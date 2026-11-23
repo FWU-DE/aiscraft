@@ -56,9 +56,7 @@ pub fn local_user_name() -> String {
         };
         let full = if cfg!(target_os = "macos") {
             run("id", &["-F"])
-        } else if cfg!(windows) {
-            None
-        } else if login.is_empty() {
+        } else if cfg!(windows) || login.is_empty() {
             None
         } else {
             // passwd: name:x:uid:gid:GECOS:home:shell; the full name is GECOS up to the first comma.

@@ -140,7 +140,7 @@ async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<Stri
                 o.insert("conversation".into(), json!(conv));
             }
             crate::schedules::create(c.clone(), p).await.map(|v| {
-                let when = v.get("next_run").and_then(Value::as_i64).map(|t| chrono_fmt(t)).unwrap_or_else(|| "–".into());
+                let when = v.get("next_run").and_then(Value::as_i64).map(chrono_fmt).unwrap_or_else(|| "–".into());
                 c.notice_with(
                     NoticeLevel::Info,
                     format!("Geplant: {} ({when})", a.get("title").and_then(Value::as_str).unwrap_or("")),

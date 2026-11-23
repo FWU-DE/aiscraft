@@ -129,7 +129,7 @@ fn run(engine: &Engine, cmd: Cmd) -> Result<(), String> {
                 }
             };
             let account = call(engine, "backend.login", json!({"id": backend, "secret": secret.trim()}))?;
-            println!("Angemeldet: {}", [account["display_name"].as_str(), account["detail"].as_str()].into_iter().flatten().collect::<Vec<_>>().join(" · "));
+            println!("Angemeldet: {}", [account.get("display_name").and_then(serde_json::Value::as_str), account.get("detail").and_then(serde_json::Value::as_str)].into_iter().flatten().collect::<Vec<_>>().join(" · "));
         }
         Cmd::Status => {
             for b in &engine.state().backends {
@@ -187,12 +187,12 @@ fn run(engine: &Engine, cmd: Cmd) -> Result<(), String> {
         Cmd::Search { query } => {
             let hits = call(engine, "search", json!({"query": query.join(" ")}))?;
             for h in hits.as_array().cloned().unwrap_or_default() {
-                println!("{}  {}\n    {}", h["conversation_id"].as_str().unwrap_or(""), h["title"].as_str().unwrap_or(""), h["snippet"].as_str().unwrap_or("").replace('\n', " "));
+                println!("{}  {}\n    {}", h.get("conversation_id").and_then(serde_json::Value::as_str).unwrap_or(""), h.get("title").and_then(serde_json::Value::as_str).unwrap_or(""), h.get("snippet").and_then(serde_json::Value::as_str).unwrap_or("").replace('\n', " "));
             }
         }
         Cmd::Export { id, format } => {
             let out = call(engine, "chat.export", json!({"id": id, "format": format}))?;
-            print!("{}", out["text"].as_str().unwrap_or(""));
+            print!("{}", out.get("text").and_then(serde_json::Value::as_str).unwrap_or(""));
         }
         Cmd::Call { command, params } => {
             let params: Value = match params {

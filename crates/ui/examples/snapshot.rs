@@ -43,8 +43,10 @@ fn demo_server(engine: &Engine) -> String {
                     }
                     let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
                     // "Kollegium" + a connector tool named *__notify: ask to call it (approval demo).
-                    if req.contains("Kollegium") && !req.contains("\"role\":\"tool\"") {
-                        if let Some(name) = req.split('"').find(|p| p.ends_with("__notify")) {
+                    if req.contains("Kollegium") && !req.contains("\"role\":\"tool\"")
+                        && let Some(name) = req.split('"').find(|p| p.ends_with("__notify"))
+                    {
+                        {
                             let c1 = json!({"choices":[{"delta":{"content":"Ich schicke die Einladung ans Kollegium.","tool_calls":[{"index":0,"id":"c1","function":{"name":name,"arguments":"{\"an\":\"kollegium@schule.de\",\"betreff\":\"Konferenz am 4. Dezember\"}"}}]}}]});
                             let c2 = json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]});
                             let _ = sock.write_all(format!("data: {c1}\n\ndata: {c2}\n\ndata: [DONE]\n\n").as_bytes()).await;

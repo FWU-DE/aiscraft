@@ -167,7 +167,7 @@ pub(crate) fn start(c: &Ctx) {
             tokio::time::sleep(Duration::from_secs(20)).await;
             ticks = ticks.wrapping_add(1);
             // Hourly: tidy up the notes (duplicates are archived, never deleted).
-            if ticks % 180 == 0 {
+            if ticks.is_multiple_of(180) {
                 let _ = crate::skills::lint_memory(&ctx);
             }
             // Hourly too, half an hour later: maybe one hint.

@@ -72,7 +72,7 @@ pub(crate) fn relevant(c: &Ctx, request: &str, max: usize) -> Vec<Skill> {
             (hits > 0).then(|| (hits, s.clone()))
         })
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|x| std::cmp::Reverse(x.0));
     scored.into_iter().take(max).map(|(_, s)| s).collect()
 }
 

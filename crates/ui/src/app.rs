@@ -73,7 +73,7 @@ impl AisCraftApp {
             search_text: String::new(),
             project_filter: None,
             editing: None,
-            dialog: first_run.then(|| Dialog::Welcome),
+            dialog: first_run.then_some(Dialog::Welcome),
             palette: None,
             focus_composer: true,
             focus_search: false,

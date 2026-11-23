@@ -130,7 +130,7 @@ pub(crate) fn save_state(c: &Ctx, id: &str, state: &[u8], version_note: Option<&
         if let Some(x) = s.artifacts.iter_mut().find(|x| x.id == id) {
             *x = a;
         }
-        s.artifacts.sort_by(|x, y| y.updated_at.cmp(&x.updated_at));
+        s.artifacts.sort_by_key(|x| std::cmp::Reverse(x.updated_at));
         s.artifact_rev = s.artifact_rev.wrapping_add(1);
     });
     Ok(())

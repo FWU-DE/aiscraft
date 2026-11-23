@@ -33,7 +33,6 @@ eframe = { version = "0.37", default-features = false, features = ["accesskit", 
 egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 egui_commonmark = { version = "0.26", features = ["better_syntax_highlighting"] }
 rfd = "0.17"
-arboard = "3"
 clap = { version = "4", features = ["derive"] }
 
 [workspace.lints.rust]

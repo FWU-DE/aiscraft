@@ -65,7 +65,7 @@ impl Dialog {
         Dialog::Login { backend_id: id.to_string(), secret: String::new(), sent: false }
     }
     pub fn add_backend() -> Self {
-        let (label, _, url, _, _) = PRESETS[0];
+        let (label, url) = PRESETS.first().map(|p| (p.0, p.2)).unwrap_or(("", "https://"));
         Dialog::AddBackend { preset: 0, name: label.into(), base_url: url.into(), secret: String::new() }
     }
     pub fn project(p: Option<&Project>) -> Self {
@@ -770,7 +770,7 @@ impl AisCraftApp {
                                     && ui.small_button("Code kopieren").clicked()
                                     && let Ok(v) = self.engine.call("vault.code", json!({"id": e.id}))
                                 {
-                                    ui.ctx().copy_text(v["code"].as_str().unwrap_or("").to_string());
+                                    ui.ctx().copy_text(v.get("code").and_then(serde_json::Value::as_str).unwrap_or("").to_string());
                                 }
                             });
                         });
@@ -794,7 +794,7 @@ impl AisCraftApp {
             SettingsTab::Usage => {
                 match self.engine.call("usage.report", json!({})) {
                     Ok(r) => {
-                        let rows = r["rows"].as_array().cloned().unwrap_or_default();
+                        let rows = r.get("rows").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
                         if rows.is_empty() {
                             ui.label(muted(&t, "Noch keine Token-Zahlen. AIS.chat über die Anmeldung meldet keine."));
                         }
@@ -804,11 +804,11 @@ impl AisCraftApp {
                             }
                             ui.end_row();
                             for row in rows {
-                                ui.label(row["month"].as_str().unwrap_or(""));
-                                ui.label(row["backend"].as_str().unwrap_or(""));
-                                ui.label(row["model"].as_str().unwrap_or(""));
-                                ui.label(format!("{} / {}", row["input_tokens"].as_i64().unwrap_or(0), row["output_tokens"].as_i64().unwrap_or(0)));
-                                ui.label(row["usd"].as_f64().map(|u| format!("≈ {u:.2} $")).unwrap_or_else(|| "–".into()));
+                                ui.label(row.get("month").and_then(serde_json::Value::as_str).unwrap_or(""));
+                                ui.label(row.get("backend").and_then(serde_json::Value::as_str).unwrap_or(""));
+                                ui.label(row.get("model").and_then(serde_json::Value::as_str).unwrap_or(""));
+                                ui.label(format!("{} / {}", row.get("input_tokens").and_then(serde_json::Value::as_i64).unwrap_or(0), row.get("output_tokens").and_then(serde_json::Value::as_i64).unwrap_or(0)));
+                                ui.label(row.get("usd").and_then(serde_json::Value::as_f64).map(|u| format!("≈ {u:.2} $")).unwrap_or_else(|| "–".into()));
                                 ui.end_row();
                             }
                         });
