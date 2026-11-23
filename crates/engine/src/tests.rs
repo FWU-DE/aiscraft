@@ -55,8 +55,9 @@ fn engine_with_backend() -> (Engine, String) {
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
     let url = scripted_openai(&engine);
     let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"})).unwrap()["id"].as_str().unwrap().to_string();
-    let bid = id.clone();
-    assert!(engine.wait_for(Duration::from_secs(30), |s| s.backend(&bid).is_some_and(|b| !b.models.is_empty())), "models load");
+    // Check synchronously instead of waiting for the background refresh: deterministic under load.
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    assert!(!engine.state().backend(&id).unwrap().models.is_empty(), "models load");
     engine.call("chat.select_model", json!({"backend": id, "model": "test-model"})).unwrap();
     engine.call("chat.new", json!({})).unwrap();
     (engine, id)
@@ -211,8 +212,8 @@ fn tool_loop_with_builtin_history_search() {
         format!("http://{addr}/v1")
     });
     let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url})).unwrap()["id"].as_str().unwrap().to_string();
-    let bid = id.clone();
-    assert!(engine.wait_for(Duration::from_secs(30), |s| s.backend(&bid).is_some_and(|b| !b.models.is_empty())));
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    assert!(!engine.state().backend(&id).unwrap().models.is_empty());
     engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
     engine.call("chat.new", json!({})).unwrap();
     engine.call("chat.send", json!({"text": "Erkläre Fotosynthese"})).unwrap();
