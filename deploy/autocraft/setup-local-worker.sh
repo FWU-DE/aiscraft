@@ -41,10 +41,12 @@ loginctl enable-linger "$SANDBOX"
 UID_S=$(id -u "$SANDBOX")
 for _ in $(seq 1 20); do [ -d "/run/user/$UID_S" ] && break; sleep 0.5; done
 [ -d "/run/user/$UID_S" ] || die "/run/user/$UID_S fehlt (systemd --user für $SANDBOX startet nicht)"
-as_sandbox() { runuser -u "$SANDBOX" -- env HOME="$HOME_S" XDG_RUNTIME_DIR="/run/user/$UID_S" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$UID_S/bus" "$@"; }
+# Runs from the sandbox user's home: it may not enter yours (the script's working directory).
+as_sandbox() { (cd "$HOME_S" && runuser -u "$SANDBOX" -- env HOME="$HOME_S" XDG_RUNTIME_DIR="/run/user/$UID_S" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$UID_S/bus" "$@"); }
 
 say "3/6 AutoCraft-Code für den Worker (eigene Kopie, nur lesend aus GitHub)"
 if [ ! -d "$HOME_S/autocraft/.git" ]; then
+  rm -rf "$HOME_S/autocraft"   # leftover of an aborted clone
   REV=$(runuser -u "$OPERATOR" -- git -C "$AUTOCRAFT_SRC" rev-parse HEAD)
   as_sandbox git clone --quiet https://github.com/storytold/autocraft.git "$HOME_S/autocraft"
   as_sandbox git -C "$HOME_S/autocraft" checkout --quiet "$REV"
