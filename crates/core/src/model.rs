@@ -336,6 +336,16 @@ pub struct AccountInfo {
     /// When the session ends, for cookie sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires: Option<String>,
+    /// Tools and features the backend runs on its own servers (AIS.chat), and whether they are on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub server_tools: Vec<ServerTool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerTool {
+    pub id: String,
+    pub label: String,
+    pub enabled: bool,
 }
 
 /// How much of a backend's allowance is used (AIS.chat token points).

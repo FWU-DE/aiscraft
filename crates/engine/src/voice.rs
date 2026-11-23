@@ -101,7 +101,12 @@ fn devices_allowed(c: &Ctx) -> Result<()> {
 /// Where speech comes from: ("ais", base, cookie) or ("openai", base, key).
 pub(crate) fn tts_provider(c: &Ctx) -> Result<(BackendKind, String, String)> {
     let s = c.state();
-    if let Some(b) = s.backends.iter().find(|b| b.config.kind == BackendKind::AisChat && matches!(b.status, crate::BackendStatus::Ready { .. }))
+    // AIS.chat only where its speech feature is on for the person's state.
+    let ais_speech = |b: &crate::BackendView| match &b.status {
+        crate::BackendStatus::Ready { account } => account.server_tools.is_empty() || account.server_tools.iter().any(|t| t.id == "speech" && t.enabled),
+        _ => false,
+    };
+    if let Some(b) = s.backends.iter().find(|b| b.config.kind == BackendKind::AisChat && ais_speech(b))
         && let Some(cookie) = c.0.secrets.get(&b.config.id)?
     {
         return Ok((BackendKind::AisChat, b.config.base_url.clone(), cookie));

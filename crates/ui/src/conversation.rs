@@ -498,6 +498,20 @@ impl AisCraftApp {
                     }
                 }
             }
+            let server_tools = self.state.backend(&self.state.selection.backend_id).and_then(|b| match &b.status {
+                aiscraft_engine::BackendStatus::Ready { account } => Some(account.server_tools.clone()),
+                _ => None,
+            });
+            if let Some(st) = server_tools.filter(|s| !s.is_empty()) {
+                ui.separator();
+                ui.label(small_muted(&t, "Auf dem AIS.chat-Server (vom Land eingestellt)"));
+                for tool in st {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(if tool.enabled { "✔" } else { "×" }).color(if tool.enabled { t.success } else { t.muted }));
+                        ui.label(if tool.enabled { RichText::new(&tool.label) } else { RichText::new(&tool.label).color(t.muted) });
+                    });
+                }
+            }
             if !caps.tools || !caps.system_prompt {
                 ui.separator();
                 let name = self.state.backend(&self.state.selection.backend_id).map(|b| b.config.name.clone()).unwrap_or_default();

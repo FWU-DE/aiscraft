@@ -170,6 +170,7 @@ impl Backend for ClaudeCli {
                 display_name: None,
                 detail: Some(detail),
                 expires: v.get("loginExpiresAt").and_then(Value::as_str).map(str::to_string),
+                server_tools: vec![],
             })
         })
     }

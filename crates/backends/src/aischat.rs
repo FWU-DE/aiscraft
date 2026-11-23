@@ -208,6 +208,28 @@ fn ais_error(name: &str, message: &str) -> Error {
     }
 }
 
+/// The tools AIS.chat runs for this person, from the state's feature toggles (see
+/// `apps/chat-bot/src/app/api/chat/build-tools.ts`). Documents and file search are always on.
+pub fn server_tools(toggles: Option<&Value>) -> Vec<aiscraft_core::ServerTool> {
+    let on = |k: &str| toggles.and_then(|t| t.get(k)).and_then(Value::as_bool).unwrap_or(false);
+    let t = |id: &str, label: &str, enabled: bool| aiscraft_core::ServerTool { id: id.into(), label: label.into(), enabled };
+    if toggles.is_none() {
+        return Vec::new();
+    }
+    vec![
+        t("web_search", "Websuche und Webseiten lesen", on("isWebSearchEnabled")),
+        t("documents", "Dokumente erzeugen", true),
+        t("files", "Angehängte Dateien durchsuchen", true),
+        t("plots", "Diagramme (JSXGraph)", on("isJsxGraphEnabled")),
+        t("calculator", "Rechner", on("isCalculatorEnabled")),
+        t("images", "Bilder erzeugen", on("isImageGenerationEnabled")),
+        t("speech", "Sprachausgabe", on("isSpeechModelEnabled")),
+        t("agentic", "Mehrschrittiges Arbeiten (Agent)", on("isAgenticChatEnabled")),
+        t("characters", "Figuren", on("isCharacterEnabled")),
+        t("custom", "Eigene Assistenten", on("isCustomGptEnabled")),
+    ]
+}
+
 fn tool_label(tool: &str) -> &'static str {
     let t = tool.to_ascii_lowercase();
     if t.contains("websearch") || t.contains("web_search") {
@@ -367,7 +389,12 @@ impl Backend for AisChat {
                 .flatten()
                 .collect::<Vec<_>>()
                 .join(" · ");
-            Ok(AccountInfo { display_name: name, detail: (!detail.is_empty()).then_some(detail), expires: v.get("expires").and_then(Value::as_str).map(str::to_string) })
+            Ok(AccountInfo {
+                display_name: name,
+                detail: (!detail.is_empty()).then_some(detail),
+                expires: v.get("expires").and_then(Value::as_str).map(str::to_string),
+                server_tools: server_tools(user.pointer("/federalState/featureToggles")),
+            })
         })
     }
 
@@ -489,6 +516,16 @@ impl Backend for AisChat {
 mod tests {
     use super::*;
     use aiscraft_core::{Attachment, Message};
+
+    #[test]
+    fn server_tools_from_toggles() {
+        let t = json!({"isWebSearchEnabled": true, "isCalculatorEnabled": false, "isSpeechModelEnabled": false, "isJsxGraphEnabled": true});
+        let tools = server_tools(Some(&t));
+        let get = |id: &str| tools.iter().find(|x| x.id == id).unwrap().enabled;
+        assert!(get("web_search") && get("plots") && get("documents"));
+        assert!(!get("calculator") && !get("speech"));
+        assert!(server_tools(None).is_empty());
+    }
 
     #[test]
     fn cookie_input_forms() {

@@ -157,7 +157,7 @@ impl Backend for OpenAi {
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
         Box::pin(async move {
             let n = self.models().await?.len();
-            Ok(AccountInfo { display_name: None, detail: Some(format!("{n} Modelle verfügbar")), expires: None })
+            Ok(AccountInfo { display_name: None, detail: Some(format!("{n} Modelle verfügbar")), expires: None, server_tools: vec![] })
         })
     }
 
