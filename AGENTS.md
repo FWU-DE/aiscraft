@@ -33,7 +33,19 @@ apps/
   aiscraft-collab-server  relay for live collaboration (rooms on disk, compaction, /healthz)
 deploy/autocraft  Coolify compose for AutoCraft
 deploy/collab     Dockerfile and Coolify compose for the collab relay
+docs/craft-libs.md  which shared Craft libraries we use, defer or reject, and why
 ```
+
+### Shared Craft libraries
+
+Where a crate of [storytold/craft-libs](https://github.com/storytold/craft-libs) does the job, use
+it instead of writing our own; check `docs/craft-libs.md` before adding plumbing. In use:
+`craft-atomic` (every file write: exports, secrets, tokens, attachments), `craft-jsonrpc` +
+`craft-mcp` (`aiscraft-cli mcp`), `craft-control-protocol` (`aiscraft --control`, requests are
+`{"token", "id", "method", "params"}`). All entries in `[workspace.dependencies]` share one pin
+(full rev until craft-libs tags a release); update them together and commit `Cargo.lock`.
+The egui crates come from the storytold egui fork through `[patch.crates-io]`, like craft-libs
+itself; keep that block in step with craft-libs' root `Cargo.toml` when bumping the pin.
 
 ## 2. Golden rules
 
@@ -62,7 +74,7 @@ deploy/collab     Dockerfile and Coolify compose for the collab relay
 ## 3. Build, test, look
 
 ```sh
-cargo test --workspace --exclude aiscraft          # all tests (the app binary has none)
+cargo test --workspace --exclude aiscraft          # all tests (+ `cargo test -p aiscraft`: control channel)
 cargo clippy --workspace --all-targets
 cargo test -p aiscraft-backends -- --ignored       # live: real Claude CLI, real headless browser
 cargo run -p aiscraft-ui --example snapshot -- --demo --out shot.png \

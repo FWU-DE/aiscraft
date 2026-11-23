@@ -7,6 +7,8 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+craft-atomic.workspace = true
+craft-control-protocol.workspace = true
 aiscraft-engine.workspace = true
 aiscraft-ui.workspace = true
 eframe.workspace = true

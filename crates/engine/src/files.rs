@@ -64,7 +64,8 @@ pub fn keep_copy(dir: &Path, original: &Path, bytes: &[u8]) -> Result<std::path:
     std::fs::create_dir_all(dir).map_err(|e| Error::storage(format!("Anhänge-Ordner: {e}")))?;
     let ext = original.extension().and_then(|e| e.to_str()).filter(|e| e.len() <= 8 && e.chars().all(|c| c.is_ascii_alphanumeric())).unwrap_or("bin");
     let path = dir.join(format!("{}.{ext}", uuid::Uuid::new_v4()));
-    std::fs::write(&path, bytes).map_err(|e| Error::storage(format!("Anhang speichern: {e}")))?;
+    // A fresh name, created exclusively: never replaces an existing attachment.
+    craft_atomic::write_new(&path, bytes).map_err(|e| Error::storage(format!("Anhang speichern: {e}")))?;
     Ok(path)
 }
 

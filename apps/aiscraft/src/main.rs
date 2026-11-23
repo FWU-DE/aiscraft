@@ -2,15 +2,17 @@
 //!
 //! `aiscraft` opens the window. `aiscraft --control [port]` also starts the JSON control
 //! channel on 127.0.0.1 (default 7979), so agents and tests can drive the running app: one
-//! JSON object per line, `{"token": …, "id": 1, "cmd": "chat.send", "params": {…}}`, answered
+//! JSON object per line, `{"token": …, "id": 1, "method": "chat.send", "params": {…}}`, answered
 //! with `{"id": 1, "ok": true, "result": …}`. The token is in `control-token` in the data folder
-//! (readable only by you), so a web page that posts to localhost cannot send commands.
+//! (readable only by you), so a web page that posts to localhost cannot send commands. Framing and
+//! the token check are the Craft suite's (craft-control-protocol): every request carries the
+//! token, a wrong one or a line that is not a request closes the connection.
 //! Besides every engine command: `ui.screenshot {path}` and `ui.show {what}`.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -20,6 +22,8 @@ use aiscraft_ui::{AisCraftApp, UiRequest};
 use serde_json::{Value, json};
 
 const DEFAULT_PORT: u16 = 7979;
+/// Longest request line the control channel reads.
+const MAX_CONTROL_LINE: usize = 16 * 1024 * 1024;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
@@ -73,58 +77,33 @@ fn main() {
 fn start_control(engine: Engine, ui: mpsc::Sender<UiRequest>, port: u16, data_dir: Option<PathBuf>) -> std::io::Result<PathBuf> {
     let dir = data_dir.unwrap_or_else(std::env::temp_dir);
     std::fs::create_dir_all(&dir)?;
-    let token = uuid::Uuid::new_v4().simple().to_string();
+    // 64 hex characters, the suite's control token form (`craft_control_protocol::valid_token`).
+    let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
     let token_path = dir.join("control-token");
-    std::fs::write(&token_path, &token)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    // Mode 0600 from the first byte, replaced atomically: a reader never sees half a token.
+    let private = craft_atomic::WriteOptions::default().with_new_file_permissions(craft_atomic::NewFilePermissions::Private);
+    private.atomic_write(&token_path, token.as_bytes())?;
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     std::thread::Builder::new().name("aiscraft-control".into()).spawn(move || {
         for stream in listener.incoming().flatten() {
             let (engine, ui, token) = (engine.clone(), ui.clone(), token.clone());
-            let _ = std::thread::Builder::new().name("aiscraft-control-conn".into()).spawn(move || serve(stream, engine, ui, token));
+            let Ok(read) = stream.try_clone() else { continue };
+            let _ = std::thread::Builder::new().name("aiscraft-control-conn".into()).spawn(move || serve(read, stream, &engine, &ui, &token));
         }
     })?;
     Ok(token_path)
 }
 
-fn serve(stream: TcpStream, engine: Engine, ui: mpsc::Sender<UiRequest>, token: String) {
-    let Ok(read) = stream.try_clone() else { return };
-    let mut out = stream;
-    for line in BufReader::new(read).lines() {
-        let Ok(line) = line else { return };
-        if line.trim().is_empty() {
-            continue;
-        }
-        let reply = match serde_json::from_str::<Value>(&line) {
-            Err(_) => {
-                // Not JSON (for example an HTTP request from a browser): hang up.
-                return;
-            }
-            Ok(req) => {
-                let id = req.get("id").cloned().unwrap_or(Value::Null);
-                if req.get("token").and_then(Value::as_str) != Some(token.as_str()) {
-                    json!({"id": id, "ok": false, "error": {"kind": "auth", "message": "Falscher oder fehlender Token"}})
-                } else {
-                    let cmd = req.get("cmd").and_then(Value::as_str).unwrap_or("");
-                    let params = req.get("params").cloned().unwrap_or(json!({}));
-                    // Last-resort guard: a panic in a command must not take the app down.
-                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&engine, &ui, cmd, params)));
-                    match res {
-                        Ok(Ok(v)) => json!({"id": id, "ok": true, "result": v}),
-                        Ok(Err(e)) => json!({"id": id, "ok": false, "error": e}),
-                        Err(_) => json!({"id": id, "ok": false, "error": {"kind": "protocol", "message": "Interner Fehler"}}),
-                    }
-                }
-            }
-        };
-        if writeln!(out, "{reply}").is_err() {
-            return;
-        }
-    }
+fn serve(read: impl Read, out: impl Write, engine: &Engine, ui: &mpsc::Sender<UiRequest>, token: &str) {
+    craft_control_protocol::serve_lines(read, out, token, MAX_CONTROL_LINE, |method, params| {
+        // Last-resort guard: a panic in a command must not take the app down.
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(engine, ui, &method, params)));
+        Some(match res {
+            Ok(Ok(v)) => json!({"ok": true, "result": v}),
+            Ok(Err(e)) => json!({"ok": false, "error": e}),
+            Err(_) => json!({"ok": false, "error": {"kind": "protocol", "message": "Interner Fehler"}}),
+        })
+    });
 }
 
 fn run(engine: &Engine, ui: &mpsc::Sender<UiRequest>, cmd: &str, params: Value) -> Result<Value, Value> {
@@ -145,5 +124,33 @@ fn run(engine: &Engine, ui: &mpsc::Sender<UiRequest>, cmd: &str, params: Value) 
             ui_call(&|tx| UiRequest::Show { what: what.clone(), reply: tx })
         }
         _ => engine.call(cmd, params).map_err(|e| serde_json::to_value(e).unwrap_or(Value::Null)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn control_channel_checks_the_token_on_every_request() {
+        let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+        // No window: UI requests fail at once instead of waiting.
+        let (ui, _) = mpsc::channel::<UiRequest>();
+        let token = "ab".repeat(32);
+        let input = format!(
+            "{}\n{}\n{}\n{}\n",
+            json!({"id": 1, "token": token, "method": "app.state"}),
+            json!({"id": 2, "token": token, "method": "ui.show", "params": {"what": "settings"}}),
+            json!({"id": 3, "token": "falsch", "method": "app.state"}),
+            json!({"id": 4, "token": token, "method": "app.state"}),
+        );
+        let mut out = Vec::new();
+        serve(input.as_bytes(), &mut out, &engine, &ui, &token);
+        let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(replies.len(), 3, "{replies:?}");
+        assert_eq!((replies[0]["id"].clone(), replies[0]["ok"].clone()), (json!(1), json!(true)));
+        assert_eq!(replies[1]["error"]["message"], "Fenster ist geschlossen");
+        assert_eq!(replies[2]["ok"], false, "a wrong token closes the connection");
+        assert!(craft_control_protocol::valid_token(&token));
     }
 }

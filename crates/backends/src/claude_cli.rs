@@ -58,12 +58,9 @@ impl Drop for TempFile {
 }
 
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
-    std::fs::write(path, bytes).map_err(|e| Error::storage(format!("MCP-Konfiguration: {e}")))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| Error::storage(e.to_string()))?;
-    }
+    // Mode 0600 from the first byte: the file holds the bridge token.
+    let private = craft_atomic::WriteOptions::default().with_new_file_permissions(craft_atomic::NewFilePermissions::Private);
+    private.atomic_write(path, bytes).map_err(|e| Error::storage(format!("MCP-Konfiguration: {e}")))?;
     Ok(())
 }
 

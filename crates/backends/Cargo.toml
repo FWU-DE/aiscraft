@@ -7,6 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+craft-atomic.workspace = true
 aiscraft-core.workspace = true
 aiscraft-rsc.workspace = true
 serde.workspace = true
