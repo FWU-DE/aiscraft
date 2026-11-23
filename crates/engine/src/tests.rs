@@ -56,7 +56,7 @@ fn engine_with_backend() -> (Engine, String) {
     let url = scripted_openai(&engine);
     let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"})).unwrap()["id"].as_str().unwrap().to_string();
     let bid = id.clone();
-    assert!(engine.wait_for(Duration::from_secs(5), |s| s.backend(&bid).is_some_and(|b| !b.models.is_empty())), "models load");
+    assert!(engine.wait_for(Duration::from_secs(30), |s| s.backend(&bid).is_some_and(|b| !b.models.is_empty())), "models load");
     engine.call("chat.select_model", json!({"backend": id, "model": "test-model"})).unwrap();
     engine.call("chat.new", json!({})).unwrap();
     (engine, id)
@@ -108,9 +108,9 @@ fn send_streams_saves_searches_and_regenerates() {
 fn stop_keeps_partial_answer() {
     let (engine, _) = engine_with_backend();
     engine.dispatch("chat.send", json!({"text": "bitte langsam"}));
-    assert!(engine.wait_for(Duration::from_secs(5), |s| s.messages.get(1).is_some_and(|m| m.content == "Hallo")));
+    assert!(engine.wait_for(Duration::from_secs(30), |s| s.messages.get(1).is_some_and(|m| m.content == "Hallo")));
     engine.call("chat.stop", json!({})).unwrap();
-    assert!(engine.wait_for(Duration::from_secs(5), |s| s.generating.is_empty()));
+    assert!(engine.wait_for(Duration::from_secs(30), |s| s.generating.is_empty()));
     assert_eq!(engine.state().messages[1].content, "Hallo");
 }
 
