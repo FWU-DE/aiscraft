@@ -1,0 +1,33 @@
+# Maintainer: FWU / UDS
+# Build from a checkout: makepkg -p packaging/PKGBUILD (in the repository root via `cd packaging && makepkg`).
+pkgname=aischatcraft
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="AIS.ChatCraft: nativer Client für AIS.chat und weitere KI-Dienste"
+arch=('x86_64' 'aarch64')
+url="https://github.com/FWU-DE/aiscraft"
+license=('MIT OR Apache-2.0')
+depends=('alsa-lib' 'gcc-libs' 'glibc' 'libxkbcommon' 'wayland')
+optdepends=('chromium: Anmeldung bei AIS.chat im Browserfenster'
+            'claude-code: Claude-Abo als Backend'
+            'nodejs: Konnektor-Vorlagen über npx')
+makedepends=('cargo')
+source=()
+
+build() {
+  cd "$startdir/.."
+  cargo build --release --locked -p aiscraft -p aiscraft-cli
+}
+
+package() {
+  cd "$startdir/.."
+  install -Dm755 target/release/aiscraft "$pkgdir/usr/bin/aiscraft"
+  install -Dm755 target/release/aiscraft-cli "$pkgdir/usr/bin/aiscraft-cli"
+  install -Dm644 packaging/ai.uds.aischatcraft.desktop "$pkgdir/usr/share/applications/ai.uds.aischatcraft.desktop"
+  install -Dm644 packaging/icons/aischatcraft.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/aischatcraft.svg"
+  for s in 32 48 64 128 256 512; do
+    install -Dm644 "packaging/icons/aischatcraft-$s.png" "$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps/aischatcraft.png"
+  done
+  install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+}

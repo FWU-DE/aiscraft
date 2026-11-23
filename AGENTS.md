@@ -127,4 +127,9 @@ cargo clippy --workspace --all-targets
 ```
 
 Then commit with a message that says what changed for people, reference the issue (`Closes #n`),
-and push. Rebuild the release binaries if the user runs the app (`target/release/aiscraft`).
+and push. If the user runs the app, reinstall it with `packaging/install.sh` (binaries in
+`~/.local/bin`, launcher entry and icons under `~/.local/share`) and restart it.
+
+Packaging: `packaging/install.sh` (per user, no sudo), `packaging/PKGBUILD` (Arch), the launcher
+entry `packaging/ai.uds.aischatcraft.desktop` and icons in `packaging/icons/` (the AIS.chat logo
+from FWU-DE/ais-chat on a white tile, rendered with `rsvg-convert`).

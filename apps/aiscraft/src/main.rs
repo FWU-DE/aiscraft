@@ -52,8 +52,12 @@ fn main() {
         }
     }
 
+    let mut viewport = egui::ViewportBuilder::default();
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../../../packaging/icons/aischatcraft-256.png")) {
+        viewport = viewport.with_icon(std::sync::Arc::new(icon));
+    }
     let native = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("AIS.ChatCraft").with_app_id("ai.uds.aiscraft").with_inner_size([1180.0, 780.0]).with_min_inner_size([640.0, 420.0]),
+        viewport: viewport.with_title("AIS.ChatCraft").with_app_id("ai.uds.aiscraft").with_inner_size([1180.0, 780.0]).with_min_inner_size([640.0, 420.0]),
         ..Default::default()
     };
     let result = eframe::run_native("AIS.ChatCraft", native, Box::new(move |cc| Ok(Box::new(AisCraftApp::new(cc, engine, Some(ui_rx))))));

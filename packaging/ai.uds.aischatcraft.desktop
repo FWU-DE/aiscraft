@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=AIS.ChatCraft
+GenericName=KI-Chat
+Comment=Chatten mit AIS.chat, Claude und anderen KI-Diensten
+Exec=aiscraft
+Icon=aischatcraft
+Terminal=false
+Categories=Network;Chat;
+Keywords=AIS;AIS.chat;KI;Chat;Claude;Schule;
+StartupWMClass=ai.uds.aiscraft
