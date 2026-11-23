@@ -32,12 +32,7 @@ pub async fn status_error(resp: Response, what: &str) -> Error {
     let body = read_capped(resp, 16 * 1024).await.unwrap_or_default();
     let detail = serde_json::from_str::<serde_json::Value>(&body)
         .ok()
-        .and_then(|v| {
-            v.pointer("/error/message")
-                .or_else(|| v.get("error"))
-                .or_else(|| v.get("message"))
-                .and_then(|m| m.as_str().map(str::to_string))
-        })
+        .and_then(|v| v.pointer("/error/message").or_else(|| v.get("error")).or_else(|| v.get("message")).and_then(|m| m.as_str().map(str::to_string)))
         .unwrap_or_else(|| body.chars().take(300).collect());
     let msg = if detail.trim().is_empty() { format!("{what}: HTTP {status}") } else { format!("{what}: {detail}") };
     match status {

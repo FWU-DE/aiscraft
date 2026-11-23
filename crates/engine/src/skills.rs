@@ -5,7 +5,7 @@
 //! permission. Before each answer, the skills that fit the request and a few excerpts from
 //! earlier chats go into the context.
 
-use aiscraft_core::{Error, Message, MemoryNote, Result, Role};
+use aiscraft_core::{Error, MemoryNote, Message, Result, Role};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -45,12 +45,13 @@ fn save(c: &Ctx, mut all: Vec<Skill>) -> Result<()> {
 }
 
 fn words(s: &str) -> Vec<String> {
-    const STOP: &[&str] = &["aber", "alle", "auch", "dass", "dein", "deine", "dich", "dies", "diese", "einen", "einer", "eine", "haben", "hier", "ich", "ist", "kann", "mein", "meine", "mich", "mit", "nach", "nicht", "oder", "schon", "sein", "sich", "sind", "und", "unser", "von", "was", "wenn", "wie", "wir", "wird", "zum", "zur", "bitte", "einmal", "mache", "machen", "please", "the", "and", "with"];
-    let mut out: Vec<String> = s
-        .split(|c: char| !c.is_alphanumeric())
-        .map(str::to_lowercase)
-        .filter(|w| w.chars().count() >= 4 && !STOP.contains(&w.as_str()))
-        .collect();
+    const STOP: &[&str] = &[
+        "aber", "alle", "auch", "dass", "dein", "deine", "dich", "dies", "diese", "einen", "einer", "eine", "haben", "hier", "ich", "ist", "kann", "mein",
+        "meine", "mich", "mit", "nach", "nicht", "oder", "schon", "sein", "sich", "sind", "und", "unser", "von", "was", "wenn", "wie", "wir", "wird", "zum",
+        "zur", "bitte", "einmal", "mache", "machen", "please", "the", "and", "with",
+    ];
+    let mut out: Vec<String> =
+        s.split(|c: char| !c.is_alphanumeric()).map(str::to_lowercase).filter(|w| w.chars().count() >= 4 && !STOP.contains(&w.as_str())).collect();
     out.sort();
     out.dedup();
     out
@@ -121,16 +122,21 @@ pub(crate) async fn learn_from(c: &Ctx, conv_id: &str) -> Result<Option<String>>
         .rev()
         .map(|m| match m.role {
             Role::User => format!("Person: {}", m.content.chars().take(800).collect::<String>()),
-            Role::Assistant if !m.tool_calls.is_empty() => format!("Assistent ruft auf: {}", m.tool_calls.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")),
+            Role::Assistant if !m.tool_calls.is_empty() => {
+                format!("Assistent ruft auf: {}", m.tool_calls.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "))
+            }
             Role::Assistant => format!("Assistent: {}", m.content.chars().take(600).collect::<String>()),
-            Role::Tool => format!("Ergebnis ({}): {}", m.tool_result.as_ref().map(|r| r.name.as_str()).unwrap_or(""), m.content.chars().take(200).collect::<String>()),
+            Role::Tool => {
+                format!("Ergebnis ({}): {}", m.tool_result.as_ref().map(|r| r.name.as_str()).unwrap_or(""), m.content.chars().take(200).collect::<String>())
+            }
             Role::System => String::new(),
         })
         .collect::<Vec<_>>()
         .join("\n");
     let existing: Vec<String> = load(c).iter().map(|s| s.title.clone()).collect();
     let system = "Du leitest aus einem abgeschlossenen Arbeitsablauf ein wiederverwendbares Vorgehen ab. Keine persönlichen Daten (keine Namen, Adressen, E-Mails, Noten, Inhalte von Dokumenten), nur das allgemeine Vorgehen. Wenn es nichts Wiederverwendbares gibt, antworte {\"none\": true}. Sonst nur JSON: {\"title\": \"kurz\", \"when\": \"wann es passt\", \"steps\": \"nummerierte Schritte in Markdown\"}. Ist ein vorhandenes Vorgehen gemeint, nimm genau dessen Titel.";
-    let prompt = format!("Vorhandene Vorgehen: {}\n\n<ablauf>\n{transcript}\n</ablauf>", if existing.is_empty() { "keine".into() } else { existing.join(", ") });
+    let prompt =
+        format!("Vorhandene Vorgehen: {}\n\n<ablauf>\n{transcript}\n</ablauf>", if existing.is_empty() { "keine".into() } else { existing.join(", ") });
     let out = crate::chat::complete(c, Some(system), &prompt).await?;
     let start = out.find('{').unwrap_or(0);
     let end = out.rfind('}').map(|e| e + 1).unwrap_or(out.len());
@@ -151,7 +157,16 @@ pub(crate) async fn learn_from(c: &Ctx, conv_id: &str) -> Result<Option<String>>
             x.id.clone()
         }
         None => {
-            let sk = Skill { id: new_id(), title: title.clone(), when: when.chars().take(300).collect(), steps: steps.chars().take(4000).collect(), source_conversation: Some(conv_id.to_string()), created_at: now, updated_at: now, uses: 0 };
+            let sk = Skill {
+                id: new_id(),
+                title: title.clone(),
+                when: when.chars().take(300).collect(),
+                steps: steps.chars().take(4000).collect(),
+                source_conversation: Some(conv_id.to_string()),
+                created_at: now,
+                updated_at: now,
+                uses: 0,
+            };
             let id = sk.id.clone();
             all.push(sk);
             id
@@ -197,7 +212,16 @@ pub(crate) async fn create(c: Ctx, p: Value) -> Result<Value> {
         return Err(Error::invalid("Titel und Schritte dürfen nicht leer sein"));
     }
     let now = now_ms();
-    let sk = Skill { id: new_id(), title, when: opt_str(&p, "when").unwrap_or_default(), steps, source_conversation: None, created_at: now, updated_at: now, uses: 0 };
+    let sk = Skill {
+        id: new_id(),
+        title,
+        when: opt_str(&p, "when").unwrap_or_default(),
+        steps,
+        source_conversation: None,
+        created_at: now,
+        updated_at: now,
+        uses: 0,
+    };
     let id = sk.id.clone();
     let mut all = load(&c);
     all.push(sk);

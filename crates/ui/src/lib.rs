@@ -5,8 +5,8 @@
 mod app;
 mod artifact_panel;
 mod conversation;
-pub mod manual;
 mod dialogs;
+pub mod manual;
 mod palette;
 pub mod plot;
 mod sidebar;

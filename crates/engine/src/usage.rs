@@ -73,7 +73,11 @@ pub(crate) fn check_limit(c: &Ctx, text: &str, files: &[String], artifact: Optio
     c.notice_with(
         NoticeLevel::Warning,
         format!("Monatsgrenze erreicht: {used} von {limit} Tokens."),
-        Some(NoticeAction { label: "Trotzdem senden".into(), command: "chat.send".into(), params: json!({"text": text, "files": files, "artifact": artifact, "force": true}) }),
+        Some(NoticeAction {
+            label: "Trotzdem senden".into(),
+            command: "chat.send".into(),
+            params: json!({"text": text, "files": files, "artifact": artifact, "force": true}),
+        }),
     );
     Err(Error::refused(format!("Die Monatsgrenze von {limit} Tokens ist erreicht ({used} verbraucht).")))
 }

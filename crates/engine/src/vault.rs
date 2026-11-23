@@ -41,7 +41,14 @@ pub struct EntryInfo {
 }
 
 fn info(e: &Entry) -> EntryInfo {
-    EntryInfo { id: e.id.clone(), name: e.name.clone(), has_username: !e.username.is_empty(), has_password: !e.password.is_empty(), has_totp: !e.totp.is_empty(), url: e.url.clone() }
+    EntryInfo {
+        id: e.id.clone(),
+        name: e.name.clone(),
+        has_username: !e.username.is_empty(),
+        has_password: !e.password.is_empty(),
+        has_totp: !e.totp.is_empty(),
+        url: e.url.clone(),
+    }
 }
 
 fn load(c: &Ctx) -> Vec<Entry> {
@@ -201,7 +208,14 @@ pub(crate) async fn add(c: Ctx, p: Value) -> Result<Value> {
     if all.iter().any(|e| e.name == name) {
         return Err(Error::invalid(format!("„{name}“ gibt es schon")));
     }
-    let e = Entry { id: new_id(), name, username: opt_str(&p, "username").unwrap_or_default(), password: opt_str(&p, "password").unwrap_or_default(), totp, url: opt_str(&p, "url").unwrap_or_default() };
+    let e = Entry {
+        id: new_id(),
+        name,
+        username: opt_str(&p, "username").unwrap_or_default(),
+        password: opt_str(&p, "password").unwrap_or_default(),
+        totp,
+        url: opt_str(&p, "url").unwrap_or_default(),
+    };
     let id = e.id.clone();
     all.push(e);
     save(&c, &all)?;
@@ -276,7 +290,14 @@ pub(crate) async fn import_bitwarden(c: Ctx, p: Value) -> Result<Value> {
         }
         let totp = get(ci_totp).trim_start_matches("otpauth://").to_string();
         let totp = if totp.contains("secret=") { totp.split("secret=").nth(1).and_then(|s| s.split('&').next()).unwrap_or("").to_string() } else { totp };
-        all.push(Entry { id: new_id(), name, username: get(Some(ci_user)), password: get(Some(ci_pass)), totp: if base32_decode(&totp).is_some() { totp } else { String::new() }, url: get(ci_uri) });
+        all.push(Entry {
+            id: new_id(),
+            name,
+            username: get(Some(ci_user)),
+            password: get(Some(ci_pass)),
+            totp: if base32_decode(&totp).is_some() { totp } else { String::new() },
+            url: get(ci_uri),
+        });
         added += 1;
     }
     save(&c, &all)?;

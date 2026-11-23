@@ -100,7 +100,9 @@ async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<Stri
         "document_update" => {
             let id = a.get("id").and_then(Value::as_str).unwrap_or("").to_string();
             let md = a.get("markdown").and_then(Value::as_str).unwrap_or("").to_string();
-            crate::artifacts::save(c.clone(), json!({"id": id, "text": md, "version": "Vom Modell geändert"})).await.map(|_| "Dokument aktualisiert.".to_string())
+            crate::artifacts::save(c.clone(), json!({"id": id, "text": md, "version": "Vom Modell geändert"}))
+                .await
+                .map(|_| "Dokument aktualisiert.".to_string())
         }
         "board_create" => crate::artifacts::create(
             c.clone(),
@@ -129,7 +131,9 @@ async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<Stri
             if let Some(o) = p.as_object_mut() {
                 o.insert("conversation".into(), json!(conv));
             }
-            crate::tasks::start(c.clone(), p).await.map(|v| format!("Aufgabe gestartet (Chat {}). Das Ergebnis kommt in diesen Chat.", v.get("id").and_then(Value::as_str).unwrap_or("")))
+            crate::tasks::start(c.clone(), p)
+                .await
+                .map(|v| format!("Aufgabe gestartet (Chat {}). Das Ergebnis kommt in diesen Chat.", v.get("id").and_then(Value::as_str).unwrap_or("")))
         }
         "schedule_create" => {
             let mut p = a.clone();
@@ -278,7 +282,8 @@ pub(crate) fn deny_all(c: &Ctx, conv: &str) {
 pub(crate) async fn answer(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let allow = p.get("allow").and_then(Value::as_bool).ok_or_else(|| Error::invalid("allow (ja/nein) fehlt"))?;
-    let tx = c.0.tools.waiters.lock().unwrap_or_else(PoisonError::into_inner).remove(&id).ok_or_else(|| Error::not_found("Diese Frage ist nicht mehr offen"))?;
+    let tx =
+        c.0.tools.waiters.lock().unwrap_or_else(PoisonError::into_inner).remove(&id).ok_or_else(|| Error::not_found("Diese Frage ist nicht mehr offen"))?;
     let _ = tx.send(allow);
     Ok(json!({}))
 }
@@ -348,17 +353,34 @@ pub fn presets() -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     for vault in obsidian_vaults() {
         let name = std::path::Path::new(&vault).file_name().and_then(|n| n.to_str()).unwrap_or("Obsidian").to_string();
-        out.push((format!("Obsidian „{name}“ (lesen)"), format!("Obsidian {name}"), format!("npx -y @modelcontextprotocol/server-filesystem --read-only {}", quote(&vault))));
-        out.push((format!("Obsidian „{name}“ (lesen und schreiben)"), format!("Obsidian {name}"), format!("npx -y @modelcontextprotocol/server-filesystem {}", quote(&vault))));
+        out.push((
+            format!("Obsidian „{name}“ (lesen)"),
+            format!("Obsidian {name}"),
+            format!("npx -y @modelcontextprotocol/server-filesystem --read-only {}", quote(&vault)),
+        ));
+        out.push((
+            format!("Obsidian „{name}“ (lesen und schreiben)"),
+            format!("Obsidian {name}"),
+            format!("npx -y @modelcontextprotocol/server-filesystem {}", quote(&vault)),
+        ));
     }
-    if let Some(docs) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::path::PathBuf::from(h).join("Dokumente")).filter(|d| d.is_dir()).or_else(|| {
-        std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::path::PathBuf::from(h).join("Documents")).filter(|d| d.is_dir())
-    }) {
+    if let Some(docs) = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|h| std::path::PathBuf::from(h).join("Dokumente"))
+        .filter(|d| d.is_dir())
+        .or_else(|| {
+            std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::path::PathBuf::from(h).join("Documents")).filter(|d| d.is_dir())
+        })
+    {
         let d = docs.display().to_string();
         out.push(("Dokumente-Ordner (lesen)".into(), "Dokumente".into(), format!("npx -y @modelcontextprotocol/server-filesystem --read-only {}", quote(&d))));
     }
     out.push(("Webseiten abrufen".into(), "Web abrufen".into(), "uvx mcp-server-fetch".into()));
-    if let Some(cli) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(if cfg!(windows) { "aiscraft-cli.exe" } else { "aiscraft-cli" }))).filter(|p| p.is_file()) {
+    if let Some(cli) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join(if cfg!(windows) { "aiscraft-cli.exe" } else { "aiscraft-cli" })))
+        .filter(|p| p.is_file())
+    {
         out.push(("AIS.ChatCraft selbst (Chats, Suche, Dokumente)".into(), "AIS.ChatCraft".into(), format!("{} mcp", quote(&cli.display().to_string()))));
     }
     out
@@ -484,7 +506,9 @@ fn split_command(s: &str) -> Vec<String> {
 fn kv_lines(v: Option<&Value>, sep: char) -> std::collections::BTreeMap<String, String> {
     match v {
         Some(Value::Object(o)) => o.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect(),
-        Some(Value::String(s)) => s.lines().filter_map(|l| l.split_once(sep)).map(|(k, v)| (k.trim().to_string(), v.trim().to_string())).filter(|(k, _)| !k.is_empty()).collect(),
+        Some(Value::String(s)) => {
+            s.lines().filter_map(|l| l.split_once(sep)).map(|(k, v)| (k.trim().to_string(), v.trim().to_string())).filter(|(k, _)| !k.is_empty()).collect()
+        }
         _ => Default::default(),
     }
 }

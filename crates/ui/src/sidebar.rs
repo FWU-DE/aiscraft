@@ -10,7 +10,9 @@ use crate::widgets::{age_group, icon_button, muted, small_muted, status_dot};
 impl AisCraftApp {
     pub(crate) fn sidebar(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
-        egui::Panel::bottom("sidebar-account").frame(egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 2 })).show(ui, |ui| self.account_row(ui));
+        egui::Panel::bottom("sidebar-account")
+            .frame(egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 2 }))
+            .show(ui, |ui| self.account_row(ui));
         ui.horizontal(|ui| {
             crate::widgets::ais_logo(ui, 18.0, t.accent);
             ui.label(RichText::new("AIS.ChatCraft").strong().size(17.0));
@@ -25,7 +27,9 @@ impl AisCraftApp {
         });
         ui.add_space(8.0);
 
-        let new_btn = egui::Button::new(RichText::new("+  Neuer Chat").strong()).min_size(egui::vec2(ui.available_width(), 32.0)).corner_radius(CornerRadius::same(t.radius));
+        let new_btn = egui::Button::new(RichText::new("+  Neuer Chat").strong())
+            .min_size(egui::vec2(ui.available_width(), 32.0))
+            .corner_radius(CornerRadius::same(t.radius));
         if ui.add(new_btn).on_hover_text("Strg+N").clicked() {
             self.new_chat();
         }
@@ -145,7 +149,8 @@ impl AisCraftApp {
                 });
             });
         });
-        let items: Vec<_> = self.state.artifacts.iter().filter(|a| self.project_filter.as_ref().is_none_or(|p| a.project_id.as_ref() == Some(p))).take(12).cloned().collect();
+        let items: Vec<_> =
+            self.state.artifacts.iter().filter(|a| self.project_filter.as_ref().is_none_or(|p| a.project_id.as_ref() == Some(p))).take(12).cloned().collect();
         if items.is_empty() {
             ui.label(small_muted(&t, "„Als Dokument“ an einer Antwort legt eins an."));
         }
@@ -168,7 +173,8 @@ impl AisCraftApp {
                     ui.close();
                 }
                 if ui.button(RichText::new("Löschen").color(t.danger)).clicked() {
-                    self.dialog = Some(Dialog::Confirm { text: format!("„{}“ löschen?", a.title), command: "artifact.delete".into(), params: json!({"id": a.id}) });
+                    self.dialog =
+                        Some(Dialog::Confirm { text: format!("„{}“ löschen?", a.title), command: "artifact.delete".into(), params: json!({"id": a.id}) });
                     ui.close();
                 }
             });
@@ -177,7 +183,8 @@ impl AisCraftApp {
 
     fn chat_list(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
-        let convs: Vec<_> = self.state.conversations.iter().filter(|c| self.project_filter.as_ref().is_none_or(|p| c.project_id.as_ref() == Some(p))).cloned().collect();
+        let convs: Vec<_> =
+            self.state.conversations.iter().filter(|c| self.project_filter.as_ref().is_none_or(|p| c.project_id.as_ref() == Some(p))).cloned().collect();
         if convs.is_empty() {
             ui.add_space(8.0);
             ui.label(small_muted(&t, if self.project_filter.is_some() { "Noch keine Chats in diesem Projekt." } else { "Noch keine Chats." }));
@@ -238,7 +245,11 @@ impl AisCraftApp {
                         }
                     }
                 });
-                if let Some(url) = self.state.backend(&c.backend_id).filter(|b| b.config.kind == BackendKind::AisChat).map(|b| format!("{}{}", b.config.base_url.trim_end_matches('/'), aiscraft_core::ais_conversation_path(c.persona.as_ref(), &c.id)))
+                if let Some(url) = self
+                    .state
+                    .backend(&c.backend_id)
+                    .filter(|b| b.config.kind == BackendKind::AisChat)
+                    .map(|b| format!("{}{}", b.config.base_url.trim_end_matches('/'), aiscraft_core::ais_conversation_path(c.persona.as_ref(), &c.id)))
                     && ui.button("In AIS.chat öffnen").clicked()
                 {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(url));
@@ -246,7 +257,8 @@ impl AisCraftApp {
                 }
                 ui.separator();
                 if ui.button(RichText::new("Löschen").color(t.danger)).clicked() {
-                    self.dialog = Some(Dialog::Confirm { text: format!("„{}“ löschen?", c.title), command: "chat.delete".into(), params: json!({"id": c.id}) });
+                    self.dialog =
+                        Some(Dialog::Confirm { text: format!("„{}“ löschen?", c.title), command: "chat.delete".into(), params: json!({"id": c.id}) });
                     ui.close();
                 }
             });
@@ -256,54 +268,60 @@ impl AisCraftApp {
     /// Assistants, characters and learning scenarios on AIS.chat: start a chat with one.
     fn personas_section(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
-        let ais: Vec<_> = self.state.backends.iter().filter(|b| b.config.kind == BackendKind::AisChat && matches!(b.status, BackendStatus::Ready { .. })).cloned().collect();
+        let ais: Vec<_> =
+            self.state.backends.iter().filter(|b| b.config.kind == BackendKind::AisChat && matches!(b.status, BackendStatus::Ready { .. })).cloned().collect();
         for b in ais {
             ui.add_space(4.0);
             let open = std::mem::take(&mut self.show_personas).then_some(true);
-            let header = egui::CollapsingHeader::new(small_muted(&t, "ASSISTENTEN, FIGUREN & SZENARIEN")).id_salt(("personas", &b.config.id)).default_open(false).open(open).show(ui, |ui| {
-                let Some(list) = b.personas.clone() else {
-                    match &b.personas_error {
-                        Some(e) => {
-                            ui.label(small_muted(&t, e));
-                            if ui.button("Erneut versuchen").clicked() {
-                                self.run("persona.refresh", json!({"backend": b.config.id}));
+            let header = egui::CollapsingHeader::new(small_muted(&t, "ASSISTENTEN, FIGUREN & SZENARIEN"))
+                .id_salt(("personas", &b.config.id))
+                .default_open(false)
+                .open(open)
+                .show(ui, |ui| {
+                    let Some(list) = b.personas.clone() else {
+                        match &b.personas_error {
+                            Some(e) => {
+                                ui.label(small_muted(&t, e));
+                                if ui.button("Erneut versuchen").clicked() {
+                                    self.run("persona.refresh", json!({"backend": b.config.id}));
+                                }
+                            }
+                            None => {
+                                ui.add(egui::Spinner::new());
                             }
                         }
-                        None => {
-                            ui.add(egui::Spinner::new());
+                        return;
+                    };
+                    if list.is_empty() {
+                        ui.label(small_muted(&t, "Noch keine. In AIS.chat angelegte und geteilte erscheinen hier."));
+                    }
+                    for kind in aiscraft_core::PersonaKind::ALL {
+                        let items: Vec<_> = list.iter().filter(|p| p.kind == kind).collect();
+                        if items.is_empty() {
+                            continue;
+                        }
+                        ui.add_space(2.0);
+                        ui.label(small_muted(&t, kind.plural()));
+                        for p in items.into_iter().take(80) {
+                            let active =
+                                self.state.current.is_none() && self.state.selection.persona.as_ref().is_some_and(|x| x.kind == p.kind && x.id == p.id);
+                            let label = if p.own { format!("{}  · eigene", p.name) } else { p.name.clone() };
+                            let r = ui.add(egui::Button::selectable(active, RichText::new(label)).truncate().min_size(egui::vec2(ui.available_width(), 22.0)));
+                            let r = match &p.description {
+                                Some(d) => r.on_hover_text(d.chars().take(400).collect::<String>()),
+                                None => r.on_hover_text(format!("Neuer Chat: {}", kind.label())),
+                            };
+                            if r.clicked() {
+                                self.run("persona.start", json!({"backend": b.config.id, "kind": p.kind.as_str(), "id": p.id}));
+                                self.composer.clear();
+                                self.focus_composer = true;
+                            }
                         }
                     }
-                    return;
-                };
-                if list.is_empty() {
-                    ui.label(small_muted(&t, "Noch keine. In AIS.chat angelegte und geteilte erscheinen hier."));
-                }
-                for kind in aiscraft_core::PersonaKind::ALL {
-                    let items: Vec<_> = list.iter().filter(|p| p.kind == kind).collect();
-                    if items.is_empty() {
-                        continue;
+                    if ui.add(egui::Button::new(small_muted(&t, "Neu laden")).frame(false)).clicked() {
+                        self.run("persona.refresh", json!({"backend": b.config.id}));
                     }
-                    ui.add_space(2.0);
-                    ui.label(small_muted(&t, kind.plural()));
-                    for p in items.into_iter().take(80) {
-                        let active = self.state.current.is_none() && self.state.selection.persona.as_ref().is_some_and(|x| x.kind == p.kind && x.id == p.id);
-                        let label = if p.own { format!("{}  · eigene", p.name) } else { p.name.clone() };
-                        let r = ui.add(egui::Button::selectable(active, RichText::new(label)).truncate().min_size(egui::vec2(ui.available_width(), 22.0)));
-                        let r = match &p.description {
-                            Some(d) => r.on_hover_text(d.chars().take(400).collect::<String>()),
-                            None => r.on_hover_text(format!("Neuer Chat: {}", kind.label())),
-                        };
-                        if r.clicked() {
-                            self.run("persona.start", json!({"backend": b.config.id, "kind": p.kind.as_str(), "id": p.id}));
-                            self.composer.clear();
-                            self.focus_composer = true;
-                        }
-                    }
-                }
-                if ui.add(egui::Button::new(small_muted(&t, "Neu laden")).frame(false)).clicked() {
-                    self.run("persona.refresh", json!({"backend": b.config.id}));
-                }
-            });
+                });
             if header.fully_open() && b.personas.is_none() && !self.personas_open {
                 self.personas_open = true;
                 self.run("persona.refresh", json!({"backend": b.config.id}));
@@ -317,25 +335,33 @@ impl AisCraftApp {
     /// Conversations on the AIS.chat server that are not here yet.
     fn remote_section(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
-        let ais: Vec<_> = self.state.backends.iter().filter(|b| b.config.kind == BackendKind::AisChat && matches!(b.status, BackendStatus::Ready { .. })).cloned().collect();
+        let ais: Vec<_> =
+            self.state.backends.iter().filter(|b| b.config.kind == BackendKind::AisChat && matches!(b.status, BackendStatus::Ready { .. })).cloned().collect();
         for b in ais {
             ui.add_space(10.0);
-            let header = egui::CollapsingHeader::new(small_muted(&t, format!("{} – VERLAUF", b.config.name.to_uppercase()))).id_salt(("remote", &b.config.id)).default_open(false).show(ui, |ui| {
-                let Some(list) = self.state.remote.get(&b.config.id).cloned() else {
-                    ui.add(egui::Spinner::new());
-                    return;
-                };
-                let local: std::collections::HashSet<&str> = self.state.conversations.iter().map(|c| c.id.as_str()).collect();
-                let missing: Vec<_> = list.iter().filter(|r| !local.contains(r.id.as_str())).collect();
-                if missing.is_empty() {
-                    ui.label(small_muted(&t, "Alles schon hier."));
-                }
-                for r in missing.into_iter().take(60) {
-                    if ui.add(egui::Button::new(RichText::new(&r.title).color(t.muted)).frame(false).truncate()).on_hover_text("Hierher übernehmen und weiterschreiben").clicked() {
-                        self.run("remote.import", json!({"backend": b.config.id, "id": r.id, "title": r.title}));
+            let header = egui::CollapsingHeader::new(small_muted(&t, format!("{} – VERLAUF", b.config.name.to_uppercase())))
+                .id_salt(("remote", &b.config.id))
+                .default_open(false)
+                .show(ui, |ui| {
+                    let Some(list) = self.state.remote.get(&b.config.id).cloned() else {
+                        ui.add(egui::Spinner::new());
+                        return;
+                    };
+                    let local: std::collections::HashSet<&str> = self.state.conversations.iter().map(|c| c.id.as_str()).collect();
+                    let missing: Vec<_> = list.iter().filter(|r| !local.contains(r.id.as_str())).collect();
+                    if missing.is_empty() {
+                        ui.label(small_muted(&t, "Alles schon hier."));
                     }
-                }
-            });
+                    for r in missing.into_iter().take(60) {
+                        if ui
+                            .add(egui::Button::new(RichText::new(&r.title).color(t.muted)).frame(false).truncate())
+                            .on_hover_text("Hierher übernehmen und weiterschreiben")
+                            .clicked()
+                        {
+                            self.run("remote.import", json!({"backend": b.config.id, "id": r.id, "title": r.title}));
+                        }
+                    }
+                });
             if header.fully_open() && !self.state.remote.contains_key(&b.config.id) && !self.remote_open {
                 self.remote_open = true;
                 self.run("remote.refresh", json!({"backend": b.config.id}));
@@ -357,7 +383,9 @@ impl AisCraftApp {
                 account.detail.clone().unwrap_or_default(),
             ),
             Some(BackendStatus::Checking) => (t.warning, "Verbinde …".into(), String::new()),
-            Some(BackendStatus::SignedOut { .. }) | Some(BackendStatus::Unknown) => (t.muted, view.as_ref().map(|b| b.config.name.clone()).unwrap_or_default(), "Nicht angemeldet".into()),
+            Some(BackendStatus::SignedOut { .. }) | Some(BackendStatus::Unknown) => {
+                (t.muted, view.as_ref().map(|b| b.config.name.clone()).unwrap_or_default(), "Nicht angemeldet".into())
+            }
             Some(BackendStatus::Failed { message }) => (t.danger, view.as_ref().map(|b| b.config.name.clone()).unwrap_or_default(), message.clone()),
             None => (t.muted, "Kein Backend".into(), String::new()),
         };
@@ -384,7 +412,13 @@ impl AisCraftApp {
             })
             .response
             .interact(Sense::click());
-        if let Some(q) = self.state.backends.iter().filter(|b| b.config.kind == BackendKind::AisChat && matches!(b.status, BackendStatus::Ready { .. })).find_map(|b| b.quota) {
+        if let Some(q) = self
+            .state
+            .backends
+            .iter()
+            .filter(|b| b.config.kind == BackendKind::AisChat && matches!(b.status, BackendStatus::Ready { .. }))
+            .find_map(|b| b.quota)
+        {
             let left = q.left() as f32;
             ui.horizontal(|ui| {
                 ui.label(small_muted(&t, format!("AIS.chat-Kontingent: {:.0} % übrig", left * 100.0)));
@@ -393,7 +427,17 @@ impl AisCraftApp {
             ui.painter().rect_filled(rect, CornerRadius::same(3), t.surface_hi);
             let mut fill = rect;
             fill.set_width((rect.width() * left).max(2.0));
-            ui.painter().rect_filled(fill, CornerRadius::same(3), if left < 0.1 { t.danger } else if left < 0.3 { t.warning } else { t.accent });
+            ui.painter().rect_filled(
+                fill,
+                CornerRadius::same(3),
+                if left < 0.1 {
+                    t.danger
+                } else if left < 0.3 {
+                    t.warning
+                } else {
+                    t.accent
+                },
+            );
             resp.on_hover_text(format!("{:.0} von {:.0} Token-Punkten verbraucht (aus AIS.chat, nach jeder Antwort aktualisiert)", q.used, q.max));
         }
         if r.clicked() {

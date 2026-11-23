@@ -177,7 +177,16 @@ impl Backend for ClaudeCli {
 
     fn models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>>> {
         Box::pin(async move {
-            Ok(MODELS.iter().map(|(id, name, d)| ModelInfo { id: id.to_string(), name: name.to_string(), description: Some(d.to_string()), vision: true, context_window: Some(1_000_000) }).collect())
+            Ok(MODELS
+                .iter()
+                .map(|(id, name, d)| ModelInfo {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    description: Some(d.to_string()),
+                    vision: true,
+                    context_window: Some(1_000_000),
+                })
+                .collect())
         })
     }
 
@@ -210,7 +219,8 @@ impl Backend for ClaudeCli {
             let mcp_file = match &req.tool_bridge {
                 Some(b) => {
                     let path = dir.join(format!("mcp-{}.json", std::process::id() as u64 ^ req.conversation_id.len() as u64 ^ b.token.len() as u64));
-                    let cfg = json!({"mcpServers": {"aischatcraft": {"type": "http", "url": b.url, "headers": {"Authorization": format!("Bearer {}", b.token)}}}});
+                    let cfg =
+                        json!({"mcpServers": {"aischatcraft": {"type": "http", "url": b.url, "headers": {"Authorization": format!("Bearer {}", b.token)}}}});
                     write_private(&path, cfg.to_string().as_bytes())?;
                     c.args(["--mcp-config", &path.display().to_string(), "--allowedTools", "mcp__aischatcraft"]);
                     Some(path)
@@ -233,7 +243,14 @@ impl Backend for ClaudeCli {
                 queue: std::collections::VecDeque<Result<StreamEvent>>,
                 finished: bool,
             }
-            let st = St { _mcp: mcp_file.map(TempFile), child, lines: BufReader::new(stdout).lines(), stderr: stderr.take(), queue: Default::default(), finished: false };
+            let st = St {
+                _mcp: mcp_file.map(TempFile),
+                child,
+                lines: BufReader::new(stdout).lines(),
+                stderr: stderr.take(),
+                queue: Default::default(),
+                finished: false,
+            };
             Ok(stream::unfold(st, |mut st| async move {
                 loop {
                     if let Some(item) = st.queue.pop_front() {
@@ -265,7 +282,11 @@ impl Backend for ClaudeCli {
                             st.queue.push_back(if status.is_some_and(|s| s.success()) && err.is_empty() {
                                 Ok(StreamEvent::Done)
                             } else {
-                                Err(Error::protocol(if err.is_empty() { "Claude-CLI wurde unerwartet beendet".to_string() } else { format!("Claude-CLI: {err}") }))
+                                Err(Error::protocol(if err.is_empty() {
+                                    "Claude-CLI wurde unerwartet beendet".to_string()
+                                } else {
+                                    format!("Claude-CLI: {err}")
+                                }))
                             });
                         }
                         Err(e) => st.queue.push_back(Err(Error::protocol(format!("Claude-CLI: {e}")))),
@@ -282,12 +303,33 @@ mod tests {
     use super::*;
 
     fn m(role: Role, c: &str) -> Message {
-        Message { id: "x".into(), conversation_id: "c".into(), role, content: c.into(), created_at: 0, model: None, attachments: vec![], activity: vec![], error: None, usage: None, tool_calls: vec![], tool_result: None }
+        Message {
+            id: "x".into(),
+            conversation_id: "c".into(),
+            role,
+            content: c.into(),
+            created_at: 0,
+            model: None,
+            attachments: vec![],
+            activity: vec![],
+            error: None,
+            usage: None,
+            tool_calls: vec![],
+            tool_result: None,
+        }
     }
 
     #[test]
     fn transcript_and_last_message() {
-        let req = ChatRequest { conversation_id: "c".into(), model: "claude-haiku-5-5".into(), system: None, messages: vec![m(Role::User, "Hallo"), m(Role::Assistant, "Hi!"), m(Role::User, "Und jetzt?")], tools: vec![], tool_bridge: None, persona: None };
+        let req = ChatRequest {
+            conversation_id: "c".into(),
+            model: "claude-haiku-5-5".into(),
+            system: None,
+            messages: vec![m(Role::User, "Hallo"), m(Role::Assistant, "Hi!"), m(Role::User, "Und jetzt?")],
+            tools: vec![],
+            tool_bridge: None,
+            persona: None,
+        };
         let v = input_message(&req);
         let text = v.pointer("/message/content/0/text").and_then(Value::as_str).unwrap();
         assert!(text.contains("<Person>\nHallo\n</Person>"));
@@ -302,7 +344,10 @@ mod tests {
         let r = r#"{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":2,"cache_read_input_tokens":10,"output_tokens":5}}"#;
         let evs = line_events(r).unwrap();
         assert_eq!(evs.last(), Some(&StreamEvent::Done));
-        assert!(line_events(r#"{"type":"result","is_error":true,"result":"Not logged in · Please run /login"}"#).unwrap_err().kind == aiscraft_core::ErrorKind::Auth);
+        assert!(
+            line_events(r#"{"type":"result","is_error":true,"result":"Not logged in · Please run /login"}"#).unwrap_err().kind
+                == aiscraft_core::ErrorKind::Auth
+        );
         assert!(line_events("garbage").unwrap().is_empty());
     }
 
@@ -310,10 +355,25 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn claude_cli_live() {
-        let cfg = BackendConfig { id: "cc".into(), name: "Claude".into(), kind: aiscraft_core::BackendKind::ClaudeCli, base_url: "claude".into(), default_model: None, send_context: true };
+        let cfg = BackendConfig {
+            id: "cc".into(),
+            name: "Claude".into(),
+            kind: aiscraft_core::BackendKind::ClaudeCli,
+            base_url: "claude".into(),
+            default_model: None,
+            send_context: true,
+        };
         let b = ClaudeCli::new(cfg, "claude".into()).unwrap();
         b.check().await.unwrap();
-        let req = ChatRequest { conversation_id: "c".into(), model: "claude-haiku-5-5".into(), system: Some("Antworte mit genau einem Wort.".into()), messages: vec![m(Role::User, "Sag Hallo")], tools: vec![], tool_bridge: None, persona: None };
+        let req = ChatRequest {
+            conversation_id: "c".into(),
+            model: "claude-haiku-5-5".into(),
+            system: Some("Antworte mit genau einem Wort.".into()),
+            messages: vec![m(Role::User, "Sag Hallo")],
+            tools: vec![],
+            tool_bridge: None,
+            persona: None,
+        };
         let mut s = b.chat(req).await.unwrap();
         let mut text = String::new();
         while let Some(e) = s.next().await {

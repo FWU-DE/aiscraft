@@ -101,7 +101,15 @@ impl Cron {
                 *x = 0; // Sunday is 0 and 7
             }
         }
-        Ok(Self { minutes: field(m, 0, 59)?, hours: field(h, 0, 23)?, days: field(d, 1, 31)?, months: field(mo, 1, 12)?, weekdays, any_day: *d == "*", any_weekday: *w == "*" })
+        Ok(Self {
+            minutes: field(m, 0, 59)?,
+            hours: field(h, 0, 23)?,
+            days: field(d, 1, 31)?,
+            months: field(mo, 1, 12)?,
+            weekdays,
+            any_day: *d == "*",
+            any_weekday: *w == "*",
+        })
     }
 
     /// Does the rule fire in this minute? Day of month and weekday combine with OR when both are
@@ -221,8 +229,8 @@ async fn run(c: &Ctx, mut s: Schedule) -> Result<Value> {
                 pinned: false,
                 sources: Default::default(),
                 persona: None,
-        kind: Default::default(),
-        remote_id: None,
+                kind: Default::default(),
+                remote_id: None,
             };
             c.store(|st| st.save_conversation(&conv))?;
             let id = conv.id.clone();
@@ -328,7 +336,14 @@ pub fn parse_when(s: &str, now: i64) -> Option<i64> {
         return None;
     };
     let time = time.trim_start_matches("um").trim().trim_end_matches("uhr").trim();
-    let (h, m) = if time.is_empty() { (8, 0) } else { time.split_once(':').map(|(a, b)| (a.parse().ok(), b.parse().ok())).map(|(a, b)| (a.unwrap_or(99), b.unwrap_or(99))).unwrap_or((time.parse().unwrap_or(99), 0)) };
+    let (h, m) = if time.is_empty() {
+        (8, 0)
+    } else {
+        time.split_once(':')
+            .map(|(a, b)| (a.parse().ok(), b.parse().ok()))
+            .map(|(a, b)| (a.unwrap_or(99), b.unwrap_or(99)))
+            .unwrap_or((time.parse().unwrap_or(99), 0))
+    };
     let dt = day.and_hms_opt(h, m, 0)?;
     Local.from_local_datetime(&dt).earliest().map(|d| d.timestamp_millis())
 }
@@ -344,7 +359,9 @@ pub(crate) async fn create(c: Ctx, p: Value) -> Result<Value> {
     let now = now_ms();
     let cron = opt_str(&p, "cron").filter(|x| !x.trim().is_empty());
     let run_at = match opt_str(&p, "at").filter(|x| !x.trim().is_empty()) {
-        Some(w) => Some(parse_when(&w, now).ok_or_else(|| Error::invalid(format!("Zeit nicht verstanden: {w} (z. B. „in 2 Tagen“, „morgen 7:30“, „2026-12-04 08:00“)")))?),
+        Some(w) => Some(
+            parse_when(&w, now).ok_or_else(|| Error::invalid(format!("Zeit nicht verstanden: {w} (z. B. „in 2 Tagen“, „morgen 7:30“, „2026-12-04 08:00“)")))?,
+        ),
         None => None,
     };
     match (&cron, run_at) {

@@ -7,12 +7,12 @@ mod bridge;
 mod chat;
 mod commands;
 mod files;
-mod secrets;
 mod proactive;
 mod schedules;
+mod secrets;
 mod skills;
-mod tasks;
 mod state;
+mod tasks;
 pub mod tools;
 mod usage;
 mod vault;
@@ -30,15 +30,15 @@ use futures::future::BoxFuture;
 use serde_json::Value;
 
 pub use aiscraft_backends::SESSION_COOKIE;
-pub use commands::{CommandSpec, commands};
 pub use artifacts::{change_blocks, doc_text, markdown_html};
+pub use commands::{CommandSpec, commands};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use schedules::{Cron, Schedule, next_run as schedule_next_run};
 pub use secrets::Secrets;
 pub use skills::Skill;
-pub use vault::{EntryInfo as VaultEntry, totp_at};
-pub use tools::{obsidian_vaults, presets as connector_presets};
 pub use state::*;
+pub use tools::{obsidian_vaults, presets as connector_presets};
+pub use vault::{EntryInfo as VaultEntry, totp_at};
 
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
@@ -60,7 +60,9 @@ pub fn local_user_name() -> String {
             None
         } else {
             // passwd: name:x:uid:gid:GECOS:home:shell; the full name is GECOS up to the first comma.
-            run("getent", &["passwd", &login]).and_then(|l| l.split(':').nth(4).map(|g| g.split(',').next().unwrap_or("").trim().to_string())).filter(|g| !g.is_empty())
+            run("getent", &["passwd", &login])
+                .and_then(|l| l.split(':').nth(4).map(|g| g.split(',').next().unwrap_or("").trim().to_string()))
+                .filter(|g| !g.is_empty())
         };
         full.unwrap_or(login)
     })
@@ -158,8 +160,16 @@ impl Engine {
             bridge: Default::default(),
             voice: Default::default(),
             browser_allowed: opts.data_dir.is_some() && std::env::var_os("AISCRAFT_NO_BROWSER").is_none(),
-            browser_profile: opts.data_dir.clone().map(|d| d.join("browser-profile")).unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-browser-{}", std::process::id()))),
-            attachments_dir: opts.data_dir.clone().map(|d| d.join("attachments")).unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-attachments-{}", std::process::id()))),
+            browser_profile: opts
+                .data_dir
+                .clone()
+                .map(|d| d.join("browser-profile"))
+                .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-browser-{}", std::process::id()))),
+            attachments_dir: opts
+                .data_dir
+                .clone()
+                .map(|d| d.join("attachments"))
+                .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-attachments-{}", std::process::id()))),
         }));
         ctx.load()?;
         if let Some(n) = secret_notice {
@@ -323,7 +333,17 @@ impl Ctx {
             let quota = s.backend(&config.id).and_then(|b| b.quota);
             let personas = s.backend(&config.id).and_then(|b| b.personas.clone());
             let image_models = s.backend(&config.id).map(|b| b.image_models.clone()).unwrap_or_default();
-            let view = BackendView { config: config.clone(), capabilities: caps, has_secret, status: BackendStatus::Unknown, models, quota, personas, personas_error: None, image_models };
+            let view = BackendView {
+                config: config.clone(),
+                capabilities: caps,
+                has_secret,
+                status: BackendStatus::Unknown,
+                models,
+                quota,
+                personas,
+                personas_error: None,
+                image_models,
+            };
             match s.backends.iter_mut().find(|b| b.config.id == config.id) {
                 Some(b) => *b = view,
                 None => s.backends.push(view),

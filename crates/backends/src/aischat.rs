@@ -214,7 +214,9 @@ impl AisChat {
         }
         match first_err {
             Some(e) if !loaded_any => Err(e),
-            _ => Err(Error::protocol(format!("{} von AIS.chat wurde in der Web-App nicht gefunden. Vermutlich hat sich AIS.chat geändert.", action_label(name)))),
+            _ => {
+                Err(Error::protocol(format!("{} von AIS.chat wurde in der Web-App nicht gefunden. Vermutlich hat sich AIS.chat geändert.", action_label(name))))
+            }
         }
     }
 
@@ -306,7 +308,13 @@ impl AisChat {
         if !resp.status().is_success() {
             return Err(status_error(resp, "Bild laden").await);
         }
-        let mime = resp.headers().get("content-type").and_then(|c| c.to_str().ok()).map(|c| c.split(';').next().unwrap_or("").trim().to_string()).filter(|c| c.starts_with("image/")).unwrap_or_else(|| "image/png".into());
+        let mime = resp
+            .headers()
+            .get("content-type")
+            .and_then(|c| c.to_str().ok())
+            .map(|c| c.split(';').next().unwrap_or("").trim().to_string())
+            .filter(|c| c.starts_with("image/"))
+            .unwrap_or_else(|| "image/png".into());
         let bytes = crate::http::read_bytes_capped(resp, IMAGE_CAP, "Das Bild").await?;
         Ok((bytes, mime))
     }
@@ -366,7 +374,9 @@ pub fn parse_personas(kind: PersonaKind, v: &Value, me: Option<&str>) -> Vec<Per
                 prompt_suggestions: o
                     .get("promptSuggestions")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_str).map(str::trim).filter(|x| !x.is_empty()).take(8).map(|x| x.chars().take(500).collect()).collect())
+                    .map(|a| {
+                        a.iter().filter_map(Value::as_str).map(str::trim).filter(|x| !x.is_empty()).take(8).map(|x| x.chars().take(500).collect()).collect()
+                    })
                     .unwrap_or_default(),
                 model_id: s(o, "modelId"),
             })
@@ -391,8 +401,13 @@ pub fn action_payload(req: &ChatRequest) -> Value {
             json!({"id": m.id, "role": m.role.as_str(), "content": content})
         })
         .collect();
-    let file_ids: Vec<&str> =
-        req.messages.iter().rev().find(|m| m.role == Role::User).map(|m| m.attachments.iter().filter_map(|a| a.remote_id.as_deref()).collect()).unwrap_or_default();
+    let file_ids: Vec<&str> = req
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == Role::User)
+        .map(|m| m.attachments.iter().filter_map(|a| a.remote_id.as_deref()).collect())
+        .unwrap_or_default();
     let mut p = json!({"conversationId": req.conversation_id, "messages": messages, "modelId": req.model});
     if let Some(o) = p.as_object_mut() {
         if !file_ids.is_empty() {
@@ -628,7 +643,13 @@ impl Backend for AisChat {
             let mut models: Vec<ModelInfo> = scrape::page_models(&payload)
                 .into_iter()
                 .filter(|m| m.kind == "text")
-                .map(|m| ModelInfo { id: m.id, name: m.display_name, description: (!m.description.is_empty()).then_some(m.description), vision: m.vision, context_window: None })
+                .map(|m| ModelInfo {
+                    id: m.id,
+                    name: m.display_name,
+                    description: (!m.description.is_empty()).then_some(m.description),
+                    vision: m.vision,
+                    context_window: None,
+                })
                 .collect();
             if models.is_empty() {
                 return Err(Error::protocol("AIS.chat hat keine Modelle geliefert. Ist die Schulung abgeschlossen?"));
@@ -679,9 +700,13 @@ impl Backend for AisChat {
                     a.iter()
                         .filter_map(|c| {
                             let s = |k: &str| c.get(k).and_then(Value::as_str).map(str::to_string);
-                            let persona = [("assistantId", PersonaKind::Assistant), ("characterId", PersonaKind::Character), ("learningScenarioId", PersonaKind::LearningScenario)]
-                                .into_iter()
-                                .find_map(|(k, kind)| s(k).filter(|v| !v.is_empty()).map(|id| Persona { kind, id, name: String::new() }));
+                            let persona = [
+                                ("assistantId", PersonaKind::Assistant),
+                                ("characterId", PersonaKind::Character),
+                                ("learningScenarioId", PersonaKind::LearningScenario),
+                            ]
+                            .into_iter()
+                            .find_map(|(k, kind)| s(k).filter(|v| !v.is_empty()).map(|id| Persona { kind, id, name: String::new() }));
                             Some(RemoteConversation {
                                 id: s("id")?,
                                 title: s("name").or_else(|| s("title")).unwrap_or_else(|| "Ohne Titel".into()),
@@ -773,7 +798,13 @@ impl Backend for AisChat {
             Ok(scrape::page_models(&scrape::rsc_payload(&html))
                 .into_iter()
                 .filter(|m| m.kind == "image")
-                .map(|m| ModelInfo { id: m.id, name: m.display_name, description: (!m.description.is_empty()).then_some(m.description), vision: m.vision, context_window: None })
+                .map(|m| ModelInfo {
+                    id: m.id,
+                    name: m.display_name,
+                    description: (!m.description.is_empty()).then_some(m.description),
+                    vision: m.vision,
+                    context_window: None,
+                })
                 .collect())
         })
     }
@@ -870,11 +901,21 @@ mod tests {
             attachments: vec![Attachment { remote_id: Some("f1".into()), ..Default::default() }],
             activity: vec![],
             error: None,
-            usage: None, tool_calls: vec![], tool_result: None,
+            usage: None,
+            tool_calls: vec![],
+            tool_result: None,
         };
         let a = Message { id: "a0".into(), role: Role::Assistant, content: String::new(), attachments: vec![], ..u.clone() };
         u.id = "u1".into();
-        let req = ChatRequest { conversation_id: "c1".into(), model: "uuid-m".into(), system: Some("ignored".into()), messages: vec![u, a], tools: vec![], tool_bridge: None, persona: None };
+        let req = ChatRequest {
+            conversation_id: "c1".into(),
+            model: "uuid-m".into(),
+            system: Some("ignored".into()),
+            messages: vec![u, a],
+            tools: vec![],
+            tool_bridge: None,
+            persona: None,
+        };
         let body = encode_action_args(&[action_payload(&req)]);
         assert_eq!(body, r#"[{"conversationId":"c1","fileIds":["f1"],"messages":[{"content":"$$5?","id":"u1","role":"user"}],"modelId":"uuid-m"}]"#);
     }
@@ -893,7 +934,8 @@ mod tests {
         assert_eq!(steps.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(), ["Diagramm erstellen", "Webseite lesen", "Datei lesen"]);
         assert_eq!(steps[0].detail.as_deref(), Some("Parabel y=x^2"));
         assert!(steps[1].failed && steps[1].links[0].failed && steps[1].links[0].title == "https://a.example");
-        let err = map_action_event(ActionEvent::Result(json!({"stream":"$2","messageId":"m","error":{"name":"TokenPointsExceededError","message":"x"}}))).unwrap_err();
+        let err = map_action_event(ActionEvent::Result(json!({"stream":"$2","messageId":"m","error":{"name":"TokenPointsExceededError","message":"x"}})))
+            .unwrap_err();
         assert_eq!(err.kind, aiscraft_core::ErrorKind::Refused);
         assert_eq!(map_action_event(ActionEvent::Result(json!({"messageId":"m9"}))).unwrap(), vec![StreamEvent::MessageId { id: "m9".into() }]);
     }
@@ -917,12 +959,17 @@ mod tests {
                     let (ctype, extra, body) = if req.starts_with("GET / ") {
                         ("text/html", String::new(), r#"<script src="/_next/static/chunks/app.js"></script>"#.to_string())
                     } else if req.starts_with("GET /_next/static/chunks/app.js") {
-                        ("application/javascript", String::new(), format!(r#"(0,a.createServerReference)("{action}",a.callServer,void 0,a.findSourceMapURL,"sendChatMessageAction")"#))
+                        (
+                            "application/javascript",
+                            String::new(),
+                            format!(r#"(0,a.createServerReference)("{action}",a.callServer,void 0,a.findSourceMapURL,"sendChatMessageAction")"#),
+                        )
                     } else if req.starts_with("POST / ") && req.contains(&format!("next-action: {action}")) && req.contains("cookie: __Secure-ais-chat-app") {
                         (
                             "text/x-component",
                             format!("set-cookie: {SESSION_COOKIE}=renewed; Path=/; Secure\r\n"),
-                            "0:{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}\n1:{\"stream\":\"$2\",\"messageId\":\"srv-1\"}\n2:R\n2:T6,Hallo 2:\"Welt\"\n2:C\n".to_string(),
+                            "0:{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}\n1:{\"stream\":\"$2\",\"messageId\":\"srv-1\"}\n2:R\n2:T6,Hallo 2:\"Welt\"\n2:C\n"
+                                .to_string(),
                         )
                     } else {
                         ("text/plain", String::new(), "nope".to_string())
@@ -953,9 +1000,22 @@ mod tests {
             attachments: vec![],
             activity: vec![],
             error: None,
-            usage: None, tool_calls: vec![], tool_result: None,
+            usage: None,
+            tool_calls: vec![],
+            tool_result: None,
         };
-        let mut s = backend.chat(ChatRequest { conversation_id: "c".into(), model: "m".into(), system: None, messages: vec![msg], tools: vec![], tool_bridge: None, persona: None }).await.unwrap();
+        let mut s = backend
+            .chat(ChatRequest {
+                conversation_id: "c".into(),
+                model: "m".into(),
+                system: None,
+                messages: vec![msg],
+                tools: vec![],
+                tool_bridge: None,
+                persona: None,
+            })
+            .await
+            .unwrap();
         let mut evs = Vec::new();
         while let Some(e) = s.next().await {
             evs.push(e.unwrap());
@@ -1008,7 +1068,9 @@ mod tests {
             tool_calls: vec![],
             tool_result: None,
         };
-        for (kind, key) in [(PersonaKind::Assistant, "assistantId"), (PersonaKind::Character, "characterId"), (PersonaKind::LearningScenario, "learningScenarioId")] {
+        for (kind, key) in
+            [(PersonaKind::Assistant, "assistantId"), (PersonaKind::Character, "characterId"), (PersonaKind::LearningScenario, "learningScenarioId")]
+        {
             let req = ChatRequest {
                 conversation_id: "c".into(),
                 model: "m".into(),
@@ -1037,7 +1099,10 @@ mod tests {
             buf.extend_from_slice(&chunk[..n]);
             let s = String::from_utf8_lossy(&buf);
             if let Some(head_end) = s.find("\r\n\r\n") {
-                let len = s[..head_end].lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+                let len = s[..head_end]
+                    .lines()
+                    .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                    .unwrap_or(0);
                 if buf.len() >= head_end + 4 + len {
                     break;
                 }
@@ -1083,11 +1148,19 @@ mod tests {
                         posted.lock().unwrap().push(req.clone());
                         if action == id(0x11) {
                             assert!(req.ends_with(r#"["all"]"#), "{req}");
-                            ("text/x-component", flight(r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung","updatedAt":"$D2026-11-01T00:00:00.000Z"},{"id":"a2","name":"Schulassistent","userId":"x"}]"#))
+                            (
+                                "text/x-component",
+                                flight(
+                                    r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung","updatedAt":"$D2026-11-01T00:00:00.000Z"},{"id":"a2","name":"Schulassistent","userId":"x"}]"#,
+                                ),
+                            )
                         } else if action == id(0x22) {
                             ("text/x-component", flight(r#"[{"id":"c1","name":"Goethe","userId":"x","initialMessage":"Seid gegrüßt!"}]"#))
                         } else if action == id(0x7f) {
-                            ("text/x-component", "0:{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}\n1:{\"stream\":\"$2\",\"messageId\":\"srv-1\"}\n2:R\n2:\"Gern.\"\n2:C\n".to_string())
+                            (
+                                "text/x-component",
+                                "0:{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}\n1:{\"stream\":\"$2\",\"messageId\":\"srv-1\"}\n2:R\n2:\"Gern.\"\n2:C\n".to_string(),
+                            )
                         } else {
                             ("text/plain", "unbekannte Aktion".to_string())
                         }
@@ -1103,7 +1176,14 @@ mod tests {
     }
 
     fn ais_config(base: String) -> BackendConfig {
-        BackendConfig { id: "ais".into(), name: "AIS".into(), kind: aiscraft_core::BackendKind::AisChat, base_url: base, default_model: None, send_context: false }
+        BackendConfig {
+            id: "ais".into(),
+            name: "AIS".into(),
+            kind: aiscraft_core::BackendKind::AisChat,
+            base_url: base,
+            default_model: None,
+            send_context: false,
+        }
     }
 
     /// Listing assistants and characters, then chatting as one, against a scripted server.
@@ -1114,13 +1194,50 @@ mod tests {
         let backend = crate::build(ais_config(base), Some("tok".into()), std::sync::Arc::new(|_, _| {})).unwrap();
         let list = backend.personas().await.unwrap();
         let names: Vec<_> = list.iter().map(|p| (p.kind, p.name.as_str(), p.own)).collect();
-        assert_eq!(names, [(PersonaKind::Assistant, "Mathe-Coach", true), (PersonaKind::Assistant, "Schulassistent", false), (PersonaKind::Character, "Goethe", false)]);
+        assert_eq!(
+            names,
+            [(PersonaKind::Assistant, "Mathe-Coach", true), (PersonaKind::Assistant, "Schulassistent", false), (PersonaKind::Character, "Goethe", false)]
+        );
         let goethe = list.iter().find(|p| p.id == "c1").unwrap();
         let msgs = vec![
-            Message { id: "g".into(), conversation_id: "c".into(), role: Role::Assistant, content: "Seid gegrüßt!".into(), created_at: 0, model: None, attachments: vec![], activity: vec![], error: None, usage: None, tool_calls: vec![], tool_result: None },
-            Message { id: "u".into(), conversation_id: "c".into(), role: Role::User, content: "Wer bist du?".into(), created_at: 1, model: None, attachments: vec![], activity: vec![], error: None, usage: None, tool_calls: vec![], tool_result: None },
+            Message {
+                id: "g".into(),
+                conversation_id: "c".into(),
+                role: Role::Assistant,
+                content: "Seid gegrüßt!".into(),
+                created_at: 0,
+                model: None,
+                attachments: vec![],
+                activity: vec![],
+                error: None,
+                usage: None,
+                tool_calls: vec![],
+                tool_result: None,
+            },
+            Message {
+                id: "u".into(),
+                conversation_id: "c".into(),
+                role: Role::User,
+                content: "Wer bist du?".into(),
+                created_at: 1,
+                model: None,
+                attachments: vec![],
+                activity: vec![],
+                error: None,
+                usage: None,
+                tool_calls: vec![],
+                tool_result: None,
+            },
         ];
-        let req = ChatRequest { conversation_id: "c".into(), model: "m".into(), system: None, messages: msgs, tools: vec![], tool_bridge: None, persona: Some(goethe.persona()) };
+        let req = ChatRequest {
+            conversation_id: "c".into(),
+            model: "m".into(),
+            system: None,
+            messages: msgs,
+            tools: vec![],
+            tool_bridge: None,
+            persona: Some(goethe.persona()),
+        };
         let mut s = backend.chat(req).await.unwrap();
         let mut text = String::new();
         while let Some(e) = s.next().await {
@@ -1135,7 +1252,8 @@ mod tests {
 
     #[tokio::test]
     async fn image_addresses_are_checked() {
-        let ais = AisChat::new(ais_config("http://127.0.0.1:9".into()), "http://127.0.0.1:9".into(), Some("tok".into()), std::sync::Arc::new(|_, _| {})).unwrap();
+        let ais =
+            AisChat::new(ais_config("http://127.0.0.1:9".into()), "http://127.0.0.1:9".into(), Some("tok".into()), std::sync::Arc::new(|_, _| {})).unwrap();
         let (bytes, mime) = ais.fetch_image("data:image/webp;base64,AAEC").await.unwrap();
         assert_eq!((bytes, mime.as_str()), (vec![0, 1, 2], "image/webp"));
         assert!(ais.fetch_image("data:image/png;base64,***").await.is_err());

@@ -133,7 +133,9 @@ impl AisCraftApp {
         Frame::new().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(if meta.kind == ArtifactKind::Board { "▣" } else { "📄" }).color(t.accent));
-                let r = ui.add(egui::Label::new(RichText::new(&meta.title).strong()).truncate().sense(egui::Sense::click())).on_hover_text("Doppelklick zum Umbenennen");
+                let r = ui
+                    .add(egui::Label::new(RichText::new(&meta.title).strong()).truncate().sense(egui::Sense::click()))
+                    .on_hover_text("Doppelklick zum Umbenennen");
                 if r.double_clicked() {
                     self.dialog = Some(crate::dialogs::Dialog::RenameArtifact { id: meta.id.clone(), title: meta.title.clone() });
                 }
@@ -143,7 +145,8 @@ impl AisCraftApp {
                         self.run("artifact.close", json!({}));
                     }
                     ui.menu_button(RichText::new("⬇").color(t.muted), |ui| {
-                        let formats: &[(&str, &str)] = if meta.kind == ArtifactKind::Board { &[("markdown", "md"), ("json", "json")] } else { &[("markdown", "md"), ("html", "html")] };
+                        let formats: &[(&str, &str)] =
+                            if meta.kind == ArtifactKind::Board { &[("markdown", "md"), ("json", "json")] } else { &[("markdown", "md"), ("html", "html")] };
                         for (f, ext) in formats {
                             if ui.button(format!("Als {}", ext.to_uppercase())).clicked() {
                                 let name: String = meta.title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
@@ -216,7 +219,12 @@ impl AisCraftApp {
                 ui.selectable_value(&mut v.preview, true, "Vorschau");
             });
             ui.horizontal(|ui| {
-                let r = ui.add_enabled(!v.revising, egui::TextEdit::singleline(&mut v.revise).hint_text("Mit KI überarbeiten, z. B. „Kürzer und für Klasse 5“").desired_width(ui.available_width() - 90.0));
+                let r = ui.add_enabled(
+                    !v.revising,
+                    egui::TextEdit::singleline(&mut v.revise)
+                        .hint_text("Mit KI überarbeiten, z. B. „Kürzer und für Klasse 5“")
+                        .desired_width(ui.available_width() - 90.0),
+                );
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if v.revising {
                     ui.add(egui::Spinner::new().color(t.accent));
@@ -259,7 +267,13 @@ impl AisCraftApp {
                     }
                     egui_commonmark::CommonMarkViewer::new().show(ui, &mut self.md, &v.doc);
                 } else {
-                    let r = ui.add(egui::TextEdit::multiline(&mut v.doc).desired_width(f32::INFINITY).desired_rows(30).frame(Frame::NONE).hint_text("# Titel\n\nText in Markdown …"));
+                    let r = ui.add(
+                        egui::TextEdit::multiline(&mut v.doc)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(30)
+                            .frame(Frame::NONE)
+                            .hint_text("# Titel\n\nText in Markdown …"),
+                    );
                     if r.changed() {
                         v.dirty_since = Some(Instant::now());
                     }

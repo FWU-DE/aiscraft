@@ -401,11 +401,32 @@ pub struct Plot {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shape {
     /// Sampled points of a graph or curve; NaN breaks the line.
-    Path { points: Vec<[f64; 2]>, color: Option<Color32>, dashed: bool, fill: bool },
-    Point { at: [f64; 2], name: Option<String>, color: Option<Color32> },
-    Circle { center: [f64; 2], radius: f64, color: Option<Color32> },
-    Text { at: [f64; 2], text: String },
-    Bar { x: f64, width: f64, height: f64, color: Option<Color32> },
+    Path {
+        points: Vec<[f64; 2]>,
+        color: Option<Color32>,
+        dashed: bool,
+        fill: bool,
+    },
+    Point {
+        at: [f64; 2],
+        name: Option<String>,
+        color: Option<Color32>,
+    },
+    Circle {
+        center: [f64; 2],
+        radius: f64,
+        color: Option<Color32>,
+    },
+    Text {
+        at: [f64; 2],
+        text: String,
+    },
+    Bar {
+        x: f64,
+        width: f64,
+        height: f64,
+        color: Option<Color32>,
+    },
 }
 
 const MAX_ELEMENTS: usize = 200;
@@ -483,7 +504,11 @@ pub fn parse_plot(src: &str) -> Result<Plot, String> {
                 }
             }
             "point" | "glider" => {
-                let at = if parents.len() >= 2 { (|| Some([num(parents.first()?, &vars)?, num(parents.get(1)?, &vars)?]))() } else { parents.first().and_then(|p| coord(p, &vars, &named)) };
+                let at = if parents.len() >= 2 {
+                    (|| Some([num(parents.first()?, &vars)?, num(parents.get(1)?, &vars)?]))()
+                } else {
+                    parents.first().and_then(|p| coord(p, &vars, &named))
+                };
                 match at {
                     Some(at) => {
                         if let Some(n) = &name {
@@ -519,7 +544,12 @@ pub fn parse_plot(src: &str) -> Result<Plot, String> {
                         let len = (dx * dx + dy * dy).sqrt();
                         if len > 0.0 {
                             let k = span / len;
-                            plot.shapes.push(Shape::Path { points: vec![[a[0] - dx * k, a[1] - dy * k], [a[0] + dx * k, a[1] + dy * k]], color: c, dashed, fill: false });
+                            plot.shapes.push(Shape::Path {
+                                points: vec![[a[0] - dx * k, a[1] - dy * k], [a[0] + dx * k, a[1] + dy * k]],
+                                color: c,
+                                dashed,
+                                fill: false,
+                            });
                         }
                     }
                     [a, b] => plot.shapes.push(Shape::Path { points: vec![*a, *b], color: c, dashed, fill: false }),
@@ -608,7 +638,8 @@ pub fn parse_plot(src: &str) -> Result<Plot, String> {
                 }
             }
             "chart" => {
-                let rows: Vec<Vec<f64>> = parents.iter().filter_map(Value::as_array).map(|a| a.iter().filter_map(|x| num(x, &vars)).take(500).collect()).collect();
+                let rows: Vec<Vec<f64>> =
+                    parents.iter().filter_map(Value::as_array).map(|a| a.iter().filter_map(|x| num(x, &vars)).take(500).collect()).collect();
                 let (xs, ys): (Vec<f64>, Vec<f64>) = match rows.as_slice() {
                     [ys] => ((1..=ys.len()).map(|i| i as f64).collect(), ys.clone()),
                     [xs, ys, ..] => (xs.clone(), ys.clone()),
@@ -653,8 +684,13 @@ fn sample(e: &Expr, from: f64, to: f64, vars: &HashMap<String, f64>) -> Vec<[f64
 
 // ---- drawing -----------------------------------------------------------------------------
 
-const PALETTE: [Color32; 5] =
-    [Color32::from_rgb(0x25, 0x63, 0xeb), Color32::from_rgb(0xdc, 0x26, 0x26), Color32::from_rgb(0x16, 0xa3, 0x4a), Color32::from_rgb(0x93, 0x33, 0xea), Color32::from_rgb(0xea, 0x58, 0x0c)];
+const PALETTE: [Color32; 5] = [
+    Color32::from_rgb(0x25, 0x63, 0xeb),
+    Color32::from_rgb(0xdc, 0x26, 0x26),
+    Color32::from_rgb(0x16, 0xa3, 0x4a),
+    Color32::from_rgb(0x93, 0x33, 0xea),
+    Color32::from_rgb(0xea, 0x58, 0x0c),
+];
 
 /// Draw a plot into the available width.
 pub fn show(ui: &mut Ui, plot: &Plot, fg: Color32, muted: Color32, bg: Color32) {
@@ -794,7 +830,8 @@ pub fn show(ui: &mut Ui, plot: &Plot, fg: Color32, muted: Color32, bg: Color32) 
 }
 
 fn fmt_tick(v: f64) -> String {
-    let s = if (v - v.round()).abs() < 1e-9 { format!("{}", v.round() as i64) } else { format!("{v:.2}").trim_end_matches('0').trim_end_matches('.').to_string() };
+    let s =
+        if (v - v.round()).abs() < 1e-9 { format!("{}", v.round() as i64) } else { format!("{v:.2}").trim_end_matches('0').trim_end_matches('.').to_string() };
     s.replace('.', ",")
 }
 

@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use aiscraft_core::{BackendKind, Error, Result};
 use serde_json::{Value, json};
 
-use crate::commands::opt_str;
 use crate::Ctx;
+use crate::commands::opt_str;
 
 enum AudioCmd {
     StartRecording(mpsc::Sender<Result<()>>),
@@ -115,7 +115,11 @@ pub(crate) fn tts_provider(c: &Ctx) -> Result<(BackendKind, String, String)> {
 }
 
 fn openai_with_key(c: &Ctx) -> Option<(BackendKind, String, String)> {
-    c.state().backends.iter().filter(|b| b.config.kind == BackendKind::OpenAi && b.has_secret).find_map(|b| c.0.secrets.get(&b.config.id).ok().flatten().map(|k| (BackendKind::OpenAi, b.config.base_url.clone(), k)))
+    c.state()
+        .backends
+        .iter()
+        .filter(|b| b.config.kind == BackendKind::OpenAi && b.has_secret)
+        .find_map(|b| c.0.secrets.get(&b.config.id).ok().flatten().map(|k| (BackendKind::OpenAi, b.config.base_url.clone(), k)))
 }
 
 pub(crate) async fn speak(c: Ctx, p: Value) -> Result<Value> {

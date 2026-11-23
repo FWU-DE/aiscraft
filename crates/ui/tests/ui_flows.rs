@@ -8,7 +8,10 @@ use egui_kittest::kittest::Queryable;
 
 fn harness(engine: &Engine) -> egui_kittest::Harness<'static, AisCraftApp> {
     let e = engine.clone();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).allow_missing_glyphs().build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .allow_missing_glyphs()
+        .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
     h.run_steps(4);
     // Close the welcome dialog a fresh profile shows.
     if let Some(later) = h.query_by_label("Später") {
@@ -43,7 +46,6 @@ fn sidebar_collapse_button_collapses() {
     h.run_steps(30);
     assert!(h.query_by_label_contains("Neuer Chat").is_none(), "sidebar hidden");
 }
-
 
 #[test]
 fn handbook_opens_closes_and_follows_settings_links() {

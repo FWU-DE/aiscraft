@@ -76,7 +76,8 @@ async fn serve(c: &Ctx, mut sock: tokio::net::TcpStream) -> std::io::Result<()> 
         }
         if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
             let head = String::from_utf8_lossy(buf.get(..pos).unwrap_or_default()).to_string();
-            let len = head.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").and_then(|v| v.trim().parse::<usize>().ok())).unwrap_or(0);
+            let len =
+                head.lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").and_then(|v| v.trim().parse::<usize>().ok())).unwrap_or(0);
             break (pos + 4, len.min(MAX_REQUEST));
         }
     };
@@ -118,14 +119,24 @@ pub(crate) async fn handle(c: &Ctx, conv: &str, req: &Value) -> Option<Value> {
         "ping" => ok(json!({})),
         "tools/list" => {
             let sources = c.state().conversation(conv).map(|x| x.sources.clone()).unwrap_or_default();
-            let tools: Vec<Value> = crate::tools::specs_for(c, &sources).into_iter().map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.input_schema})).collect();
+            let tools: Vec<Value> = crate::tools::specs_for(c, &sources)
+                .into_iter()
+                .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.input_schema}))
+                .collect();
             ok(json!({"tools": tools}))
         }
         "tools/call" => {
             let name = req.pointer("/params/name").and_then(Value::as_str).unwrap_or("").to_string();
             let arguments = req.pointer("/params/arguments").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
             let call = ToolCall { id: new_id(), name, arguments, outcome: None };
-            let owner = c.store(|st| st.messages(conv)).unwrap_or_default().iter().filter(|m| m.role == aiscraft_core::Role::User).map(|m| m.content.clone()).collect::<Vec<_>>().join("\n");
+            let owner = c
+                .store(|st| st.messages(conv))
+                .unwrap_or_default()
+                .iter()
+                .filter(|m| m.role == aiscraft_core::Role::User)
+                .map(|m| m.content.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
             let (text, is_error, outcome) = crate::tools::run(c, conv, &call, &owner, true).await;
             record(c, conv, ToolCall { outcome: Some(outcome.to_string()), ..call });
             ok(json!({"content": [{"type": "text", "text": text}], "isError": is_error}))

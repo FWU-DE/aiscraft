@@ -23,9 +23,8 @@ pub fn mime_of(path: &Path) -> &'static str {
         "csv" => "text/csv",
         "json" => "application/json",
         "html" | "htm" => "text/html",
-        "txt" | "rs" | "py" | "js" | "ts" | "tsx" | "toml" | "yaml" | "yml" | "xml" | "sh" | "c" | "h" | "cpp" | "java" | "go" | "rb" | "css" | "sql" | "tex" => {
-            "text/plain"
-        }
+        "txt" | "rs" | "py" | "js" | "ts" | "tsx" | "toml" | "yaml" | "yml" | "xml" | "sh" | "c" | "h" | "cpp" | "java" | "go" | "rb" | "css" | "sql"
+        | "tex" => "text/plain",
         _ => "application/octet-stream",
     }
 }
@@ -104,7 +103,12 @@ mod tests {
             content: String::new(),
             created_at: 0,
             model: None,
-            attachments: vec![Attachment { name: "Foto.PNG".into(), mime: "image/png".into(), local_path: Some(copy.display().to_string()), ..Default::default() }],
+            attachments: vec![Attachment {
+                name: "Foto.PNG".into(),
+                mime: "image/png".into(),
+                local_path: Some(copy.display().to_string()),
+                ..Default::default()
+            }],
             activity: vec![],
             error: None,
             usage: None,

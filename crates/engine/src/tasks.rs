@@ -56,7 +56,11 @@ pub(crate) async fn start(c: Ctx, p: Value) -> Result<Value> {
                 id: new_id(),
                 conversation_id: origin.clone(),
                 role: Role::Assistant,
-                content: if ok { format!("**Aufgabe „{title}“ ist fertig.**\n\n{summary}") } else { format!("**Aufgabe „{title}“ ist gescheitert:** {summary}") },
+                content: if ok {
+                    format!("**Aufgabe „{title}“ ist fertig.**\n\n{summary}")
+                } else {
+                    format!("**Aufgabe „{title}“ ist gescheitert:** {summary}")
+                },
                 created_at: now_ms(),
                 model: Some("Aufgabe".into()),
                 attachments: vec![],

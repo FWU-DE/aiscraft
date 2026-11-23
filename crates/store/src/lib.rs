@@ -116,12 +116,14 @@ impl Store {
         }
         db.execute_batch(SCHEMA).map_err(db_err)?;
         // 1 → 2: per-chat sources.
-        let has_sources: bool = db.prepare("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'sources'").and_then(|mut st| st.exists([])).map_err(db_err)?;
+        let has_sources: bool =
+            db.prepare("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'sources'").and_then(|mut st| st.exists([])).map_err(db_err)?;
         if !has_sources {
             db.execute_batch("ALTER TABLE conversations ADD COLUMN sources TEXT NOT NULL DEFAULT '{}'").map_err(db_err)?;
         }
         // 2 → 3: persona (assistant, character, learning scenario), kind and server id.
-        let has_extra: bool = db.prepare("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'extra'").and_then(|mut st| st.exists([])).map_err(db_err)?;
+        let has_extra: bool =
+            db.prepare("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'extra'").and_then(|mut st| st.exists([])).map_err(db_err)?;
         if !has_extra {
             db.execute_batch("ALTER TABLE conversations ADD COLUMN extra TEXT NOT NULL DEFAULT '{}'").map_err(db_err)?;
         }
@@ -331,7 +333,9 @@ impl Store {
             )
             .map_err(db_err)?;
         let rows = st
-            .query_map(params![fts, limit as i64], |r| Ok(SearchHit { conversation_id: r.get(0)?, message_id: r.get(1)?, title: r.get(2)?, snippet: r.get(3)? }))
+            .query_map(params![fts, limit as i64], |r| {
+                Ok(SearchHit { conversation_id: r.get(0)?, message_id: r.get(1)?, title: r.get(2)?, snippet: r.get(3)? })
+            })
             .map_err(db_err)?;
         rows.collect::<rusqlite::Result<_>>().map_err(db_err)
     }
@@ -365,10 +369,8 @@ impl Store {
     // ---- memory ---------------------------------------------------------------------------
 
     pub fn memory(&self) -> Result<Vec<MemoryNote>> {
-        let mut st = self
-            .db
-            .prepare("SELECT id, area, text, source_message_id, source_quote, created_at, archived FROM memory ORDER BY created_at")
-            .map_err(db_err)?;
+        let mut st =
+            self.db.prepare("SELECT id, area, text, source_message_id, source_quote, created_at, archived FROM memory ORDER BY created_at").map_err(db_err)?;
         let rows = st
             .query_map([], |r| {
                 Ok((
@@ -417,9 +419,7 @@ impl Store {
             .prepare("SELECT id, kind, title, conversation_id, project_id, created_at, updated_at FROM artifacts ORDER BY updated_at DESC")
             .map_err(db_err)?;
         let rows = st
-            .query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
-            })
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))
             .map_err(db_err)?;
         let mut out = Vec::new();
         for row in rows {
@@ -460,9 +460,13 @@ impl Store {
 
     /// Keep a snapshot; returns its version number. At most 50 are kept per artifact.
     pub fn add_artifact_version(&self, id: &str, note: &str, state: &[u8], at: i64) -> Result<i64> {
-        let v: i64 = self.db.query_row("SELECT COALESCE(MAX(version), 0) + 1 FROM artifact_versions WHERE artifact_id = ?1", [id], |r| r.get(0)).map_err(db_err)?;
+        let v: i64 =
+            self.db.query_row("SELECT COALESCE(MAX(version), 0) + 1 FROM artifact_versions WHERE artifact_id = ?1", [id], |r| r.get(0)).map_err(db_err)?;
         self.db
-            .execute("INSERT INTO artifact_versions (artifact_id, version, created_at, note, state) VALUES (?1, ?2, ?3, ?4, ?5)", params![id, v, at, note, state])
+            .execute(
+                "INSERT INTO artifact_versions (artifact_id, version, created_at, note, state) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, v, at, note, state],
+            )
             .map_err(db_err)?;
         self.db.execute("DELETE FROM artifact_versions WHERE artifact_id = ?1 AND version <= ?2", params![id, v - 50]).map_err(db_err)?;
         Ok(v)
@@ -470,7 +474,9 @@ impl Store {
 
     pub fn artifact_versions(&self, id: &str) -> Result<Vec<ArtifactVersion>> {
         let mut st = self.db.prepare("SELECT version, created_at, note FROM artifact_versions WHERE artifact_id = ?1 ORDER BY version DESC").map_err(db_err)?;
-        let rows = st.query_map([id], |r| Ok(ArtifactVersion { artifact_id: id.to_string(), version: r.get(0)?, created_at: r.get(1)?, note: r.get(2)? })).map_err(db_err)?;
+        let rows = st
+            .query_map([id], |r| Ok(ArtifactVersion { artifact_id: id.to_string(), version: r.get(0)?, created_at: r.get(1)?, note: r.get(2)? }))
+            .map_err(db_err)?;
         rows.collect::<rusqlite::Result<_>>().map_err(db_err)
     }
 
@@ -497,7 +503,16 @@ impl Store {
             )
             .map_err(db_err)?;
         let rows = st
-            .query_map([], |r| Ok(UsageRow { month: r.get(0)?, backend_id: r.get(1)?, model: r.get(2)?, input_tokens: r.get(3)?, output_tokens: r.get(4)?, answers: r.get(5)? }))
+            .query_map([], |r| {
+                Ok(UsageRow {
+                    month: r.get(0)?,
+                    backend_id: r.get(1)?,
+                    model: r.get(2)?,
+                    input_tokens: r.get(3)?,
+                    output_tokens: r.get(4)?,
+                    answers: r.get(5)?,
+                })
+            })
             .map_err(db_err)?;
         let mut out: Vec<UsageRow> = rows.collect::<rusqlite::Result<_>>().map_err(db_err)?;
         let mut months_seen: Vec<String> = out.iter().map(|r| r.month.clone()).collect();
@@ -525,7 +540,13 @@ impl Store {
 impl Store {
     /// Full-text search where any of the words may match (for recall), best first.
     pub fn search_any(&self, words: &[String], exclude_conversation: Option<&str>, limit: usize) -> Result<Vec<SearchHit>> {
-        let terms: Vec<String> = words.iter().map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>()).filter(|w| w.chars().count() >= 3).take(8).map(|w| format!("\"{w}\"*")).collect();
+        let terms: Vec<String> = words
+            .iter()
+            .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>())
+            .filter(|w| w.chars().count() >= 3)
+            .take(8)
+            .map(|w| format!("\"{w}\"*"))
+            .collect();
         if terms.is_empty() {
             return Ok(Vec::new());
         }
@@ -563,12 +584,8 @@ impl Store {
 
 /// Turn what a person types into an FTS5 query: every word quoted, as a prefix, all required.
 fn fts_query(q: &str) -> Option<String> {
-    let terms: Vec<String> = q
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .take(12)
-        .map(|t| format!("\"{}\"*", t.replace('"', "")))
-        .collect();
+    let terms: Vec<String> =
+        q.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()).take(12).map(|t| format!("\"{}\"*", t.replace('"', ""))).collect();
     (!terms.is_empty()).then(|| terms.join(" "))
 }
 
@@ -605,7 +622,9 @@ mod tests {
             attachments: vec![],
             activity: vec![],
             error: None,
-            usage: None, tool_calls: vec![], tool_result: None,
+            usage: None,
+            tool_calls: vec![],
+            tool_result: None,
         }
     }
 
@@ -693,7 +712,8 @@ mod tests {
     #[test]
     fn backends_projects_memory_settings() {
         let s = Store::open_in_memory().unwrap();
-        let b = BackendConfig { id: "x".into(), name: "X".into(), kind: BackendKind::OpenAi, base_url: "http://l".into(), default_model: None, send_context: true };
+        let b =
+            BackendConfig { id: "x".into(), name: "X".into(), kind: BackendKind::OpenAi, base_url: "http://l".into(), default_model: None, send_context: true };
         s.save_backend(&b).unwrap();
         s.save_backend(&BackendConfig { name: "Y".into(), ..b.clone() }).unwrap();
         assert_eq!(s.backends().unwrap()[0].name, "Y");

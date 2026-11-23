@@ -334,7 +334,8 @@ mod tests {
         out
     }
 
-    const RESPONSE: &str = "0:{\"a\":\"$@1\",\"f\":\"\",\"b\":\"build\"}\n1:{\"stream\":\"$2\",\"messageId\":\"m1\"}\n2:R\n2:T5,Hallo2:\" Welt\"\n2:T8,\u{1e}{\"a\":1}2:C\n";
+    const RESPONSE: &str =
+        "0:{\"a\":\"$@1\",\"f\":\"\",\"b\":\"build\"}\n1:{\"stream\":\"$2\",\"messageId\":\"m1\"}\n2:R\n2:T5,Hallo2:\" Welt\"\n2:T8,\u{1e}{\"a\":1}2:C\n";
 
     #[test]
     fn decodes_streamed_action_at_any_split() {

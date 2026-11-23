@@ -112,8 +112,11 @@ pub fn body(req: &ChatRequest) -> Value {
             o.insert("fallbacks".into(), json!("default"));
         }
         if !req.tools.is_empty() {
-            let tools: Vec<Value> =
-                req.tools.iter().map(|t| json!({"name": t.name, "description": t.description, "input_schema": t.input_schema, "eager_input_streaming": true})).collect();
+            let tools: Vec<Value> = req
+                .tools
+                .iter()
+                .map(|t| json!({"name": t.name, "description": t.description, "input_schema": t.input_schema, "eager_input_streaming": true}))
+                .collect();
             o.insert("tools".into(), Value::Array(tools));
         }
     }
@@ -149,7 +152,9 @@ pub fn sse_events_with(event: Option<&str>, data: &str, acc: &mut ToolAcc) -> Re
             }
             Ok(vec![])
         }
-        "content_block_stop" => Ok(acc.blocks.remove(&idx).map(|(id, name, args)| vec![StreamEvent::ToolCall { call: crate::tool_call(id, name, &args) }]).unwrap_or_default()),
+        "content_block_stop" => {
+            Ok(acc.blocks.remove(&idx).map(|(id, name, args)| vec![StreamEvent::ToolCall { call: crate::tool_call(id, name, &args) }]).unwrap_or_default())
+        }
         "message_delta" if v.pointer("/delta/stop_reason").and_then(Value::as_str) == Some("max_tokens") && !acc.blocks.is_empty() => {
             // A tool call cut off mid-arguments must not run.
             acc.blocks.clear();
@@ -185,7 +190,11 @@ pub fn sse_events(event: Option<&str>, data: &str) -> Result<Vec<StreamEvent>> {
         "error" => {
             let msg = v.pointer("/error/message").and_then(Value::as_str).unwrap_or("Fehler des Servers");
             let kind = v.pointer("/error/type").and_then(Value::as_str).unwrap_or("");
-            return Err(if kind == "overloaded_error" || kind == "rate_limit_error" { Error::refused(msg.to_string()) } else { Error::protocol(msg.to_string()) });
+            return Err(if kind == "overloaded_error" || kind == "rate_limit_error" {
+                Error::refused(msg.to_string())
+            } else {
+                Error::protocol(msg.to_string())
+            });
         }
         _ => vec![],
     })
@@ -261,8 +270,17 @@ mod tests {
     #[test]
     fn streamed_tool_use() {
         let mut acc = ToolAcc::default();
-        assert!(sse_events_with(None, r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu1","name":"document_create","input":{}}}"#, &mut acc).unwrap().is_empty());
-        sse_events_with(None, r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"title\": \"A"}}"#, &mut acc).unwrap();
+        assert!(
+            sse_events_with(
+                None,
+                r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu1","name":"document_create","input":{}}}"#,
+                &mut acc
+            )
+            .unwrap()
+            .is_empty()
+        );
+        sse_events_with(None, r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"title\": \"A"}}"#, &mut acc)
+            .unwrap();
         sse_events_with(None, r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"}"}}"#, &mut acc).unwrap();
         let ev = sse_events_with(None, r#"{"type":"content_block_stop","index":1}"#, &mut acc).unwrap();
         let StreamEvent::ToolCall { call } = &ev[0] else { panic!() };
@@ -287,9 +305,19 @@ mod tests {
             attachments: vec![],
             activity: vec![],
             error: None,
-            usage: None, tool_calls: vec![], tool_result: None,
+            usage: None,
+            tool_calls: vec![],
+            tool_result: None,
         };
-        let req = ChatRequest { conversation_id: "c".into(), model: DEFAULT_MODEL.into(), system: None, messages: vec![m(Role::User, "a"), m(Role::User, "b")], tools: vec![], tool_bridge: None, persona: None };
+        let req = ChatRequest {
+            conversation_id: "c".into(),
+            model: DEFAULT_MODEL.into(),
+            system: None,
+            messages: vec![m(Role::User, "a"), m(Role::User, "b")],
+            tools: vec![],
+            tool_bridge: None,
+            persona: None,
+        };
         let b = body(&req);
         assert_eq!(b["messages"].as_array().unwrap().len(), 1);
         assert_eq!(b["fallbacks"], "default");

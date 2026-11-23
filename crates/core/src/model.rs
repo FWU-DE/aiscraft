@@ -595,13 +595,23 @@ pub const ASPECT_RATIOS: [(&str, &str); 3] = [("quadratic", "Quadratisch"), ("la
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
     /// Server-assigned id of the answer (AIS.chat), so later edits refer to the same message.
-    MessageId { id: String },
-    Delta { text: String },
+    MessageId {
+        id: String,
+    },
+    Delta {
+        text: String,
+    },
     /// The full list of activity steps so far (replaces the previous list).
-    Activity { steps: Vec<ActivityStep> },
-    Usage { usage: Usage },
+    Activity {
+        steps: Vec<ActivityStep>,
+    },
+    Usage {
+        usage: Usage,
+    },
     /// The model wants this tool called (arguments complete).
-    ToolCall { call: ToolCall },
+    ToolCall {
+        call: ToolCall,
+    },
     Done,
 }
 

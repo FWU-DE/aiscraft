@@ -31,12 +31,19 @@ pub fn candidates() -> Vec<PathBuf> {
     } else if cfg!(windows) {
         let roots: Vec<String> = ["ProgramFiles", "ProgramFiles(x86)", "LocalAppData"].iter().filter_map(|v| std::env::var(v).ok()).collect();
         for r in roots {
-            for rel in [r"Google\Chrome\Application\chrome.exe", r"Microsoft\Edge\Application\msedge.exe", r"BraveSoftware\Brave-Browser\Application\brave.exe", r"Chromium\Application\chrome.exe"] {
+            for rel in [
+                r"Google\Chrome\Application\chrome.exe",
+                r"Microsoft\Edge\Application\msedge.exe",
+                r"BraveSoftware\Brave-Browser\Application\brave.exe",
+                r"Chromium\Application\chrome.exe",
+            ] {
                 out.push(Path::new(&r).join(rel));
             }
         }
     } else {
-        for name in ["chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "brave-browser", "brave", "microsoft-edge-stable", "vivaldi-stable"] {
+        for name in
+            ["chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "brave-browser", "brave", "microsoft-edge-stable", "vivaldi-stable"]
+        {
             if let Some(p) = which(name) {
                 out.push(p);
             }
@@ -60,7 +67,8 @@ pub fn cookie_from_cdp(result: &Value, host: &str) -> Option<String> {
             let name = c.get("name")?.as_str()?;
             let value = c.get("value")?.as_str()?;
             let domain = c.get("domain").and_then(Value::as_str).unwrap_or("").trim_start_matches('.');
-            (name.starts_with(SESSION_COOKIE) && !value.is_empty() && (domain == host || host.ends_with(&format!(".{domain}")))).then(|| (name.to_string(), value.to_string()))
+            (name.starts_with(SESSION_COOKIE) && !value.is_empty() && (domain == host || host.ends_with(&format!(".{domain}"))))
+                .then(|| (name.to_string(), value.to_string()))
         })
         .collect();
     if parts.is_empty() {
@@ -89,7 +97,11 @@ pub async fn wait_for_cookie(port: u16, host: &str, timeout: Duration, alive: &m
         }
         tokio::time::sleep(Duration::from_millis(1200)).await;
     }
-    Err(Error::auth(if last_err.is_empty() { "Anmeldung nicht abgeschlossen (Zeit abgelaufen)".into() } else { format!("Anmeldung nicht abgeschlossen: {last_err}") }))
+    Err(Error::auth(if last_err.is_empty() {
+        "Anmeldung nicht abgeschlossen (Zeit abgelaufen)".into()
+    } else {
+        format!("Anmeldung nicht abgeschlossen: {last_err}")
+    }))
 }
 
 async fn read_cookies(http: &reqwest::Client, port: u16) -> Result<Value> {
@@ -109,7 +121,9 @@ async fn read_cookies(http: &reqwest::Client, port: u16) -> Result<Value> {
         .await
         .map_err(|_| Error::network("DevTools antwortet nicht"))?
         .map_err(|e| Error::network(format!("DevTools: {e}")))?;
-    sock.send(WsMessage::Text(json!({"id": 1, "method": "Storage.getCookies"}).to_string().into())).await.map_err(|e| Error::network(format!("DevTools: {e}")))?;
+    sock.send(WsMessage::Text(json!({"id": 1, "method": "Storage.getCookies"}).to_string().into()))
+        .await
+        .map_err(|e| Error::network(format!("DevTools: {e}")))?;
     let reply = tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(m) = sock.next().await {
             if let Ok(WsMessage::Text(t)) = m
@@ -159,9 +173,12 @@ pub struct LoginOptions {
 /// Open the AIS.chat login in a browser and return the session cookie header.
 pub async fn login(opts: LoginOptions) -> Result<String> {
     let browser = opts.browser.clone().or_else(|| candidates().into_iter().next()).ok_or_else(|| {
-        Error::not_found("Kein Chromium-Browser gefunden (Chrome, Chromium, Edge, Brave, Vivaldi). Den Cookie stattdessen von Hand einfügen oder AISCRAFT_BROWSER setzen.")
+        Error::not_found(
+            "Kein Chromium-Browser gefunden (Chrome, Chromium, Edge, Brave, Vivaldi). Den Cookie stattdessen von Hand einfügen oder AISCRAFT_BROWSER setzen.",
+        )
     })?;
-    let host = reqwest::Url::parse(&opts.base_url).ok().and_then(|u| u.host_str().map(str::to_string)).ok_or_else(|| Error::invalid("Ungültige AIS.chat-Adresse"))?;
+    let host =
+        reqwest::Url::parse(&opts.base_url).ok().and_then(|u| u.host_str().map(str::to_string)).ok_or_else(|| Error::invalid("Ungültige AIS.chat-Adresse"))?;
     std::fs::create_dir_all(&opts.profile_dir).map_err(|e| Error::storage(format!("Browser-Profil: {e}")))?;
     #[cfg(unix)]
     {
@@ -210,10 +227,7 @@ mod tests {
             {"name": format!("{SESSION_COOKIE}.1"), "value": "b2", "domain": ".ais-chat.schule"},
             {"name": format!("{SESSION_COOKIE}.0"), "value": "b1", "domain": ".ais-chat.schule"},
         ]});
-        assert_eq!(
-            cookie_from_cdp(&r, "app.ais-chat.schule").unwrap(),
-            format!("{SESSION_COOKIE}=abc; {SESSION_COOKIE}.0=b1; {SESSION_COOKIE}.1=b2")
-        );
+        assert_eq!(cookie_from_cdp(&r, "app.ais-chat.schule").unwrap(), format!("{SESSION_COOKIE}=abc; {SESSION_COOKIE}.0=b1; {SESSION_COOKIE}.1=b2"));
         assert_eq!(cookie_from_cdp(&json!({"cookies": []}), "x"), None);
         assert_eq!(cookie_from_cdp(&json!("garbage"), "x"), None);
     }
@@ -239,7 +253,15 @@ mod tests {
                     if head.starts_with("GET /json/version") {
                         let _ = sock.read(&mut buf).await;
                         let body = format!(r#"{{"webSocketDebuggerUrl":"ws://127.0.0.1:{port}/devtools/browser/x"}}"#);
-                        let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
+                        let _ = sock
+                            .write_all(
+                                format!(
+                                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
+                                    body.len()
+                                )
+                                .as_bytes(),
+                            )
+                            .await;
                         return;
                     }
                     let Ok(mut ws) = tokio_tungstenite::accept_async(sock).await else { return };
@@ -287,7 +309,15 @@ mod tests {
             }
         });
         let profile = std::env::temp_dir().join(format!("aiscraft-browser-test-{}", std::process::id()));
-        let cookie = login(LoginOptions { base_url: format!("http://localhost:{port}"), profile_dir: profile.clone(), headless: true, timeout: Duration::from_secs(30), browser: None }).await.unwrap();
+        let cookie = login(LoginOptions {
+            base_url: format!("http://localhost:{port}"),
+            profile_dir: profile.clone(),
+            headless: true,
+            timeout: Duration::from_secs(30),
+            browser: None,
+        })
+        .await
+        .unwrap();
         assert_eq!(cookie, format!("{SESSION_COOKIE}=live-token"));
         let _ = std::fs::remove_dir_all(profile);
     }

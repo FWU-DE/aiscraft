@@ -72,7 +72,11 @@ pub fn body(req: &ChatRequest) -> Value {
     if !req.tools.is_empty()
         && let Some(o) = b.as_object_mut()
     {
-        let tools: Vec<Value> = req.tools.iter().map(|t| json!({"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.input_schema}})).collect();
+        let tools: Vec<Value> = req
+            .tools
+            .iter()
+            .map(|t| json!({"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.input_schema}}))
+            .collect();
         o.insert("tools".into(), Value::Array(tools));
     }
     b
@@ -176,7 +180,9 @@ impl Backend for OpenAi {
                         .filter_map(|m| {
                             let id = m.get("id")?.as_str()?.to_string();
                             let name = m.get("name").and_then(Value::as_str).unwrap_or(&id).to_string();
-                            let context_window = ["context_length", "context_window", "max_model_len", "max_context_length"].iter().find_map(|k| m.get(*k).and_then(Value::as_u64));
+                            let context_window = ["context_length", "context_window", "max_model_len", "max_context_length"]
+                                .iter()
+                                .find_map(|k| m.get(*k).and_then(Value::as_u64));
                             Some(ModelInfo { id, name, description: None, vision: false, context_window })
                         })
                         .collect()
@@ -215,7 +221,9 @@ mod tests {
             attachments: vec![],
             activity: vec![],
             error: None,
-            usage: None, tool_calls: vec![], tool_result: None,
+            usage: None,
+            tool_calls: vec![],
+            tool_result: None,
         }
     }
 
@@ -223,7 +231,15 @@ mod tests {
     fn body_has_system_and_images() {
         let mut u = msg(Role::User, "Was ist das?");
         u.attachments.push(Attachment { name: "a.png".into(), mime: "image/png".into(), data_base64: Some("QUJD".into()), ..Default::default() });
-        let req = ChatRequest { conversation_id: "c".into(), model: "gpt".into(), system: Some("Sei kurz".into()), messages: vec![u, msg(Role::Assistant, "")], tools: vec![], tool_bridge: None, persona: None };
+        let req = ChatRequest {
+            conversation_id: "c".into(),
+            model: "gpt".into(),
+            system: Some("Sei kurz".into()),
+            messages: vec![u, msg(Role::Assistant, "")],
+            tools: vec![],
+            tool_bridge: None,
+            persona: None,
+        };
         let b = body(&req);
         assert_eq!(b["messages"][0]["role"], "system");
         assert_eq!(b["messages"][1]["content"][1]["image_url"]["url"], "data:image/png;base64,QUJD");
@@ -233,7 +249,11 @@ mod tests {
     #[test]
     fn streamed_tool_calls() {
         let mut acc = ToolAcc::default();
-        let a = chunk_events_with(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"history_search","arguments":"{\"qu"}}]}}]}"#, &mut acc).unwrap();
+        let a = chunk_events_with(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"history_search","arguments":"{\"qu"}}]}}]}"#,
+            &mut acc,
+        )
+        .unwrap();
         assert!(a.is_empty());
         chunk_events_with(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ery\":\"bio\"}"}}]}}]}"#, &mut acc).unwrap();
         let done = chunk_events_with(r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#, &mut acc).unwrap();

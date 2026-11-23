@@ -137,7 +137,8 @@ pub(crate) fn save_state(c: &Ctx, id: &str, state: &[u8], version_note: Option<&
 }
 
 pub(crate) async fn create(c: Ctx, p: Value) -> Result<Value> {
-    let kind = ArtifactKind::parse(&opt_str(&p, "kind").unwrap_or_else(|| "document".into())).ok_or_else(|| Error::invalid("kind muss document oder board sein"))?;
+    let kind =
+        ArtifactKind::parse(&opt_str(&p, "kind").unwrap_or_else(|| "document".into())).ok_or_else(|| Error::invalid("kind muss document oder board sein"))?;
     let state = c.state();
     let source = match opt_str(&p, "from_message") {
         Some(mid) => Some(state.messages.iter().find(|m| m.id == mid).map(|m| m.content.clone()).ok_or_else(|| Error::not_found("Nachricht nicht gefunden"))?),
@@ -263,7 +264,12 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
         (_, "markdown" | "md") => text,
         (_, "html") => markdown_html(&a.title, &text),
         (ArtifactKind::Board, "json") => Board::from_state(&state).map(|b| b.to_json().to_string()).map_err(|e| Error::invalid(e.to_string()))?,
-        (_, other) => return Err(Error::invalid(format!("Format {other} gibt es hier nicht (markdown, html{})", if a.kind == ArtifactKind::Board { ", json" } else { "" }))),
+        (_, other) => {
+            return Err(Error::invalid(format!(
+                "Format {other} gibt es hier nicht (markdown, html{})",
+                if a.kind == ArtifactKind::Board { ", json" } else { "" }
+            )));
+        }
     };
     if let Some(path) = opt_str(&p, "path") {
         std::fs::write(&path, &out).map_err(|e| Error::storage(format!("{path}: {e}")))?;

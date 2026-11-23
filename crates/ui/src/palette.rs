@@ -58,7 +58,11 @@ impl AisCraftApp {
     fn palette_items(&self) -> Vec<Item> {
         // Commands that need params get a UI action instead of a bare dispatch.
         let ui_handled = ["chat.export", "project.create", "search"];
-        let mut items: Vec<Item> = commands().iter().filter(|c| c.palette && !ui_handled.contains(&c.id)).map(|c| Item::Command { id: c.id, label: c.label, shortcut: c.shortcut }).collect();
+        let mut items: Vec<Item> = commands()
+            .iter()
+            .filter(|c| c.palette && !ui_handled.contains(&c.id))
+            .map(|c| Item::Command { id: c.id, label: c.label, shortcut: c.shortcut })
+            .collect();
         items.extend([
             Item::Ui { label: "Einstellungen", action: UiAction::Settings },
             Item::Ui { label: "Handbuch", action: UiAction::Manual },
@@ -115,7 +119,13 @@ impl AisCraftApp {
                         Item::Command { shortcut: Some(s), .. } => s.to_string(),
                         _ => it.kind().to_string(),
                     };
-                    ui.painter().text(resp.rect.right_center() - egui::vec2(10.0, 0.0), egui::Align2::RIGHT_CENTER, hint, egui::FontId::proportional(12.0), t.muted);
+                    ui.painter().text(
+                        resp.rect.right_center() - egui::vec2(10.0, 0.0),
+                        egui::Align2::RIGHT_CENTER,
+                        hint,
+                        egui::FontId::proportional(12.0),
+                        t.muted,
+                    );
                     if sel {
                         resp.scroll_to_me(None);
                     }

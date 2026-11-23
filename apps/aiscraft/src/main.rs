@@ -25,7 +25,10 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("AIS.ChatCraft {}\n\n  aiscraft                 Fenster öffnen\n  aiscraft --control [port] mit JSON-Steuerkanal auf 127.0.0.1 (Standard {DEFAULT_PORT})", env!("CARGO_PKG_VERSION"));
+        println!(
+            "AIS.ChatCraft {}\n\n  aiscraft                 Fenster öffnen\n  aiscraft --control [port] mit JSON-Steuerkanal auf 127.0.0.1 (Standard {DEFAULT_PORT})",
+            env!("CARGO_PKG_VERSION")
+        );
         return;
     }
     if args.iter().any(|a| a == "--version") {
@@ -128,7 +131,9 @@ fn run(engine: &Engine, ui: &mpsc::Sender<UiRequest>, cmd: &str, params: Value) 
     let ui_call = |make: &dyn Fn(mpsc::Sender<Result<Value, String>>) -> UiRequest| -> Result<Value, Value> {
         let (tx, rx) = mpsc::channel();
         ui.send(make(tx)).map_err(|_| json!({"kind": "protocol", "message": "Fenster ist geschlossen"}))?;
-        rx.recv_timeout(Duration::from_secs(10)).map_err(|_| json!({"kind": "protocol", "message": "Fenster antwortet nicht"}))?.map_err(|m| json!({"kind": "invalid", "message": m}))
+        rx.recv_timeout(Duration::from_secs(10))
+            .map_err(|_| json!({"kind": "protocol", "message": "Fenster antwortet nicht"}))?
+            .map_err(|m| json!({"kind": "invalid", "message": m}))
     };
     match cmd {
         "ui.screenshot" => {

@@ -30,7 +30,13 @@ fn scripted_openai(engine: &Engine) -> String {
                     if req.starts_with("GET /v1/models") {
                         let body = r#"{"data":[{"id":"test-model"}]}"#;
                         let _ = sock
-                            .write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes())
+                            .write_all(
+                                format!(
+                                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
+                                    body.len()
+                                )
+                                .as_bytes(),
+                            )
                             .await;
                         return;
                     }
@@ -159,12 +165,13 @@ fn panic_hunt_every_command_with_hostile_params() {
     }
     // chat.send with hostile params, no network involved: bad files fail before sending.
     for p in &hostile {
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.call("chat.send", json!({"text": "", "files": p.get("files").cloned().unwrap_or(json!([]))}))));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.call("chat.send", json!({"text": "", "files": p.get("files").cloned().unwrap_or(json!([]))}))
+        }));
         assert!(r.is_ok());
     }
     assert!(engine.call("does.not.exist", json!({})).is_err());
 }
-
 
 /// The tool loop: the model asks for history_search, gets the result, then answers.
 #[test]
@@ -288,7 +295,9 @@ fn connector_tools_need_approval_unless_read_only() {
     assert!(engine.call("tool.answer", json!({"id": "nope", "allow": true})).is_err());
 
     // Vault placeholders: filled in before the call, always asked, taken out of the result.
-    engine.call("vault.add", json!({"name": "Schulportal", "username": "frau.ada", "password": "geheim-123", "totp": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"})).unwrap();
+    engine
+        .call("vault.add", json!({"name": "Schulportal", "username": "frau.ada", "password": "geheim-123", "totp": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"}))
+        .unwrap();
     assert_eq!(engine.state().vault[0].name, "schulportal");
     assert!(serde_json::to_string(&*engine.state()).unwrap().find("geheim-123").is_none(), "secrets never in state");
     let ctx2 = ctx.clone();
@@ -322,7 +331,10 @@ fn connector_tools_need_approval_unless_read_only() {
     let id = engine.state().connectors[0].id.clone();
     engine.call("connector.toggle", json!({"id": id, "enabled": false})).unwrap();
     assert_eq!(engine.state().connectors[0].status, "off");
-    assert!(engine.call("tools.list", json!({})).unwrap().as_array().unwrap().iter().all(|t| !t["name"].as_str().unwrap().ends_with("__echo")), "tools of an off connector are not offered");
+    assert!(
+        engine.call("tools.list", json!({})).unwrap().as_array().unwrap().iter().all(|t| !t["name"].as_str().unwrap().ends_with("__echo")),
+        "tools of an off connector are not offered"
+    );
     engine.call("connector.toggle", json!({"id": id, "enabled": true})).unwrap();
     assert_eq!(engine.state().connectors[0].status, "connected");
     engine.call("connector.refresh", json!({"id": id})).unwrap();
@@ -354,7 +366,10 @@ fn recording_openai(engine: &Engine, answer: &'static str) -> (String, std::sync
                         buf.extend_from_slice(&chunk[..k]);
                         let s = String::from_utf8_lossy(&buf).to_string();
                         if let Some(h) = s.find("\r\n\r\n") {
-                            let len = s[..h].lines().find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+                            let len = s[..h]
+                                .lines()
+                                .find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                                .unwrap_or(0);
                             if buf.len() >= h + 4 + len {
                                 break;
                             }
@@ -364,7 +379,15 @@ fn recording_openai(engine: &Engine, answer: &'static str) -> (String, std::sync
                     seen.lock().unwrap().push(req.clone());
                     if req.starts_with("GET") {
                         let body = r#"{"data":[{"id":"m","context_length":1000}]}"#;
-                        let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
+                        let _ = sock
+                            .write_all(
+                                format!(
+                                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
+                                    body.len()
+                                )
+                                .as_bytes(),
+                            )
+                            .await;
                         return;
                     }
                     let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
@@ -628,7 +651,10 @@ async fn read_http(sock: &mut tokio::net::TcpStream) -> String {
         buf.extend_from_slice(&chunk[..n]);
         let s = String::from_utf8_lossy(&buf);
         if let Some(head_end) = s.find("\r\n\r\n") {
-            let len = s[..head_end].lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+            let len = s[..head_end]
+                .lines()
+                .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                .unwrap_or(0);
             if buf.len() >= head_end + 4 + len {
                 break;
             }
@@ -928,7 +954,11 @@ fn schedules_run_watch_and_check_in() {
 
     // A watch whose answer is "no change" leaves no trace in its chat.
     let (engine2, _) = engine_with_recording(crate::schedules::NO_CHANGE);
-    let w = engine2.call("schedule.create", json!({"title": "Vertretungsplan", "prompt": "Prüfe den Plan", "cron": "*/30 * * * *", "watch": true})).unwrap()["id"].as_str().unwrap().to_string();
+    let w =
+        engine2.call("schedule.create", json!({"title": "Vertretungsplan", "prompt": "Prüfe den Plan", "cron": "*/30 * * * *", "watch": true})).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
     engine2.call("schedule.run", json!({"id": w})).unwrap();
     let conv2 = engine2.state().schedules[0].conversation_id.clone().unwrap();
     assert!(engine2.ctx().store(|st| st.messages(&conv2)).unwrap().is_empty(), "unchanged watch runs are removed");
@@ -939,7 +969,12 @@ fn check_in_tool_answers_in_the_same_chat() {
     let (engine, _) = engine_with_recording("ok");
     engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
     let conv = engine.state().current.clone().unwrap();
-    let call = aiscraft_core::ToolCall { id: "t".into(), name: "schedule_create".into(), arguments: json!({"title": "Nachfragen", "prompt": "Hat Frau Yilmaz geantwortet?", "at": "in 2 Tagen"}), outcome: None };
+    let call = aiscraft_core::ToolCall {
+        id: "t".into(),
+        name: "schedule_create".into(),
+        arguments: json!({"title": "Nachfragen", "prompt": "Hat Frau Yilmaz geantwortet?", "at": "in 2 Tagen"}),
+        outcome: None,
+    };
     let (text, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, "", true));
     assert!(!err && text.starts_with("Geplant für"), "{text}");
     let s = engine.state();
@@ -969,7 +1004,6 @@ fn usage_report_and_monthly_limit() {
     assert!(engine.state().notices.iter().any(|n| n.action.as_ref().is_some_and(|a| a.params["force"] == true)), "offers to send anyway");
     engine.call("chat.send", json!({"text": "zwei", "force": true})).unwrap();
 }
-
 
 /// Per-chat sources: memory, project and tools follow the chat's switches.
 #[test]
@@ -1002,12 +1036,18 @@ fn per_chat_sources() {
     assert!(engine.call("chat.set_sources", json!({"connectors": "alle"})).is_err());
 }
 
-
 /// Skills: created by hand, fitting ones reach the context; learned from tool-heavy chats.
 #[test]
 fn skills_recall_and_learning() {
-    let (engine, seen) = engine_with_recording(r#"{"title": "Elternbrief schreiben", "when": "Wenn ein Elternbrief gebraucht wird", "steps": "1. Anlass klären\n2. Entwurf als Dokument"}"#);
-    let id = engine.call("skill.create", json!({"title": "Arbeitsblatt erstellen", "when": "Arbeitsblatt für eine Klasse", "steps": "1. Ziel\n2. Aufgaben\n3. Lösungen"})).unwrap()["id"].as_str().unwrap().to_string();
+    let (engine, seen) = engine_with_recording(
+        r#"{"title": "Elternbrief schreiben", "when": "Wenn ein Elternbrief gebraucht wird", "steps": "1. Anlass klären\n2. Entwurf als Dokument"}"#,
+    );
+    let id = engine
+        .call("skill.create", json!({"title": "Arbeitsblatt erstellen", "when": "Arbeitsblatt für eine Klasse", "steps": "1. Ziel\n2. Aufgaben\n3. Lösungen"}))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     engine.call("chat.send", json!({"text": "Erstelle ein Arbeitsblatt zur Photosynthese"})).unwrap();
     let last = seen.lock().unwrap().last().cloned().unwrap();
     assert!(last.contains("Gelernte Vorgehen") && last.contains("Arbeitsblatt erstellen"), "fitting skill in context");
@@ -1056,7 +1096,9 @@ fn background_task_reports_back() {
     let origin = engine.state().current.clone().unwrap();
     let id = engine.call("task.start", json!({"title": "Entwürfe", "instructions": "Schreibe drei Entwürfe"})).unwrap()["id"].as_str().unwrap().to_string();
     let oc = origin.clone();
-    assert!(engine.wait_for(Duration::from_secs(30), |s| s.messages.iter().any(|m| m.conversation_id == oc && m.content.contains("Aufgabe „Entwürfe“ ist fertig"))));
+    assert!(
+        engine.wait_for(Duration::from_secs(30), |s| s.messages.iter().any(|m| m.conversation_id == oc && m.content.contains("Aufgabe „Entwürfe“ ist fertig")))
+    );
     assert!(engine.state().conversation(&id).unwrap().title.starts_with("▶ "));
     assert_eq!(engine.ctx().store(|st| st.messages(&id)).unwrap().len(), 2);
     // No task inside a task.
@@ -1079,7 +1121,10 @@ fn tool_bridge_serves_the_chats_tools() {
             let addr = url.trim_start_matches("http://").trim_end_matches("/mcp").to_string();
             let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
             let body = body.to_string();
-            let req = format!("POST /mcp HTTP/1.1\r\nhost: x\r\nauthorization: Bearer {token}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}", body.len());
+            let req = format!(
+                "POST /mcp HTTP/1.1\r\nhost: x\r\nauthorization: Bearer {token}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+                body.len()
+            );
             s.write_all(req.as_bytes()).await.unwrap();
             let mut out = String::new();
             s.read_to_string(&mut out).await.unwrap();
@@ -1095,10 +1140,16 @@ fn tool_bridge_serves_the_chats_tools() {
     let (_, list) = post(&b.token, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
     let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"document_create") && names.contains(&"board_add"));
-    let (_, call) = post(&b.token, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "document_create", "arguments": {"title": "Über die Brücke", "markdown": "# Über die Brücke"}}}));
+    let (_, call) = post(
+        &b.token,
+        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "document_create", "arguments": {"title": "Über die Brücke", "markdown": "# Über die Brücke"}}}),
+    );
     assert_eq!(call["result"]["isError"], false);
     assert!(engine.state().artifacts.iter().any(|a| a.title == "Über die Brücke"));
-    assert!(engine.state().messages.iter().any(|m| m.tool_calls.iter().any(|t| t.name == "document_create" && t.outcome.as_deref() == Some("ok"))), "shown as a chip");
+    assert!(
+        engine.state().messages.iter().any(|m| m.tool_calls.iter().any(|t| t.name == "document_create" && t.outcome.as_deref() == Some("ok"))),
+        "shown as a chip"
+    );
     // Sources apply: no tools in this chat, none over the bridge.
     engine.call("chat.set_sources", json!({"tools": false})).unwrap();
     let (_, list) = post(&b.token, json!({"jsonrpc": "2.0", "id": 4, "method": "tools/list"}));
@@ -1132,9 +1183,12 @@ fn claude_subscription_uses_tools() {
     engine.call("chat.select_model", json!({"backend": id, "model": "claude-haiku-5-5"})).unwrap();
     engine.call("chat.new", json!({})).unwrap();
     engine.call("chat.send", json!({"text": "Lege mit dem Werkzeug document_create ein Dokument mit dem Titel „Brückentest“ und einem Satz Inhalt an. Antworte danach nur mit „erledigt“."})).unwrap();
-    assert!(engine.state().artifacts.iter().any(|a| a.title.contains("Brückentest")), "document created through the bridge: {:?}", engine.state().messages.last());
+    assert!(
+        engine.state().artifacts.iter().any(|a| a.title.contains("Brückentest")),
+        "document created through the bridge: {:?}",
+        engine.state().messages.last()
+    );
 }
-
 
 /// Voice: engines in memory never touch devices; provider choice prefers AIS.chat, then OpenAI.
 #[test]
@@ -1142,7 +1196,9 @@ fn voice_refuses_devices_in_tests_and_picks_providers() {
     let (engine, _) = engine_with_recording("Hallo **Welt**");
     engine.call("chat.send", json!({"text": "x"})).unwrap();
     let mid = engine.state().messages[1].id.clone();
-    for (cmd, p) in [("voice.speak", json!({"message_id": mid})), ("voice.stop", json!({})), ("voice.record_start", json!({})), ("voice.record_stop", json!({}))] {
+    for (cmd, p) in
+        [("voice.speak", json!({"message_id": mid})), ("voice.stop", json!({})), ("voice.record_start", json!({})), ("voice.record_stop", json!({}))]
+    {
         let e = engine.call(cmd, p).unwrap_err();
         assert!(matches!(e.kind, aiscraft_core::ErrorKind::Unsupported | aiscraft_core::ErrorKind::Invalid), "{cmd}: {e:?}");
     }
@@ -1153,7 +1209,6 @@ fn voice_refuses_devices_in_tests_and_picks_providers() {
     assert_eq!(crate::voice::tts_provider(engine.ctx()).unwrap().0, aiscraft_core::BackendKind::OpenAi);
     assert_eq!(engine.mic_level(), 0.0);
 }
-
 
 /// Hints: one concrete need gives one hint, never twice; "nothing" gives none.
 #[test]

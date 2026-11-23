@@ -143,7 +143,12 @@ impl AisCraftApp {
         let sc = |m: Modifiers, k: Key| KeyboardShortcut::new(m, k);
         let pressed = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
         // F1: the handbook, except over an open whiteboard, which has its own shortcut overview.
-        let over_board = self.state.open_artifact.as_ref().and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id)).is_some_and(|a| a.kind == aiscraft_core::ArtifactKind::Board)
+        let over_board = self
+            .state
+            .open_artifact
+            .as_ref()
+            .and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id))
+            .is_some_and(|a| a.kind == aiscraft_core::ArtifactKind::Board)
             && ctx.pointer_hover_pos().is_some_and(|p| p.x > ctx.content_rect().center().x);
         if !over_board && pressed(sc(Modifiers::NONE, Key::F1)) {
             self.manual = if self.manual.is_some() { None } else { Some(Default::default()) };
@@ -194,7 +199,9 @@ impl AisCraftApp {
         let Some(id) = self.state.current.clone() else { return };
         let title = self.state.conversation(&id).map(|c| c.title.clone()).unwrap_or_else(|| "chat".into());
         let safe: String = title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-        if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.md", safe.trim())).add_filter("Markdown", &["md"]).add_filter("JSON", &["json"]).save_file() {
+        if let Some(path) =
+            rfd::FileDialog::new().set_file_name(format!("{}.md", safe.trim())).add_filter("Markdown", &["md"]).add_filter("JSON", &["json"]).save_file()
+        {
             let format = if path.extension().is_some_and(|e| e == "json") { "json" } else { "markdown" };
             self.run("chat.export", json!({"id": id, "format": format, "path": path.display().to_string()}));
         }
@@ -274,7 +281,8 @@ impl AisCraftApp {
             match r {
                 UiRequest::Screenshot { path, reply } => {
                     let cb = egui::ScreenshotCallback::new(move |img| {
-                        let _ = reply.send(save_png(&path, &img).map(|()| json!({"path": path.display().to_string(), "width": img.size[0], "height": img.size[1]})));
+                        let _ = reply
+                            .send(save_png(&path, &img).map(|()| json!({"path": path.display().to_string(), "width": img.size[0], "height": img.size[1]})));
                     });
                     ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(cb));
                 }

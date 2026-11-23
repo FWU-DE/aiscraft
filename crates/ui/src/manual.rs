@@ -134,7 +134,22 @@ mod tests {
     #[test]
     fn handbook_covers_the_features() {
         let all = TEXT.to_lowercase();
-        for word in ["quellen", "konnektor", "zeitplän", "aufgaben", "tresor", "gedächtnis", "whiteboard", "dokument", "diktieren", "vorlesen", "kontingent", "projekt", "im browser anmelden", "claude (abo)"] {
+        for word in [
+            "quellen",
+            "konnektor",
+            "zeitplän",
+            "aufgaben",
+            "tresor",
+            "gedächtnis",
+            "whiteboard",
+            "dokument",
+            "diktieren",
+            "vorlesen",
+            "kontingent",
+            "projekt",
+            "im browser anmelden",
+            "claude (abo)",
+        ] {
             assert!(all.contains(word), "handbook lacks {word}");
         }
     }

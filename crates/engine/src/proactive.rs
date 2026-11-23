@@ -47,7 +47,9 @@ pub(crate) async fn check(c: &Ctx, force: bool) -> Result<Option<String>> {
     if v.get("need").and_then(Value::as_bool) != Some(true) {
         return Ok(None);
     }
-    let Some(text) = v.get("text").and_then(Value::as_str).map(|t| t.trim().chars().take(200).collect::<String>()).filter(|t| !t.is_empty()) else { return Ok(None) };
+    let Some(text) = v.get("text").and_then(Value::as_str).map(|t| t.trim().chars().take(200).collect::<String>()).filter(|t| !t.is_empty()) else {
+        return Ok(None);
+    };
     let fp = fingerprint(&text);
     let mut sent: Vec<String> = c.store(|st| Ok(st.setting(SENT_KEY)?.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()))?;
     if sent.contains(&fp) {
@@ -58,7 +60,11 @@ pub(crate) async fn check(c: &Ctx, force: bool) -> Result<Option<String>> {
     sent.drain(..keep);
     c.store(|st| st.set_setting(SENT_KEY, &json!(sent)))?;
     let conv = v.get("conversation_id").and_then(Value::as_str).filter(|id| c.state().conversation(id).is_some()).map(str::to_string);
-    c.notice_with(NoticeLevel::Info, format!("Hinweis: {text}"), conv.map(|id| NoticeAction { label: "Chat öffnen".into(), command: "chat.open".into(), params: json!({"id": id}) }));
+    c.notice_with(
+        NoticeLevel::Info,
+        format!("Hinweis: {text}"),
+        conv.map(|id| NoticeAction { label: "Chat öffnen".into(), command: "chat.open".into(), params: json!({"id": id}) }),
+    );
     crate::schedules::desktop_notify("AIS.ChatCraft", &text);
     Ok(Some(text))
 }

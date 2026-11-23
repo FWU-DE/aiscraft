@@ -12,7 +12,8 @@ mod sse;
 use std::sync::Arc;
 
 use aiscraft_core::{
-    AccountInfo, BackendConfig, BackendKind, Capabilities, ChatRequest, Error, ImageRequest, ImageResult, ModelInfo, PersonaInfo, RemoteConversation, Result, StreamEvent,
+    AccountInfo, BackendConfig, BackendKind, Capabilities, ChatRequest, Error, ImageRequest, ImageResult, ModelInfo, PersonaInfo, RemoteConversation, Result,
+    StreamEvent,
 };
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;

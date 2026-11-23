@@ -37,10 +37,22 @@ pub enum Dialog {
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
 pub const PRESETS: &[(&str, BackendKind, &str, bool, &str)] = &[
-    ("Claude (Abo)", BackendKind::ClaudeCli, "claude", false, "Nutzt dein claude.ai-Abo über die lokale Claude-CLI (vorher `claude auth login`). Ohne Werkzeuge, nur Chat."),
+    (
+        "Claude (Abo)",
+        BackendKind::ClaudeCli,
+        "claude",
+        false,
+        "Nutzt dein claude.ai-Abo über die lokale Claude-CLI (vorher `claude auth login`). Ohne Werkzeuge, nur Chat.",
+    ),
     ("Claude (API)", BackendKind::Anthropic, "https://api.anthropic.com", true, "API-Schlüssel von console.anthropic.com, Abrechnung nach Verbrauch"),
     ("OpenAI", BackendKind::OpenAi, "https://api.openai.com/v1", true, "API-Schlüssel von platform.openai.com"),
-    ("AIS.chat API", BackendKind::OpenAi, "https://api.ais-chat.schule/v1", true, "API-Schlüssel aus dem AIS.chat-Admin; eigener Verlauf, getrennt von der Web-App"),
+    (
+        "AIS.chat API",
+        BackendKind::OpenAi,
+        "https://api.ais-chat.schule/v1",
+        true,
+        "API-Schlüssel aus dem AIS.chat-Admin; eigener Verlauf, getrennt von der Web-App",
+    ),
     ("Ollama (lokal)", BackendKind::OpenAi, "http://127.0.0.1:11434/v1", false, "Läuft auf diesem Rechner, kein Schlüssel nötig"),
     ("LM Studio (lokal)", BackendKind::OpenAi, "http://127.0.0.1:1234/v1", false, "Läuft auf diesem Rechner, kein Schlüssel nötig"),
     ("OpenRouter", BackendKind::OpenAi, "https://openrouter.ai/api/v1", true, "Ein Schlüssel für viele Modelle"),
@@ -69,7 +81,11 @@ impl Dialog {
         Dialog::AddBackend { preset: 0, name: label.into(), base_url: url.into(), secret: String::new() }
     }
     pub fn project(p: Option<&Project>) -> Self {
-        Dialog::Project { id: p.map(|p| p.id.clone()), name: p.map(|p| p.name.clone()).unwrap_or_default(), instructions: p.map(|p| p.instructions.clone()).unwrap_or_default() }
+        Dialog::Project {
+            id: p.map(|p| p.id.clone()),
+            name: p.map(|p| p.name.clone()).unwrap_or_default(),
+            instructions: p.map(|p| p.instructions.clone()).unwrap_or_default(),
+        }
     }
 }
 
@@ -127,15 +143,18 @@ impl AisCraftApp {
             Dialog::AddBackend { preset, name, base_url, secret } => {
                 ui.heading("Backend hinzufügen");
                 ui.add_space(6.0);
-                egui::ComboBox::from_id_salt("preset").width(ui.available_width()).selected_text(PRESETS.get(*preset).map(|p| p.0).unwrap_or("")).show_ui(ui, |ui| {
-                    for (i, p) in PRESETS.iter().enumerate() {
-                        if ui.selectable_label(*preset == i, p.0).clicked() {
-                            *preset = i;
-                            *name = p.0.trim_end_matches(" (lokal)").to_string();
-                            *base_url = p.2.to_string();
+                egui::ComboBox::from_id_salt("preset").width(ui.available_width()).selected_text(PRESETS.get(*preset).map(|p| p.0).unwrap_or("")).show_ui(
+                    ui,
+                    |ui| {
+                        for (i, p) in PRESETS.iter().enumerate() {
+                            if ui.selectable_label(*preset == i, p.0).clicked() {
+                                *preset = i;
+                                *name = p.0.trim_end_matches(" (lokal)").to_string();
+                                *base_url = p.2.to_string();
+                            }
                         }
-                    }
-                });
+                    },
+                );
                 let Some(&(_, kind, _, needs_key, hint)) = PRESETS.get(*preset) else { return false };
                 ui.label(small_muted(&t, hint));
                 ui.add_space(6.0);
@@ -249,7 +268,9 @@ impl AisCraftApp {
                         ui.end_row();
                     } else {
                         ui.label("Befehl");
-                        ui.add(egui::TextEdit::singleline(command).hint_text("npx -y @modelcontextprotocol/server-filesystem ~/Dokumente").desired_width(320.0));
+                        ui.add(
+                            egui::TextEdit::singleline(command).hint_text("npx -y @modelcontextprotocol/server-filesystem ~/Dokumente").desired_width(320.0),
+                        );
                         ui.end_row();
                         ui.label("Umgebung");
                         ui.add(egui::TextEdit::multiline(env).hint_text("SCHLÜSSEL=Wert (eine pro Zeile)").desired_rows(2).desired_width(320.0));
@@ -298,13 +319,24 @@ impl AisCraftApp {
                     ui.add(egui::TextEdit::singleline(when).desired_width(320.0));
                     ui.end_row();
                 });
-                ui.label(small_muted(&t, if *recurring { "Minute Stunde Tag Monat Wochentag, Ortszeit. „0 7 * * 1-5“ = werktags 7:00, „*/30 * * * *“ = alle 30 Minuten." } else { "„in 30 min“, „in 2 Tagen“, „morgen 7:30“ oder „2026-12-04 08:00“." }));
+                ui.label(small_muted(
+                    &t,
+                    if *recurring {
+                        "Minute Stunde Tag Monat Wochentag, Ortszeit. „0 7 * * 1-5“ = werktags 7:00, „*/30 * * * *“ = alle 30 Minuten."
+                    } else {
+                        "„in 30 min“, „in 2 Tagen“, „morgen 7:30“ oder „2026-12-04 08:00“."
+                    },
+                ));
                 ui.checkbox(watch, "Beobachten: nur melden, wenn sich etwas geändert hat");
                 ui.add_space(8.0);
                 let mut keep = true;
                 ui.horizontal(|ui| {
                     if ui.add_enabled(!title.trim().is_empty() && !prompt.trim().is_empty(), egui::Button::new("Anlegen")).clicked() {
-                        let p = if *recurring { json!({"title": title, "prompt": prompt, "cron": when, "watch": watch}) } else { json!({"title": title, "prompt": prompt, "at": when, "watch": watch}) };
+                        let p = if *recurring {
+                            json!({"title": title, "prompt": prompt, "cron": when, "watch": watch})
+                        } else {
+                            json!({"title": title, "prompt": prompt, "at": when, "watch": watch})
+                        };
                         self.run("schedule.create", p);
                         keep = false;
                     }
@@ -427,7 +459,10 @@ impl AisCraftApp {
                     ui.label(small_muted(&t, "Warte auf die Anmeldung im Browserfenster …"));
                 }
             });
-            ui.label(small_muted(&t, "Braucht Chrome, Chromium, Edge, Brave oder Vivaldi. Das Profil bleibt, damit die nächste Anmeldung meist ohne Fenster klappt."));
+            ui.label(small_muted(
+                &t,
+                "Braucht Chrome, Chromium, Edge, Brave oder Vivaldi. Das Profil bleibt, damit die nächste Anmeldung meist ohne Fenster klappt.",
+            ));
             ui.add_space(6.0);
             let open = egui::CollapsingHeader::new(small_muted(&t, "Oder den Sitzungs-Cookie von Hand einfügen")).id_salt("manual-cookie").show(ui, |ui| {
                 card(&t).show(ui, |ui| {
@@ -488,7 +523,10 @@ impl AisCraftApp {
             }
         });
         if view.config.kind == BackendKind::AisChat {
-            ui.label(small_muted(&t, "Die Sitzung gilt 8 Stunden und verlängert sich, solange du AIS.ChatCraft nutzt. Gespeichert im Schlüsselbund des Systems."));
+            ui.label(small_muted(
+                &t,
+                "Die Sitzung gilt 8 Stunden und verlängert sich, solange du AIS.ChatCraft nutzt. Gespeichert im Schlüsselbund des Systems.",
+            ));
         }
         keep
     }
@@ -505,7 +543,17 @@ impl AisCraftApp {
             });
         });
         ui.horizontal_wrapped(|ui| {
-            for (k, label) in [(SettingsTab::Backends, "Backends"), (SettingsTab::Connectors, "Konnektoren"), (SettingsTab::Schedules, "Zeitpläne"), (SettingsTab::Skills, "Fähigkeiten & Hinweise"), (SettingsTab::Vault, "Tresor"), (SettingsTab::Usage, "Nutzung"), (SettingsTab::Memory, "Gedächtnis"), (SettingsTab::Appearance, "Darstellung"), (SettingsTab::About, "Über")] {
+            for (k, label) in [
+                (SettingsTab::Backends, "Backends"),
+                (SettingsTab::Connectors, "Konnektoren"),
+                (SettingsTab::Schedules, "Zeitpläne"),
+                (SettingsTab::Skills, "Fähigkeiten & Hinweise"),
+                (SettingsTab::Vault, "Tresor"),
+                (SettingsTab::Usage, "Nutzung"),
+                (SettingsTab::Memory, "Gedächtnis"),
+                (SettingsTab::Appearance, "Darstellung"),
+                (SettingsTab::About, "Über"),
+            ] {
                 ui.selectable_value(tab, k, label);
             }
         });

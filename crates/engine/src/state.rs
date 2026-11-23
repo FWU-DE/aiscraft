@@ -215,7 +215,21 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { theme: "system".into(), memory: true, zoom: 1.0, enter_sends: true, tools: true, trust_check: true, auto_allow_covered: false, monthly_token_limit: 0, learn_skills: true, recall: true, proactive: false, quiet_start: 22, quiet_end: 7 }
+        Self {
+            theme: "system".into(),
+            memory: true,
+            zoom: 1.0,
+            enter_sends: true,
+            tools: true,
+            trust_check: true,
+            auto_allow_covered: false,
+            monthly_token_limit: 0,
+            learn_skills: true,
+            recall: true,
+            proactive: false,
+            quiet_start: 22,
+            quiet_end: 7,
+        }
     }
 }
 

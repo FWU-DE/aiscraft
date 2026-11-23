@@ -129,7 +129,14 @@ fn run(engine: &Engine, cmd: Cmd) -> Result<(), String> {
                 }
             };
             let account = call(engine, "backend.login", json!({"id": backend, "secret": secret.trim()}))?;
-            println!("Angemeldet: {}", [account.get("display_name").and_then(serde_json::Value::as_str), account.get("detail").and_then(serde_json::Value::as_str)].into_iter().flatten().collect::<Vec<_>>().join(" · "));
+            println!(
+                "Angemeldet: {}",
+                [account.get("display_name").and_then(serde_json::Value::as_str), account.get("detail").and_then(serde_json::Value::as_str)]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            );
         }
         Cmd::Status => {
             for b in &engine.state().backends {
@@ -137,11 +144,24 @@ fn run(engine: &Engine, cmd: Cmd) -> Result<(), String> {
             }
             for b in &engine.state().backends {
                 let status = match &b.status {
-                    BackendStatus::Ready { account } => format!("bereit  {}", [account.display_name.clone(), account.detail.clone(), account.expires.clone().map(|e| format!("bis {e}"))].into_iter().flatten().collect::<Vec<_>>().join(" · ")),
+                    BackendStatus::Ready { account } => format!(
+                        "bereit  {}",
+                        [account.display_name.clone(), account.detail.clone(), account.expires.clone().map(|e| format!("bis {e}"))]
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>()
+                            .join(" · ")
+                    ),
                     BackendStatus::SignedOut { message } => format!("abgemeldet  {message}"),
                     BackendStatus::Failed { message } => format!("Fehler  {message}"),
                     BackendStatus::Checking => "prüft …".into(),
-                    BackendStatus::Unknown => if b.has_secret { "unbekannt".into() } else { "nicht angemeldet".into() },
+                    BackendStatus::Unknown => {
+                        if b.has_secret {
+                            "unbekannt".into()
+                        } else {
+                            "nicht angemeldet".into()
+                        }
+                    }
                 };
                 println!("{:<24} {:<22} {status}", b.config.id, b.config.kind.label());
             }
@@ -187,7 +207,12 @@ fn run(engine: &Engine, cmd: Cmd) -> Result<(), String> {
         Cmd::Search { query } => {
             let hits = call(engine, "search", json!({"query": query.join(" ")}))?;
             for h in hits.as_array().cloned().unwrap_or_default() {
-                println!("{}  {}\n    {}", h.get("conversation_id").and_then(serde_json::Value::as_str).unwrap_or(""), h.get("title").and_then(serde_json::Value::as_str).unwrap_or(""), h.get("snippet").and_then(serde_json::Value::as_str).unwrap_or("").replace('\n', " "));
+                println!(
+                    "{}  {}\n    {}",
+                    h.get("conversation_id").and_then(serde_json::Value::as_str).unwrap_or(""),
+                    h.get("title").and_then(serde_json::Value::as_str).unwrap_or(""),
+                    h.get("snippet").and_then(serde_json::Value::as_str).unwrap_or("").replace('\n', " ")
+                );
             }
         }
         Cmd::Export { id, format } => {

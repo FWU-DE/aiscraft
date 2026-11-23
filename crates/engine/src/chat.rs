@@ -3,7 +3,10 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use aiscraft_core::{ChatRequest, Conversation, ConversationKind, Error, ErrorKind, MemoryNote, Message, Result, Role, StreamEvent, ToolCall, extract_explicit_memory, memory_prompt, title_from};
+use aiscraft_core::{
+    ChatRequest, Conversation, ConversationKind, Error, ErrorKind, MemoryNote, Message, Result, Role, StreamEvent, ToolCall, extract_explicit_memory,
+    memory_prompt, title_from,
+};
 use futures::StreamExt;
 use serde_json::{Value, json};
 
@@ -117,9 +120,19 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
         attachments: vec![],
         activity: vec![],
         error: None,
-        usage: None, tool_calls: vec![], tool_result: None,
+        usage: None,
+        tool_calls: vec![],
+        tool_result: None,
     };
-    let req = ChatRequest { conversation_id: new_id(), model: sel.model_id, system: if takes_system { system.map(str::to_string) } else { None }, messages: vec![msg], tools: vec![], tool_bridge: None, persona: None };
+    let req = ChatRequest {
+        conversation_id: new_id(),
+        model: sel.model_id,
+        system: if takes_system { system.map(str::to_string) } else { None },
+        messages: vec![msg],
+        tools: vec![],
+        tool_bridge: None,
+        persona: None,
+    };
     let mut stream = backend.chat(req).await?;
     let mut out = String::new();
     while let Some(ev) = stream.next().await {
@@ -138,7 +151,10 @@ const MAX_LINKS: usize = 5;
 /// A web address a person attached: http(s), no spaces, not too long.
 pub(crate) fn check_url(url: &str) -> Result<String> {
     let u = url.trim();
-    let ok = (u.starts_with("https://") || u.starts_with("http://")) && u.len() <= 2000 && !u.chars().any(char::is_whitespace) && u.split("://").nth(1).is_some_and(|h| !h.is_empty() && !h.starts_with('/'));
+    let ok = (u.starts_with("https://") || u.starts_with("http://"))
+        && u.len() <= 2000
+        && !u.chars().any(char::is_whitespace)
+        && u.split("://").nth(1).is_some_and(|h| !h.is_empty() && !h.starts_with('/'));
     if !ok {
         return Err(Error::invalid(format!("Das ist keine Webadresse: {}", u.chars().take(80).collect::<String>())));
     }
@@ -214,7 +230,9 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: V
         attachments,
         activity: vec![],
         error: None,
-        usage: None, tool_calls: vec![], tool_result: None,
+        usage: None,
+        tool_calls: vec![],
+        tool_result: None,
     };
     c.store(|st| st.save_message(&user))?;
     // The state is copied on every change; image bytes stay out of it (requests read the copy).
@@ -231,7 +249,15 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: V
     if c.state().settings.memory
         && let Some((area, note_text)) = extract_explicit_memory(&text)
     {
-        let note = MemoryNote { id: new_id(), area, text: note_text.clone(), source_message_id: Some(user.id.clone()), source_quote: text.clone(), created_at: now_ms(), archived: false };
+        let note = MemoryNote {
+            id: new_id(),
+            area,
+            text: note_text.clone(),
+            source_message_id: Some(user.id.clone()),
+            source_quote: text.clone(),
+            created_at: now_ms(),
+            archived: false,
+        };
         c.store(|st| st.save_memory(&note))?;
         let nid = note.id.clone();
         c.update(|s| s.memory.push(note));

@@ -204,7 +204,9 @@ fn seed(engine: &Engine) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let out = arg(&args, "--out").unwrap_or_else(|| "snapshot.png".into());
-    let (w, h) = arg(&args, "--size").and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse::<f32>().ok()?, b.parse::<f32>().ok()?)))).unwrap_or((1280.0, 800.0));
+    let (w, h) = arg(&args, "--size")
+        .and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse::<f32>().ok()?, b.parse::<f32>().ok()?))))
+        .unwrap_or((1280.0, 800.0));
     let scale: f32 = arg(&args, "--scale").and_then(|s| s.parse().ok()).unwrap_or(1.5);
     let script: Vec<(String, Value)> = arg(&args, "--script").map(|s| serde_json::from_str(&s).expect("--script: [[cmd, params], …]")).unwrap_or_default();
 

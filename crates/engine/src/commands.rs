@@ -37,17 +37,29 @@ pub fn find(id: &str) -> Option<&'static CommandSpec> {
 }
 
 static COMMANDS: &[CommandSpec] = &[
-    cmd!("chat.new", "Neuer Chat", "Chat", Some("Ctrl+N"), "backend?: string, model?: string, project?: string, kind?: chat|image", true, |c, p| Box::pin(chat_new(c, p))),
+    cmd!("chat.new", "Neuer Chat", "Chat", Some("Ctrl+N"), "backend?: string, model?: string, project?: string, kind?: chat|image", true, |c, p| Box::pin(
+        chat_new(c, p)
+    )),
     cmd!("chat.open", "Chat öffnen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_open(c, p))),
-    cmd!("chat.send", "Senden", "Chat", Some("Enter"), "text: string, files?: [path], artifact?: string (as context), force?: bool (past the monthly limit), aspect_ratio?: quadratic|landscape|portrait (image chats), links?: [url] (web pages, at most 5)", false, |c, p| Box::pin(async move {
-        let text = opt_str(&p, "text").unwrap_or_default();
-        if let Some(r) = opt_str(&p, "aspect_ratio") {
-            set_aspect(&c, &r)?;
-        }
-        let files: Vec<String> = p.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-        let links: Vec<String> = p.get("links").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-        chat::send_with(c, text, files, links, opt_str(&p, "artifact"), p.get("force").and_then(Value::as_bool).unwrap_or(false)).await
-    })),
+    cmd!(
+        "chat.send",
+        "Senden",
+        "Chat",
+        Some("Enter"),
+        "text: string, files?: [path], artifact?: string (as context), force?: bool (past the monthly limit), aspect_ratio?: quadratic|landscape|portrait (image chats), links?: [url] (web pages, at most 5)",
+        false,
+        |c, p| Box::pin(async move {
+            let text = opt_str(&p, "text").unwrap_or_default();
+            if let Some(r) = opt_str(&p, "aspect_ratio") {
+                set_aspect(&c, &r)?;
+            }
+            let files: Vec<String> =
+                p.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            let links: Vec<String> =
+                p.get("links").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            chat::send_with(c, text, files, links, opt_str(&p, "artifact"), p.get("force").and_then(Value::as_bool).unwrap_or(false)).await
+        })
+    ),
     cmd!("chat.stop", "Antwort anhalten", "Chat", Some("Escape"), "conversation?: string", true, |c, p| Box::pin(async move {
         let conv = opt_str(&p, "conversation").or_else(|| c.state().current.clone()).ok_or_else(|| Error::invalid("Kein Chat offen"))?;
         Ok(json!({"stopped": chat::stop(&c, &conv)}))
@@ -57,7 +69,15 @@ static COMMANDS: &[CommandSpec] = &[
         chat::edit(c, req_str(&p, "message_id")?, req_str(&p, "text")?).await
     })),
     cmd!("chat.select_model", "Modell wählen", "Chat", None, "backend: string, model: string", false, |c, p| Box::pin(select_model(c, p))),
-    cmd!("chat.set_sources", "Quellen des Chats", "Chat", None, "tools?: bool, memory?: bool, project?: bool, history?: bool, connectors?: [id] | null (alle)", false, |c, p| Box::pin(set_sources(c, p))),
+    cmd!(
+        "chat.set_sources",
+        "Quellen des Chats",
+        "Chat",
+        None,
+        "tools?: bool, memory?: bool, project?: bool, history?: bool, connectors?: [id] | null (alle)",
+        false,
+        |c, p| Box::pin(set_sources(c, p))
+    ),
     cmd!("chat.rename", "Chat umbenennen", "Chat", Some("F2"), "id: string, title: string", false, |c, p| Box::pin(async move {
         let title = req_str(&p, "title")?.trim().chars().take(200).collect::<String>();
         if title.is_empty() {
@@ -82,7 +102,9 @@ static COMMANDS: &[CommandSpec] = &[
         Ok(json!({}))
     })),
     cmd!("chat.delete", "Chat löschen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_delete(c, p))),
-    cmd!("chat.export", "Chat exportieren", "Chat", Some("Ctrl+Shift+E"), "id?: string, format?: markdown|json, path?: string", true, |c, p| Box::pin(chat_export(c, p))),
+    cmd!("chat.export", "Chat exportieren", "Chat", Some("Ctrl+Shift+E"), "id?: string, format?: markdown|json, path?: string", true, |c, p| Box::pin(
+        chat_export(c, p)
+    )),
     cmd!("chat.new_image", "Neuer Bild-Chat", "Chat", None, "backend?: string, model?: string", true, |c, p| Box::pin(async move {
         let mut p = if p.is_object() { p } else { json!({}) };
         if let Some(o) = p.as_object_mut() {
@@ -95,7 +117,9 @@ static COMMANDS: &[CommandSpec] = &[
         Ok(json!({}))
     })),
     cmd!("chat.save_image", "Bild speichern", "Chat", None, "message_id: string, index?: number, path: string", false, |c, p| Box::pin(save_image(c, p))),
-    cmd!("chat.save_document", "Erzeugtes Dokument speichern", "Chat", None, "message_id: string, step: number, path: string", false, |c, p| Box::pin(save_document(c, p))),
+    cmd!("chat.save_document", "Erzeugtes Dokument speichern", "Chat", None, "message_id: string, step: number, path: string", false, |c, p| Box::pin(
+        save_document(c, p)
+    )),
     cmd!("search", "Alle Chats durchsuchen", "Suche", Some("Ctrl+Shift+F"), "query: string", true, |c, p| Box::pin(async move {
         let query = opt_str(&p, "query").unwrap_or_default();
         let hits = c.store(|st| st.search(&query, 50))?;
@@ -152,19 +176,21 @@ static COMMANDS: &[CommandSpec] = &[
         });
         Ok(json!({}))
     })),
-    cmd!("memory.add", "Notiz merken", "Gedächtnis", None, "text: string, area?: about|preferences|people|routines|lessons", false, |c, p| Box::pin(async move {
-        let text = req_str(&p, "text")?.trim().to_string();
-        if text.is_empty() {
-            return Err(Error::invalid("Notiz darf nicht leer sein"));
+    cmd!("memory.add", "Notiz merken", "Gedächtnis", None, "text: string, area?: about|preferences|people|routines|lessons", false, |c, p| Box::pin(
+        async move {
+            let text = req_str(&p, "text")?.trim().to_string();
+            if text.is_empty() {
+                return Err(Error::invalid("Notiz darf nicht leer sein"));
+            }
+            let area = opt_str(&p, "area").and_then(|a| MemoryArea::parse(&a)).unwrap_or(MemoryArea::About);
+            // Typed by the owner into the memory panel: the note is its own source.
+            let note = MemoryNote { id: new_id(), area, source_quote: text.clone(), text, source_message_id: None, created_at: now_ms(), archived: false };
+            c.store(|st| st.save_memory(&note))?;
+            let id = note.id.clone();
+            c.update(|s| s.memory.push(note));
+            Ok(json!({"id": id}))
         }
-        let area = opt_str(&p, "area").and_then(|a| MemoryArea::parse(&a)).unwrap_or(MemoryArea::About);
-        // Typed by the owner into the memory panel: the note is its own source.
-        let note = MemoryNote { id: new_id(), area, source_quote: text.clone(), text, source_message_id: None, created_at: now_ms(), archived: false };
-        c.store(|st| st.save_memory(&note))?;
-        let id = note.id.clone();
-        c.update(|s| s.memory.push(note));
-        Ok(json!({"id": id}))
-    })),
+    )),
     cmd!("memory.update", "Notiz ändern", "Gedächtnis", None, "id: string, text?: string, area?: string", false, |c, p| Box::pin(async move {
         let id = req_str(&p, "id")?;
         edit_memory(&c, &id, |n| {
@@ -182,8 +208,24 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("memory.restore", "Notiz wiederherstellen", "Gedächtnis", None, "id: string", false, |c, p| Box::pin(async move {
         edit_memory(&c, &req_str(&p, "id")?, |n| n.archived = false)
     })),
-    cmd!("backend.add", "Backend hinzufügen", "Backends", None, "kind: ais_chat|openai|anthropic|claude_cli, name?: string, base_url?: string, secret?: string", false, |c, p| Box::pin(backend_add(c, p))),
-    cmd!("backend.update", "Backend bearbeiten", "Backends", None, "id: string, name?: string, base_url?: string, default_model?: string, send_context?: bool", false, |c, p| Box::pin(backend_update(c, p))),
+    cmd!(
+        "backend.add",
+        "Backend hinzufügen",
+        "Backends",
+        None,
+        "kind: ais_chat|openai|anthropic|claude_cli, name?: string, base_url?: string, secret?: string",
+        false,
+        |c, p| Box::pin(backend_add(c, p))
+    ),
+    cmd!(
+        "backend.update",
+        "Backend bearbeiten",
+        "Backends",
+        None,
+        "id: string, name?: string, base_url?: string, default_model?: string, send_context?: bool",
+        false,
+        |c, p| Box::pin(backend_update(c, p))
+    ),
     cmd!("backend.remove", "Backend entfernen", "Backends", None, "id: string", false, |c, p| Box::pin(backend_remove(c, p))),
     cmd!("backend.login", "Anmelden", "Backends", None, "id: string, secret: string", false, |c, p| Box::pin(backend_login(c, p))),
     cmd!("backend.logout", "Abmelden", "Backends", None, "id: string", false, |c, p| Box::pin(async move {
@@ -194,7 +236,15 @@ static COMMANDS: &[CommandSpec] = &[
         c.update(|s| set_status(s, &id, BackendStatus::SignedOut { message: "Abgemeldet".into() }));
         Ok(json!({}))
     })),
-    cmd!("backend.browser_login", "Im Browser anmelden", "Backends", None, "id?: string (AIS.chat), silent?: bool (erst ohne Fenster versuchen), window?: bool (false: nie ein Fenster)", true, |c, p| Box::pin(browser_login(c, p))),
+    cmd!(
+        "backend.browser_login",
+        "Im Browser anmelden",
+        "Backends",
+        None,
+        "id?: string (AIS.chat), silent?: bool (erst ohne Fenster versuchen), window?: bool (false: nie ein Fenster)",
+        true,
+        |c, p| Box::pin(browser_login(c, p))
+    ),
     cmd!("backend.check", "Verbindung prüfen", "Backends", None, "id?: string", true, |c, p| Box::pin(async move {
         let id = opt_str(&p, "id").unwrap_or_else(|| c.state().selection.backend_id.clone());
         refresh_backend(&c, &id).await?;
@@ -211,31 +261,57 @@ static COMMANDS: &[CommandSpec] = &[
         Ok(out)
     })),
     cmd!("persona.refresh", "Assistenten, Figuren und Lernszenarien laden", "Backends", None, "backend?: string", true, |c, p| Box::pin(persona_refresh(c, p))),
-    cmd!("persona.start", "Chat mit Assistent, Figur oder Lernszenario", "Chat", None, "kind: assistant|character|learning_scenario, id: string, backend?: string", false, |c, p| Box::pin(persona_start(c, p))),
-    cmd!("remote.import", "Chat vom Server übernehmen", "Backends", None, "backend: string, id: string, title?: string", false, |c, p| Box::pin(remote_import(c, p))),
-    cmd!("settings.set", "Einstellung ändern", "Einstellungen", None, "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|proactive|quiet_start|quiet_end, value: any", false, |c, p| Box::pin(async move {
-        let key = req_str(&p, "key")?;
-        let value = p.get("value").cloned().unwrap_or(Value::Null);
-        let mut settings = serde_json::to_value(&c.state().settings)?;
-        let Some(obj) = settings.as_object_mut().filter(|o| o.contains_key(&key)) else {
-            return Err(Error::invalid(format!("Unbekannte Einstellung {key}")));
-        };
-        obj.insert(key.clone(), value);
-        let mut parsed: Settings = serde_json::from_value(settings).map_err(|e| Error::invalid(format!("{key}: {e}")))?;
-        if !parsed.zoom.is_finite() {
-            parsed.zoom = 1.0;
-        }
-        parsed.zoom = parsed.zoom.clamp(0.5, 3.0);
-        c.store(|st| st.set_setting("settings", &serde_json::to_value(&parsed)?))?;
-        c.update(|s| s.settings = parsed);
-        Ok(json!({}))
-    })),
+    cmd!(
+        "persona.start",
+        "Chat mit Assistent, Figur oder Lernszenario",
+        "Chat",
+        None,
+        "kind: assistant|character|learning_scenario, id: string, backend?: string",
+        false,
+        |c, p| Box::pin(persona_start(c, p))
+    ),
+    cmd!("remote.import", "Chat vom Server übernehmen", "Backends", None, "backend: string, id: string, title?: string", false, |c, p| Box::pin(
+        remote_import(c, p)
+    )),
+    cmd!(
+        "settings.set",
+        "Einstellung ändern",
+        "Einstellungen",
+        None,
+        "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|proactive|quiet_start|quiet_end, value: any",
+        false,
+        |c, p| Box::pin(async move {
+            let key = req_str(&p, "key")?;
+            let value = p.get("value").cloned().unwrap_or(Value::Null);
+            let mut settings = serde_json::to_value(&c.state().settings)?;
+            let Some(obj) = settings.as_object_mut().filter(|o| o.contains_key(&key)) else {
+                return Err(Error::invalid(format!("Unbekannte Einstellung {key}")));
+            };
+            obj.insert(key.clone(), value);
+            let mut parsed: Settings = serde_json::from_value(settings).map_err(|e| Error::invalid(format!("{key}: {e}")))?;
+            if !parsed.zoom.is_finite() {
+                parsed.zoom = 1.0;
+            }
+            parsed.zoom = parsed.zoom.clamp(0.5, 3.0);
+            c.store(|st| st.set_setting("settings", &serde_json::to_value(&parsed)?))?;
+            c.update(|s| s.settings = parsed);
+            Ok(json!({}))
+        })
+    ),
     cmd!("notice.dismiss", "Hinweis schließen", "App", None, "id: number", false, |c, p| Box::pin(async move {
         let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| Error::invalid("id fehlt"))?;
         c.update(|s| s.notices.retain(|n| n.id != id));
         Ok(json!({}))
     })),
-    cmd!("artifact.create", "Neues Dokument", "Artefakte", None, "kind?: document|board, title?: string, content?: string, from_message?: string", true, |c, p| Box::pin(crate::artifacts::create(c, p))),
+    cmd!(
+        "artifact.create",
+        "Neues Dokument",
+        "Artefakte",
+        None,
+        "kind?: document|board, title?: string, content?: string, from_message?: string",
+        true,
+        |c, p| Box::pin(crate::artifacts::create(c, p))
+    ),
     cmd!("artifact.open", "Artefakt öffnen", "Artefakte", None, "id: string", false, |c, p| Box::pin(async move {
         let id = req_str(&p, "id")?;
         if !c.state().artifacts.iter().any(|a| a.id == id) {
@@ -249,54 +325,117 @@ static COMMANDS: &[CommandSpec] = &[
         Ok(json!({}))
     })),
     cmd!("artifact.get", "Artefakt lesen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::get(c, p))),
-    cmd!("artifact.save", "Artefakt speichern", "Artefakte", None, "id: string, text?: string, state_b64?: string, version?: string", false, |c, p| Box::pin(crate::artifacts::save(c, p))),
-    cmd!("artifact.revise", "Mit KI überarbeiten", "Artefakte", None, "id: string, instruction: string", false, |c, p| Box::pin(crate::artifacts::revise(c, p))),
-    cmd!("artifact.export", "Artefakt exportieren", "Artefakte", None, "id: string, format?: markdown|html|json, path?: string", false, |c, p| Box::pin(crate::artifacts::export(c, p))),
+    cmd!("artifact.save", "Artefakt speichern", "Artefakte", None, "id: string, text?: string, state_b64?: string, version?: string", false, |c, p| Box::pin(
+        crate::artifacts::save(c, p)
+    )),
+    cmd!("artifact.revise", "Mit KI überarbeiten", "Artefakte", None, "id: string, instruction: string", false, |c, p| Box::pin(crate::artifacts::revise(
+        c, p
+    ))),
+    cmd!("artifact.export", "Artefakt exportieren", "Artefakte", None, "id: string, format?: markdown|html|json, path?: string", false, |c, p| Box::pin(
+        crate::artifacts::export(c, p)
+    )),
     cmd!("artifact.versions", "Versionen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::versions(c, p))),
-    cmd!("artifact.restore", "Version wiederherstellen", "Artefakte", None, "id: string, version: number", false, |c, p| Box::pin(crate::artifacts::restore(c, p))),
-    cmd!("artifact.rename", "Artefakt umbenennen", "Artefakte", None, "id: string, title: string", false, |c, p| Box::pin(crate::artifacts::edit_meta(c, p, |a, p| {
-        let t = req_str(p, "title")?.trim().chars().take(200).collect::<String>();
-        if t.is_empty() {
-            return Err(Error::invalid("Titel darf nicht leer sein"));
+    cmd!("artifact.restore", "Version wiederherstellen", "Artefakte", None, "id: string, version: number", false, |c, p| Box::pin(crate::artifacts::restore(
+        c, p
+    ))),
+    cmd!("artifact.rename", "Artefakt umbenennen", "Artefakte", None, "id: string, title: string", false, |c, p| Box::pin(crate::artifacts::edit_meta(
+        c,
+        p,
+        |a, p| {
+            let t = req_str(p, "title")?.trim().chars().take(200).collect::<String>();
+            if t.is_empty() {
+                return Err(Error::invalid("Titel darf nicht leer sein"));
+            }
+            a.title = t;
+            Ok(())
         }
-        a.title = t;
-        Ok(())
-    }))),
-    cmd!("artifact.board_add", "Whiteboard ergänzen", "Artefakte", None, "id: string, outline: string (eingerückte Liste)", false, |c, p| Box::pin(crate::artifacts::board_add(c, p))),
+    ))),
+    cmd!("artifact.board_add", "Whiteboard ergänzen", "Artefakte", None, "id: string, outline: string (eingerückte Liste)", false, |c, p| Box::pin(
+        crate::artifacts::board_add(c, p)
+    )),
     cmd!("artifact.delete", "Artefakt löschen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::delete(c, p))),
-    cmd!("connector.add", "Konnektor hinzufügen", "Konnektoren", None, "name: string, command?: string (Befehlszeile), args?: [string], env?: {KEY: value} | \"KEY=value\\n…\", url?: string, headers?: {Name: value}", false, |c, p| Box::pin(crate::tools::add(c, p))),
+    cmd!(
+        "connector.add",
+        "Konnektor hinzufügen",
+        "Konnektoren",
+        None,
+        "name: string, command?: string (Befehlszeile), args?: [string], env?: {KEY: value} | \"KEY=value\\n…\", url?: string, headers?: {Name: value}",
+        false,
+        |c, p| Box::pin(crate::tools::add(c, p))
+    ),
     cmd!("connector.remove", "Konnektor entfernen", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::remove(c, p))),
     cmd!("connector.toggle", "Konnektor ein/aus", "Konnektoren", None, "id: string, enabled: bool", false, |c, p| Box::pin(crate::tools::toggle(c, p))),
     cmd!("connector.refresh", "Konnektor neu verbinden", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::refresh(c, p))),
-    cmd!("tool.answer", "Werkzeugaufruf erlauben oder ablehnen", "Konnektoren", None, "id: string, allow: bool", false, |c, p| Box::pin(crate::tools::answer(c, p))),
-    cmd!("tools.list", "Werkzeuge auflisten", "Konnektoren", None, "", false, |c, _| Box::pin(async move { Ok(serde_json::to_value(crate::tools::specs(&c))?) })),
-    cmd!("schedule.create", "Zeitplan anlegen", "Zeitpläne", None, "title: string, prompt: string, cron?: \"0 7 * * 1-5\" | at?: \"morgen 7:30\", watch?: bool, backend?: string, model?: string, conversation?: string", false, |c, p| Box::pin(crate::schedules::create(c, p))),
-    cmd!("schedule.update", "Zeitplan ändern", "Zeitpläne", None, "id: string, enabled?: bool, title?: string, prompt?: string, cron?: string", false, |c, p| Box::pin(crate::schedules::edit(c, p))),
+    cmd!("tool.answer", "Werkzeugaufruf erlauben oder ablehnen", "Konnektoren", None, "id: string, allow: bool", false, |c, p| Box::pin(crate::tools::answer(
+        c, p
+    ))),
+    cmd!("tools.list", "Werkzeuge auflisten", "Konnektoren", None, "", false, |c, _| Box::pin(
+        async move { Ok(serde_json::to_value(crate::tools::specs(&c))?) }
+    )),
+    cmd!(
+        "schedule.create",
+        "Zeitplan anlegen",
+        "Zeitpläne",
+        None,
+        "title: string, prompt: string, cron?: \"0 7 * * 1-5\" | at?: \"morgen 7:30\", watch?: bool, backend?: string, model?: string, conversation?: string",
+        false,
+        |c, p| Box::pin(crate::schedules::create(c, p))
+    ),
+    cmd!(
+        "schedule.update",
+        "Zeitplan ändern",
+        "Zeitpläne",
+        None,
+        "id: string, enabled?: bool, title?: string, prompt?: string, cron?: string",
+        false,
+        |c, p| Box::pin(crate::schedules::edit(c, p))
+    ),
     cmd!("schedule.delete", "Zeitplan löschen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::delete(c, p))),
     cmd!("schedule.run", "Zeitplan jetzt ausführen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::run_now(c, p))),
     cmd!("usage.report", "Nutzung", "App", None, "months?: number (default 6)", true, |c, p| Box::pin(crate::usage::report(c, p))),
-    cmd!("task.start", "Aufgabe im Hintergrund starten", "Aufgaben", None, "title: string, instructions: string, conversation?: string (wohin das Ergebnis geht)", false, |c, p| Box::pin(crate::tasks::start(c, p))),
-    cmd!("skill.create", "Vorgehen anlegen", "Fähigkeiten", None, "title: string, when?: string, steps: string", false, |c, p| Box::pin(crate::skills::create(c, p))),
-    cmd!("skill.update", "Vorgehen ändern", "Fähigkeiten", None, "id: string, title?: string, when?: string, steps?: string", false, |c, p| Box::pin(crate::skills::update(c, p))),
+    cmd!(
+        "task.start",
+        "Aufgabe im Hintergrund starten",
+        "Aufgaben",
+        None,
+        "title: string, instructions: string, conversation?: string (wohin das Ergebnis geht)",
+        false,
+        |c, p| Box::pin(crate::tasks::start(c, p))
+    ),
+    cmd!("skill.create", "Vorgehen anlegen", "Fähigkeiten", None, "title: string, when?: string, steps: string", false, |c, p| Box::pin(
+        crate::skills::create(c, p)
+    )),
+    cmd!("skill.update", "Vorgehen ändern", "Fähigkeiten", None, "id: string, title?: string, when?: string, steps?: string", false, |c, p| Box::pin(
+        crate::skills::update(c, p)
+    )),
     cmd!("skill.delete", "Vorgehen löschen", "Fähigkeiten", None, "id: string", false, |c, p| Box::pin(crate::skills::delete(c, p))),
-    cmd!("memory.tidy", "Notizen aufräumen", "Gedächtnis", None, "", false, |c, _| Box::pin(async move { Ok(json!({"archived": crate::skills::lint_memory(&c)?})) })),
+    cmd!("memory.tidy", "Notizen aufräumen", "Gedächtnis", None, "", false, |c, _| Box::pin(async move {
+        Ok(json!({"archived": crate::skills::lint_memory(&c)?}))
+    })),
     cmd!("voice.speak", "Vorlesen", "Sprache", None, "message_id?: string, text?: string", false, |c, p| Box::pin(crate::voice::speak(c, p))),
     cmd!("voice.stop", "Vorlesen anhalten", "Sprache", None, "", false, |c, p| Box::pin(crate::voice::stop_speaking(c, p))),
     cmd!("voice.record_start", "Diktat starten", "Sprache", Some("Ctrl+D"), "", false, |c, p| Box::pin(crate::voice::record_start(c, p))),
     cmd!("voice.record_stop", "Diktat beenden", "Sprache", None, "cancel?: bool", false, |c, p| Box::pin(crate::voice::record_stop(c, p))),
-    cmd!("vault.add", "Tresor-Eintrag anlegen", "Tresor", None, "name: string, username?: string, password?: string, totp?: base32, url?: string", false, |c, p| Box::pin(crate::vault::add(c, p))),
+    cmd!(
+        "vault.add",
+        "Tresor-Eintrag anlegen",
+        "Tresor",
+        None,
+        "name: string, username?: string, password?: string, totp?: base32, url?: string",
+        false,
+        |c, p| Box::pin(crate::vault::add(c, p))
+    ),
     cmd!("vault.remove", "Tresor-Eintrag löschen", "Tresor", None, "id: string", false, |c, p| Box::pin(crate::vault::remove(c, p))),
     cmd!("vault.code", "Einmalcode anzeigen", "Tresor", None, "id: string", false, |c, p| Box::pin(crate::vault::code(c, p))),
-    cmd!("vault.import_bitwarden", "Aus Bitwarden übernehmen", "Tresor", None, "path: string (CSV-Export)", false, |c, p| Box::pin(crate::vault::import_bitwarden(c, p))),
-    cmd!("hints.check", "Jetzt auf offene Punkte prüfen", "Hinweise", None, "", true, |c, _| Box::pin(async move { Ok(json!({"hint": crate::proactive::check(&c, true).await?})) })),
+    cmd!("vault.import_bitwarden", "Aus Bitwarden übernehmen", "Tresor", None, "path: string (CSV-Export)", false, |c, p| Box::pin(
+        crate::vault::import_bitwarden(c, p)
+    )),
+    cmd!("hints.check", "Jetzt auf offene Punkte prüfen", "Hinweise", None, "", true, |c, _| Box::pin(async move {
+        Ok(json!({"hint": crate::proactive::check(&c, true).await?}))
+    })),
     cmd!("app.state", "Zustand lesen", "App", None, "", false, |c, _| Box::pin(async move { Ok(serde_json::to_value(&*c.state())?) })),
     cmd!("app.commands", "Befehle auflisten", "App", None, "", false, |_, _| Box::pin(async move {
-        Ok(Value::Array(
-            COMMANDS
-                .iter()
-                .map(|c| json!({"id": c.id, "label": c.label, "group": c.group, "shortcut": c.shortcut, "params": c.params}))
-                .collect(),
-        ))
+        Ok(Value::Array(COMMANDS.iter().map(|c| json!({"id": c.id, "label": c.label, "group": c.group, "shortcut": c.shortcut, "params": c.params})).collect()))
     })),
 ];
 
@@ -327,8 +466,11 @@ pub(crate) async fn refresh_backend(c: &Ctx, id: &str) -> Result<()> {
             c.update(|s| set_status(s, id, BackendStatus::Ready { account }));
         }
         Err(e) => {
-            let status =
-                if e.kind == ErrorKind::Auth { BackendStatus::SignedOut { message: e.message.clone() } } else { BackendStatus::Failed { message: e.message.clone() } };
+            let status = if e.kind == ErrorKind::Auth {
+                BackendStatus::SignedOut { message: e.message.clone() }
+            } else {
+                BackendStatus::Failed { message: e.message.clone() }
+            };
             c.update(|s| set_status(s, id, status));
             return Err(e);
         }
@@ -577,7 +719,11 @@ async fn save_document(c: Ctx, p: Value) -> Result<Value> {
         .and_then(|s| s.document.clone())
         .ok_or_else(|| Error::not_found("Dokument nicht gefunden"))?;
     let binary = ["docx", "pptx", "xlsx", "pdf", "odt"].contains(&doc.format.as_str());
-    let bytes = if binary { base64::engine::general_purpose::STANDARD.decode(doc.content.trim()).unwrap_or_else(|_| doc.content.into_bytes()) } else { doc.content.into_bytes() };
+    let bytes = if binary {
+        base64::engine::general_purpose::STANDARD.decode(doc.content.trim()).unwrap_or_else(|_| doc.content.into_bytes())
+    } else {
+        doc.content.into_bytes()
+    };
     std::fs::write(&path, bytes).map_err(|e| Error::storage(format!("{path}: {e}")))?;
     c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
     Ok(json!({"path": path}))
@@ -631,7 +777,20 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
         p
     });
     let kind = state.remote.get(&backend_id).and_then(|l| l.iter().find(|r| r.id == id)).map(|r| r.kind).unwrap_or_default();
-    let conv = Conversation { id: id.clone(), title, backend_id, model_id, project_id: None, created_at: now, updated_at: now, pinned: false, sources: Default::default(), persona, kind, remote_id: None };
+    let conv = Conversation {
+        id: id.clone(),
+        title,
+        backend_id,
+        model_id,
+        project_id: None,
+        created_at: now,
+        updated_at: now,
+        pinned: false,
+        sources: Default::default(),
+        persona,
+        kind,
+        remote_id: None,
+    };
     c.store(|st| {
         st.save_conversation(&conv)?;
         for (i, (mid, role, content)) in msgs.iter().enumerate() {
@@ -645,7 +804,9 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
                 attachments: vec![],
                 activity: vec![],
                 error: None,
-                usage: None, tool_calls: vec![], tool_result: None,
+                usage: None,
+                tool_calls: vec![],
+                tool_result: None,
             })?;
         }
         Ok(())
@@ -680,7 +841,8 @@ async fn persona_refresh(c: Ctx, p: Value) -> Result<Value> {
 /// the first message, like any new chat; a character's greeting comes first.
 async fn persona_start(c: Ctx, p: Value) -> Result<Value> {
     let backend_id = opt_str(&p, "backend").unwrap_or_else(|| c.state().selection.backend_id.clone());
-    let kind = aiscraft_core::PersonaKind::parse(&req_str(&p, "kind")?).ok_or_else(|| Error::invalid("kind muss assistant, character oder learning_scenario sein"))?;
+    let kind =
+        aiscraft_core::PersonaKind::parse(&req_str(&p, "kind")?).ok_or_else(|| Error::invalid("kind muss assistant, character oder learning_scenario sein"))?;
     let id = req_str(&p, "id")?;
     if c.state().backend(&backend_id).is_some_and(|b| b.personas.is_none()) {
         persona_refresh(c.clone(), json!({"backend": backend_id})).await?;
@@ -706,7 +868,15 @@ async fn persona_start(c: Ctx, p: Value) -> Result<Value> {
     c.update(|s| {
         s.current = None;
         s.messages.clear();
-        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: Some(info.persona()), kind: ConversationKind::Chat, aspect_ratio: s.selection.aspect_ratio.clone() };
+        s.selection = Selection {
+            backend_id,
+            model_id,
+            project_id,
+            sources: Default::default(),
+            persona: Some(info.persona()),
+            kind: ConversationKind::Chat,
+            aspect_ratio: s.selection.aspect_ratio.clone(),
+        };
     });
     persist_selection(&c);
     Ok(serde_json::to_value(&info)?)
@@ -731,7 +901,14 @@ async fn backend_add(c: Ctx, p: Value) -> Result<Value> {
         BackendKind::Anthropic | BackendKind::ClaudeCli => Some(aiscraft_backends::ANTHROPIC_DEFAULT_MODEL.to_string()),
         _ => None,
     };
-    let config = BackendConfig { id: format!("{}-{}", kind_slug(kind), &new_id()[..8]), name, kind, base_url, default_model, send_context: kind != BackendKind::AisChat };
+    let config = BackendConfig {
+        id: format!("{}-{}", kind_slug(kind), &new_id()[..8]),
+        name,
+        kind,
+        base_url,
+        default_model,
+        send_context: kind != BackendKind::AisChat,
+    };
     // Build first so a bad address is reported before anything is saved.
     aiscraft_backends::build(config.clone(), None, c.secret_sink())?;
     if let Some(secret) = opt_str(&p, "secret").filter(|s| !s.trim().is_empty()) {
@@ -849,8 +1026,11 @@ async fn backend_login(c: Ctx, p: Value) -> Result<Value> {
     c.notice_with(
         NoticeLevel::Success,
         format!("Angemeldet bei {}: {who}", config.name),
-        (config.kind == BackendKind::AisChat)
-            .then(|| NoticeAction { label: "Verlauf laden".into(), command: "remote.refresh".into(), params: json!({"backend": id}) }),
+        (config.kind == BackendKind::AisChat).then(|| NoticeAction {
+            label: "Verlauf laden".into(),
+            command: "remote.refresh".into(),
+            params: json!({"backend": id}),
+        }),
     );
     Ok(serde_json::to_value(account)?)
 }
