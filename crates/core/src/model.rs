@@ -152,6 +152,38 @@ pub struct Conversation {
     pub updated_at: Millis,
     #[serde(default)]
     pub pinned: bool,
+    /// What this chat may use besides the conversation itself.
+    #[serde(default)]
+    pub sources: Sources,
+}
+
+/// The sources a chat draws on. All on by default; each can be switched off per chat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Sources {
+    /// Offer tools at all (documents, history search, connectors).
+    pub tools: bool,
+    /// The owner's memory notes.
+    pub memory: bool,
+    /// The project's instructions.
+    pub project: bool,
+    /// Searching the other chats (the history_search tool).
+    pub history: bool,
+    /// Connectors this chat may use: `None` = every enabled one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connectors: Option<Vec<String>>,
+}
+
+impl Default for Sources {
+    fn default() -> Self {
+        Self { tools: true, memory: true, project: true, history: true, connectors: None }
+    }
+}
+
+impl Sources {
+    pub fn allows_connector(&self, id: &str) -> bool {
+        self.tools && self.connectors.as_ref().is_none_or(|c| c.iter().any(|x| x == id))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1,6 +1,6 @@
 [package]
 name = "aiscraft-backends"
-description = "AISCraft chat backends: AIS.chat (web session), OpenAI-compatible servers, Anthropic."
+description = "AIS.ChatCraft chat backends: AIS.chat (web session), OpenAI-compatible servers, Anthropic."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

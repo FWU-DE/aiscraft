@@ -1,4 +1,4 @@
-//! AISCraft whiteboard.
+//! AIS.ChatCraft whiteboard.
 //!
 //! - [`Board`]: the document, a `yrs` (Yjs) CRDT so it can be shared live, with typed helpers,
 //!   undo/redo and update exchange.

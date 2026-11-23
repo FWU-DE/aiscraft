@@ -1,4 +1,4 @@
-//! The AISCraft engine (layer 2). It owns the state, the store, the secrets and the backends,
+//! The AIS.ChatCraft engine (layer 2). It owns the state, the store, the secrets and the backends,
 //! and exposes one registry of commands. The egui shell, the CLI and the JSON control channel
 //! all dispatch the same commands by id, so everything a person can do, an agent can do.
 

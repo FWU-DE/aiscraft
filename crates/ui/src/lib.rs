@@ -1,4 +1,4 @@
-//! The AISCraft desktop shell (layer 3), on egui. Thin: it renders the engine's state and
+//! The AIS.ChatCraft desktop shell (layer 3), on egui. Thin: it renders the engine's state and
 //! dispatches the engine's commands. Pure view state (open dialogs, text being typed, scroll)
 //! lives here; everything else lives in the engine.
 

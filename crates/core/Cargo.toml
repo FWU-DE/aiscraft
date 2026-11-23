@@ -1,6 +1,6 @@
 [package]
 name = "aiscraft-core"
-description = "AISCraft data model: conversations, messages, backends, memory, errors. Serde only, no I/O."
+description = "AIS.ChatCraft data model: conversations, messages, backends, memory, errors. Serde only, no I/O."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

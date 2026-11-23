@@ -1,5 +1,5 @@
 //! The usage ledger (as in Nod): tokens per month, backend and model, and a monthly limit after
-//! which AISCraft asks before sending.
+//! which AIS.ChatCraft asks before sending.
 
 use aiscraft_core::{Error, Result};
 use serde_json::{Value, json};

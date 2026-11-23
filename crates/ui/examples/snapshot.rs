@@ -1,4 +1,4 @@
-//! Render the AISCraft window offscreen (no window, no focus stealing) and save a PNG.
+//! Render the AIS.ChatCraft window offscreen (no window, no focus stealing) and save a PNG.
 //!
 //! ```sh
 //! cargo run -p aiscraft-ui --example snapshot -- --out shot.png --size 1280x800 --demo \

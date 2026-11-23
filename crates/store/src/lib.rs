@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS backends (id TEXT PRIMARY KEY, position INTEGER NOT NULL, config TEXT NOT NULL);
@@ -101,9 +101,14 @@ impl Store {
         db.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;").map_err(db_err)?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(db_err)?;
         if version > SCHEMA_VERSION {
-            return Err(Error::storage("Die Datenbank stammt aus einer neueren AISCraft-Version"));
+            return Err(Error::storage("Die Datenbank stammt aus einer neueren AIS.ChatCraft-Version"));
         }
         db.execute_batch(SCHEMA).map_err(db_err)?;
+        // 1 → 2: per-chat sources.
+        let has_sources: bool = db.prepare("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'sources'").and_then(|mut st| st.exists([])).map_err(db_err)?;
+        if !has_sources {
+            db.execute_batch("ALTER TABLE conversations ADD COLUMN sources TEXT NOT NULL DEFAULT '{}'").map_err(db_err)?;
+        }
         db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}")).map_err(db_err)?;
         Ok(Self { db })
     }
@@ -151,10 +156,11 @@ impl Store {
             created_at: r.get(5)?,
             updated_at: r.get(6)?,
             pinned: r.get::<_, i64>(7)? != 0,
+            sources: r.get::<_, String>(8).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
         })
     }
 
-    const CONV_COLS: &'static str = "id, title, backend_id, model_id, project_id, created_at, updated_at, pinned";
+    const CONV_COLS: &'static str = "id, title, backend_id, model_id, project_id, created_at, updated_at, pinned, sources";
 
     /// Pinned first, then most recently updated.
     pub fn conversations(&self, limit: usize) -> Result<Vec<Conversation>> {
@@ -172,11 +178,11 @@ impl Store {
     pub fn save_conversation(&self, c: &Conversation) -> Result<()> {
         self.db
             .execute(
-                "INSERT INTO conversations (id, title, backend_id, model_id, project_id, created_at, updated_at, pinned)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                "INSERT INTO conversations (id, title, backend_id, model_id, project_id, created_at, updated_at, pinned, sources)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(id) DO UPDATE SET title = excluded.title, backend_id = excluded.backend_id, model_id = excluded.model_id,
-                   project_id = excluded.project_id, updated_at = excluded.updated_at, pinned = excluded.pinned",
-                params![c.id, c.title, c.backend_id, c.model_id, c.project_id, c.created_at, c.updated_at, c.pinned as i64],
+                   project_id = excluded.project_id, updated_at = excluded.updated_at, pinned = excluded.pinned, sources = excluded.sources",
+                params![c.id, c.title, c.backend_id, c.model_id, c.project_id, c.created_at, c.updated_at, c.pinned as i64, serde_json::to_string(&c.sources)?],
             )
             .map_err(db_err)?;
         Ok(())
@@ -510,6 +516,7 @@ mod tests {
             created_at: 0,
             updated_at: updated,
             pinned: false,
+            sources: Default::default(),
         }
     }
 
@@ -564,6 +571,27 @@ mod tests {
         s.delete_conversation("a").unwrap();
         assert!(s.messages("a").unwrap().is_empty());
         assert!(s.search("photosynthese", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn migrates_schema_1_and_keeps_sources() {
+        let path = std::env::temp_dir().join(format!("aiscraft-migrate-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            // A version-1 database without the sources column.
+            let db = Connection::open(&path).unwrap();
+            db.execute_batch("CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, backend_id TEXT NOT NULL, model_id TEXT NOT NULL, project_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, pinned INTEGER NOT NULL DEFAULT 0); INSERT INTO conversations VALUES ('old','Alt','b','m',NULL,0,0,0); PRAGMA user_version = 1;").unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        let old = s.conversation("old").unwrap().unwrap();
+        assert_eq!(old.sources, aiscraft_core::Sources::default());
+        let mut c = old.clone();
+        c.sources.memory = false;
+        c.sources.connectors = Some(vec!["k1".into()]);
+        s.save_conversation(&c).unwrap();
+        assert_eq!(s.conversation("old").unwrap().unwrap().sources, c.sources);
+        drop(s);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

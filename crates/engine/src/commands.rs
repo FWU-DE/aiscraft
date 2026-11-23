@@ -53,6 +53,7 @@ static COMMANDS: &[CommandSpec] = &[
         chat::edit(c, req_str(&p, "message_id")?, req_str(&p, "text")?).await
     })),
     cmd!("chat.select_model", "Modell wählen", "Chat", None, "backend: string, model: string", false, |c, p| Box::pin(select_model(c, p))),
+    cmd!("chat.set_sources", "Quellen des Chats", "Chat", None, "tools?: bool, memory?: bool, project?: bool, history?: bool, connectors?: [id] | null (alle)", false, |c, p| Box::pin(set_sources(c, p))),
     cmd!("chat.rename", "Chat umbenennen", "Chat", Some("F2"), "id: string, title: string", false, |c, p| Box::pin(async move {
         let title = req_str(&p, "title")?.trim().chars().take(200).collect::<String>();
         if title.is_empty() {
@@ -370,7 +371,7 @@ async fn chat_new(c: Ctx, p: Value) -> Result<Value> {
     c.update(|s| {
         s.current = None;
         s.messages.clear();
-        s.selection = Selection { backend_id, model_id, project_id };
+        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default() };
     });
     persist_selection(&c);
     Ok(json!({}))
@@ -384,7 +385,7 @@ async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
     c.update(|s| {
         s.current = Some(id.clone());
         s.messages = messages;
-        s.selection = Selection { backend_id: conv.backend_id.clone(), model_id: conv.model_id.clone(), project_id: conv.project_id.clone() };
+        s.selection = Selection { backend_id: conv.backend_id.clone(), model_id: conv.model_id.clone(), project_id: conv.project_id.clone(), sources: conv.sources.clone() };
     });
     Ok(json!({"messages": n}))
 }
@@ -409,6 +410,29 @@ async fn select_model(c: Ctx, p: Value) -> Result<Value> {
     }
     persist_selection(&c);
     Ok(json!({}))
+}
+
+/// Switch the sources of the open chat (or of the next new one).
+async fn set_sources(c: Ctx, p: Value) -> Result<Value> {
+    let mut src = c.state().selection.sources.clone();
+    let flag = |k: &str, cur: bool| p.get(k).and_then(Value::as_bool).unwrap_or(cur);
+    src.tools = flag("tools", src.tools);
+    src.memory = flag("memory", src.memory);
+    src.project = flag("project", src.project);
+    src.history = flag("history", src.history);
+    match p.get("connectors") {
+        Some(Value::Null) => src.connectors = None,
+        Some(Value::Array(a)) => src.connectors = Some(a.iter().filter_map(|v| v.as_str().map(str::to_string)).take(200).collect()),
+        Some(_) => return Err(Error::invalid("connectors muss eine Liste von IDs oder null sein")),
+        None => {}
+    }
+    let current = c.state().current.clone();
+    c.update(|s| s.selection.sources = src.clone());
+    if let Some(id) = current {
+        let s2 = src.clone();
+        edit_conversation(&c, &id, |conv| conv.sources = s2)?;
+    }
+    Ok(serde_json::to_value(src)?)
 }
 
 async fn chat_delete(c: Ctx, p: Value) -> Result<Value> {
@@ -492,7 +516,7 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
     let state = c.state();
     let model_id = if state.selection.backend_id == backend_id { state.selection.model_id.clone() } else { String::new() };
     // The local id is the server's id, so continuing the chat continues it on the server too.
-    let conv = Conversation { id: id.clone(), title, backend_id, model_id, project_id: None, created_at: now, updated_at: now, pinned: false };
+    let conv = Conversation { id: id.clone(), title, backend_id, model_id, project_id: None, created_at: now, updated_at: now, pinned: false, sources: Default::default() };
     c.store(|st| {
         st.save_conversation(&conv)?;
         for (i, (mid, role, content)) in msgs.iter().enumerate() {
@@ -617,7 +641,7 @@ pub(crate) async fn browser_login(c: Ctx, p: Value) -> Result<Value> {
         return Err(Error::unsupported("Anmelden im Browser gibt es nur für AIS.chat"));
     }
     if !c.0.browser_allowed {
-        return Err(Error::unsupported("In dieser Umgebung startet AISCraft keinen Browser (Tests, Skripte, AISCRAFT_NO_BROWSER)"));
+        return Err(Error::unsupported("In dieser Umgebung startet AIS.ChatCraft keinen Browser (Tests, Skripte, AISCRAFT_NO_BROWSER)"));
     }
     let opts = |headless: bool, secs: u64| aiscraft_backends::browser_login::LoginOptions {
         base_url: config.base_url.clone(),

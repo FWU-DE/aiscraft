@@ -13,7 +13,7 @@ impl AisCraftApp {
         egui::Panel::bottom("sidebar-account").frame(egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 2 })).show(ui, |ui| self.account_row(ui));
         ui.horizontal(|ui| {
             crate::widgets::ais_logo(ui, 18.0, t.accent);
-            ui.label(RichText::new("AISCraft").strong().size(17.0));
+            ui.label(RichText::new("AIS.ChatCraft").strong().size(17.0));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if icon_button(ui, &t, "☰", "Seitenleiste ausblenden (Strg+B)").clicked() {
                     self.sidebar_open = false;
@@ -193,7 +193,17 @@ impl AisCraftApp {
             let selected = self.state.current.as_deref() == Some(&c.id);
             let generating = self.state.is_generating(&c.id);
             let w = ui.available_width();
-            let resp = ui.add(egui::Button::selectable(selected, RichText::new(&c.title)).truncate().min_size(egui::vec2(w, 26.0)));
+            let is_ais = self.state.backend(&c.backend_id).is_some_and(|b| b.config.kind == BackendKind::AisChat);
+            // AIS.chat chats get a small AIS.chat logo; the spaces make room for it.
+            let title = if is_ais { format!("      {}", c.title) } else { c.title.clone() };
+            let resp = ui.add(egui::Button::selectable(selected, RichText::new(title)).truncate().min_size(egui::vec2(w, 26.0)));
+            if is_ais {
+                let r = resp.rect;
+                let h = 10.0;
+                let logo = egui::Rect::from_min_size(egui::pos2(r.left() + 8.0, r.center().y - h / 2.0), egui::vec2(h * 269.8 / 230.1, h));
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(logo));
+                crate::widgets::ais_logo(&mut child, h, if selected { t.on_accent } else { t.accent }).on_hover_text("AIS.chat");
+            }
             if generating {
                 let r = resp.rect;
                 let center = egui::pos2(r.right() - 12.0, r.center().y);

@@ -1,4 +1,4 @@
-//! AISCraft desktop app.
+//! AIS.ChatCraft desktop app.
 //!
 //! `aiscraft` opens the window. `aiscraft --control [port]` also starts the JSON control
 //! channel on 127.0.0.1 (default 7979), so agents and tests can drive the running app: one
@@ -25,7 +25,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("AISCraft {}\n\n  aiscraft                 Fenster öffnen\n  aiscraft --control [port] mit JSON-Steuerkanal auf 127.0.0.1 (Standard {DEFAULT_PORT})", env!("CARGO_PKG_VERSION"));
+        println!("AIS.ChatCraft {}\n\n  aiscraft                 Fenster öffnen\n  aiscraft --control [port] mit JSON-Steuerkanal auf 127.0.0.1 (Standard {DEFAULT_PORT})", env!("CARGO_PKG_VERSION"));
         return;
     }
     if args.iter().any(|a| a == "--version") {
@@ -39,7 +39,7 @@ fn main() {
     let engine = match Engine::open(opts) {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("AISCraft kann nicht starten: {e}");
+            eprintln!("AIS.ChatCraft kann nicht starten: {e}");
             std::process::exit(1);
         }
     };
@@ -53,12 +53,12 @@ fn main() {
     }
 
     let native = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("AISCraft").with_app_id("ai.uds.aiscraft").with_inner_size([1180.0, 780.0]).with_min_inner_size([640.0, 420.0]),
+        viewport: egui::ViewportBuilder::default().with_title("AIS.ChatCraft").with_app_id("ai.uds.aiscraft").with_inner_size([1180.0, 780.0]).with_min_inner_size([640.0, 420.0]),
         ..Default::default()
     };
-    let result = eframe::run_native("AISCraft", native, Box::new(move |cc| Ok(Box::new(AisCraftApp::new(cc, engine, Some(ui_rx))))));
+    let result = eframe::run_native("AIS.ChatCraft", native, Box::new(move |cc| Ok(Box::new(AisCraftApp::new(cc, engine, Some(ui_rx))))));
     if let Err(e) = result {
-        eprintln!("AISCraft: {e}");
+        eprintln!("AIS.ChatCraft: {e}");
         std::process::exit(1);
     }
 }

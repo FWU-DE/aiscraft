@@ -4,7 +4,7 @@ use aiscraft_core::{Error, Result};
 use futures::StreamExt;
 use reqwest::{Response, StatusCode};
 
-pub const USER_AGENT: &str = concat!("AISCraft/", env!("CARGO_PKG_VERSION"));
+pub const USER_AGENT: &str = concat!("AIS.ChatCraft/", env!("CARGO_PKG_VERSION"));
 
 pub fn client(follow_redirects: bool) -> Result<reqwest::Client> {
     reqwest::Client::builder()

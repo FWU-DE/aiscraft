@@ -1,6 +1,6 @@
 [package]
 name = "aiscraft"
-description = "AISCraft desktop app."
+description = "AIS.ChatCraft desktop app."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

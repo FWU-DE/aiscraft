@@ -1,6 +1,6 @@
 [package]
 name = "aiscraft-voice"
-description = "AISCraft speech: microphone recording, playback, speech-to-text and text-to-speech (OpenAI-compatible, AIS.chat)."
+description = "AIS.ChatCraft speech: microphone recording, playback, speech-to-text and text-to-speech (OpenAI-compatible, AIS.chat)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

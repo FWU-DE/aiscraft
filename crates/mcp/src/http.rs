@@ -16,7 +16,7 @@ use crate::MAX_MESSAGE_BYTES;
 use crate::client::{Conn, Inner, lock, preview};
 use crate::sse::SseParser;
 
-const USER_AGENT: &str = concat!("AISCraft/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("AIS.ChatCraft/", env!("CARGO_PKG_VERSION"));
 const SESSION_HEADER: &str = "mcp-session-id";
 const VERSION_HEADER: &str = "mcp-protocol-version";
 

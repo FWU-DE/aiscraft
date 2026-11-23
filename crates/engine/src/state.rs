@@ -93,6 +93,9 @@ pub struct Selection {
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// Sources of the open chat, or of the next new one.
+    #[serde(default)]
+    pub sources: aiscraft_core::Sources,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

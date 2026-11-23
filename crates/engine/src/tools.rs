@@ -1,6 +1,6 @@
 //! Tools the model may call, and the rules for calling them.
 //!
-//! Built-in tools work on AISCraft's own data (searching the history, creating documents). The
+//! Built-in tools work on AIS.ChatCraft's own data (searching the history, creating documents). The
 //! rest come from connectors (MCP servers). As in n8n's Nod: a tool that is not read-only runs only
 //! with the owner's yes for exactly these arguments, once; a trust check first asks whether the
 //! owner's own words already cover the action and must quote them, and the quote is checked
@@ -60,8 +60,12 @@ fn builtin_specs() -> Vec<ToolSpec> {
     ]
 }
 
-async fn run_builtin(c: &Ctx, call: &ToolCall) -> Option<Result<String>> {
+async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<String>> {
     let a = &call.arguments;
+    let sources = c.state().conversation(conv).map(|x| x.sources.clone()).unwrap_or_default();
+    if call.name == "history_search" && !sources.history {
+        return Some(Err(Error::refused("Die Suche in anderen Chats ist in diesem Chat abgeschaltet.")));
+    }
     Some(match call.name.as_str() {
         "history_search" => {
             let q = a.get("query").and_then(Value::as_str).unwrap_or("").to_string();
@@ -118,8 +122,16 @@ fn chrono_fmt(ms: i64) -> String {
 
 /// Every tool on offer right now.
 pub(crate) fn specs(c: &Ctx) -> Vec<ToolSpec> {
-    let mut out = builtin_specs();
-    for conn in c.state().connectors.iter().filter(|x| x.enabled && x.status == "connected") {
+    specs_for(c, &aiscraft_core::Sources::default())
+}
+
+/// The tools a chat with these sources may use.
+pub(crate) fn specs_for(c: &Ctx, sources: &aiscraft_core::Sources) -> Vec<ToolSpec> {
+    if !sources.tools {
+        return Vec::new();
+    }
+    let mut out: Vec<ToolSpec> = builtin_specs().into_iter().filter(|t| sources.history || t.name != "history_search").collect();
+    for conn in c.state().connectors.iter().filter(|x| x.enabled && x.status == "connected" && sources.allows_connector(&x.id)) {
         for t in &conn.tools {
             let mut desc = format!("[{}] {}", conn.name, if t.description.is_empty() { &t.title } else { &t.description });
             if !t.read_only {
@@ -145,7 +157,7 @@ pub(crate) async fn run(c: &Ctx, conv: &str, call: &ToolCall, owner_words: &str,
     if call.arguments.get("_invalid_json").is_some() {
         return ("Die Argumente waren kein gültiges JSON. Bitte erneut mit gültigem JSON aufrufen.".into(), true, "error");
     }
-    if let Some(r) = run_builtin(c, call).await {
+    if let Some(r) = run_builtin(c, conv, call).await {
         return match r {
             Ok(t) => (t, false, "ok"),
             Err(e) => (e.message, true, "error"),
@@ -154,6 +166,13 @@ pub(crate) async fn run(c: &Ctx, conv: &str, call: &ToolCall, owner_words: &str,
     let Some((conn, tool)) = c.state().connectors.iter().find_map(|x| x.tools.iter().find(|t| t.llm_name == call.name).map(|t| (x.clone(), t.clone()))) else {
         return (format!("Werkzeug {} gibt es nicht.", call.name), true, "error");
     };
+    // The model may only call what this chat offers; a name it made up or remembered from
+    // before the sources changed does not run.
+    if let Some(conv_sources) = c.state().conversation(conv).map(|x| x.sources.clone())
+        && !conv_sources.allows_connector(&conn.id)
+    {
+        return (format!("{} ist in diesem Chat nicht freigegeben.", conn.name), true, "denied");
+    }
     if !tool.read_only {
         let trust = if c.state().settings.trust_check { trust_check(c, &conn.name, &tool, &call.arguments, owner_words).await } else { None };
         let auto = c.state().settings.auto_allow_covered && trust.as_ref().is_some_and(|t| t.covered) && !tool.destructive;
@@ -293,7 +312,7 @@ pub fn presets() -> Vec<(String, String, String)> {
     }
     out.push(("Webseiten abrufen".into(), "Web abrufen".into(), "uvx mcp-server-fetch".into()));
     if let Some(cli) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(if cfg!(windows) { "aiscraft-cli.exe" } else { "aiscraft-cli" }))).filter(|p| p.is_file()) {
-        out.push(("AISCraft selbst (Chats, Suche, Dokumente)".into(), "AISCraft".into(), format!("{} mcp", quote(&cli.display().to_string()))));
+        out.push(("AIS.ChatCraft selbst (Chats, Suche, Dokumente)".into(), "AIS.ChatCraft".into(), format!("{} mcp", quote(&cli.display().to_string()))));
     }
     out
 }

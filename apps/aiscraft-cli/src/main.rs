@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 use serde_json::{Value, json};
 
 #[derive(Parser)]
-#[command(name = "aiscraft-cli", version, about = "AISCraft auf der Kommandozeile")]
+#[command(name = "aiscraft-cli", version, about = "AIS.ChatCraft auf der Kommandozeile")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -249,7 +249,7 @@ fn mcp(engine: &Engine) {
                 "protocolVersion": req.pointer("/params/protocolVersion").cloned().unwrap_or(json!("2025-06-18")),
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "aiscraft", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "AISCraft: chat with AIS.chat and other backends, search and export chats. Call app_commands for the full list."
+                "instructions": "AIS.ChatCraft: chat with AIS.chat and other backends, search and export chats. Call app_commands for the full list."
             }))),
             "notifications/initialized" | "notifications/cancelled" => None,
             "ping" => Some(Ok(json!({}))),

@@ -663,3 +663,35 @@ fn usage_report_and_monthly_limit() {
     assert!(engine.state().notices.iter().any(|n| n.action.as_ref().is_some_and(|a| a.params["force"] == true)), "offers to send anyway");
     engine.call("chat.send", json!({"text": "zwei", "force": true})).unwrap();
 }
+
+
+/// Per-chat sources: memory, project and tools follow the chat's switches.
+#[test]
+fn per_chat_sources() {
+    let (engine, seen) = engine_with_recording("ok");
+    let pid = engine.call("project.create", json!({"name": "P", "instructions": "PROJEKTREGEL"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("memory.add", json!({"text": "MERKNOTIZ"})).unwrap();
+    engine.call("chat.new", json!({"project": pid})).unwrap();
+    // Switched before the first message: the new chat takes them over.
+    engine.call("chat.set_sources", json!({"memory": false, "history": false})).unwrap();
+    engine.call("chat.send", json!({"text": "eins"})).unwrap();
+    let last = seen.lock().unwrap().last().cloned().unwrap();
+    assert!(last.contains("PROJEKTREGEL") && !last.contains("MERKNOTIZ"), "memory off, project on");
+    assert!(last.contains("document_create") && !last.contains("history_search"), "history search off, other tools on");
+    let conv = engine.state().current.clone().unwrap();
+    assert!(!engine.state().conversation(&conv).unwrap().sources.memory);
+    engine.call("chat.set_sources", json!({"tools": false, "project": false, "memory": true})).unwrap();
+    engine.call("chat.send", json!({"text": "zwei"})).unwrap();
+    let last = seen.lock().unwrap().last().cloned().unwrap();
+    assert!(!last.contains("\"tools\"") && !last.contains("PROJEKTREGEL") && last.contains("MERKNOTIZ"));
+    // A model calling history_search anyway is refused.
+    let call = aiscraft_core::ToolCall { id: "h".into(), name: "history_search".into(), arguments: json!({"query": "x"}), outcome: None };
+    let (_, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, "", true));
+    assert!(err);
+    // A new chat starts with everything on again; reopening brings the chat's own switches back.
+    engine.call("chat.new", json!({})).unwrap();
+    assert_eq!(engine.state().selection.sources, aiscraft_core::Sources::default());
+    engine.call("chat.open", json!({"id": conv})).unwrap();
+    assert!(!engine.state().selection.sources.tools);
+    assert!(engine.call("chat.set_sources", json!({"connectors": "alle"})).is_err());
+}

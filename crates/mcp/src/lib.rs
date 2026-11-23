@@ -1,4 +1,4 @@
-//! MCP (Model Context Protocol) client for AISCraft's connectors ("Konnektoren").
+//! MCP (Model Context Protocol) client for AIS.ChatCraft's connectors ("Konnektoren").
 //!
 //! A [`McpClient`] talks to one MCP server, either a local program over stdio or a remote
 //! endpoint over Streamable HTTP (spec 2025-06-18), and lets the models list and call its tools.
@@ -20,7 +20,7 @@ pub use config::{ServerConfig, Transport};
 pub use names::llm_tool_name;
 pub use types::{Content, EmbeddedResource, ServerInfo, Tool, ToolAnnotations, ToolResult};
 
-/// The protocol version AISCraft asks for in `initialize`.
+/// The protocol version AIS.ChatCraft asks for in `initialize`.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// Older versions servers may answer with; they are close enough for tools.

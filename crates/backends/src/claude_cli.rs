@@ -3,7 +3,7 @@
 //! Each answer is one `claude -p` run with every tool and MCP server switched off, no saved
 //! session and an empty working directory: the CLI only talks, it cannot touch files. The whole
 //! conversation goes in each time (as text plus image/PDF blocks via `--input-format
-//! stream-json`), so AISCraft stays the only place the history lives. `ANTHROPIC_API_KEY` is
+//! stream-json`), so AIS.ChatCraft stays the only place the history lives. `ANTHROPIC_API_KEY` is
 //! removed from the environment so the subscription, not an API key, pays.
 
 use std::process::Stdio;

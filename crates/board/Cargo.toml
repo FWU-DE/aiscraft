@@ -1,6 +1,6 @@
 [package]
 name = "aiscraft-board"
-description = "AISCraft whiteboard: a yrs (Yjs) CRDT board model and an egui canvas widget."
+description = "AIS.ChatCraft whiteboard: a yrs (Yjs) CRDT board model and an egui canvas widget."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

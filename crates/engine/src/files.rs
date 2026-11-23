@@ -60,7 +60,7 @@ pub fn load(path: &Path, inline_binary: bool) -> Result<(Attachment, Vec<u8>)> {
     Ok((a, bytes))
 }
 
-/// Keep a copy of an attached file in AISCraft's data folder and return its path.
+/// Keep a copy of an attached file in AIS.ChatCraft's data folder and return its path.
 pub fn keep_copy(dir: &Path, original: &Path, bytes: &[u8]) -> Result<std::path::PathBuf> {
     std::fs::create_dir_all(dir).map_err(|e| Error::storage(format!("Anhänge-Ordner: {e}")))?;
     let ext = original.extension().and_then(|e| e.to_str()).filter(|e| e.len() <= 8 && e.chars().all(|c| c.is_ascii_alphanumeric())).unwrap_or("bin");

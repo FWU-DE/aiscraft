@@ -413,6 +413,68 @@ impl AisCraftApp {
         }
     }
 
+    /// What this chat may draw on: tools, memory, project instructions, history, each connector.
+    fn sources_menu(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        let src = self.state.selection.sources.clone();
+        let caps = self.state.backend(&self.state.selection.backend_id).map(|b| b.capabilities).unwrap_or_default();
+        let on = [src.tools, src.memory, src.project, src.history].iter().filter(|x| **x).count();
+        let label = if on == 4 && src.connectors.is_none() { "Quellen".to_string() } else { format!("Quellen ({on}/4)") };
+        ui.menu_button(RichText::new(format!("{label}  ⏷")).color(t.muted), |ui| {
+            ui.set_min_width(280.0);
+            ui.label(small_muted(&t, "Was dieser Chat nutzen darf"));
+            let set = |key: &str, value: bool| self.engine.dispatch("chat.set_sources", json!({key: value}));
+            let mut memory = src.memory;
+            if ui.checkbox(&mut memory, "Gedächtnis (deine Notizen)").changed() {
+                set("memory", memory);
+            }
+            let mut project = src.project;
+            if ui.checkbox(&mut project, "Projektanweisungen").changed() {
+                set("project", project);
+            }
+            let mut tools = src.tools;
+            if ui.checkbox(&mut tools, "Werkzeuge (Dokumente, Whiteboards, Zeitpläne)").changed() {
+                set("tools", tools);
+            }
+            let mut history = src.history;
+            if ui.add_enabled(src.tools, egui::Checkbox::new(&mut history, "Andere Chats durchsuchen")).changed() {
+                set("history", history);
+            }
+            let conns = self.state.connectors.clone();
+            if !conns.is_empty() {
+                ui.separator();
+                ui.label(small_muted(&t, "Konnektoren"));
+                for k in conns {
+                    let mut allowed = src.allows_connector(&k.id) || (!src.tools && src.connectors.as_ref().is_none_or(|c| c.contains(&k.id)));
+                    let text = if k.enabled { k.name.clone() } else { format!("{} (aus)", k.name) };
+                    if ui.add_enabled(src.tools && k.enabled, egui::Checkbox::new(&mut allowed, text)).changed() {
+                        let mut list: Vec<String> = src.connectors.clone().unwrap_or_else(|| self.state.connectors.iter().map(|c| c.id.clone()).collect());
+                        if allowed {
+                            if !list.contains(&k.id) {
+                                list.push(k.id.clone());
+                            }
+                        } else {
+                            list.retain(|x| x != &k.id);
+                        }
+                        self.engine.dispatch("chat.set_sources", json!({"connectors": list}));
+                    }
+                }
+            }
+            if !caps.tools || !caps.system_prompt {
+                ui.separator();
+                let name = self.state.backend(&self.state.selection.backend_id).map(|b| b.config.name.clone()).unwrap_or_default();
+                let mut missing = Vec::new();
+                if !caps.system_prompt {
+                    missing.push("Gedächtnis und Projektanweisungen");
+                }
+                if !caps.tools {
+                    missing.push("Werkzeuge und Konnektoren");
+                }
+                ui.label(small_muted(&t, format!("{name} nimmt {} nicht an.", missing.join(" und "))));
+            }
+        });
+    }
+
     /// A readable name for a tool the model called.
     fn tool_label(&self, name: &str) -> String {
         match name {
@@ -532,6 +594,7 @@ impl AisCraftApp {
                         self.pending_files.extend(files);
                     }
                     self.model_picker(ui);
+                    self.sources_menu(ui);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if generating {
                             if accent_button(ui, &t, "■").on_hover_text("Anhalten (Esc)").clicked() {

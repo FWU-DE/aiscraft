@@ -195,7 +195,7 @@ async fn json_and_sse_responses_with_session() {
     let init = &p[0];
     assert_eq!(init.body["method"], "initialize");
     assert_eq!(init.body["params"]["protocolVersion"], "2025-06-18");
-    assert_eq!(init.body["params"]["clientInfo"]["name"], "AISCraft");
+    assert_eq!(init.body["params"]["clientInfo"]["name"], "AIS.ChatCraft");
     assert_eq!(init.header("accept"), Some("application/json, text/event-stream"));
     assert_eq!(init.header("authorization"), Some("Bearer test-token"));
     assert_eq!(init.header("mcp-session-id"), None);

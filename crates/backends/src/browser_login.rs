@@ -1,6 +1,6 @@
 //! Sign in to AIS.chat in a real browser and take the session cookie from it.
 //!
-//! AISCraft has no webview. Instead it starts an installed Chromium-based browser (Chrome,
+//! AIS.ChatCraft has no webview. Instead it starts an installed Chromium-based browser (Chrome,
 //! Chromium, Edge, Brave, Vivaldi) with its own profile and the DevTools protocol on localhost,
 //! opens the AIS.chat login there, and reads the session cookie with `Storage.getCookies` as soon
 //! as the person has signed in (VIDIS, school account or Microsoft 365). The profile stays, so a
@@ -148,7 +148,7 @@ async fn wait_for_port(profile: &Path, timeout: Duration) -> Result<u16> {
 
 pub struct LoginOptions {
     pub base_url: String,
-    /// The browser profile AISCraft keeps for AIS.chat.
+    /// The browser profile AIS.ChatCraft keeps for AIS.chat.
     pub profile_dir: PathBuf,
     /// Without a window: only works while the identity provider still knows the person.
     pub headless: bool,

@@ -1,6 +1,6 @@
 [package]
 name = "aiscraft-engine"
-description = "AISCraft engine: state, the command registry every surface dispatches through, secrets, generation."
+description = "AIS.ChatCraft engine: state, the command registry every surface dispatches through, secrets, generation."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

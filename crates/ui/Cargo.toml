@@ -1,6 +1,6 @@
 [package]
 name = "aiscraft-ui"
-description = "AISCraft egui shell. Thin: every action goes through the engine's commands."
+description = "AIS.ChatCraft egui shell. Thin: every action goes through the engine's commands."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

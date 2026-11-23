@@ -55,6 +55,7 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
         created_at: now,
         updated_at: now,
         pinned: false,
+        sources: sel.sources.clone(),
     };
     c.store(|st| st.save_conversation(&conv))?;
     let id = conv.id.clone();
@@ -262,12 +263,14 @@ fn system_prompt(c: &Ctx, conv: &Conversation, send_context: bool, takes_system:
     }
     let state = c.state();
     let mut parts = Vec::new();
-    if let Some(p) = conv.project_id.as_ref().and_then(|pid| state.projects.iter().find(|p| &p.id == pid))
+    if conv.sources.project
+        && let Some(p) = conv.project_id.as_ref().and_then(|pid| state.projects.iter().find(|p| &p.id == pid))
         && !p.instructions.trim().is_empty()
     {
         parts.push(p.instructions.trim().to_string());
     }
     if state.settings.memory
+        && conv.sources.memory
         && let Some(m) = memory_prompt(&state.memory)
     {
         parts.push(m);
@@ -384,7 +387,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     let caps = backend.capabilities();
     let system = system_prompt(&c, &conv, backend.config().send_context, caps.system_prompt);
     let model_name = c.state().model_name(&conv.backend_id, &conv.model_id);
-    let tools = if caps.tools && c.state().settings.tools { crate::tools::specs(&c) } else { vec![] };
+    let tools = if caps.tools && c.state().settings.tools && conv.sources.tools { crate::tools::specs_for(&c, &conv.sources) } else { vec![] };
     let system = if tools.is_empty() {
         system
     } else {

@@ -1,6 +1,6 @@
 [package]
 name = "aiscraft-cli"
-description = "AISCraft on the command line: chat, login, search, export, any engine command, and an MCP server."
+description = "AIS.ChatCraft on the command line: chat, login, search, export, any engine command, and an MCP server."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

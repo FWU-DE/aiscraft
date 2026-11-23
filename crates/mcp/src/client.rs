@@ -344,7 +344,7 @@ impl McpClient {
         let params = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {},
-            "clientInfo": { "name": "AISCraft", "version": env!("CARGO_PKG_VERSION") }
+            "clientInfo": { "name": "AIS.ChatCraft", "version": env!("CARGO_PKG_VERSION") }
         });
         // The spec forbids cancelling `initialize`.
         let result = request(inner, "initialize", params, timeout, false).await?;

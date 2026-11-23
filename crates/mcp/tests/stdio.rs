@@ -234,7 +234,7 @@ fn config_round_trips_through_serde() {
     assert!(!debug.contains("geheim"), "{debug}");
 }
 
-/// Runs the real AISCraft CLI MCP server, if it has been built.
+/// Runs the real AIS.ChatCraft CLI MCP server, if it has been built.
 #[tokio::test]
 #[ignore]
 async fn real_aiscraft_cli_server() {
@@ -246,7 +246,7 @@ async fn real_aiscraft_cli_server() {
     }
     let cfg = ServerConfig {
         id: "aiscraft".into(),
-        name: "AISCraft".into(),
+        name: "AIS.ChatCraft".into(),
         transport: Transport::Stdio { command: exe.to_string_lossy().into_owned(), args: vec!["mcp".into()], env: BTreeMap::new(), cwd: None },
         enabled: true,
         timeout_secs: Some(30),

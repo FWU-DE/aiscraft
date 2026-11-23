@@ -94,7 +94,7 @@ impl AisCraftApp {
         let t = self.tokens.clone();
         match dialog {
             Dialog::Welcome => {
-                ui.heading("Willkommen bei AISCraft");
+                ui.heading("Willkommen bei AIS.ChatCraft");
                 ui.add_space(4.0);
                 ui.label(muted(&t, "Ein Chat-Programm für AIS.chat und andere KI-Dienste. Deine Chats liegen auf diesem Rechner und sind durchsuchbar; Projekte bündeln Chats mit eigenen Anweisungen; mit „Merke dir: …“ legst du Notizen an, die nur aus deinen eigenen Worten stammen."));
                 ui.add_space(12.0);
@@ -356,7 +356,7 @@ impl AisCraftApp {
         let mut keep = true;
         let mut manual = view.config.kind != BackendKind::AisChat;
         if view.config.kind == BackendKind::AisChat {
-            ui.label(muted(&t, "Die Anmeldung (VIDIS, Schulkonto oder Microsoft 365) läuft in einem eigenen Browserfenster. AISCraft übernimmt danach die Sitzung und schließt das Fenster."));
+            ui.label(muted(&t, "Die Anmeldung (VIDIS, Schulkonto oder Microsoft 365) läuft in einem eigenen Browserfenster. AIS.ChatCraft übernimmt danach die Sitzung und schließt das Fenster."));
             ui.add_space(8.0);
             let checking = matches!(view.status, BackendStatus::Checking);
             ui.horizontal(|ui| {
@@ -430,7 +430,7 @@ impl AisCraftApp {
             }
         });
         if view.config.kind == BackendKind::AisChat {
-            ui.label(small_muted(&t, "Die Sitzung gilt 8 Stunden und verlängert sich, solange du AISCraft nutzt. Gespeichert im Schlüsselbund des Systems."));
+            ui.label(small_muted(&t, "Die Sitzung gilt 8 Stunden und verlängert sich, solange du AIS.ChatCraft nutzt. Gespeichert im Schlüsselbund des Systems."));
         }
         keep
     }
@@ -571,7 +571,7 @@ impl AisCraftApp {
                 }
             }
             SettingsTab::Schedules => {
-                ui.label(muted(&t, "Zeitpläne schicken einen Auftrag wiederkehrend oder einmal ab; die Antwort landet in einem eigenen Chat. Sie laufen, solange AISCraft läuft, und Werkzeuge, die eine Freigabe brauchen, werden dabei abgelehnt."));
+                ui.label(muted(&t, "Zeitpläne schicken einen Auftrag wiederkehrend oder einmal ab; die Antwort landet in einem eigenen Chat. Sie laufen, solange AIS.ChatCraft läuft, und Werkzeuge, die eine Freigabe brauchen, werden dabei abgelehnt."));
                 ui.add_space(6.0);
                 let now = aiscraft_engine::now_ms();
                 for sch in self.state.schedules.clone() {
@@ -643,7 +643,7 @@ impl AisCraftApp {
                         self.run("settings.set", json!({"key": "monthly_token_limit", "value": limit}));
                     }
                 });
-                ui.label(small_muted(&t, "Ab der Grenze fragt AISCraft vor dem Senden nach. Kosten nur für Claude über API (Preise je Million Tokens); Abo und AIS.chat rechnen nicht pro Token ab."));
+                ui.label(small_muted(&t, "Ab der Grenze fragt AIS.ChatCraft vor dem Senden nach. Kosten nur für Claude über API (Preise je Million Tokens); Abo und AIS.chat rechnen nicht pro Token ab."));
             }
             SettingsTab::Memory => {
                 let mut on = self.state.settings.memory;
@@ -723,7 +723,7 @@ impl AisCraftApp {
                 }
             }
             SettingsTab::About => {
-                ui.label(RichText::new(format!("AISCraft {}", env!("CARGO_PKG_VERSION"))).strong());
+                ui.label(RichText::new(format!("AIS.ChatCraft {}", env!("CARGO_PKG_VERSION"))).strong());
                 ui.label(muted(&t, "Nativer Client für AIS.chat und andere KI-Dienste. Rust und egui, ohne Webview."));
                 ui.add_space(6.0);
                 ui.label(small_muted(&t, "Tastenkürzel: Strg+K Befehle · Strg+N neuer Chat · Strg+B Seitenleiste · Strg+Umschalt+F Suche · Strg+R neu erzeugen · Esc anhalten"));

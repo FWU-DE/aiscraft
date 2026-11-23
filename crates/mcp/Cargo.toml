@@ -1,6 +1,6 @@
 [package]
 name = "aiscraft-mcp"
-description = "AISCraft MCP client: connectors over stdio and Streamable HTTP, tools for the models."
+description = "AIS.ChatCraft MCP client: connectors over stdio and Streamable HTTP, tools for the models."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

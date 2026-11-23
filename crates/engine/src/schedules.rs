@@ -4,7 +4,7 @@
 //! answer goes into the schedule's own chat, or for a check-in the model planned itself
 //! ("I'll look again on Friday") into the chat it came from. A watch only reports when the
 //! answer changed. Schedules run without a person present: tools that need a yes are refused.
-//! Like Nod, they only run while AISCraft runs.
+//! Like Nod, they only run while AIS.ChatCraft runs.
 
 use std::time::Duration;
 
@@ -209,6 +209,7 @@ async fn run(c: &Ctx, mut s: Schedule) -> Result<Value> {
                 created_at: now,
                 updated_at: now,
                 pinned: false,
+                sources: Default::default(),
             };
             c.store(|st| st.save_conversation(&conv))?;
             let id = conv.id.clone();
@@ -255,7 +256,7 @@ async fn run(c: &Ctx, mut s: Schedule) -> Result<Value> {
             format!("⏰ {}: {summary}", s.title),
             Some(NoticeAction { label: "Öffnen".into(), command: "chat.open".into(), params: json!({"id": conv_id}) }),
         );
-        desktop_notify(&format!("AISCraft · {}", s.title), &summary);
+        desktop_notify(&format!("AIS.ChatCraft · {}", s.title), &summary);
     }
     out
 }
@@ -273,7 +274,7 @@ fn update_one(c: &Ctx, s: &Schedule) -> Result<()> {
 pub(crate) fn desktop_notify(title: &str, body: &str) {
     let (title, body) = (title.to_string(), body.to_string());
     std::thread::spawn(move || {
-        let _ = notify_rust::Notification::new().appname("AISCraft").summary(&title).body(&body).timeout(notify_rust::Timeout::Milliseconds(8000)).show();
+        let _ = notify_rust::Notification::new().appname("AIS.ChatCraft").summary(&title).body(&body).timeout(notify_rust::Timeout::Milliseconds(8000)).show();
     });
 }
 

@@ -1,4 +1,4 @@
-//! AISCraft speech: dictation (microphone → WAV → speech to text) and read-aloud
+//! AIS.ChatCraft speech: dictation (microphone → WAV → speech to text) and read-aloud
 //! (Markdown → speakable text → text to speech → speakers).
 //!
 //! Devices: [`Recorder`] (cpal, 16 kHz mono) and [`Player`] (rodio, MP3/WAV, streaming).
