@@ -655,7 +655,8 @@ impl AisCraftApp {
         let t = self.tokens.clone();
         let src = self.state.selection.sources.clone();
         let caps = self.state.backend(&self.state.selection.backend_id).map(|b| b.capabilities).unwrap_or_default();
-        let on = [src.tools, src.memory, src.project, src.history].iter().filter(|x| **x).count();
+        let takes_label = self.state.backend(&self.state.selection.backend_id).is_none_or(|b| b.capabilities.system_prompt);
+        let on = [src.tools, src.memory_for(takes_label), src.project_for(takes_label), src.history].iter().filter(|x| **x).count();
         let label = if on == 4 && src.connectors.is_none() { "Quellen".to_string() } else { format!("Quellen ({on}/4)") };
         // Stays open while switching; closes with its button, the toggle button or Esc.
         let toggle = ui.button(RichText::new(format!("{label}  ⏷")).color(t.muted));
@@ -671,13 +672,33 @@ impl AisCraftApp {
                 });
             });
             let set = |key: &str, value: bool| self.engine.dispatch("chat.set_sources", json!({key: value}));
-            let mut memory = src.memory;
+            // Without a system prompt (AIS.chat) notes and instructions go along in the message and stay in the
+            // backend's history: off until switched on here, and switching one on does not switch on the other.
+            // No backend chosen yet: nothing goes anywhere, show the switches as they are.
+            let takes = self.state.backend(&self.state.selection.backend_id).is_none_or(|b| b.capabilities.system_prompt);
+            let switch_inline = |key: &str, value: bool| {
+                if takes || !value {
+                    set(key, value);
+                } else {
+                    let other = if key == "memory" { "project" } else { "memory" };
+                    let other_on = if key == "memory" { src.project_for(false) } else { src.memory_for(false) };
+                    self.engine.dispatch("chat.set_sources", json!({key: true, other: other_on, "inline": true}));
+                }
+            };
+            let mut memory = src.memory_for(takes);
             if ui.checkbox(&mut memory, "Gedächtnis (deine Notizen)").changed() {
-                set("memory", memory);
+                switch_inline("memory", memory);
             }
-            let mut project = src.project;
+            let mut project = src.project_for(takes);
             if ui.checkbox(&mut project, "Projektanweisungen").changed() {
-                set("project", project);
+                switch_inline("project", project);
+            }
+            if !takes {
+                let name = self.state.backend(&self.state.selection.backend_id).map(|b| b.config.name.clone()).unwrap_or_default();
+                ui.label(small_muted(
+                    &t,
+                    format!("Gehen am Anfang deiner nächsten Nachricht mit und bleiben im Verlauf bei {name}; danach nur, wenn sie sich ändern."),
+                ));
             }
             let mut tools = src.tools;
             if ui.checkbox(&mut tools, "Werkzeuge (Dokumente, Whiteboards, Zeitpläne)").changed() {
@@ -721,13 +742,10 @@ impl AisCraftApp {
                     });
                 }
             }
-            if !caps.tools || !caps.system_prompt {
+            if !caps.tools {
                 ui.separator();
                 let name = self.state.backend(&self.state.selection.backend_id).map(|b| b.config.name.clone()).unwrap_or_default();
                 let mut missing = Vec::new();
-                if !caps.system_prompt {
-                    missing.push("Gedächtnis und Projektanweisungen");
-                }
                 if !caps.tools {
                     missing.push("Werkzeuge und Konnektoren");
                 }
@@ -1015,7 +1033,8 @@ impl AisCraftApp {
             .and_then(|p| self.state.projects.iter().find(|x| &x.id == p))
             .is_some_and(|p| !p.instructions.trim().is_empty());
         let has_memory = self.state.settings.memory && self.state.memory.iter().any(|n| !n.archived);
-        let sends = b.config.send_context && b.capabilities.system_prompt;
+        let src = &self.state.selection.sources;
+        let sends = (b.config.send_context && b.capabilities.system_prompt) || (!b.capabilities.system_prompt && src.inline && (src.memory || src.project));
         ui.add_space(4.0);
         ui.vertical_centered(|ui| {
             if (has_project || has_memory) && !sends {

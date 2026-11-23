@@ -351,9 +351,33 @@ pub(crate) async fn edit(c: Ctx, message_id: String, text: String) -> Result<Val
     send(c, text, vec![]).await
 }
 
+/// The block of memory and project instructions to put in front of the next message, with its
+/// fingerprint, for a backend without a system prompt; `None` when nothing (new) has to go along.
+pub(crate) fn inline_context(c: &Ctx, conv: &Conversation, takes_system: bool) -> Option<(String, String)> {
+    if takes_system || !conv.sources.inline || !(conv.sources.memory || conv.sources.project) {
+        return None;
+    }
+    let ctx = system_prompt_for(c, conv, true, true, "")?;
+    let print = fingerprint(&ctx);
+    if conv.sources.inline_sent.as_deref() == Some(print.as_str()) {
+        return None;
+    }
+    Some((format!("[Hinweise der Person für diesen Chat, aus AIS.ChatCraft]\n{ctx}\n[Ende der Hinweise]"), print))
+}
+
+/// FNV-1a, stable across builds (it is stored with the chat).
+fn fingerprint(s: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+#[cfg(test)]
 /// The system prompt: project instructions, memory, fitting skills and earlier chats, where the
 /// backend takes them.
-#[cfg(test)]
 fn system_prompt(c: &Ctx, conv: &Conversation, send_context: bool, takes_system: bool) -> Option<String> {
     system_prompt_for(c, conv, send_context, takes_system, "")
 }
@@ -513,6 +537,15 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         })
     };
 
+    // Backends without a system prompt (AIS.chat): memory and project instructions go at the top of
+    // the message, once and again only after they change, when the person agreed to it.
+    let inline = inline_context(&c, &conv, caps.system_prompt);
+    let context = match (&inline, context) {
+        (Some((block, _)), Some(ctx)) => Some(format!("{block}\n\n{ctx}")),
+        (Some((block, _)), None) => Some(block.clone()),
+        (None, ctx) => ctx,
+    };
+
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
     c.0.cancels.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(conv_id.clone(), cancel_tx);
     c.update(|s| s.generating.push(conv_id.clone()));
@@ -601,14 +634,23 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
             let _ = crate::skills::learn_from(&ctx, &id).await;
         });
     }
-    let mut updated = conv.clone();
+    let mut updated = c.state().conversation(&conv_id).cloned().unwrap_or_else(|| conv.clone());
     updated.updated_at = now_ms();
+    // The backend has the inline context now (it keeps it in its history); not again until it changes.
+    let sent = inline.filter(|_| result.is_ok() && answer.error.is_none()).map(|(_, print)| print);
+    if let Some(print) = &sent {
+        updated.sources.inline_sent = Some(print.clone());
+    }
     let _ = c.store(|st| st.save_conversation(&updated));
     c.0.cancels.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&conv_id);
     c.update(|s| {
         s.generating.retain(|g| g != &conv_id);
         if let Some(x) = s.conversations.iter_mut().find(|x| x.id == conv_id) {
             x.updated_at = updated.updated_at;
+            x.sources = updated.sources.clone();
+        }
+        if sent.is_some() && s.current.as_deref() == Some(conv_id.as_str()) {
+            s.selection.sources = updated.sources.clone();
         }
         s.conversations.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.updated_at.cmp(&a.updated_at)));
     });

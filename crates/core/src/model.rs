@@ -319,15 +319,33 @@ pub struct Sources {
     /// Connectors this chat may use: `None` = every enabled one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connectors: Option<Vec<String>>,
+    /// For backends without a system prompt (AIS.chat): the person agreed that memory and project
+    /// instructions go along at the top of a message, where they stay in the backend's history.
+    /// Off by default, so older chats never start sending them.
+    #[serde(default)]
+    pub inline: bool,
+    /// Fingerprint of the context last sent that way; it is sent again only when it changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inline_sent: Option<String>,
 }
 
 impl Default for Sources {
     fn default() -> Self {
-        Self { tools: true, memory: true, project: true, history: true, connectors: None }
+        Self { tools: true, memory: true, project: true, history: true, connectors: None, inline: false, inline_sent: None }
     }
 }
 
 impl Sources {
+    /// Memory and project instructions as they apply to a backend: without a system prompt only
+    /// when the person agreed to send them inline.
+    pub fn memory_for(&self, takes_system: bool) -> bool {
+        self.memory && (takes_system || self.inline)
+    }
+
+    pub fn project_for(&self, takes_system: bool) -> bool {
+        self.project && (takes_system || self.inline)
+    }
+
     pub fn allows_connector(&self, id: &str) -> bool {
         self.tools && self.connectors.as_ref().is_none_or(|c| c.iter().any(|x| x == id))
     }

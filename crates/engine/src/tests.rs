@@ -1225,3 +1225,32 @@ fn hints_once_per_need() {
     // Off by default: the hourly check does nothing.
     assert!(engine2.block_on(crate::proactive::check(engine2.ctx(), false)).unwrap().is_none());
 }
+
+/// AIS.chat takes no system prompt: memory and project instructions go along in the message only
+/// after the person agreed (`inline`), once, and again only when they change.
+#[test]
+fn inline_context_for_backends_without_system_prompt() {
+    let (engine, _) = engine_with_recording("ok");
+    let pid = engine.call("project.create", json!({"name": "P", "instructions": "PROJEKTREGEL"})).unwrap()["id"].as_str().unwrap().to_string();
+    let nid = engine.call("memory.add", json!({"text": "MERKNOTIZ"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("chat.new", json!({"project": pid})).unwrap();
+    engine.call("chat.send", json!({"text": "eins"})).unwrap();
+    let conv = || engine.state().conversation(engine.state().current.as_deref().unwrap()).cloned().unwrap();
+    // Older chats and new ones: off until switched on.
+    assert!(!conv().sources.inline);
+    assert!(crate::chat::inline_context(engine.ctx(), &conv(), false).is_none());
+    assert!(!conv().sources.memory_for(false) && conv().sources.memory_for(true));
+    engine.call("chat.set_sources", json!({"memory": true, "project": false, "inline": true})).unwrap();
+    let (block, print) = crate::chat::inline_context(engine.ctx(), &conv(), false).unwrap();
+    assert!(block.contains("MERKNOTIZ") && !block.contains("PROJEKTREGEL"), "only what is switched on");
+    // Backends with a system prompt never get it inline.
+    assert!(crate::chat::inline_context(engine.ctx(), &conv(), true).is_none());
+    // Once sent, not again …
+    let mut sent = conv();
+    sent.sources.inline_sent = Some(print.clone());
+    assert!(crate::chat::inline_context(engine.ctx(), &sent, false).is_none());
+    // … until the notes change.
+    engine.call("memory.update", json!({"id": nid, "text": "NEUE NOTIZ"})).unwrap();
+    let (block, print2) = crate::chat::inline_context(engine.ctx(), &sent, false).unwrap();
+    assert!(block.contains("NEUE NOTIZ") && print2 != print);
+}

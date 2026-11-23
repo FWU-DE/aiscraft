@@ -48,7 +48,7 @@ Chats von AIS.chat tragen in der Seitenleiste das AIS.chat-Zeichen. Über „AIS
 
 Für einen neuen Chat stellst du die Quellen vor der ersten Nachricht ein. Das Menü bleibt offen, bis du „Schließen“ klickst.
 
-AIS.chat über die Anmeldung nimmt keine Projektanweisungen, Notizen oder Werkzeuge an; das Menü sagt es dazu.
+Bei AIS.chat sind Gedächtnis und Projektanweisungen zuerst aus. Schaltest du sie ein, gehen sie am Anfang deiner nächsten Nachricht mit und bleiben im AIS.chat-Verlauf; erneut nur, wenn sie sich ändern. Werkzeuge und Konnektoren nimmt AIS.chat nicht an. Seine eigenen Werkzeuge (Websuche, Bilder, Diagramme) legt das Land fest, bei Assistenten und Figuren auch deren Einstellung in AIS.chat; das Menü zeigt sie.
 
 ## Projekte
 

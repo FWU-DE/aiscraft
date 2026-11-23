@@ -25,12 +25,13 @@ fn harness(engine: &Engine) -> egui_kittest::Harness<'static, AisCraftApp> {
 fn sources_popup_stays_open_until_closed() {
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
     let mut h = harness(&engine);
+    let before = engine.state().selection.sources.clone();
     h.get_by_label_contains("Quellen").click();
     h.run_steps(4);
     h.get_by_label("Gedächtnis (deine Notizen)").click();
     h.run_steps(6);
     assert!(h.query_by_label("Gedächtnis (deine Notizen)").is_some(), "the popup stays open after a switch");
-    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| !s.selection.sources.memory), "the switch reached the engine");
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.selection.sources != before), "the switch reached the engine");
     h.get_by_label("Schließen").click();
     h.run_steps(6);
     assert!(h.query_by_label("Gedächtnis (deine Notizen)").is_none(), "Schließen closes it");
