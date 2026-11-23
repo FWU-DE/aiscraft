@@ -66,6 +66,48 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
 }
 
 pub(crate) async fn send(c: Ctx, text: String, paths: Vec<String>) -> Result<Value> {
+    send_with(c, text, paths, None).await
+}
+
+/// One model call outside any conversation, with the selected backend and model: for revising
+/// documents, schedules, skills. Returns the whole answer.
+pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Result<String> {
+    let sel = c.state().selection.clone();
+    let backend = c.backend(&sel.backend_id)?;
+    if sel.model_id.is_empty() {
+        return Err(Error::invalid("Kein Modell gewählt"));
+    }
+    let takes_system = backend.capabilities().system_prompt;
+    let content = match system {
+        Some(s) if !takes_system => format!("{s}\n\n{prompt}"),
+        _ => prompt.to_string(),
+    };
+    let msg = Message {
+        id: new_id(),
+        conversation_id: String::new(),
+        role: Role::User,
+        content,
+        created_at: now_ms(),
+        model: None,
+        attachments: vec![],
+        activity: vec![],
+        error: None,
+        usage: None,
+    };
+    let req = ChatRequest { conversation_id: new_id(), model: sel.model_id, system: if takes_system { system.map(str::to_string) } else { None }, messages: vec![msg] };
+    let mut stream = backend.chat(req).await?;
+    let mut out = String::new();
+    while let Some(ev) = stream.next().await {
+        match ev? {
+            StreamEvent::Delta { text } => out.push_str(&text),
+            StreamEvent::Done => break,
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact: Option<String>) -> Result<Value> {
     let text = text.trim().to_string();
     if text.is_empty() && paths.is_empty() {
         return Err(Error::invalid("Nachricht ist leer"));
@@ -128,7 +170,15 @@ pub(crate) async fn send(c: Ctx, text: String, paths: Vec<String>) -> Result<Val
         );
     }
 
-    generate(c, conv).await
+    let context = match artifact {
+        Some(id) => Some(crate::artifacts::context_block(&c, &id)?),
+        None => None,
+    };
+    generate_with(c, conv, context).await
+}
+
+async fn generate(c: Ctx, conv_id: String) -> Result<Value> {
+    generate_with(c, conv_id, None).await
 }
 
 pub(crate) async fn regenerate(c: Ctx) -> Result<Value> {
@@ -180,11 +230,17 @@ fn system_prompt(c: &Ctx, conv: &Conversation, send_context: bool, takes_system:
     (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
-async fn generate(c: Ctx, conv_id: String) -> Result<Value> {
+async fn generate_with(c: Ctx, conv_id: String, context: Option<String>) -> Result<Value> {
     let conv = c.state().conversation(&conv_id).cloned().ok_or_else(|| Error::not_found("Chat nicht gefunden"))?;
     let backend = c.backend(&conv.backend_id)?;
     let caps = backend.capabilities();
-    let history = c.store(|st| st.messages(&conv_id))?;
+    let mut history = c.store(|st| st.messages(&conv_id))?;
+    // An attached document or board goes in front of the last user message, for this request only.
+    if let Some(ctx_block) = context
+        && let Some(last) = history.iter_mut().rev().find(|m| m.role == Role::User)
+    {
+        last.content = format!("{ctx_block}\n\n{}", last.content);
+    }
     let system = system_prompt(&c, &conv, backend.config().send_context, caps.system_prompt);
     let model_name = c.state().model_name(&conv.backend_id, &conv.model_id);
 

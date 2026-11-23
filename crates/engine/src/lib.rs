@@ -2,6 +2,7 @@
 //! and exposes one registry of commands. The egui shell, the CLI and the JSON control channel
 //! all dispatch the same commands by id, so everything a person can do, an agent can do.
 
+mod artifacts;
 mod chat;
 mod commands;
 mod files;
@@ -21,6 +22,7 @@ use serde_json::Value;
 
 pub use aiscraft_backends::SESSION_COOKIE;
 pub use commands::{CommandSpec, commands};
+pub use artifacts::{doc_text, markdown_html};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use secrets::Secrets;
 pub use state::*;
@@ -253,9 +255,9 @@ impl Ctx {
     }
 
     fn load(&self) -> Result<()> {
-        let (mut backends, conversations, projects, memory, settings) = self.store(|st| {
+        let (mut backends, conversations, projects, memory, settings, artifacts) = self.store(|st| {
             let settings: Settings = st.setting("settings")?.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
-            Ok((st.backends()?, st.conversations(500)?, st.projects()?, st.memory()?, settings))
+            Ok((st.backends()?, st.conversations(500)?, st.projects()?, st.memory()?, settings, st.artifacts()?))
         })?;
         if backends.is_empty() {
             let ais = BackendConfig {
@@ -275,6 +277,7 @@ impl Ctx {
             s.projects = projects;
             s.memory = memory;
             s.settings = settings;
+            s.artifacts = artifacts;
         });
         for b in &backends {
             if let Err(e) = self.install_backend(b.clone()) {

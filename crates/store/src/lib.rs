@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use aiscraft_core::{BackendConfig, Conversation, Error, MemoryArea, MemoryNote, Message, Project, Result, Role};
+use aiscraft_core::{Artifact, ArtifactKind, ArtifactVersion, BackendConfig, Conversation, Error, MemoryArea, MemoryNote, Message, Project, Result, Role};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -29,6 +29,14 @@ CREATE TABLE IF NOT EXISTS memory (
     created_at INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS artifacts (
+    id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, conversation_id TEXT, project_id TEXT,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, state BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS artifact_versions (
+    artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, version INTEGER NOT NULL,
+    created_at INTEGER NOT NULL, note TEXT NOT NULL, state BLOB NOT NULL, PRIMARY KEY (artifact_id, version)
+);
 "#;
 
 /// What a message carries besides its text, stored as one JSON column.
@@ -343,6 +351,78 @@ impl Store {
             )
             .map_err(db_err)?;
         Ok(())
+    }
+
+    // ---- artifacts ------------------------------------------------------------------------
+
+    pub fn artifacts(&self) -> Result<Vec<Artifact>> {
+        let mut st = self
+            .db
+            .prepare("SELECT id, kind, title, conversation_id, project_id, created_at, updated_at FROM artifacts ORDER BY updated_at DESC")
+            .map_err(db_err)?;
+        let rows = st
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+            })
+            .map_err(db_err)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, kind, title, conversation_id, project_id, created_at, updated_at) = row.map_err(db_err)?;
+            let Some(kind) = ArtifactKind::parse(&kind) else { continue };
+            out.push(Artifact { id, kind, title, conversation_id, project_id, created_at, updated_at });
+        }
+        Ok(out)
+    }
+
+    /// Insert or update an artifact; `state` replaces the stored content when given.
+    pub fn save_artifact(&self, a: &Artifact, state: Option<&[u8]>) -> Result<()> {
+        match state {
+            Some(st) => self.db.execute(
+                "INSERT INTO artifacts (id, kind, title, conversation_id, project_id, created_at, updated_at, state) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(id) DO UPDATE SET title = excluded.title, conversation_id = excluded.conversation_id, project_id = excluded.project_id,
+                   updated_at = excluded.updated_at, state = excluded.state",
+                params![a.id, a.kind.as_str(), a.title, a.conversation_id, a.project_id, a.created_at, a.updated_at, st],
+            ),
+            None => self.db.execute(
+                "UPDATE artifacts SET title = ?2, conversation_id = ?3, project_id = ?4, updated_at = ?5 WHERE id = ?1",
+                params![a.id, a.title, a.conversation_id, a.project_id, a.updated_at],
+            ),
+        }
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    pub fn artifact_state(&self, id: &str) -> Result<Option<Vec<u8>>> {
+        self.db.query_row("SELECT state FROM artifacts WHERE id = ?1", [id], |r| r.get(0)).optional().map_err(db_err)
+    }
+
+    pub fn delete_artifact(&self, id: &str) -> Result<()> {
+        self.db.execute("DELETE FROM artifact_versions WHERE artifact_id = ?1", [id]).map_err(db_err)?;
+        self.db.execute("DELETE FROM artifacts WHERE id = ?1", [id]).map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Keep a snapshot; returns its version number. At most 50 are kept per artifact.
+    pub fn add_artifact_version(&self, id: &str, note: &str, state: &[u8], at: i64) -> Result<i64> {
+        let v: i64 = self.db.query_row("SELECT COALESCE(MAX(version), 0) + 1 FROM artifact_versions WHERE artifact_id = ?1", [id], |r| r.get(0)).map_err(db_err)?;
+        self.db
+            .execute("INSERT INTO artifact_versions (artifact_id, version, created_at, note, state) VALUES (?1, ?2, ?3, ?4, ?5)", params![id, v, at, note, state])
+            .map_err(db_err)?;
+        self.db.execute("DELETE FROM artifact_versions WHERE artifact_id = ?1 AND version <= ?2", params![id, v - 50]).map_err(db_err)?;
+        Ok(v)
+    }
+
+    pub fn artifact_versions(&self, id: &str) -> Result<Vec<ArtifactVersion>> {
+        let mut st = self.db.prepare("SELECT version, created_at, note FROM artifact_versions WHERE artifact_id = ?1 ORDER BY version DESC").map_err(db_err)?;
+        let rows = st.query_map([id], |r| Ok(ArtifactVersion { artifact_id: id.to_string(), version: r.get(0)?, created_at: r.get(1)?, note: r.get(2)? })).map_err(db_err)?;
+        rows.collect::<rusqlite::Result<_>>().map_err(db_err)
+    }
+
+    pub fn artifact_version_state(&self, id: &str, version: i64) -> Result<Option<Vec<u8>>> {
+        self.db
+            .query_row("SELECT state FROM artifact_versions WHERE artifact_id = ?1 AND version = ?2", params![id, version], |r| r.get(0))
+            .optional()
+            .map_err(db_err)
     }
 
     // ---- settings -------------------------------------------------------------------------

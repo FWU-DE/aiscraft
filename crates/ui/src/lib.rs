@@ -3,6 +3,7 @@
 //! lives here; everything else lives in the engine.
 
 mod app;
+mod artifact_panel;
 mod conversation;
 mod dialogs;
 mod palette;

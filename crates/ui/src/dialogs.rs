@@ -22,6 +22,7 @@ pub enum Dialog {
     Settings { tab: SettingsTab, new_note: String },
     Project { id: Option<String>, name: String, instructions: String },
     Rename { id: String, title: String },
+    RenameArtifact { id: String, title: String },
     Confirm { text: String, command: String, params: Value },
 }
 
@@ -197,6 +198,23 @@ impl AisCraftApp {
                 ui.horizontal(|ui| {
                     if (ui.button("Speichern").clicked() || enter) && !title.trim().is_empty() {
                         self.run("chat.rename", json!({"id": id, "title": title}));
+                        keep = false;
+                    }
+                    if ui.button("Abbrechen").clicked() {
+                        keep = false;
+                    }
+                });
+                keep
+            }
+            Dialog::RenameArtifact { id, title } => {
+                ui.heading("Umbenennen");
+                let r = ui.add(egui::TextEdit::singleline(title).desired_width(f32::INFINITY));
+                r.request_focus();
+                let mut keep = true;
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.horizontal(|ui| {
+                    if (ui.button("Speichern").clicked() || enter) && !title.trim().is_empty() {
+                        self.run("artifact.rename", json!({"id": id, "title": title}));
                         keep = false;
                     }
                     if ui.button("Abbrechen").clicked() {

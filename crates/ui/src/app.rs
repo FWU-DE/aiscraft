@@ -38,6 +38,9 @@ pub struct AisCraftApp {
     pub(crate) focus_search: bool,
     pub(crate) remote_open: bool,
     last_current: Option<String>,
+    pub(crate) artifact: Option<crate::artifact_panel::ArtifactView>,
+    /// Send the open artifact as context with the next message.
+    pub(crate) attach_artifact: bool,
 }
 
 pub(crate) const CONTENT_WIDTH: f32 = 760.0;
@@ -72,6 +75,8 @@ impl AisCraftApp {
             focus_search: false,
             remote_open: false,
             last_current: None,
+            artifact: None,
+            attach_artifact: false,
         }
     }
 
@@ -300,6 +305,19 @@ impl eframe::App for AisCraftApp {
             .show_collapsible(ui, &mut sidebar_open, |ui| self.sidebar(ui));
         if self.sidebar_open == before {
             self.sidebar_open = sidebar_open;
+        }
+
+        self.sync_artifact();
+        if self.state.open_artifact.is_some() {
+            let w = ui.available_width();
+            egui::Panel::right("artifact")
+                .resizable(true)
+                .default_size((w * 0.45).clamp(360.0, 760.0))
+                .size_range(320.0..=(w - 360.0).max(340.0))
+                .frame(Frame::new().fill(t.surface).inner_margin(Margin::ZERO))
+                .show(ui, |ui| self.artifact_panel(ui));
+        } else {
+            self.attach_artifact = false;
         }
 
         egui::CentralPanel::default().frame(Frame::new().fill(t.bg)).show(ui, |ui| self.conversation(ui));

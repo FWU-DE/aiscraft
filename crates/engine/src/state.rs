@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use aiscraft_core::{AccountInfo, BackendConfig, Capabilities, Conversation, MemoryNote, Message, ModelInfo, Project, RemoteConversation};
+use aiscraft_core::{AccountInfo, Artifact, BackendConfig, Capabilities, Conversation, MemoryNote, Message, ModelInfo, Project, RemoteConversation};
 use aiscraft_store::SearchHit;
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +25,11 @@ pub struct State {
     pub search: Option<SearchState>,
     pub notices: Vec<Notice>,
     pub settings: Settings,
+    pub artifacts: Vec<Artifact>,
+    /// The artifact shown next to the chat.
+    pub open_artifact: Option<String>,
+    /// Increases when any artifact's content changes, so open views reload.
+    pub artifact_rev: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

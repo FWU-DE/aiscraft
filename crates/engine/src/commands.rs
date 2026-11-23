@@ -39,10 +39,10 @@ pub fn find(id: &str) -> Option<&'static CommandSpec> {
 static COMMANDS: &[CommandSpec] = &[
     cmd!("chat.new", "Neuer Chat", "Chat", Some("Ctrl+N"), "backend?: string, model?: string, project?: string", true, |c, p| Box::pin(chat_new(c, p))),
     cmd!("chat.open", "Chat öffnen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_open(c, p))),
-    cmd!("chat.send", "Senden", "Chat", Some("Enter"), "text: string, files?: [path]", false, |c, p| Box::pin(async move {
+    cmd!("chat.send", "Senden", "Chat", Some("Enter"), "text: string, files?: [path], artifact?: string (as context)", false, |c, p| Box::pin(async move {
         let text = opt_str(&p, "text").unwrap_or_default();
         let files: Vec<String> = p.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-        chat::send(c, text, files).await
+        chat::send_with(c, text, files, opt_str(&p, "artifact")).await
     })),
     cmd!("chat.stop", "Antwort anhalten", "Chat", Some("Escape"), "conversation?: string", true, |c, p| Box::pin(async move {
         let conv = opt_str(&p, "conversation").or_else(|| c.state().current.clone()).ok_or_else(|| Error::invalid("Kein Chat offen"))?;
@@ -215,6 +215,34 @@ static COMMANDS: &[CommandSpec] = &[
         c.update(|s| s.notices.retain(|n| n.id != id));
         Ok(json!({}))
     })),
+    cmd!("artifact.create", "Neues Dokument", "Artefakte", None, "kind?: document|board, title?: string, content?: string, from_message?: string", true, |c, p| Box::pin(crate::artifacts::create(c, p))),
+    cmd!("artifact.open", "Artefakt öffnen", "Artefakte", None, "id: string", false, |c, p| Box::pin(async move {
+        let id = req_str(&p, "id")?;
+        if !c.state().artifacts.iter().any(|a| a.id == id) {
+            return Err(Error::not_found("Artefakt nicht gefunden"));
+        }
+        c.update(|s| s.open_artifact = Some(id));
+        Ok(json!({}))
+    })),
+    cmd!("artifact.close", "Artefakt schließen", "Artefakte", None, "", false, |c, _| Box::pin(async move {
+        c.update(|s| s.open_artifact = None);
+        Ok(json!({}))
+    })),
+    cmd!("artifact.get", "Artefakt lesen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::get(c, p))),
+    cmd!("artifact.save", "Artefakt speichern", "Artefakte", None, "id: string, text?: string, state_b64?: string, version?: string", false, |c, p| Box::pin(crate::artifacts::save(c, p))),
+    cmd!("artifact.revise", "Mit KI überarbeiten", "Artefakte", None, "id: string, instruction: string", false, |c, p| Box::pin(crate::artifacts::revise(c, p))),
+    cmd!("artifact.export", "Artefakt exportieren", "Artefakte", None, "id: string, format?: markdown|html|json, path?: string", false, |c, p| Box::pin(crate::artifacts::export(c, p))),
+    cmd!("artifact.versions", "Versionen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::versions(c, p))),
+    cmd!("artifact.restore", "Version wiederherstellen", "Artefakte", None, "id: string, version: number", false, |c, p| Box::pin(crate::artifacts::restore(c, p))),
+    cmd!("artifact.rename", "Artefakt umbenennen", "Artefakte", None, "id: string, title: string", false, |c, p| Box::pin(crate::artifacts::edit_meta(c, p, |a, p| {
+        let t = req_str(p, "title")?.trim().chars().take(200).collect::<String>();
+        if t.is_empty() {
+            return Err(Error::invalid("Titel darf nicht leer sein"));
+        }
+        a.title = t;
+        Ok(())
+    }))),
+    cmd!("artifact.delete", "Artefakt löschen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::delete(c, p))),
     cmd!("app.state", "Zustand lesen", "App", None, "", false, |c, _| Box::pin(async move { Ok(serde_json::to_value(&*c.state())?) })),
     cmd!("app.commands", "Befehle auflisten", "App", None, "", false, |_, _| Box::pin(async move {
         Ok(Value::Array(

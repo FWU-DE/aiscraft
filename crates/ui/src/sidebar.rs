@@ -51,6 +51,8 @@ impl AisCraftApp {
             } else {
                 self.projects_section(ui);
                 ui.add_space(4.0);
+                self.artifacts_section(ui);
+                ui.add_space(4.0);
                 self.chat_list(ui);
                 self.remote_section(ui);
             }
@@ -117,6 +119,53 @@ impl AisCraftApp {
                         command: "project.delete".into(),
                         params: json!({"id": p.id}),
                     });
+                    ui.close();
+                }
+            });
+        }
+    }
+
+    fn artifacts_section(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        ui.horizontal(|ui| {
+            ui.label(small_muted(&t, "DOKUMENTE & BOARDS"));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.menu_button(RichText::new("+").color(t.muted), |ui| {
+                    if ui.button("📄  Neues Dokument").clicked() {
+                        self.run("artifact.create", json!({"kind": "document"}));
+                        ui.close();
+                    }
+                    if ui.button("▣  Neues Whiteboard").clicked() {
+                        self.run("artifact.create", json!({"kind": "board"}));
+                        ui.close();
+                    }
+                });
+            });
+        });
+        let items: Vec<_> = self.state.artifacts.iter().filter(|a| self.project_filter.as_ref().is_none_or(|p| a.project_id.as_ref() == Some(p))).take(12).cloned().collect();
+        if items.is_empty() {
+            ui.label(small_muted(&t, "„Als Dokument“ an einer Antwort legt eins an."));
+        }
+        for a in items {
+            let open = self.state.open_artifact.as_deref() == Some(&a.id);
+            let icon = if a.kind == aiscraft_core::ArtifactKind::Board { "▣" } else { "📄" };
+            let r = ui.add(egui::Button::selectable(open, format!("{icon}  {}", a.title)).truncate().min_size(egui::vec2(ui.available_width(), 24.0)));
+            if r.clicked() {
+                if open {
+                    self.save_if_dirty();
+                    self.run("artifact.close", json!({}));
+                } else {
+                    self.save_if_dirty();
+                    self.run("artifact.open", json!({"id": a.id}));
+                }
+            }
+            r.context_menu(|ui| {
+                if ui.button("Umbenennen").clicked() {
+                    self.dialog = Some(Dialog::RenameArtifact { id: a.id.clone(), title: a.title.clone() });
+                    ui.close();
+                }
+                if ui.button(RichText::new("Löschen").color(t.danger)).clicked() {
+                    self.dialog = Some(Dialog::Confirm { text: format!("„{}“ löschen?", a.title), command: "artifact.delete".into(), params: json!({"id": a.id}) });
                     ui.close();
                 }
             });

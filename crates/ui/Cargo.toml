@@ -16,6 +16,8 @@ rfd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
+aiscraft-board = { path = "../board" }
+base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [lints]

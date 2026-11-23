@@ -127,6 +127,61 @@ pub struct Project {
     pub created_at: Millis,
 }
 
+/// What kind of artifact: a Markdown document or a whiteboard. Both are CRDTs (yrs) so they can
+/// be shared live later without changing their format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactKind {
+    Document,
+    Board,
+}
+
+impl ArtifactKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ArtifactKind::Document => "document",
+            ArtifactKind::Board => "board",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "document" | "doc" => Some(ArtifactKind::Document),
+            "board" | "whiteboard" => Some(ArtifactKind::Board),
+            _ => None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            ArtifactKind::Document => "Dokument",
+            ArtifactKind::Board => "Whiteboard",
+        }
+    }
+}
+
+/// A document or board. Its content (the CRDT state) is stored separately.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Artifact {
+    pub id: String,
+    pub kind: ArtifactKind,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    pub created_at: Millis,
+    pub updated_at: Millis,
+}
+
+/// One saved version of an artifact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArtifactVersion {
+    pub artifact_id: String,
+    pub version: i64,
+    pub created_at: Millis,
+    /// Why it was saved: "KI-Überarbeitung", "Manuell", …
+    pub note: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BackendKind {

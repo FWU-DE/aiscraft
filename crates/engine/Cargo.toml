@@ -19,6 +19,9 @@ keyring.workspace = true
 directories.workspace = true
 log.workspace = true
 base64 = "0.22"
+yrs = "0.28"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+aiscraft-board = { path = "../board" }
 
 [lints]
 workspace = true

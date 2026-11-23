@@ -304,6 +304,12 @@ impl AisCraftApp {
                 if ui.add(egui::Button::new(small_muted(&t, "Kopieren")).frame(false)).clicked() {
                     ui.ctx().copy_text(m.content.clone());
                 }
+                if ui.add(egui::Button::new(small_muted(&t, "Als Dokument")).frame(false)).on_hover_text("Antwort neben dem Chat als bearbeitbares Dokument öffnen").clicked() {
+                    self.run("artifact.create", json!({"kind": "document", "from_message": m.id}));
+                }
+                if ui.add(egui::Button::new(small_muted(&t, "Als Whiteboard")).frame(false)).on_hover_text("Gliederung der Antwort als Mindmap öffnen").clicked() {
+                    self.run("artifact.create", json!({"kind": "board", "from_message": m.id}));
+                }
                 if is_last && icon_button(ui, &t, "⟳", "Neu erzeugen (Strg+R)").clicked() {
                     self.run("chat.regenerate", json!({}));
                 }
@@ -346,6 +352,11 @@ impl AisCraftApp {
                     if let Some(i) = remove {
                         self.pending_files.remove(i);
                     }
+                }
+                if self.attach_artifact
+                    && let Some(a) = self.state.open_artifact.as_ref().and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id))
+                {
+                    ui.label(small_muted(&t, format!("📄 {} geht als Kontext mit", a.title)));
                 }
                 let has_focus = ui.memory(|m| m.focused()) == Some(egui::Id::unique("composer"));
                 if enter_sends && has_focus && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
@@ -394,7 +405,9 @@ impl AisCraftApp {
             let text = std::mem::take(&mut self.composer);
             let files: Vec<String> = self.pending_files.drain(..).map(|p| p.display().to_string()).collect();
             if !text.trim().is_empty() || !files.is_empty() {
-                self.run("chat.send", json!({"text": text, "files": files}));
+                self.save_if_dirty();
+                let artifact = if self.attach_artifact { self.state.open_artifact.clone() } else { None };
+                self.run("chat.send", json!({"text": text, "files": files, "artifact": artifact}));
             }
             self.focus_composer = true;
         }
