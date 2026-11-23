@@ -46,47 +46,48 @@ fn luminance(c: Color32) -> f32 {
 }
 
 impl Tokens {
+    /// AIS look, light: white, AIS blue, slate text (as app.ais-chat.schule).
     pub fn light() -> Self {
-        let bg = Color32::from_rgb(0xfa, 0xf9, 0xf7);
         Self {
             dark: false,
-            bg,
-            sidebar: Color32::from_rgb(0xf2, 0xf0, 0xec),
+            bg: Color32::WHITE,
+            sidebar: Color32::from_rgb(0xf5, 0xfa, 0xfc),
             surface: Color32::WHITE,
-            surface_hi: Color32::from_rgb(0xeb, 0xe8, 0xe2),
-            border: Color32::from_rgb(0xde, 0xda, 0xd2),
-            text: Color32::from_rgb(0x1f, 0x1d, 0x1a),
-            muted: Color32::from_rgb(0x6f, 0x6a, 0x62),
-            accent: Color32::from_rgb(0xc9, 0x52, 0x1c),
+            surface_hi: Color32::from_rgb(0xe8, 0xf3, 0xf7),
+            border: Color32::from_rgb(0xd9, 0xe6, 0xed),
+            text: Color32::from_rgb(0x1e, 0x29, 0x3b),
+            muted: Color32::from_rgb(0x5f, 0x6f, 0x82),
+            accent: Color32::from_rgb(0x10, 0x7f, 0xad),
             on_accent: Color32::WHITE,
-            selection: Color32::from_rgb(0xf6, 0xd9, 0xc8),
-            user_bubble: Color32::from_rgb(0xee, 0xeb, 0xe5),
-            danger: Color32::from_rgb(0xc0, 0x39, 0x2b),
-            success: Color32::from_rgb(0x2e, 0x8b, 0x57),
+            selection: Color32::from_rgb(0xcf, 0xe6, 0xf1),
+            user_bubble: Color32::from_rgb(0xe7, 0xf2, 0xf7),
+            danger: Color32::from_rgb(0xd6, 0x33, 0x29),
+            success: Color32::from_rgb(0x1f, 0x8a, 0x5b),
             warning: Color32::from_rgb(0xb7, 0x79, 0x1f),
-            code_bg: Color32::from_rgb(0xf1, 0xee, 0xe8),
+            code_bg: Color32::from_rgb(0xf1, 0xf5, 0xf9),
             radius: 10,
         }
     }
 
+    /// AIS look, dark: deep slate with a lighter AIS blue for contrast.
     pub fn dark() -> Self {
         Self {
             dark: true,
-            bg: Color32::from_rgb(0x1e, 0x1d, 0x1b),
-            sidebar: Color32::from_rgb(0x18, 0x17, 0x15),
-            surface: Color32::from_rgb(0x28, 0x26, 0x23),
-            surface_hi: Color32::from_rgb(0x33, 0x30, 0x2c),
-            border: Color32::from_rgb(0x3d, 0x3a, 0x35),
-            text: Color32::from_rgb(0xf3, 0xf0, 0xea),
-            muted: Color32::from_rgb(0xa3, 0x9e, 0x94),
-            accent: Color32::from_rgb(0xe0, 0x7a, 0x4a),
-            on_accent: Color32::from_rgb(0x1e, 0x1d, 0x1b),
-            selection: Color32::from_rgb(0x5a, 0x34, 0x22),
-            user_bubble: Color32::from_rgb(0x30, 0x2e, 0x2a),
-            danger: Color32::from_rgb(0xf0, 0x6a, 0x5a),
-            success: Color32::from_rgb(0x6c, 0xc0, 0x8a),
+            bg: Color32::from_rgb(0x0e, 0x16, 0x22),
+            sidebar: Color32::from_rgb(0x0a, 0x11, 0x1b),
+            surface: Color32::from_rgb(0x15, 0x20, 0x30),
+            surface_hi: Color32::from_rgb(0x1d, 0x2b, 0x3e),
+            border: Color32::from_rgb(0x26, 0x36, 0x4a),
+            text: Color32::from_rgb(0xe6, 0xed, 0xf5),
+            muted: Color32::from_rgb(0x94, 0xa3, 0xb8),
+            accent: Color32::from_rgb(0x2a, 0xa3, 0xd6),
+            on_accent: Color32::from_rgb(0x06, 0x12, 0x1c),
+            selection: Color32::from_rgb(0x15, 0x45, 0x62),
+            user_bubble: Color32::from_rgb(0x1a, 0x2a, 0x3c),
+            danger: Color32::from_rgb(0xf2, 0x44, 0x39),
+            success: Color32::from_rgb(0x4c, 0xc0, 0x8a),
             warning: Color32::from_rgb(0xe8, 0xb0, 0x50),
-            code_bg: Color32::from_rgb(0x16, 0x15, 0x13),
+            code_bg: Color32::from_rgb(0x09, 0x0f, 0x18),
             radius: 10,
         }
     }

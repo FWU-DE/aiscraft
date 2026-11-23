@@ -288,14 +288,19 @@ impl eframe::App for AisCraftApp {
         self.dropped_files(&ctx);
 
         let t = self.tokens.clone();
-        let mut sidebar_open = self.sidebar_open;
+        // The panel needs its own copy to animate; a click inside the sidebar (its collapse
+        // button) changes `self.sidebar_open` meanwhile and must win over that copy.
+        let before = self.sidebar_open;
+        let mut sidebar_open = before;
         egui::Panel::left("sidebar")
             .resizable(true)
             .default_size(272.0)
             .size_range(200.0..=420.0)
             .frame(Frame::new().fill(t.sidebar).inner_margin(Margin::symmetric(10, 12)))
             .show_collapsible(ui, &mut sidebar_open, |ui| self.sidebar(ui));
-        self.sidebar_open = sidebar_open;
+        if self.sidebar_open == before {
+            self.sidebar_open = sidebar_open;
+        }
 
         egui::CentralPanel::default().frame(Frame::new().fill(t.bg)).show(ui, |ui| self.conversation(ui));
 

@@ -419,7 +419,7 @@ impl AisCraftApp {
             SettingsTab::Appearance => {
                 ui.label("Farben");
                 ui.horizontal(|ui| {
-                    for (k, label) in [("omarchy", "Wie Omarchy"), ("system", "System"), ("light", "Hell"), ("dark", "Dunkel")] {
+                    for (k, label) in [("system", "AIS (wie System)"), ("light", "AIS hell"), ("dark", "AIS dunkel"), ("omarchy", "Wie Omarchy")] {
                         if ui.selectable_label(self.state.settings.theme == k, label).clicked() {
                             self.run("settings.set", json!({"key": "theme", "value": k}));
                         }

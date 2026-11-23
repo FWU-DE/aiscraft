@@ -138,7 +138,7 @@ impl AisCraftApp {
         ui.add_space((ui.available_height() * 0.22).max(20.0));
         centered(ui, |ui| {
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("✳").size(34.0).color(t.accent));
+                crate::widgets::ais_logo(ui, 46.0, t.accent);
                 ui.add_space(6.0);
                 let greeting = match first {
                     Some(n) => format!("Hallo, {n}. Woran arbeiten wir?"),

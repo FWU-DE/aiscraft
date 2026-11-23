@@ -96,7 +96,7 @@ pub struct NoticeAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// "system", "light", "dark" or "omarchy" (follow the desktop theme).
+    /// "system" (AIS look, light or dark like the system), "light", "dark" or "omarchy" (follow the desktop theme).
     pub theme: String,
     /// Keep notes from "Merke dir: …" and send them to backends that allow context.
     pub memory: bool,
@@ -108,7 +108,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { theme: "omarchy".into(), memory: true, zoom: 1.0, enter_sends: true }
+        Self { theme: "system".into(), memory: true, zoom: 1.0, enter_sends: true }
     }
 }
 

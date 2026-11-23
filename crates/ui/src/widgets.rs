@@ -12,6 +12,22 @@ pub fn accent_button(ui: &mut Ui, t: &Tokens, text: &str) -> Response {
     ui.add(egui::Button::new(RichText::new(text).color(t.on_accent).strong()).fill(t.accent).corner_radius(CornerRadius::same(t.radius.saturating_sub(2))))
 }
 
+/// The AIS logo (ring, bar and dot), drawn from its SVG geometry (viewBox 269.8 × 230.1).
+pub fn ais_logo(ui: &mut Ui, height: f32, color: Color32) -> Response {
+    let scale = height / 230.1;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(269.8 * scale, height), egui::Sense::hover());
+    let p = |x: f32, y: f32| rect.min + egui::vec2(x * scale, y * scale);
+    let painter = ui.painter();
+    // Ring: outer 2..262.2 × 2.6..122.6 (radius 60), inner 42.5..221.7 × 43.1..82.1, so a stroke
+    // of 40.5 along the midline.
+    let ring = egui::Rect::from_min_max(p(22.25, 22.85), p(241.95, 102.35));
+    painter.rect_stroke(ring, CornerRadius::same((39.75 * scale).round().clamp(0.0, 255.0) as u8), Stroke::new(40.5 * scale, color), egui::StrokeKind::Middle);
+    let bar = egui::Rect::from_min_max(p(161.1, 138.6), p(257.1, 179.4));
+    painter.rect_filled(bar, CornerRadius::same((20.4 * scale).round().clamp(0.0, 255.0) as u8), color);
+    painter.circle_filled(p(249.7, 207.9), 17.4 * scale, color);
+    resp
+}
+
 pub fn icon_button(ui: &mut Ui, t: &Tokens, icon: &str, tip: &str) -> Response {
     ui.add(egui::Button::new(RichText::new(icon).color(t.muted).size(15.0)).frame(false)).on_hover_text(tip)
 }

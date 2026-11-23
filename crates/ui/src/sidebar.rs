@@ -12,6 +12,7 @@ impl AisCraftApp {
         let t = self.tokens.clone();
         egui::Panel::bottom("sidebar-account").frame(egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 2 })).show(ui, |ui| self.account_row(ui));
         ui.horizontal(|ui| {
+            crate::widgets::ais_logo(ui, 18.0, t.accent);
             ui.label(RichText::new("AISCraft").strong().size(17.0));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if icon_button(ui, &t, "☰", "Seitenleiste ausblenden (Strg+B)").clicked() {
