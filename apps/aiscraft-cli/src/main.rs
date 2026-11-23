@@ -269,50 +269,149 @@ fn stream_answer(engine: &Engine, text: String, files: Vec<String>) -> Result<()
     }
 }
 
-/// A minimal MCP server (JSON-RPC 2.0 over stdio). Every engine command is a tool.
+/// The MCP protocol versions the server answers with; an unknown one gets the first.
+const MCP_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+/// Longest request line the MCP server reads. Attachments travel as paths, not bytes.
+const MAX_MCP_MESSAGE: usize = 16 * 1024 * 1024;
+
+/// The MCP server over stdio. Every engine command is a tool.
 fn mcp(engine: &Engine) {
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { return };
-        let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
-        let id = req.get("id").cloned();
-        let method = req.get("method").and_then(Value::as_str).unwrap_or("");
-        let result: Option<Result<Value, (i64, String)>> = match method {
-            "initialize" => Some(Ok(json!({
-                "protocolVersion": req.pointer("/params/protocolVersion").cloned().unwrap_or(json!("2025-06-18")),
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "aiscraft", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "AIS.ChatCraft: chat with AIS.chat and other backends, search and export chats. Call app_commands for the full list."
-            }))),
-            "notifications/initialized" | "notifications/cancelled" => None,
-            "ping" => Some(Ok(json!({}))),
-            "tools/list" => Some(Ok(json!({"tools": commands().iter().map(|c| json!({
-                "name": c.id.replace('.', "_"),
-                "description": format!("{} ({}). Params: {}", c.label, c.group, if c.params.is_empty() { "none" } else { c.params }),
-                "inputSchema": {"type": "object", "additionalProperties": true}
-            })).collect::<Vec<_>>()}))),
-            "tools/call" => {
-                let name = req.pointer("/params/name").and_then(Value::as_str).unwrap_or("");
-                let args = req.pointer("/params/arguments").cloned().unwrap_or(json!({}));
-                match commands().iter().find(|c| c.id.replace('.', "_") == name) {
-                    None => Some(Err((-32602, format!("Unbekanntes Werkzeug {name}")))),
-                    Some(c) => Some(Ok(match engine.call(c.id, args) {
-                        Ok(v) => json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}]}),
-                        Err(e) => json!({"content": [{"type": "text", "text": e.message}], "isError": true}),
-                    })),
-                }
+    serve_mcp(engine, std::io::stdin().lock(), std::io::stdout());
+}
+
+/// Newline-delimited JSON-RPC 2.0 until `input` closes. Framing, batches and the MCP lifecycle
+/// come from craft-jsonrpc and craft-mcp; the tools are the engine's commands.
+fn serve_mcp(engine: &Engine, mut input: impl BufRead, mut output: impl Write) {
+    let version = env!("CARGO_PKG_VERSION");
+    let mut session = craft_mcp::Session::new("aiscraft", version, craft_mcp::Policy::Compatible)
+        .with_legacy_initialize(MCP_VERSIONS, json!({"name": "aiscraft", "title": "AIS.ChatCraft", "version": version}));
+    session.set_instructions(
+        "AIS.ChatCraft: chat with AIS.chat and other backends, search and export chats. Call app_commands for the full list.".into(),
+    );
+    let session = std::cell::RefCell::new(session);
+    let limits = craft_jsonrpc::Limits { max_message_bytes: MAX_MCP_MESSAGE, integer_ids_only: true, allow_null_ids: false, ..Default::default() };
+    loop {
+        let (reply, close) = match craft_jsonrpc::read_line(&mut input, MAX_MCP_MESSAGE) {
+            Ok(None) | Err(craft_jsonrpc::LineError::Io(_)) => return,
+            // The rest of the line is still unread: answer, then hang up.
+            Err(craft_jsonrpc::LineError::TooLong) => {
+                (Some(craft_jsonrpc::error_response(Value::Null, craft_jsonrpc::RpcError::new(-32600, "Anfrage zu groß"))), true)
             }
-            _ if id.is_some() => Some(Err((-32601, format!("Methode {method} gibt es nicht")))),
-            _ => None,
+            Ok(Some(line)) if line.trim_ascii().is_empty() => continue,
+            Ok(Some(line)) => {
+                let reply = match craft_jsonrpc::parse_json(&line, limits) {
+                    Err(_) => Some(craft_jsonrpc::parse_error_response()),
+                    Ok(msg) => {
+                        let in_batch = msg.is_array();
+                        craft_jsonrpc::process(&msg, limits, |r| mcp_request(engine, &session, r, in_batch), |n| session.borrow_mut().notification(n))
+                            .unwrap_or_else(|e| Some(craft_jsonrpc::error_response(Value::Null, craft_jsonrpc::RpcError::new(-32600, e.to_string()))))
+                    }
+                };
+                (reply, false)
+            }
         };
-        let (Some(id), Some(result)) = (id, result) else { continue };
-        let resp = match result {
-            Ok(r) => json!({"jsonrpc": "2.0", "id": id, "result": r}),
-            Err((code, message)) => json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}}),
-        };
-        if writeln!(stdout, "{resp}").is_err() || stdout.flush().is_err() {
+        if let Some(reply) = reply
+            && (writeln!(output, "{reply}").is_err() || output.flush().is_err())
+        {
             return;
         }
+        if close {
+            return;
+        }
+    }
+}
+
+fn mcp_request(
+    engine: &Engine,
+    session: &std::cell::RefCell<craft_mcp::Session>,
+    r: craft_jsonrpc::Request<'_>,
+    in_batch: bool,
+) -> Result<Value, craft_jsonrpc::RpcError> {
+    if let Some(answer) = session.borrow_mut().request(r, in_batch) {
+        return answer;
+    }
+    let tool_name = |id: &str| id.replace('.', "_");
+    match r.method {
+        "tools/list" => Ok(craft_mcp::tool_list(json!(commands().iter().map(|c| json!({
+            "name": tool_name(c.id),
+            "description": format!("{} ({}). Params: {}", c.label, c.group, if c.params.is_empty() { "none" } else { c.params }),
+            "inputSchema": {"type": "object", "additionalProperties": true}
+        })).collect::<Vec<_>>()))),
+        "tools/call" => {
+            let (name, args) = craft_mcp::tool_call(r.params.unwrap_or(&Value::Null))?;
+            let c = commands().iter().find(|c| tool_name(c.id) == name).ok_or_else(|| craft_jsonrpc::RpcError::new(-32602, format!("Unbekanntes Werkzeug {name}")))?;
+            Ok(match engine.call(c.id, args) {
+                Ok(v) => craft_mcp::text_tool_result(&serde_json::to_string_pretty(&v).unwrap_or_default(), false),
+                Err(e) => craft_mcp::text_tool_result(&e.message, true),
+            })
+        }
+        other => Err(craft_jsonrpc::RpcError::new(-32601, format!("Methode {other} gibt es nicht"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn exchange(input: &str) -> Vec<Value> {
+        let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+        let mut out = Vec::new();
+        serve_mcp(&engine, input.as_bytes(), &mut out);
+        String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    }
+
+    #[test]
+    fn mcp_server_lists_and_calls_engine_commands() {
+        let input = [
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"app_commands","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"chat_open","arguments":{"id":"gibt-es-nicht"}}}"#,
+            r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"nichts"}}"#,
+            r#"{"jsonrpc":"2.0","id":6,"method":"ping"}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"resources/list"}"#,
+        ]
+        .join("\n");
+        let replies = exchange(&input);
+        assert_eq!(replies.len(), 7, "{replies:?}");
+        assert_eq!(replies[0]["id"], 1);
+        assert_eq!(replies[0]["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(replies[0]["result"]["serverInfo"]["title"], "AIS.ChatCraft");
+        assert!(replies[0]["result"]["instructions"].as_str().unwrap().contains("app_commands"));
+        let tools = replies[1]["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), commands().len());
+        assert!(tools.iter().any(|t| t["name"] == "chat_send"));
+        assert_eq!(replies[2]["result"]["isError"], false);
+        assert!(replies[2]["result"]["content"][0]["text"].as_str().unwrap().contains("chat.send"));
+        assert_eq!(replies[3]["result"]["isError"], true);
+        assert_eq!(replies[4]["error"]["code"], -32602);
+        assert_eq!(replies[5]["result"], json!({}));
+        assert_eq!(replies[6]["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn mcp_server_answers_hostile_input_without_dispatching() {
+        let replies = exchange("kein json\n[]\n{\"jsonrpc\":\"2.0\",\"id\":null,\"method\":\"ping\"}\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":7}\n\n");
+        assert_eq!(replies.len(), 4, "{replies:?}");
+        assert_eq!(replies[0]["error"]["code"], -32700);
+        assert_eq!(replies[1]["error"]["code"], -32600);
+        assert_eq!(replies[2]["error"]["code"], -32600);
+        assert_eq!(replies[3]["error"]["code"], -32602);
+        let long = format!("{}\n{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}}\n", "x".repeat(MAX_MCP_MESSAGE + 1));
+        let replies = exchange(&long);
+        assert_eq!(replies.len(), 1, "an oversized line closes the connection");
+        assert_eq!(replies[0]["error"]["code"], -32600);
+    }
+
+    #[test]
+    fn mcp_server_handles_batches_and_unknown_versions() {
+        let replies = exchange(
+            r#"[{"jsonrpc":"2.0","id":"a","method":"initialize","params":{"protocolVersion":"1999-01-01"}},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":"b","method":"ping"}]"#,
+        );
+        let batch = replies[0].as_array().unwrap();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0]["result"]["protocolVersion"], MCP_VERSIONS[0]);
+        assert_eq!(batch[1]["id"], "b");
     }
 }
