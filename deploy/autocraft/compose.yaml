@@ -1,0 +1,97 @@
+# AutoCraft (storytold/autocraft) for FWU-DE/aiscraft, on Coolify (2nd Server).
+# Built from a pinned upstream commit; bump AUTOCRAFT_REF deliberately.
+# Coolify variables (secrets, never in git): GH_TOKEN, AC_GITHUB_CLIENT_ID, AC_GITHUB_CLIENT_SECRET,
+# AC_SESSION_KEY (>= 32 random chars), AC_OPERATOR (GitHub login), AUTOCRAFT_BASE_URL.
+name: autocraft
+
+x-common: &common
+  image: aiscraft-autocraft:0c359e3964ed
+  restart: unless-stopped
+  environment:
+    AUTOCRAFT_BASE_URL: ${AUTOCRAFT_BASE_URL:-https://autocraft.uds.university}
+    AUTOCRAFT_TRUST_PROXY: "1"
+    GH_TOKEN: ${GH_TOKEN}
+  volumes:
+    - autocraft-data:/data
+    - autocraft-config:/config
+
+services:
+  # Writes /config/secrets.json from the Coolify variables, adds the first operator and tracks the repo.
+  # Idempotent: safe on every deploy.
+  init:
+    <<: *common
+    build:
+      context: https://github.com/storytold/autocraft.git#0c359e3964ed
+      dockerfile: deploy/container/Dockerfile
+    restart: "no"
+    environment:
+      AUTOCRAFT_BASE_URL: ${AUTOCRAFT_BASE_URL:-https://autocraft.uds.university}
+      GH_TOKEN: ${GH_TOKEN}
+      AC_GITHUB_CLIENT_ID: ${AC_GITHUB_CLIENT_ID}
+      AC_GITHUB_CLIENT_SECRET: ${AC_GITHUB_CLIENT_SECRET}
+      AC_SESSION_KEY: ${AC_SESSION_KEY}
+      AC_OPERATOR: ${AC_OPERATOR:-janrenz}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        umask 077
+        node -e 'const e=process.env; if(!e.AC_GITHUB_CLIENT_ID||!e.AC_GITHUB_CLIENT_SECRET||(e.AC_SESSION_KEY||"").length<32){console.error("init: AC_GITHUB_CLIENT_ID, AC_GITHUB_CLIENT_SECRET and AC_SESSION_KEY (>=32) are required");process.exit(1)} require("fs").writeFileSync("/config/secrets.json.tmp", JSON.stringify({github_client_id:e.AC_GITHUB_CLIENT_ID,github_client_secret:e.AC_GITHUB_CLIENT_SECRET,session_key:e.AC_SESSION_KEY}),{mode:0o600})'
+        mv /config/secrets.json.tmp /config/secrets.json
+        cd /app
+        node --no-warnings src/cli.ts access add "$$AC_OPERATOR" --operator || true
+        node --no-warnings src/cli.ts repos track FWU-DE/aiscraft || true
+        echo "init: ok"
+
+  dashboard:
+    <<: *common
+    command: ["dashboard"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    expose:
+      - "3005"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3005/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  runner:
+    <<: *common
+    command: ["runner"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    expose:
+      - "8981"
+    stop_grace_period: 30s
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=unconfined
+      - systempaths=unconfined
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8981/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  periodic:
+    <<: *common
+    command: ["periodic"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  autocraft-data:
+  autocraft-config:
