@@ -1,7 +1,8 @@
-# AutoCraft (storytold/autocraft) for FWU-DE/aiscraft, on Coolify (2nd Server).
+# AutoCraft (storytold/autocraft) for FWU-DE/aiscraft, on Coolify (1st server, UDS Localhost: *.uds.university
+# needs no DNS record there).
 # Built from a pinned upstream commit; bump AUTOCRAFT_REF deliberately.
 # Coolify variables (secrets, never in git): GH_TOKEN, AC_GITHUB_CLIENT_ID, AC_GITHUB_CLIENT_SECRET,
-# AC_SESSION_KEY (>= 32 random chars), AC_OPERATOR (GitHub login), AUTOCRAFT_BASE_URL.
+# AC_OPERATOR (GitHub login). The session key comes from Coolify (SERVICE_PASSWORD_64_SESSIONKEY).
 name: autocraft
 
 x-common: &common
@@ -29,7 +30,7 @@ services:
       GH_TOKEN: ${GH_TOKEN}
       AC_GITHUB_CLIENT_ID: ${AC_GITHUB_CLIENT_ID}
       AC_GITHUB_CLIENT_SECRET: ${AC_GITHUB_CLIENT_SECRET}
-      AC_SESSION_KEY: ${AC_SESSION_KEY}
+      AC_SESSION_KEY: ${SERVICE_PASSWORD_64_SESSIONKEY}
       AC_OPERATOR: ${AC_OPERATOR:-janrenz}
     entrypoint: ["/bin/bash", "-c"]
     command:
@@ -46,6 +47,11 @@ services:
   dashboard:
     <<: *common
     command: ["dashboard"]
+    environment:
+      SERVICE_FQDN_DASHBOARD_3005: https://autocraft.uds.university
+      AUTOCRAFT_BASE_URL: ${AUTOCRAFT_BASE_URL:-https://autocraft.uds.university}
+      AUTOCRAFT_TRUST_PROXY: "1"
+      GH_TOKEN: ${GH_TOKEN}
     depends_on:
       init:
         condition: service_completed_successfully
