@@ -22,6 +22,7 @@ craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "249a41b
 craft-jsonrpc = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a" }
 craft-mcp = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a" }
 craft-control-protocol = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a" }
+craft-math = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a" }
 
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

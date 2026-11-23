@@ -450,13 +450,16 @@ impl AisCraftApp {
                 ui.label(muted(&t, if image_chat { "Bild wird gezeichnet …" } else { "Denkt nach …" }));
             });
         } else if !m.content.is_empty() || images.is_empty() {
-            // Diagrams from AIS.chat's create_plot tool come as ```jsxgraph-json blocks.
-            for (k, seg) in crate::plot::segments(&m.content).into_iter().enumerate() {
+            // Diagrams from AIS.chat's create_plot tool come as ```jsxgraph-json blocks; formulas
+            // and Mermaid diagrams are drawn by crate::markup.
+            for (k, seg) in crate::markup::segments(&m.content).into_iter().enumerate() {
                 match seg {
-                    crate::plot::Segment::Markdown(md) => {
-                        egui_commonmark::CommonMarkViewer::new().default_width(Some(ui.available_width().max(1.0) as usize)).show(ui, &mut self.md, md);
+                    crate::markup::Segment::Plot(src) => self.plot_block(ui, &m.id, k, src),
+                    seg => {
+                        if let Some(crate::markup::Action::Board(outline)) = crate::markup::show(ui, &mut self.md, &t, &seg, (&m.id, k)) {
+                            self.run("artifact.create", json!({"kind": "board", "content": outline}));
+                        }
                     }
-                    crate::plot::Segment::Plot(src) => self.plot_block(ui, &m.id, k, src),
                 }
             }
         }
