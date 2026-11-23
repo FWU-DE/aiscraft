@@ -353,11 +353,10 @@ fn outline_mind_map_has_no_overlaps() {
         assert!(notes.iter().any(|n| Some(&n.id) == a.from.as_ref()));
         assert!(notes.iter().any(|n| Some(&n.id) == a.to.as_ref()));
     }
-    // Root in the centre, branches on both sides.
+    // Root at the origin, every other note beside it.
     let root = notes.iter().find(|n| n.text == "Klassenfahrt").unwrap();
     assert!((root.center().0).abs() < 1.0 && (root.center().1).abs() < 1.0);
-    assert!(notes.iter().any(|n| n.x > root.x + root.w));
-    assert!(notes.iter().any(|n| n.x + n.w < root.x));
+    assert!(notes.iter().filter(|n| n.id != root.id).all(|n| n.x > root.x + root.w || n.x + n.w < root.x));
 
     // Adding a second map to an existing board keeps ids unique.
     let mut b2 = Board::from_outline(md);
@@ -395,19 +394,42 @@ struct App {
     board: Board,
     view: crate::ViewState,
     style: crate::BoardStyle,
+    rect: egui::Rect,
 }
 
-fn harness(board: Board) -> egui_kittest::Harness<'static, App> {
-    let app = App { board, view: crate::ViewState::default(), style: crate::BoardStyle::light() };
-    egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(
+type H = egui_kittest::Harness<'static, App>;
+
+fn harness(board: Board) -> H {
+    harness_sized(board, crate::ViewState::default(), egui::vec2(1000.0, 700.0))
+}
+
+fn harness_sized(board: Board, view: crate::ViewState, size: egui::Vec2) -> H {
+    let app = App { board, view, style: crate::BoardStyle::light(), rect: egui::Rect::NOTHING };
+    egui_kittest::Harness::builder().with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut App| {
-            crate::BoardView::new(&mut app.board, &mut app.view, &app.style).show(ui);
+            app.rect = crate::BoardView::new(&mut app.board, &mut app.view, &app.style).show(ui).rect;
         },
         app,
     )
 }
 
-fn drag(h: &mut egui_kittest::Harness<'static, App>, from: egui::Pos2, to: egui::Pos2) {
+/// Screen position of a world point.
+fn screen(h: &H, x: f64, y: f64) -> egui::Pos2 {
+    let st = h.state();
+    st.view.camera.to_screen(st.rect, egui::pos2(x as f32, y as f32))
+}
+
+fn click(h: &mut H, at: egui::Pos2) {
+    use egui::{Event, Modifiers, PointerButton};
+    h.event(Event::PointerMoved(at));
+    h.step();
+    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.step();
+    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.step();
+}
+
+fn drag(h: &mut H, from: egui::Pos2, to: egui::Pos2) {
     use egui::{Event, Modifiers, PointerButton};
     h.event(Event::PointerMoved(from));
     h.step();
@@ -422,7 +444,7 @@ fn drag(h: &mut egui_kittest::Harness<'static, App>, from: egui::Pos2, to: egui:
     h.step();
 }
 
-fn key(h: &mut egui_kittest::Harness<'static, App>, key: egui::Key, modifiers: egui::Modifiers) {
+fn key(h: &mut H, key: egui::Key, modifiers: egui::Modifiers) {
     h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
     h.step();
     h.event(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
@@ -432,6 +454,7 @@ fn key(h: &mut egui_kittest::Harness<'static, App>, key: egui::Key, modifiers: e
 #[test]
 fn widget_draws_moves_and_undoes() {
     let mut h = harness(Board::new());
+    h.state_mut().view.snap = false;
     h.run_steps(2);
     // Hover the canvas so shortcuts reach it, then pick the rectangle tool with R.
     h.event(egui::Event::PointerMoved(egui::pos2(500.0, 400.0)));
@@ -541,4 +564,346 @@ fn widget_handles_many_elements_and_junk() {
     key(&mut h, egui::Key::A, egui::Modifiers::COMMAND);
     assert_eq!(h.state().view.selection.len(), 1001);
     assert!(t.elapsed().as_secs() < 30);
+}
+
+// ----- UX behaviour --------------------------------------------------------------------------
+
+const OUTLINE_3X3: &str = "# Photosynthese\n## Was passiert?\n- Blätter nehmen Kohlenstoffdioxid auf\n- Wurzeln liefern Wasser\n- Sonnenlicht liefert Energie\n## Produkte\n- Traubenzucker\n- Sauerstoff\n- Stärke als Speicher\n## Im Unterricht\n- Versuch mit Wasserpest\n- Arbeitsblatt Klasse 7\n- Kurzer Test\n";
+
+fn notes_of(b: &Board) -> Vec<Element> {
+    b.elements().into_iter().filter(|e| e.kind == Kind::Note).collect()
+}
+
+#[test]
+fn mind_map_branches_are_balanced_across_sides() {
+    // Many short branches: both sides, split evenly (not 3 + 1).
+    let md = "# Thema\n- A\n- B\n- C\n- D\n- E\n- F\n- G\n- H\n";
+    let b = Board::from_outline(md);
+    let notes = notes_of(&b);
+    let root = notes.iter().find(|n| n.text == "Thema").unwrap();
+    let right = notes.iter().filter(|n| n.x > root.x + root.w).count();
+    let left = notes.iter().filter(|n| n.x + n.w < root.x).count();
+    assert_eq!((right, left), (4, 4));
+    let four = Board::from_outline("# T\n- A\n- B\n- C\n- D\n");
+    let notes = notes_of(&four);
+    let root = notes.iter().find(|n| n.text == "T").unwrap();
+    let right = notes.iter().filter(|n| n.x > root.x + root.w).count();
+    let left = notes.iter().filter(|n| n.x + n.w < root.x).count();
+    assert_eq!(right + left, 4);
+    assert!(right.abs_diff(left) <= 2, "{right} / {left}");
+    for (i, a) in notes.iter().enumerate() {
+        for c in notes.iter().skip(i + 1) {
+            assert!(!overlaps(a, c), "{} overlaps {}", a.text, c.text);
+        }
+    }
+}
+
+#[test]
+fn mind_map_fits_readably_in_a_side_panel() {
+    let b = Board::from_outline(OUTLINE_3X3);
+    let notes = notes_of(&b);
+    assert_eq!(notes.len(), 13);
+    for (i, a) in notes.iter().enumerate() {
+        for c in notes.iter().skip(i + 1) {
+            assert!(!overlaps(a, c), "{} overlaps {}", a.text, c.text);
+        }
+    }
+    let mut view = crate::ViewState::default();
+    view.zoom_to_fit();
+    let mut h = harness_sized(b, view, egui::vec2(650.0, 800.0));
+    h.run_steps(3);
+    let st = h.state();
+    assert!(st.view.camera.zoom >= 0.65, "zoom {}", st.view.camera.zoom);
+    // Everything is visible at that zoom.
+    let vis = st.view.camera.visible(st.rect);
+    for n in &notes {
+        assert!(vis.contains(egui::pos2(n.x as f32, n.y as f32)) && vis.contains(egui::pos2((n.x + n.w) as f32, (n.y + n.h) as f32)), "{} not visible", n.text);
+    }
+}
+
+#[test]
+fn fit_never_goes_below_readable_zoom() {
+    let mut b = Board::new();
+    b.add(note(-5000.0, 0.0, "links"));
+    b.add(note(5000.0, 0.0, "rechts"));
+    let mut view = crate::ViewState::default();
+    view.zoom_to_fit();
+    let mut h = harness_sized(b, view, egui::vec2(650.0, 800.0));
+    h.run_steps(2);
+    assert!((h.state().view.camera.zoom - crate::view::READABLE_ZOOM).abs() < 1e-3);
+}
+
+#[test]
+fn first_fit_follows_the_settled_canvas_size() {
+    let b = Board::from_outline(OUTLINE_3X3);
+    let mut view = crate::ViewState::default();
+    view.zoom_to_fit();
+    let mut h = harness_sized(b, view, egui::vec2(300.0, 300.0));
+    h.run_steps(2);
+    let small = h.state().view.camera.zoom;
+    h.set_size(egui::vec2(1400.0, 1000.0));
+    h.run_steps(3);
+    let big = h.state().view.camera.zoom;
+    assert!(big > small + 0.05, "{small} -> {big}");
+    // Once the user zooms, a resize no longer refits.
+    h.state_mut().view.camera.zoom = 0.5;
+    h.run_steps(1);
+    h.set_size(egui::vec2(900.0, 700.0));
+    h.run_steps(2);
+    assert!((h.state().view.camera.zoom - 0.5).abs() < 1e-3);
+}
+
+#[test]
+fn arrow_end_can_be_rebound_by_dragging() {
+    let mut b = Board::new();
+    let a = b.add(note(0.0, 0.0, "A"));
+    let c = b.add(note(400.0, 0.0, "B"));
+    let d = b.add(note(400.0, 300.0, "C"));
+    let arrow = b.add(Element::connector(&b.element(&a).unwrap(), &b.element(&c).unwrap()));
+    let mut h = harness(b);
+    h.run_steps(2);
+    h.state_mut().view.selection = vec![arrow.clone()];
+    h.run_steps(1);
+    let end = {
+        let els = h.state().board.elements();
+        let el = els.iter().find(|e| e.id == arrow).unwrap();
+        arrow_endpoints(el, |id| els.iter().find(|e| e.id == id)).1
+    };
+    let from = screen(&h, end.0, end.1);
+    let to = screen(&h, 500.0, 370.0);
+    drag(&mut h, from, to);
+    let el = h.state().board.element(&arrow).unwrap();
+    assert_eq!(el.to.as_deref(), Some(d.as_str()), "{el:?}");
+    assert_eq!(el.from.as_deref(), Some(a.as_str()));
+    // One undo step brings the old binding back.
+    key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().board.element(&arrow).unwrap().to.as_deref(), Some(c.as_str()));
+    // Dropping on empty canvas unbinds that end and leaves it where it was dropped.
+    key(&mut h, egui::Key::Z, egui::Modifiers::SHIFT | egui::Modifiers::COMMAND);
+    h.state_mut().view.selection = vec![arrow.clone()];
+    h.run_steps(1);
+    let start = {
+        let els = h.state().board.elements();
+        let el = els.iter().find(|e| e.id == arrow).unwrap();
+        arrow_endpoints(el, |id| els.iter().find(|e| e.id == id)).1
+    };
+    let (from, to) = (screen(&h, start.0, start.1), screen(&h, 800.0, 600.0));
+    drag(&mut h, from, to);
+    let el = h.state().board.element(&arrow).unwrap();
+    assert_eq!(el.to, None);
+    let end = el.world_points().last().unwrap();
+    assert!((end.0 - 800.0).abs() < 2.0 && (end.1 - 600.0).abs() < 2.0, "{end:?}");
+}
+
+#[test]
+fn notes_grow_with_their_text_while_typing() {
+    let mut b = Board::new();
+    let id = b.add(note(0.0, 0.0, ""));
+    let mut h = harness(b);
+    h.run_steps(2);
+    let h0 = h.state().board.element(&id).unwrap().h;
+    h.state_mut().view.edit(&id);
+    h.run_steps(2);
+    let long = "Eine längere Notiz mit sehr viel Text, die beim Schreiben mehrere Zeilen braucht und deshalb wachsen muss. ".repeat(3);
+    h.event(egui::Event::Text(long.clone()));
+    h.run_steps(2);
+    // Enter finishes editing; the grown height and the text are stored together.
+    key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().view.editing().is_none());
+    let el = h.state().board.element(&id).unwrap();
+    assert_eq!(el.text, long);
+    assert!(el.h > h0 + 40.0, "{} -> {}", h0, el.h);
+    h.event(egui::Event::PointerMoved(egui::pos2(900.0, 650.0)));
+    h.step();
+    // Capped for very long text.
+    h.state_mut().view.edit(&id);
+    h.run_steps(2);
+    h.event(egui::Event::Text("noch mehr Text ".repeat(200)));
+    h.run_steps(2);
+    key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+    h.run_steps(2);
+    let el = h.state().board.element(&id).unwrap();
+    assert!(el.h <= 520.0 + 0.5, "{}", el.h);
+    // Text and height came in one undo step.
+    key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+    let el = h.state().board.element(&id).unwrap();
+    assert_eq!(el.text, long);
+}
+
+#[test]
+fn shift_enter_is_a_newline_enter_finishes() {
+    let mut b = Board::new();
+    let id = b.add(note(0.0, 0.0, ""));
+    let mut h = harness(b);
+    h.run_steps(2);
+    h.state_mut().view.edit(&id);
+    h.run_steps(2);
+    h.event(egui::Event::Text("eins".into()));
+    h.step();
+    key(&mut h, egui::Key::Enter, egui::Modifiers::SHIFT);
+    h.event(egui::Event::Text("zwei".into()));
+    h.step();
+    assert!(h.state().view.editing().is_some());
+    key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().view.editing().is_none());
+    assert_eq!(h.state().board.element(&id).unwrap().text, "eins\nzwei");
+    assert_eq!(h.state().view.selection, vec![id]);
+}
+
+#[test]
+fn double_click_on_empty_canvas_creates_a_note_and_edits_it() {
+    let mut h = harness(Board::new());
+    h.run_steps(2);
+    let at = egui::pos2(500.0, 400.0);
+    click(&mut h, at);
+    click(&mut h, at);
+    h.run_steps(2);
+    let els = h.state().board.elements();
+    assert_eq!(els.len(), 1, "{els:?}");
+    assert_eq!(els[0].kind, Kind::Note);
+    assert_eq!(h.state().view.editing(), Some(els[0].id.as_str()));
+    let c = screen(&h, els[0].center().0, els[0].center().1);
+    assert!(c.distance(at) < 2.0, "{c:?}");
+}
+
+#[test]
+fn plus_handle_creates_a_connected_note() {
+    let mut b = Board::new();
+    let id = b.add(note(0.0, 0.0, "Start").with_color("blue"));
+    let mut h = harness(b);
+    h.run_steps(2);
+    h.state_mut().view.selection = vec![id.clone()];
+    h.run_steps(1);
+    // The right „+“ sits 26 px right of the note's edge.
+    let src = h.state().board.element(&id).unwrap();
+    let right = screen(&h, src.x + src.w, src.y + src.h / 2.0) + egui::vec2(26.0, 0.0);
+    click(&mut h, right);
+    h.run_steps(2);
+    let els = h.state().board.elements();
+    assert_eq!(els.len(), 3, "{els:?}");
+    let new = els.iter().find(|e| e.kind == Kind::Note && e.id != id).unwrap();
+    assert!(new.x > src.x + src.w + 20.0 && (new.y - src.y).abs() < 1.0, "{new:?}");
+    assert_eq!(new.color, "blue");
+    let arrow = els.iter().find(|e| e.kind == Kind::Arrow).unwrap();
+    assert_eq!((arrow.from.as_deref(), arrow.to.as_deref()), (Some(id.as_str()), Some(new.id.as_str())));
+    assert_eq!(h.state().view.editing(), Some(new.id.as_str()));
+    // Typing goes into the new note; one undo removes note and arrow together.
+    h.event(egui::Event::Text("Nächster Schritt".into()));
+    h.step();
+    key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+    h.run_steps(2);
+    assert_eq!(h.state().board.element(&new.id).unwrap().text, "Nächster Schritt");
+    key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+    key(&mut h, egui::Key::Z, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().board.len(), 1);
+    // A second click on the same side stacks below instead of overlapping.
+    key(&mut h, egui::Key::Z, egui::Modifiers::SHIFT | egui::Modifiers::COMMAND);
+    h.state_mut().view.selection = vec![id.clone()];
+    h.run_steps(1);
+    click(&mut h, right);
+    h.run_steps(2);
+    let notes = notes_of(&h.state().board);
+    assert_eq!(notes.len(), 3);
+    for (i, a) in notes.iter().enumerate() {
+        for c in notes.iter().skip(i + 1) {
+            assert!(!overlaps(a, c), "{} overlaps {}", a.text, c.text);
+        }
+    }
+}
+
+#[test]
+fn tab_while_editing_a_mind_map_node_adds_a_child() {
+    let b = Board::from_outline("# Wurzel\n- Ast\n");
+    let mut h = harness(b);
+    h.run_steps(2);
+    let ast = notes_of(&h.state().board).into_iter().find(|n| n.text == "Ast").unwrap();
+    let root = notes_of(&h.state().board).into_iter().find(|n| n.text == "Wurzel").unwrap();
+    h.state_mut().view.edit(&ast.id);
+    h.run_steps(2);
+    key(&mut h, egui::Key::Tab, egui::Modifiers::NONE);
+    h.run_steps(2);
+    let notes = notes_of(&h.state().board);
+    assert_eq!(notes.len(), 3);
+    let child = notes.iter().find(|n| n.id != ast.id && n.id != root.id).unwrap();
+    // Away from the parent, connected, and being edited.
+    let away = (ast.center().0 - root.center().0).signum();
+    assert_eq!((child.center().0 - ast.center().0).signum(), away);
+    assert_eq!(h.state().view.editing(), Some(child.id.as_str()));
+    assert!(
+        h.state()
+            .board
+            .elements()
+            .iter()
+            .any(|e| e.kind == Kind::Arrow && e.from.as_deref() == Some(ast.id.as_str()) && e.to.as_deref() == Some(child.id.as_str()))
+    );
+    // The text so far contains no tab character.
+    assert!(!h.state().board.element(&ast.id).unwrap().text.contains('\t'));
+}
+
+#[test]
+fn moves_snap_to_grid_and_to_other_elements() {
+    let mut b = Board::new();
+    let a = b.add(note(0.0, 0.0, "fest"));
+    let m = b.add(note(400.0, 203.0, "beweglich"));
+    let mut h = harness(b);
+    h.run_steps(2);
+    // Grid: a small move lands on a multiple of 24.
+    let from = screen(&h, 500.0, 270.0);
+    drag(&mut h, from, from + egui::vec2(37.0, 11.0));
+    let e = h.state().board.element(&m).unwrap();
+    assert!((e.x / 24.0 - (e.x / 24.0).round()).abs() < 1e-3 && (e.y / 24.0 - (e.y / 24.0).round()).abs() < 1e-3, "{e:?}");
+    // Edges: moved near the fixed note's top edge, it lines up exactly (even off-grid).
+    h.state_mut().board.move_to(&a, 7.0, 5.0);
+    h.run_steps(1);
+    let e = h.state().board.element(&m).unwrap();
+    let grab = screen(&h, e.x + 50.0, e.y + 50.0);
+    let target = screen(&h, e.x + 50.0, 5.0 + 3.0 + 50.0);
+    drag(&mut h, grab, target);
+    let e = h.state().board.element(&m).unwrap();
+    assert!((e.y - 5.0).abs() < 1e-3, "{e:?}");
+    // Alt moves freely.
+    let e0 = e.clone();
+    let grab = screen(&h, e.x + 50.0, e.y + 50.0);
+    alt_drag(&mut h, grab, grab + egui::vec2(13.0, 7.0));
+    let e = h.state().board.element(&m).unwrap();
+    let z = h.state().view.camera.zoom as f64;
+    assert!((e.x - e0.x - 13.0 / z).abs() < 0.5 && (e.y - e0.y - 7.0 / z).abs() < 0.5, "{e0:?} -> {e:?}");
+}
+
+fn alt_drag(h: &mut H, from: egui::Pos2, to: egui::Pos2) {
+    use egui::{Event, Modifiers, PointerButton};
+    let alt = Modifiers::ALT;
+    h.event(Event::ModifiersChanged(alt));
+    h.event(Event::PointerMoved(from));
+    h.step();
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: alt });
+    h.step();
+    for i in 1..=8 {
+        h.event(Event::PointerMoved(from + (to - from) * (i as f32 / 8.0)));
+        h.step();
+    }
+    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: alt });
+    h.step();
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.step();
+}
+
+#[test]
+fn help_overlay_opens_with_f1_and_closes_with_escape() {
+    let mut h = harness(Board::new());
+    h.run_steps(2);
+    h.event(egui::Event::PointerMoved(egui::pos2(500.0, 400.0)));
+    h.step();
+    key(&mut h, egui::Key::F1, egui::Modifiers::NONE);
+    assert!(h.state().view.help);
+    // While it is open, clicks do not create anything.
+    click(&mut h, egui::pos2(500.0, 400.0));
+    assert!(!h.state().view.help);
+    assert!(h.state().board.is_empty());
+    key(&mut h, egui::Key::Questionmark, egui::Modifiers::SHIFT);
+    assert!(h.state().view.help);
+    key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(!h.state().view.help);
 }

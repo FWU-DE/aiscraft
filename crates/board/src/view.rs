@@ -6,9 +6,10 @@
 use std::collections::{HashMap, HashSet};
 
 use egui::epaint::EllipseShape;
+use egui::text::LayoutJob;
 use egui::{
-    Align2, Color32, CornerRadius, CursorIcon, EventFilter, FontId, Frame, Id, Key, Margin, Modifiers, Painter, PointerButton, Pos2, Rect, Response, Sense,
-    Shape, Stroke, StrokeKind, TextEdit, Ui, Vec2, pos2, vec2,
+    Align, Align2, Color32, CornerRadius, CursorIcon, EventFilter, FontId, Frame, Id, Key, KeyboardShortcut, Margin, Modifiers, Painter, PointerButton, Pos2,
+    Rect, Response, Sense, Shape, Stroke, StrokeKind, TextEdit, Ui, Vec2, pos2, vec2,
 };
 
 use crate::model::{Board, Element, Kind, MAX_POINTS, MAX_TEXT, arrow_endpoints, truncate_chars};
@@ -40,6 +41,21 @@ const FRAME_FONT: f32 = 14.0;
 const GRID: f32 = 24.0;
 const HANDLE: f32 = 8.0;
 const MAX_PEN_POINTS: usize = MAX_POINTS / 2;
+/// The first automatic fit never zooms out further than this, so text stays readable.
+pub const READABLE_ZOOM: f32 = 0.65;
+/// Fitting never zooms in beyond 100 %.
+const FIT_MAX_ZOOM: f32 = 1.0;
+/// Notes grow with their text up to this height (world units).
+const MAX_NOTE_H: f64 = 520.0;
+/// Padding inside notes (world units).
+const NOTE_PAD: f32 = 12.0;
+/// Distance between a note and the one created next to it (world units).
+const NOTE_GAP: f64 = 72.0;
+/// Screen distance of the „+“ handles from the selection outline, and their radius.
+const PLUS_OFFSET: f32 = 26.0;
+const PLUS_R: f32 = 9.0;
+/// Screen distance at which moves snap to other elements' edges and centres.
+const SNAP_DIST: f32 = 6.0;
 const PASTE_TEXT_LIMIT: usize = 4_000;
 
 /// Colours the board needs; the app fills these from its own theme tokens.
@@ -58,6 +74,8 @@ pub struct BoardStyle {
     pub note_text: Color32,
     /// Note colours, in the order of [`PALETTE`].
     pub palette: [Color32; 8],
+    /// Alignment guides while moving.
+    pub guide: Color32,
 }
 
 impl BoardStyle {
@@ -73,6 +91,7 @@ impl BoardStyle {
             border: Color32::from_rgb(0xde, 0xda, 0xd2),
             note_text: Color32::from_rgb(0x1f, 0x1d, 0x1a),
             palette: Self::PASTELS,
+            guide: Color32::from_rgb(0xe0, 0x3a, 0x6e),
         }
     }
 
@@ -88,6 +107,7 @@ impl BoardStyle {
             border: Color32::from_rgb(0x3d, 0x3a, 0x35),
             note_text: Color32::from_rgb(0x1f, 0x1d, 0x1a),
             palette: Self::PASTELS,
+            guide: Color32::from_rgb(0xff, 0x6b, 0x9a),
         }
     }
 
@@ -172,6 +192,23 @@ impl Tool {
             Tool::Pen => "Stift (P)",
             Tool::Eraser => "Radierer (E)",
             Tool::Frame => "Rahmen (F)",
+        }
+    }
+
+    /// One line on how to use the tool, shown while it is active.
+    pub fn hint(self) -> &'static str {
+        match self {
+            Tool::Select => "Klicken wählt aus · Ziehen verschiebt · Doppelklick: Notiz",
+            Tool::Hand => "Ziehen verschiebt die Ansicht · V: Auswählen",
+            Tool::Note => "Notiz: Klicken oder Rahmen ziehen · Esc: zurück",
+            Tool::Rect => "Rechteck: Ziehen oder Klicken · Esc: zurück",
+            Tool::Ellipse => "Ellipse: Ziehen oder Klicken · Esc: zurück",
+            Tool::Arrow => "Pfeil: von einem Element zum anderen ziehen · Esc: zurück",
+            Tool::Line => "Linie: Ziehen · Esc: zurück",
+            Tool::Text => "Text: Klicken und schreiben · Esc: zurück",
+            Tool::Pen => "Stift: frei zeichnen · Esc: zurück",
+            Tool::Eraser => "Radierer: über Elemente streichen · Esc: zurück",
+            Tool::Frame => "Rahmen: Ziehen · Esc: zurück",
         }
     }
 
@@ -260,6 +297,21 @@ enum Interaction {
         start: Pos2,
         orig: Vec<(String, f64, f64)>,
         last: Vec2,
+        /// World bounds of the moved elements at the start (for snapping).
+        bounds: Rect,
+    },
+    /// Dragging one end of a selected arrow; `target` is the element it would bind to.
+    ArrowEnd {
+        id: String,
+        to_end: bool,
+        target: Option<String>,
+    },
+    /// Dragging from a „+“ handle: connect to an element or create a note where released.
+    Connect {
+        from: String,
+        dir: Vec2,
+        start: Pos2,
+        target: Option<String>,
     },
     Resize {
         handle: Handle,
@@ -285,6 +337,10 @@ struct Editing {
     id: String,
     text: String,
     focused: bool,
+    /// Height of a note when editing started; it grows from there with the text.
+    base_h: Option<f64>,
+    /// Current height of a growing note (applied on commit).
+    grow_h: Option<f64>,
 }
 
 #[derive(Debug, Default)]
@@ -342,7 +398,15 @@ pub struct ViewState {
     pub color: Option<String>,
     /// Show the floating tool and colour bars.
     pub toolbar: bool,
+    /// Snap moved elements to the grid (hold Alt while dragging to move freely).
+    pub snap: bool,
+    /// Show the shortcut overlay (F1 or „?“).
+    pub help: bool,
     fit_pending: bool,
+    /// Canvas size and camera of the last automatic fit; refit when the canvas size settles.
+    fitted: Option<(Vec2, Camera)>,
+    /// Alignment guides of the current move: (vertical, coordinate, from, to) in world units.
+    guides: Vec<(bool, f32, f32, f32)>,
     interaction: Interaction,
     editing: Option<Editing>,
     clipboard: Vec<Element>,
@@ -359,7 +423,11 @@ impl Default for ViewState {
             selection: Vec::new(),
             color: None,
             toolbar: true,
+            snap: true,
+            help: false,
             fit_pending: true,
+            fitted: None,
+            guides: Vec::new(),
             interaction: Interaction::None,
             editing: None,
             clipboard: Vec::new(),
@@ -383,7 +451,7 @@ impl ViewState {
 
     /// Start editing an element's text in place (next frame).
     pub fn edit(&mut self, id: &str) {
-        self.editing = Some(Editing { id: id.to_string(), text: String::new(), focused: false });
+        self.editing = Some(Editing { id: id.to_string(), text: String::new(), focused: false, base_h: None, grow_h: None });
         self.selection = vec![id.to_string()];
     }
 
@@ -409,6 +477,8 @@ enum Icon {
     Delete,
     Front,
     Back,
+    Snap,
+    Help,
 }
 
 impl<'a> BoardView<'a> {
@@ -422,16 +492,13 @@ impl<'a> BoardView<'a> {
         let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
         let BoardView { board, st, style } = self;
         st.camera.sanitize();
-        st.cache.refresh(board);
+        refresh(st, board);
         st.selection.retain(|id| st.cache.index.contains_key(id));
         st.selection.dedup();
         if st.editing.as_ref().is_some_and(|e| !st.cache.index.contains_key(&e.id)) {
             st.editing = None;
         }
-        if st.fit_pending {
-            fit(st, rect);
-            st.fit_pending = false;
-        }
+        auto_fit(st, rect);
         if resp.clicked() || resp.drag_started() {
             resp.request_focus();
         }
@@ -440,10 +507,14 @@ impl<'a> BoardView<'a> {
         }
 
         navigate(ui, &resp, rect, st);
-        pointer(ui, &resp, rect, board, st);
-        keyboard(ui, &resp, rect, board, st);
-        st.cache.refresh(board);
-        cursor(ui, &resp, st);
+        if st.help {
+            help_input(ui, &resp, st);
+        } else {
+            pointer(ui, &resp, rect, board, st);
+            keyboard(ui, &resp, rect, board, st);
+        }
+        refresh(st, board);
+        cursor(ui, &resp, rect, st);
 
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, style.bg);
@@ -451,25 +522,38 @@ impl<'a> BoardView<'a> {
         paint_elements(&painter, ui, rect, st, style);
         paint_overlay(&painter, ui, &resp, rect, st, style);
         editor(ui, resp.id, rect, board, st, style);
+        if st.cache.els.is_empty() && st.editing.is_none() && !st.help {
+            empty_hint(&painter, ui, rect, style);
+        }
         if st.toolbar {
             toolbar(ui, &painter, rect, resp.id, board, st, style);
+            if !st.help {
+                context_bar(ui, &painter, rect, resp.id, board, st, style);
+            }
         }
-        if st.cache.els.is_empty() && st.editing.is_none() {
-            painter.text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                "Doppelklick für eine Notiz – oder ein Werkzeug oben wählen",
-                FontId::proportional(15.0),
-                style.muted,
-            );
+        if st.help {
+            help_overlay(ui, &painter, rect, style);
         }
         resp
     }
 }
 
+/// Refresh the element cache and apply the growing height of the note being edited.
+fn refresh(st: &mut ViewState, board: &Board) {
+    st.cache.refresh(board);
+    if let Some(ed) = &st.editing
+        && let Some(h) = ed.grow_h
+        && let Some(&i) = st.cache.index.get(&ed.id)
+        && let Some(el) = st.cache.els.get_mut(i)
+    {
+        el.h = h;
+    }
+}
+
 // ----- camera ---------------------------------------------------------------------------------
 
-fn fit(st: &mut ViewState, rect: Rect) {
+/// Fit all elements into the canvas, never zooming out below `min_zoom`.
+fn fit(st: &mut ViewState, rect: Rect, min_zoom: f32) {
     let mut b = Rect::NOTHING;
     for e in &st.cache.els {
         b = b.union(st.cache.bounds(e));
@@ -478,12 +562,36 @@ fn fit(st: &mut ViewState, rect: Rect) {
         st.camera = Camera::default();
         return;
     }
-    let margin = 48.0;
-    let top = if st.toolbar { 64.0 } else { 0.0 };
+    // Room for the „+“ handles around the content.
+    let margin = 44.0;
     // Room for the tool bar on top and the colour bar at the bottom.
-    let avail = vec2((rect.width() - 2.0 * margin).max(32.0), (rect.height() - 2.0 * margin - 2.0 * top).max(32.0));
-    let zoom = (avail.x / b.width().max(1.0)).min(avail.y / b.height().max(1.0)).clamp(MIN_ZOOM, 1.5);
+    let bars = if st.toolbar { 56.0 } else { 0.0 };
+    let avail = vec2((rect.width() - 2.0 * margin).max(32.0), (rect.height() - 2.0 * margin - 2.0 * bars).max(32.0));
+    let zoom = (avail.x / b.width().max(1.0)).min(avail.y / b.height().max(1.0)).clamp(min_zoom.clamp(MIN_ZOOM, FIT_MAX_ZOOM), FIT_MAX_ZOOM);
+    // The centre stays in view even when not everything fits (a mind map's root is there).
     st.camera = Camera { center: b.center(), zoom };
+}
+
+/// The fit requested with [`ViewState::zoom_to_fit`], applied once the canvas has a real size,
+/// and repeated while the canvas is still settling (until the user moves the camera).
+fn auto_fit(st: &mut ViewState, rect: Rect) {
+    let ready = rect.width() >= 120.0 && rect.height() >= 120.0;
+    if st.fit_pending {
+        if ready {
+            fit(st, rect, READABLE_ZOOM);
+            st.fit_pending = false;
+            st.fitted = Some((rect.size(), st.camera));
+        }
+        return;
+    }
+    if let Some((size, cam)) = st.fitted {
+        if cam != st.camera || !matches!(st.interaction, Interaction::None) {
+            st.fitted = None;
+        } else if (size - rect.size()).length() > 0.5 && ready {
+            fit(st, rect, READABLE_ZOOM);
+            st.fitted = Some((rect.size(), st.camera));
+        }
+    }
 }
 
 fn navigate(ui: &mut Ui, resp: &Response, rect: Rect, st: &mut ViewState) {
@@ -503,16 +611,23 @@ fn navigate(ui: &mut Ui, resp: &Response, rect: Rect, st: &mut ViewState) {
     }
 }
 
-fn cursor(ui: &Ui, resp: &Response, st: &ViewState) {
+fn cursor(ui: &Ui, resp: &Response, rect: Rect, st: &ViewState) {
     if !resp.hovered() {
         return;
     }
     let space = ui.input(|i| i.key_down(Key::Space));
+    let hover = resp.hover_pos();
+    let on_handle = st.tool == Tool::Select
+        && matches!(st.interaction, Interaction::None)
+        && hover.is_some_and(|h| plus_at(st, rect, h).is_some() || arrow_end_at(st, rect, h).is_some());
     let icon = match (&st.interaction, st.tool) {
+        _ if st.help => CursorIcon::Default,
         (Interaction::Pan, _) => CursorIcon::Grabbing,
         _ if space => CursorIcon::Grab,
         (_, Tool::Hand) => CursorIcon::Grab,
         (Interaction::Move { .. }, _) => CursorIcon::Grabbing,
+        (Interaction::ArrowEnd { .. } | Interaction::Connect { .. }, _) => CursorIcon::Crosshair,
+        _ if on_handle => CursorIcon::PointingHand,
         (_, Tool::Select) => CursorIcon::Default,
         (_, Tool::Text) => CursorIcon::Text,
         _ => CursorIcon::Crosshair,
@@ -604,6 +719,90 @@ fn handle_at(st: &ViewState, rect: Rect, screen: Pos2) -> Option<Handle> {
     handles(b).into_iter().find(|(_, hp)| (*hp - screen).abs().max_elem() <= HANDLE).map(|(h, _)| h)
 }
 
+/// The single selected box (note, rectangle, ellipse) that shows „+“ handles.
+fn plus_source(st: &ViewState) -> Option<&Element> {
+    if st.tool != Tool::Select || st.editing.is_some() {
+        return None;
+    }
+    let [id] = st.selection.as_slice() else { return None };
+    st.cache.get(id).filter(|e| matches!(e.kind, Kind::Note | Kind::Rect | Kind::Ellipse))
+}
+
+/// Screen positions of the four „+“ handles with their direction.
+fn plus_handles(st: &ViewState, rect: Rect) -> Option<(String, [(Vec2, Pos2); 4])> {
+    let el = plus_source(st)?;
+    let r = st.camera.rect_to_screen(rect, st.cache.bounds(el));
+    if r.width() < 24.0 || r.height() < 16.0 {
+        return None;
+    }
+    let c = r.center();
+    Some((
+        el.id.clone(),
+        [
+            (vec2(1.0, 0.0), pos2(r.max.x + PLUS_OFFSET, c.y)),
+            (vec2(0.0, 1.0), pos2(c.x, r.max.y + PLUS_OFFSET)),
+            (vec2(-1.0, 0.0), pos2(r.min.x - PLUS_OFFSET, c.y)),
+            (vec2(0.0, -1.0), pos2(c.x, r.min.y - PLUS_OFFSET)),
+        ],
+    ))
+}
+
+fn plus_at(st: &ViewState, rect: Rect, screen: Pos2) -> Option<(String, Vec2)> {
+    let (id, hs) = plus_handles(st, rect)?;
+    hs.into_iter().find(|(_, hp)| hp.distance(screen) <= PLUS_R + 3.0).map(|(d, _)| (id, d))
+}
+
+/// The end of the single selected arrow under `screen`: (arrow id, is the `to` end).
+fn arrow_end_at(st: &ViewState, rect: Rect, screen: Pos2) -> Option<(String, bool)> {
+    if st.tool != Tool::Select || st.editing.is_some() {
+        return None;
+    }
+    let [id] = st.selection.as_slice() else { return None };
+    let el = st.cache.get(id).filter(|e| e.kind == Kind::Arrow)?;
+    let (a, b) = st.cache.endpoints(el);
+    let (sa, sb) = (st.camera.to_screen(rect, a), st.camera.to_screen(rect, b));
+    let (da, db) = (sa.distance(screen), sb.distance(screen));
+    let tol = 9.0;
+    if db <= tol && db <= da {
+        Some((id.clone(), true))
+    } else if da <= tol {
+        Some((id.clone(), false))
+    } else {
+        None
+    }
+}
+
+/// The element an arrow end at `w` binds to: the topmost box under the pointer (a little
+/// tolerance), never a path and never one of `exclude`.
+fn bind_target(cache: &Cache, w: Pos2, zoom: f32, exclude: &[&str]) -> Option<String> {
+    let tol = 10.0 / zoom;
+    cache.els.iter().rev().find(|e| !e.kind.is_path() && !exclude.contains(&e.id.as_str()) && hits(cache, e, w, tol)).map(|e| e.id.clone())
+}
+
+/// The arrow as it would be with the dragged end at `w` (or bound to `target`).
+fn rebound_arrow(cache: &Cache, id: &str, to_end: bool, target: Option<&str>, w: Pos2) -> Option<Element> {
+    let mut el = cache.get(id)?.clone();
+    let (a, b) = cache.endpoints(&el);
+    let wp = (w.x as f64, w.y as f64);
+    if to_end {
+        el.set_world_points(&[(a.x as f64, a.y as f64), wp]);
+        el.to = target.map(str::to_string);
+    } else {
+        el.set_world_points(&[wp, (b.x as f64, b.y as f64)]);
+        el.from = target.map(str::to_string);
+    }
+    Some(el)
+}
+
+/// The arrow a „+“ drag would create.
+fn connect_arrow(cache: &Cache, from: &str, target: Option<&str>, w: Pos2) -> Option<Element> {
+    let src = cache.get(from)?;
+    let mut el = Element::segment(Kind::Arrow, src.center(), (w.x as f64, w.y as f64)).with_color("gray");
+    el.from = Some(from.to_string());
+    el.to = target.map(str::to_string);
+    Some(el)
+}
+
 // ----- pointer --------------------------------------------------------------------------------
 
 fn new_color(st: &ViewState, kind: Kind) -> String {
@@ -637,9 +836,73 @@ fn create_at(board: &mut Board, st: &mut ViewState, kind: Kind, w: Pos2) {
     st.tool = Tool::Select;
 }
 
+/// Whether a box element (not a path or frame) overlaps `r` (world units).
+fn occupied(cache: &Cache, r: Rect) -> bool {
+    cache.els.iter().any(|e| !e.kind.is_path() && e.kind != Kind::Frame && cache.bounds(e).intersects(r))
+}
+
+/// Create a note next to `from` in direction `dir` (or centred on `at`), connected by an arrow
+/// from `from`, in one undo step, and start editing it. `size` defaults to the source's size.
+fn create_next(board: &mut Board, st: &mut ViewState, from: &str, dir: Vec2, size: Option<(f64, f64)>, at: Option<Pos2>) -> Option<String> {
+    let src = st.cache.get(from)?.clone();
+    let default = Element::new(Kind::Note, 0.0, 0.0);
+    let (w, h) = size.unwrap_or(if src.kind == Kind::Note { (src.w, src.h) } else { (default.w, default.h) });
+    let (w, h) = (w.clamp(40.0, 2000.0), h.clamp(40.0, MAX_NOTE_H));
+    let color = if src.kind == Kind::Note { src.color.clone() } else { new_color(st, Kind::Note) };
+    let (x, y) = match at {
+        Some(p) => (p.x as f64 - w / 2.0, p.y as f64 - h / 2.0),
+        None => {
+            let (cx, cy) = src.center();
+            let x = if dir.x > 0.0 {
+                src.x + src.w + NOTE_GAP
+            } else if dir.x < 0.0 {
+                src.x - NOTE_GAP - w
+            } else {
+                cx - w / 2.0
+            };
+            let y = if dir.y > 0.0 {
+                src.y + src.h + NOTE_GAP
+            } else if dir.y < 0.0 {
+                src.y - NOTE_GAP - h
+            } else {
+                cy - h / 2.0
+            };
+            // Next to existing neighbours: step sideways until the spot is free.
+            let step = if dir.x != 0.0 { vec2(0.0, h as f32 + 24.0) } else { vec2(w as f32 + 24.0, 0.0) };
+            let mut r = Rect::from_min_size(pos2(x as f32, y as f32), vec2(w as f32, h as f32));
+            for _ in 0..60 {
+                if !occupied(&st.cache, r.expand(4.0)) {
+                    break;
+                }
+                r = r.translate(step);
+            }
+            (r.min.x as f64, r.min.y as f64)
+        }
+    };
+    let mut note = Element::new(Kind::Note, x, y).with_size(w, h).with_color(color);
+    note.id = board.fresh_element_id();
+    let arrow = Element::connector(&src, &note).with_color("gray");
+    let ids = board.add_many(vec![note, arrow]);
+    let id = ids.into_iter().next()?;
+    st.selection = vec![id.clone()];
+    st.edit(&id);
+    st.tool = Tool::Select;
+    Some(id)
+}
+
+/// Direction of a mind-map child: away from the node's parent, or to the right.
+fn child_dir(cache: &Cache, id: &str) -> Vec2 {
+    let Some(el) = cache.get(id) else { return vec2(1.0, 0.0) };
+    let parent = cache.els.iter().filter(|a| a.kind == Kind::Arrow && a.to.as_deref() == Some(id)).find_map(|a| a.from.as_deref().and_then(|f| cache.get(f)));
+    let Some(p) = parent else { return vec2(1.0, 0.0) };
+    let (d, e) = (el.center(), p.center());
+    let (dx, dy) = (d.0 - e.0, d.1 - e.1);
+    if dx.abs() >= dy.abs() { vec2(if dx < 0.0 { -1.0 } else { 1.0 }, 0.0) } else { vec2(0.0, if dy < 0.0 { -1.0 } else { 1.0 }) }
+}
+
 fn pointer(ui: &mut Ui, resp: &Response, rect: Rect, board: &mut Board, st: &mut ViewState) {
     let cam = st.camera;
-    let shift = ui.input(|i| i.modifiers.shift);
+    let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
     let space = st.editing.is_none() && ui.input(|i| i.key_down(Key::Space));
     let latest = ui.input(|i| i.pointer.latest_pos());
     let pos = resp.interact_pointer_pos().or(latest).unwrap_or(rect.center());
@@ -652,7 +915,15 @@ fn pointer(ui: &mut Ui, resp: &Response, rect: Rect, board: &mut Board, st: &mut
             Interaction::Pan
         } else {
             match st.tool {
-                Tool::Select => start_select_drag(board, st, rect, origin, ow, shift),
+                Tool::Select => {
+                    if let Some((id, to_end)) = arrow_end_at(st, rect, origin) {
+                        Interaction::ArrowEnd { id, to_end, target: None }
+                    } else if let Some((from, dir)) = plus_at(st, rect, origin) {
+                        Interaction::Connect { from, dir, start: ow, target: None }
+                    } else {
+                        start_select_drag(board, st, rect, origin, ow, shift)
+                    }
+                }
                 Tool::Eraser => {
                     board.checkpoint();
                     Interaction::Erase
@@ -667,11 +938,12 @@ fn pointer(ui: &mut Ui, resp: &Response, rect: Rect, board: &mut Board, st: &mut
     }
 
     if resp.dragged_by(PointerButton::Primary) {
-        drag_update(board, st, w, shift);
+        drag_update(board, st, w, shift, alt);
     }
 
     if resp.drag_stopped() {
         let it = std::mem::take(&mut st.interaction);
+        st.guides.clear();
         match it {
             Interaction::Create { kind, start } => finish_create(board, st, kind, start, w),
             Interaction::Pen { mut points } => {
@@ -683,6 +955,25 @@ fn pointer(ui: &mut Ui, resp: &Response, rect: Rect, board: &mut Board, st: &mut
                 }
             }
             Interaction::Move { .. } | Interaction::Resize { .. } => board.checkpoint(),
+            Interaction::ArrowEnd { id, to_end, target } => {
+                if let Some(el) = rebound_arrow(&st.cache, &id, to_end, target.as_deref(), w) {
+                    let _ = board.update(&el);
+                }
+            }
+            Interaction::Connect { from, dir, start, target } => match target {
+                Some(t) => {
+                    if let Some(el) = connect_arrow(&st.cache, &from, Some(&t), w) {
+                        let id = board.add(el);
+                        st.selection = vec![id];
+                    }
+                }
+                None if start.distance(w) * cam.zoom < 6.0 => {
+                    create_next(board, st, &from, dir, None, None);
+                }
+                None => {
+                    create_next(board, st, &from, dir, None, Some(w));
+                }
+            },
             _ => {}
         }
     }
@@ -690,6 +981,10 @@ fn pointer(ui: &mut Ui, resp: &Response, rect: Rect, board: &mut Board, st: &mut
     if resp.clicked() && !space {
         match st.tool {
             Tool::Select => {
+                if let Some((from, dir)) = plus_at(st, rect, pos) {
+                    create_next(board, st, &from, dir, None, None);
+                    return;
+                }
                 let hit = hit_test(&st.cache, w, cam.zoom).map(|e| e.id.clone());
                 match hit {
                     Some(id) if shift => {
@@ -748,7 +1043,11 @@ fn start_select_drag(board: &mut Board, st: &mut ViewState, rect: Rect, origin: 
             }
             board.checkpoint();
             let orig = st.selection.iter().filter_map(|id| st.cache.get(id)).map(|e| (e.id.clone(), e.x, e.y)).collect();
-            Interaction::Move { start: ow, orig, last: Vec2::ZERO }
+            let mut bounds = Rect::NOTHING;
+            for e in st.selection.iter().filter_map(|id| st.cache.get(id)).filter(|e| e.kind != Kind::Arrow) {
+                bounds = bounds.union(st.cache.bounds(e));
+            }
+            Interaction::Move { start: ow, orig, last: Vec2::ZERO, bounds }
         }
         None => {
             if !shift {
@@ -759,11 +1058,16 @@ fn start_select_drag(board: &mut Board, st: &mut ViewState, rect: Rect, origin: 
     }
 }
 
-fn drag_update(board: &mut Board, st: &mut ViewState, w: Pos2, shift: bool) {
+fn drag_update(board: &mut Board, st: &mut ViewState, w: Pos2, shift: bool, alt: bool) {
     let zoom = st.camera.zoom;
     match &mut st.interaction {
-        Interaction::Move { start, orig, last } => {
-            let d = w - *start;
+        Interaction::Move { start, orig, last, bounds } => {
+            let mut d = w - *start;
+            st.guides.clear();
+            if !alt && bounds.min.x.is_finite() {
+                let moving: HashSet<&str> = orig.iter().map(|(id, _, _)| id.as_str()).collect();
+                d = snap_move(&st.cache, &moving, *bounds, d, zoom, st.snap, &mut st.guides);
+            }
             if d != *last {
                 *last = d;
                 for (id, x, y) in orig.iter() {
@@ -832,8 +1136,86 @@ fn drag_update(board: &mut Board, st: &mut ViewState, w: Pos2, shift: bool) {
                 st.cache.refresh(board);
             }
         }
+        Interaction::ArrowEnd { id, to_end, target } => {
+            let other = st.cache.get(id).and_then(|a| if *to_end { a.from.clone() } else { a.to.clone() });
+            let mut exclude = vec![id.as_str()];
+            if let Some(o) = other.as_deref() {
+                exclude.push(o);
+            }
+            *target = bind_target(&st.cache, w, zoom, &exclude);
+        }
+        Interaction::Connect { from, target, .. } => {
+            *target = bind_target(&st.cache, w, zoom, &[from.as_str()]);
+        }
         Interaction::None | Interaction::Pan | Interaction::Create { .. } => {}
     }
+}
+
+/// Snap a move by `d` of elements with world `bounds`: to other elements' edges and centres
+/// (recording guides), else to the grid when `grid` is on.
+fn snap_move(cache: &Cache, moving: &HashSet<&str>, bounds: Rect, d: Vec2, zoom: f32, grid: bool, guides: &mut Vec<(bool, f32, f32, f32)>) -> Vec2 {
+    let tol = SNAP_DIST / zoom.max(1e-3);
+    let mb = bounds.translate(d);
+    let xs = [mb.min.x, mb.center().x, mb.max.x];
+    let ys = [mb.min.y, mb.center().y, mb.max.y];
+    // Best (|diff|, diff, target rect) per axis.
+    let mut bx: Option<(f32, f32)> = None;
+    let mut by: Option<(f32, f32)> = None;
+    let near = mb.expand(1200.0 / zoom.max(1e-3));
+    let others: Vec<Rect> =
+        cache.els.iter().filter(|e| !moving.contains(e.id.as_str()) && !e.kind.is_path()).map(|e| cache.bounds(e)).filter(|b| b.intersects(near)).collect();
+    for b in &others {
+        for tx in [b.min.x, b.center().x, b.max.x] {
+            for mx in xs {
+                let diff = tx - mx;
+                if diff.abs() <= tol && bx.is_none_or(|(a, _)| diff.abs() < a) {
+                    bx = Some((diff.abs(), diff));
+                }
+            }
+        }
+        for ty in [b.min.y, b.center().y, b.max.y] {
+            for my in ys {
+                let diff = ty - my;
+                if diff.abs() <= tol && by.is_none_or(|(a, _)| diff.abs() < a) {
+                    by = Some((diff.abs(), diff));
+                }
+            }
+        }
+    }
+    let mut d = d;
+    match bx {
+        Some((_, diff)) => d.x += diff,
+        None if grid => d.x += (mb.min.x / GRID).round() * GRID - mb.min.x,
+        None => {}
+    }
+    match by {
+        Some((_, diff)) => d.y += diff,
+        None if grid => d.y += (mb.min.y / GRID).round() * GRID - mb.min.y,
+        None => {}
+    }
+    // Guides for every edge or centre that now lines up exactly.
+    let mb = bounds.translate(d);
+    let eps = 0.01 / zoom.max(1e-3) + 1e-3;
+    for b in &others {
+        if bx.is_some() {
+            for tx in [b.min.x, b.center().x, b.max.x] {
+                if [mb.min.x, mb.center().x, mb.max.x].iter().any(|m| (m - tx).abs() <= eps) {
+                    guides.push((true, tx, mb.min.y.min(b.min.y), mb.max.y.max(b.max.y)));
+                }
+            }
+        }
+        if by.is_some() {
+            for ty in [b.min.y, b.center().y, b.max.y] {
+                if [mb.min.y, mb.center().y, mb.max.y].iter().any(|m| (m - ty).abs() <= eps) {
+                    guides.push((false, ty, mb.min.x.min(b.min.x), mb.max.x.max(b.max.x)));
+                }
+            }
+        }
+        if guides.len() > 24 {
+            break;
+        }
+    }
+    d
 }
 
 fn finish_create(board: &mut Board, st: &mut ViewState, kind: Kind, start: Pos2, end: Pos2) {
@@ -868,6 +1250,17 @@ fn finish_create(board: &mut Board, st: &mut ViewState, kind: Kind, start: Pos2,
 
 // ----- keyboard / clipboard -------------------------------------------------------------------
 
+/// While the shortcut overlay is open: any click, Esc, F1 or „?“ closes it.
+fn help_input(ui: &mut Ui, resp: &Response, st: &mut ViewState) {
+    let close = ui.input_mut(|i| {
+        i.consume_key(Modifiers::NONE, Key::Escape) || i.consume_key(Modifiers::NONE, Key::F1) || i.consume_key(Modifiers::NONE, Key::Questionmark)
+    });
+    if close || resp.clicked() || resp.drag_started() {
+        st.help = false;
+        st.interaction = Interaction::None;
+    }
+}
+
 fn keyboard(ui: &mut Ui, resp: &Response, rect: Rect, board: &mut Board, st: &mut ViewState) {
     if st.editing.is_some() {
         return;
@@ -886,6 +1279,9 @@ fn keyboard(ui: &mut Ui, resp: &Response, rect: Rect, board: &mut Board, st: &mu
         let esc = i.consume_key(Modifiers::NONE, Key::Escape);
         let enter = i.consume_key(Modifiers::NONE, Key::Enter);
         let fit = i.consume_key(Modifiers::SHIFT, Key::Num1) || i.consume_key(Modifiers::SHIFT, Key::Exclamationmark);
+        if i.consume_key(Modifiers::NONE, Key::F1) || i.consume_key(Modifiers::NONE, Key::Questionmark) {
+            st.help = true;
+        }
         let reset = i.consume_key(Modifiers::COMMAND, Key::Num0);
         (redo, undo, dup, all, del, esc, enter, fit, reset)
     });
@@ -918,7 +1314,7 @@ fn keyboard(ui: &mut Ui, resp: &Response, rect: Rect, board: &mut Board, st: &mu
         st.edit(&id);
     }
     if fit_key {
-        fit(st, rect);
+        fit(st, rect, MIN_ZOOM);
     }
     if reset_zoom {
         st.camera.zoom = 1.0;
@@ -1083,20 +1479,35 @@ fn grid(painter: &Painter, rect: Rect, cam: &Camera, style: &BoardStyle) {
     }
 }
 
+/// Wrapped text in `area`: centred lines (notes, shapes) or left-aligned, vertically centred
+/// when it fits, else from the top.
 fn paint_text(painter: &Painter, ui: &Ui, text: &str, area: Rect, size: f32, color: Color32, center: bool) {
     if size < 4.0 || text.is_empty() || area.width() < 4.0 {
         return;
     }
-    let galley = ui.fonts_mut(|f| f.layout(text.to_string(), FontId::proportional(size), color, area.width().max(1.0)));
+    let galley = ui.fonts_mut(|f| f.layout_job(text_job(text, size, color, area.width(), center)));
     let gs = galley.size();
-    let pos = if center {
-        pos2(area.center().x - gs.x / 2.0, (area.center().y - gs.y / 2.0).max(area.min.y))
-    } else if gs.y < area.height() {
-        pos2(area.min.x, area.center().y - gs.y / 2.0)
-    } else {
-        area.min
-    };
-    painter.with_clip_rect(area.expand(2.0).intersect(painter.clip_rect())).galley(pos, galley, color);
+    let top = if gs.y < area.height() { area.center().y - gs.y / 2.0 } else { area.min.y };
+    let x = if center { area.center().x } else { area.min.x };
+    painter.with_clip_rect(area.expand(2.0).intersect(painter.clip_rect())).galley(pos2(x, top), galley, color);
+}
+
+fn text_job(text: &str, size: f32, color: Color32, wrap: f32, center: bool) -> LayoutJob {
+    let mut job = LayoutJob::simple(text.to_string(), FontId::proportional(size), color, wrap.max(1.0));
+    if center {
+        job.halign = Align::Center;
+    }
+    job
+}
+
+/// Height (world units) a note of width `w` needs for `text`.
+fn note_fit_height(ui: &Ui, text: &str, w: f64) -> f64 {
+    let wrap = (w as f32 - 2.0 * NOTE_PAD).max(8.0);
+    let t = if text.is_empty() { " " } else { text };
+    let galley = ui.fonts_mut(|f| f.layout_job(text_job(t, NOTE_FONT, Color32::BLACK, wrap, true)));
+    // A trailing newline starts a row the galley does not count yet.
+    let extra = if text.ends_with('\n') { NOTE_FONT * 1.3 } else { 0.0 };
+    (galley.size().y + extra + 2.0 * NOTE_PAD + 8.0) as f64
 }
 
 fn arrow_head(painter: &Painter, from: Pos2, tip: Pos2, size: f32, color: Color32) {
@@ -1114,7 +1525,14 @@ fn paint_elements(painter: &Painter, ui: &Ui, rect: Rect, st: &ViewState, style:
     let z = cam.zoom;
     let vis = cam.visible(rect).expand(40.0 / z);
     let editing = st.editing.as_ref().map(|e| e.id.as_str());
+    let rebinding = match &st.interaction {
+        Interaction::ArrowEnd { id, .. } => Some(id.as_str()),
+        _ => None,
+    };
     for el in &st.cache.els {
+        if rebinding == Some(el.id.as_str()) {
+            continue;
+        }
         let wb = st.cache.bounds(el);
         let label_room = if el.kind == Kind::Frame { Rect::from_min_size(wb.min - vec2(0.0, 24.0), vec2(wb.width(), 24.0)) } else { wb };
         if !vis.intersects(wb.union(label_room)) {
@@ -1129,7 +1547,7 @@ fn paint_elements(painter: &Painter, ui: &Ui, rect: Rect, st: &ViewState, style:
                 painter.rect_filled(r.translate(vec2(0.0, (3.0 * z).max(1.0))), cr, Color32::from_black_alpha(26));
                 painter.rect_filled(r, cr, style.fill(&el.color));
                 if !hide_text {
-                    paint_text(painter, ui, &el.text, r.shrink(12.0 * z), NOTE_FONT * z, style.note_text, false);
+                    paint_text(painter, ui, &el.text, r.shrink(NOTE_PAD * z), NOTE_FONT * z, style.note_text, true);
                 }
             }
             Kind::Rect | Kind::Ellipse => {
@@ -1203,9 +1621,16 @@ fn paint_overlay(painter: &Painter, ui: &Ui, resp: &Response, rect: Rect, st: &V
         let r = cam.rect_to_screen(rect, st.cache.bounds(e)).expand(3.0);
         painter.rect_stroke(r, 4.0, Stroke::new(1.0, accent.gamma_multiply(0.5)), StrokeKind::Middle);
     }
-    // Selection.
+    // Selection (an arrow being re-bound is drawn as a preview below).
+    let rebinding = match &st.interaction {
+        Interaction::ArrowEnd { id, .. } => Some(id.as_str()),
+        _ => None,
+    };
     for id in &st.selection {
         let Some(e) = st.cache.get(id) else { continue };
+        if rebinding == Some(id.as_str()) {
+            continue;
+        }
         if e.kind == Kind::Arrow || e.kind == Kind::Line {
             let (a, b) = if e.kind == Kind::Arrow {
                 st.cache.endpoints(e)
@@ -1214,8 +1639,11 @@ fn paint_overlay(painter: &Painter, ui: &Ui, resp: &Response, rect: Rect, st: &V
                 let a = pts.next().unwrap_or(Pos2::ZERO);
                 (a, pts.last().unwrap_or(a))
             };
+            let hover = resp.hover_pos();
             for q in [a, b] {
-                painter.circle(cam.to_screen(rect, q), 4.5, style.surface, Stroke::new(1.5, accent));
+                let sq = cam.to_screen(rect, q);
+                let hot = e.kind == Kind::Arrow && hover.is_some_and(|h| h.distance(sq) <= 9.0);
+                painter.circle(sq, if hot { 6.5 } else { 5.0 }, if hot { accent } else { style.surface }, Stroke::new(1.5, accent));
             }
         } else {
             let r = cam.rect_to_screen(rect, st.cache.bounds(e)).expand(3.0);
@@ -1236,7 +1664,43 @@ fn paint_overlay(painter: &Painter, ui: &Ui, resp: &Response, rect: Rect, st: &V
             painter.rect_stroke(hr, 2.0, Stroke::new(1.5, accent), StrokeKind::Middle);
         }
     }
+    // „+“ handles on a single selected box: click for a connected note, drag to connect.
+    if matches!(st.interaction, Interaction::None)
+        && let Some((_, hs)) = plus_handles(st, rect)
+    {
+        let hover = resp.hover_pos();
+        for (_, hp) in hs {
+            let hot = hover.is_some_and(|h| h.distance(hp) <= PLUS_R + 3.0);
+            let (fill, ink) = if hot { (accent, style.surface) } else { (style.surface, accent) };
+            painter.circle(hp, PLUS_R, fill, Stroke::new(1.5, accent));
+            let a = PLUS_R * 0.5;
+            painter.line_segment([hp - vec2(a, 0.0), hp + vec2(a, 0.0)], Stroke::new(1.6, ink));
+            painter.line_segment([hp - vec2(0.0, a), hp + vec2(0.0, a)], Stroke::new(1.6, ink));
+        }
+    }
+    // Alignment guides while moving.
+    for &(vertical, c, from, to) in &st.guides {
+        let (a, b) = if vertical { (pos2(c, from), pos2(c, to)) } else { (pos2(from, c), pos2(to, c)) };
+        let (a, b) = (cam.to_screen(rect, a), cam.to_screen(rect, b));
+        painter.line_segment([a, b], Stroke::new(1.0, style.guide));
+    }
     let ptr = ui.input(|i| i.pointer.latest_pos()).map(|q| cam.to_world(rect, q));
+    let preview = match (&st.interaction, ptr) {
+        (Interaction::ArrowEnd { id, to_end, target }, Some(w)) => rebound_arrow(&st.cache, id, *to_end, target.as_deref(), w).map(|e| (e, target.clone())),
+        (Interaction::Connect { from, target, .. }, Some(w)) => connect_arrow(&st.cache, from, target.as_deref(), w).map(|e| (e, target.clone())),
+        _ => None,
+    };
+    if let Some((el, target)) = preview {
+        if let Some(t) = target.as_deref().and_then(|t| st.cache.get(t)) {
+            let r = cam.rect_to_screen(rect, st.cache.bounds(t)).expand(5.0);
+            painter.rect_stroke(r, 6.0, Stroke::new(2.0, accent), StrokeKind::Middle);
+        }
+        let (a, b) = st.cache.endpoints(&el);
+        let (a, b) = (cam.to_screen(rect, a), cam.to_screen(rect, b));
+        painter.line_segment([a, b], Stroke::new(2.0, accent));
+        arrow_head(painter, a, b, 12.0, accent);
+        painter.circle(b, 5.5, accent, Stroke::new(1.5, style.surface));
+    }
     match &st.interaction {
         Interaction::Marquee { start, .. } => {
             if let Some(w) = ptr {
@@ -1275,6 +1739,33 @@ fn paint_overlay(painter: &Painter, ui: &Ui, resp: &Response, rect: Rect, st: &V
     }
 }
 
+/// Consume a press of `key` without Shift, Alt or Ctrl (checked on the event itself).
+fn consume_plain(i: &mut egui::InputState, key: Key) -> bool {
+    let before = i.events.len();
+    i.events.retain(|e| !matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && !modifiers.shift && !modifiers.alt && !modifiers.command && !modifiers.ctrl));
+    i.events.len() != before
+}
+
+/// Stop editing: write the text (and a grown note height) as one undo step.
+fn commit_edit(board: &mut Board, st: &mut ViewState) {
+    let Some(ed) = st.editing.take() else { return };
+    let Some(mut el) = board.element(&ed.id) else { return };
+    let mut changed = false;
+    if el.text != ed.text {
+        el.text = ed.text;
+        changed = true;
+    }
+    if let Some(h) = ed.grow_h
+        && (h - el.h).abs() > 0.5
+    {
+        el.h = h;
+        changed = true;
+    }
+    if changed {
+        let _ = board.update(&el);
+    }
+}
+
 fn editor(ui: &mut Ui, base: Id, rect: Rect, board: &mut Board, st: &mut ViewState, style: &BoardStyle) {
     let Some(ed) = st.editing.as_mut() else { return };
     let Some(el) = st.cache.get(&ed.id).cloned() else {
@@ -1286,47 +1777,91 @@ fn editor(ui: &mut Ui, base: Id, rect: Rect, board: &mut Board, st: &mut ViewSta
     if !ed.focused && ed.text.is_empty() {
         ed.text = el.text.clone();
     }
+    let edit_id = base.with(("edit", &ed.id));
+    let has_focus = ui.memory(|m| m.has_focus(edit_id));
+    // Enter finishes (Shift+Enter is a new line); Tab on a note adds a connected child note.
+    let (enter, tab) = if ed.focused && has_focus {
+        ui.input_mut(|i| (consume_plain(i, Key::Enter), el.kind == Kind::Note && consume_plain(i, Key::Tab)))
+    } else {
+        (false, false)
+    };
+    if enter || tab {
+        let id = ed.id.clone();
+        commit_edit(board, st);
+        refresh(st, board);
+        if tab {
+            let dir = child_dir(&st.cache, &id);
+            let w = st.cache.get(&id).map(|e| e.w).unwrap_or(200.0);
+            create_next(board, st, &id, dir, Some((w, 64.0)), None);
+            refresh(st, board);
+        } else {
+            st.selection = vec![id];
+            ui.memory_mut(|m| m.request_focus(base));
+        }
+        return;
+    }
+    // Notes grow with their text while typing (never below their height at the start).
+    let mut el = el;
+    if el.kind == Kind::Note {
+        let base_h = *ed.base_h.get_or_insert(el.h);
+        let need = note_fit_height(ui, &ed.text, el.w).clamp(base_h.min(MAX_NOTE_H), MAX_NOTE_H.max(base_h));
+        if ed.grow_h != Some(need) && (need - el.h).abs() > 0.5 {
+            ed.grow_h = Some(need);
+            el.h = need;
+            if let Some(&i) = st.cache.index.get(&el.id)
+                && let Some(c) = st.cache.els.get_mut(i)
+            {
+                c.h = need;
+            }
+        }
+    }
+    let Some(ed) = st.editing.as_mut() else { return };
     let r = cam.rect_to_screen(rect, st.cache.bounds(&el));
+    let center = matches!(el.kind, Kind::Note | Kind::Rect | Kind::Ellipse);
     let (area, size, color) = match el.kind {
-        Kind::Note => (r.shrink(12.0 * z), NOTE_FONT * z, style.note_text),
+        Kind::Note => (r.shrink(NOTE_PAD * z), NOTE_FONT * z, style.note_text),
         Kind::Rect | Kind::Ellipse => (r.shrink(10.0 * z), SHAPE_FONT * z, style.text),
         Kind::Frame => (Rect::from_min_size(r.min - vec2(0.0, 22.0 * z), vec2(r.width().max(120.0), 20.0 * z)), FRAME_FONT * z, style.muted),
         _ => (Rect::from_min_size(r.min, vec2(r.width().max(160.0 * z), r.height().max(TEXT_FONT * z * 1.4))), TEXT_FONT * z, style.ink(&el.color)),
     };
+    // Centred kinds: put the editor where the painted text would be (vertically centred).
+    let area = if center {
+        let probe = if ed.text.is_empty() { " " } else { ed.text.as_str() };
+        let gh = ui.fonts_mut(|f| f.layout_job(text_job(probe, size.max(6.0), color, area.width(), true))).size().y;
+        let extra = if ed.text.ends_with('\n') { size * 1.3 } else { 0.0 };
+        let gh = gh + extra;
+        if gh < area.height() { Rect::from_min_size(pos2(area.min.x, area.center().y - gh / 2.0), vec2(area.width(), gh)) } else { area }
+    } else {
+        area
+    };
     let area = area.intersect(rect);
-    if area.width() < 8.0 || area.height() < 8.0 {
+    if area.width() < 8.0 || area.height() < 6.0 {
         // Too small to type in: commit and stop.
-        let text = std::mem::take(&mut ed.text);
-        let id = ed.id.clone();
-        st.editing = None;
-        if text != el.text {
-            board.set_text(&id, &text);
-        }
+        commit_edit(board, st);
         return;
     }
-    let edit_id = base.with(("edit", &ed.id));
-    let out = ui.put(
-        area,
-        TextEdit::multiline(&mut ed.text)
-            .id(edit_id)
-            .font(FontId::proportional(size.max(6.0)))
-            .text_color(color)
-            .frame(Frame::NONE)
-            .margin(Margin::ZERO)
-            .background_color(Color32::TRANSPARENT)
-            .desired_width(area.width())
-            .char_limit(MAX_TEXT),
-    );
+    let mut te = TextEdit::multiline(&mut ed.text)
+        .id(edit_id)
+        .font(FontId::proportional(size.max(6.0)))
+        .text_color(color)
+        .frame(Frame::NONE)
+        .margin(Margin::ZERO)
+        .background_color(Color32::TRANSPARENT)
+        .desired_width(area.width())
+        .desired_rows(1)
+        .lock_focus(true)
+        .return_key(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter))
+        .char_limit(MAX_TEXT);
+    if center {
+        te = te.align(Align2::CENTER_TOP);
+    }
+    let out = ui.put(area, te);
+    let Some(ed) = st.editing.as_mut() else { return };
     if !ed.focused {
         out.request_focus();
         ed.focused = true;
     } else if out.lost_focus() || !out.has_focus() {
-        let text = std::mem::take(&mut ed.text);
-        let id = ed.id.clone();
-        st.editing = None;
-        if text != el.text {
-            board.set_text(&id, &text);
-        }
+        commit_edit(board, st);
     }
 }
 
@@ -1430,6 +1965,18 @@ fn paint_icon(painter: &Painter, icon: Icon, c: Pos2, color: Color32, accent: Co
                 s,
             ));
         }
+        Icon::Snap => {
+            for gx in [-5.0_f32, 0.0, 5.0] {
+                for gy in [-5.0_f32, 0.0, 5.0] {
+                    painter.circle_filled(c + vec2(gx, gy), 1.3, color);
+                }
+            }
+            painter.rect_stroke(Rect::from_min_size(c + vec2(-5.0, -5.0), vec2(5.0, 5.0)), 1.0, Stroke::new(1.6, color), StrokeKind::Middle);
+        }
+        Icon::Help => {
+            painter.circle_stroke(c, 8.0, s);
+            painter.text(c + vec2(0.0, 0.5), Align2::CENTER_CENTER, "?", FontId::proportional(12.5), color);
+        }
         Icon::Front | Icon::Back => {
             let (top, bottom) = (Rect::from_min_size(c + vec2(-7.0, -7.0), vec2(9.0, 9.0)), Rect::from_min_size(c + vec2(-2.0, -2.0), vec2(9.0, 9.0)));
             if icon == Icon::Front {
@@ -1469,10 +2016,11 @@ fn icon_button(ui: &Ui, painter: &Painter, r: Rect, id: Id, icon: Icon, tip: &st
 }
 
 fn toolbar(ui: &mut Ui, painter: &Painter, rect: Rect, base: Id, board: &mut Board, st: &mut ViewState, style: &BoardStyle) {
-    let btn = 34.0;
     let gap = 10.0;
-    let n_tools = Tool::ALL.len() as f32;
-    let width = btn * (n_tools + 3.0) + gap * 2.0 + 12.0;
+    let n_buttons = Tool::ALL.len() as f32 + 5.0;
+    // Shrink the buttons in narrow panels so the bar always fits.
+    let btn = ((rect.width() - 16.0 - 12.0 - 3.0 * gap) / n_buttons).clamp(24.0, 34.0);
+    let width = btn * n_buttons + gap * 3.0 + 12.0;
     let x0 = (rect.center().x - width / 2.0).max(rect.min.x + 8.0);
     let bar = Rect::from_min_size(pos2(x0, rect.min.y + 10.0), vec2(width, btn + 8.0));
     bar_background(painter, bar, style);
@@ -1503,15 +2051,35 @@ fn toolbar(ui: &mut Ui, painter: &Painter, rect: Rect, base: Id, board: &mut Boa
     x += gap;
     let r = Rect::from_min_size(pos2(x, y), Vec2::splat(btn));
     if icon_button(ui, painter, r, base.with("fit"), Icon::Fit, "Alles zeigen (Umschalt+1)", false, true, style) {
-        fit(st, rect);
+        fit(st, rect, MIN_ZOOM);
+    }
+    x += btn;
+    let r = Rect::from_min_size(pos2(x, y), Vec2::splat(btn));
+    let snap_tip = if st.snap { "Am Raster einrasten: an (Alt beim Ziehen: frei)" } else { "Am Raster einrasten: aus" };
+    if icon_button(ui, painter, r, base.with("snap"), Icon::Snap, snap_tip, st.snap, true, style) {
+        st.snap = !st.snap;
+    }
+    x += btn;
+    sep(painter, x + gap / 2.0);
+    x += gap;
+    let r = Rect::from_min_size(pos2(x, y), Vec2::splat(btn));
+    if icon_button(ui, painter, r, base.with("help"), Icon::Help, "Tastenkürzel (F1 oder ?)", st.help, true, style) {
+        st.help = !st.help;
     }
 
-    // Bottom bar: colours, selection actions, zoom.
+    // What the active tool does, right under the bar.
+    if st.tool != Tool::Select && !st.help {
+        let galley = ui.fonts_mut(|f| f.layout_no_wrap(st.tool.hint().to_string(), FontId::proportional(12.5), style.text));
+        let chip = Rect::from_center_size(pos2(bar.center().x, bar.max.y + 18.0), galley.size() + vec2(20.0, 10.0));
+        painter.rect_filled(chip, 10.0, style.selection);
+        painter.rect_stroke(chip, 10.0, Stroke::new(1.0, style.accent.gamma_multiply(0.6)), StrokeKind::Inside);
+        painter.galley(chip.center() - galley.size() / 2.0, galley, style.text);
+    }
+
+    // Bottom bar: colour for new elements (and the selection), zoom.
     let sw = 26.0;
-    let has_sel = !st.selection.is_empty();
-    let n_actions = if has_sel { 4.0 } else { 0.0 };
     let zoom_w = 58.0;
-    let width = sw * 9.0 + 12.0 + if has_sel { gap + btn * n_actions } else { 0.0 } + gap + zoom_w;
+    let width = sw * 9.0 + 12.0 + gap + zoom_w;
     let x0 = (rect.center().x - width / 2.0).max(rect.min.x + 8.0);
     let bar = Rect::from_min_size(pos2(x0, rect.max.y - 10.0 - (btn + 8.0)), vec2(width, btn + 8.0));
     bar_background(painter, bar, style);
@@ -1520,18 +2088,9 @@ fn toolbar(ui: &mut Ui, painter: &Painter, rect: Rect, base: Id, board: &mut Boa
     let cy = bar.center().y;
     for name in std::iter::once("ink").chain(PALETTE) {
         let r = Rect::from_center_size(pos2(x + sw / 2.0, cy), Vec2::splat(sw));
-        let resp = ui.interact(r, base.with(("color", name)), Sense::click()).on_hover_text(color_label(name));
-        let fill = if name == "ink" { style.text } else { style.fill(name) };
-        let active = current.as_deref() == Some(name);
-        if active {
-            painter.circle_stroke(r.center(), 11.0, Stroke::new(2.0, style.accent));
-        } else if resp.hovered() {
-            painter.circle_stroke(r.center(), 11.0, Stroke::new(1.0, style.border));
-        }
-        painter.circle(r.center(), 8.0, fill, Stroke::new(1.0, mix(fill, style.text, 0.25)));
-        if resp.clicked() {
+        if swatch(ui, painter, r, base.with(("color", name)), name, current.as_deref() == Some(name), style) {
             st.color = Some(name.to_string());
-            if has_sel {
+            if !st.selection.is_empty() {
                 let ids = st.selection.clone();
                 board.set_color(&ids, name);
             }
@@ -1539,35 +2098,7 @@ fn toolbar(ui: &mut Ui, painter: &Painter, rect: Rect, base: Id, board: &mut Boa
         x += sw;
     }
     x += 6.0;
-    if has_sel {
-        sep(painter, x + gap / 2.0);
-        x += gap;
-        let actions = [
-            (Icon::Duplicate, "Duplizieren (Strg+D)", "dup"),
-            (Icon::Front, "Nach vorne", "front"),
-            (Icon::Back, "Nach hinten", "back"),
-            (Icon::Delete, "Löschen (Entf)", "del"),
-        ];
-        for (icon, tip, key) in actions {
-            let r = Rect::from_min_size(pos2(x, bar.min.y + 4.0), Vec2::splat(btn));
-            if icon_button(ui, painter, r, base.with(key), icon, tip, false, true, style) {
-                let ids = st.selection.clone();
-                match icon {
-                    Icon::Duplicate => {
-                        let els = selected_elements(st);
-                        paste(board, st, els, Some(vec2(24.0, 24.0)));
-                    }
-                    Icon::Front => board.bring_to_front(&ids),
-                    Icon::Back => board.send_to_back(&ids),
-                    _ => {
-                        board.delete(&ids);
-                        st.selection.clear();
-                    }
-                }
-            }
-            x += btn;
-        }
-    }
+    let sep = |painter: &Painter, x: f32| painter.line_segment([pos2(x, bar.min.y + 11.0), pos2(x, bar.max.y - 11.0)], Stroke::new(1.0, style.border));
     sep(painter, x + gap / 2.0);
     x += gap;
     let r = Rect::from_min_size(pos2(x, bar.min.y + 4.0), vec2(zoom_w - 6.0, btn));
@@ -1579,5 +2110,154 @@ fn toolbar(ui: &mut Ui, painter: &Painter, rect: Rect, base: Id, board: &mut Boa
     if resp.clicked() {
         let c = st.camera.center;
         st.camera = Camera { center: c, zoom: 1.0 };
+    }
+}
+
+/// One colour swatch; returns whether it was clicked.
+fn swatch(ui: &Ui, painter: &Painter, r: Rect, id: Id, name: &str, active: bool, style: &BoardStyle) -> bool {
+    let resp = ui.interact(r, id, Sense::click()).on_hover_text(color_label(name));
+    let fill = if name == "ink" { style.text } else { style.fill(name) };
+    let rad = r.width() * 0.42;
+    if active {
+        painter.circle_stroke(r.center(), rad, Stroke::new(2.0, style.accent));
+    } else if resp.hovered() {
+        painter.circle_stroke(r.center(), rad, Stroke::new(1.0, style.border));
+    }
+    painter.circle(r.center(), rad - 3.0, fill, Stroke::new(1.0, mix(fill, style.text, 0.25)));
+    resp.clicked()
+}
+
+/// Floating bar next to the selection: colours, duplicate, to front, to back, delete.
+fn context_bar(ui: &mut Ui, painter: &Painter, rect: Rect, base: Id, board: &mut Board, st: &mut ViewState, style: &BoardStyle) {
+    if st.selection.is_empty() || st.editing.is_some() || !matches!(st.interaction, Interaction::None) {
+        return;
+    }
+    let Some(b) = selection_bounds(st) else { return };
+    let sb = st.camera.rect_to_screen(rect, b);
+    let (sw, btn, gap) = (24.0, 30.0, 10.0);
+    let width = sw * 9.0 + gap + btn * 4.0 + 12.0;
+    let height = btn + 8.0;
+    // Above the selection, clear of its „+“ handle; below it when there is no room on top.
+    let room = if plus_source(st).is_some() { PLUS_OFFSET + PLUS_R + 8.0 } else { 12.0 };
+    let top_limit = rect.min.y + 64.0;
+    let y = if sb.min.y - room - height >= top_limit { sb.min.y - room - height } else { sb.max.y + room };
+    let y = y.clamp(top_limit, (rect.max.y - 64.0 - height).max(top_limit));
+    let x = (sb.center().x - width / 2.0).clamp(rect.min.x + 8.0, (rect.max.x - 8.0 - width).max(rect.min.x + 8.0));
+    let bar = Rect::from_min_size(pos2(x, y), vec2(width, height));
+    if !bar.intersects(rect) {
+        return;
+    }
+    bar_background(painter, bar, style);
+    let current = st.selection.first().and_then(|id| st.cache.get(id)).map(|e| e.color.clone());
+    let mut x = bar.min.x + 6.0;
+    let cy = bar.center().y;
+    for name in std::iter::once("ink").chain(PALETTE) {
+        let r = Rect::from_center_size(pos2(x + sw / 2.0, cy), Vec2::splat(sw));
+        if swatch(ui, painter, r, base.with(("ctx-color", name)), name, current.as_deref() == Some(name), style) {
+            let ids = st.selection.clone();
+            board.set_color(&ids, name);
+        }
+        x += sw;
+    }
+    painter.line_segment([pos2(x + gap / 2.0, bar.min.y + 10.0), pos2(x + gap / 2.0, bar.max.y - 10.0)], Stroke::new(1.0, style.border));
+    x += gap;
+    let actions = [
+        (Icon::Duplicate, "Duplizieren (Strg+D)", "dup"),
+        (Icon::Front, "Nach vorne", "front"),
+        (Icon::Back, "Nach hinten", "back"),
+        (Icon::Delete, "Löschen (Entf)", "del"),
+    ];
+    for (icon, tip, key) in actions {
+        let r = Rect::from_min_size(pos2(x, bar.min.y + 4.0), Vec2::splat(btn));
+        if icon_button(ui, painter, r, base.with(("ctx", key)), icon, tip, false, true, style) {
+            let ids = st.selection.clone();
+            match icon {
+                Icon::Duplicate => {
+                    let els = selected_elements(st);
+                    paste(board, st, els, Some(vec2(24.0, 24.0)));
+                }
+                Icon::Front => board.bring_to_front(&ids),
+                Icon::Back => board.send_to_back(&ids),
+                _ => {
+                    board.delete(&ids);
+                    st.selection.clear();
+                }
+            }
+        }
+        x += btn;
+    }
+}
+
+/// Centred card on an empty board with the quickest ways to start.
+fn empty_hint(painter: &Painter, ui: &Ui, rect: Rect, style: &BoardStyle) {
+    let lines = [
+        ("Leeres Whiteboard", 17.0, style.text),
+        ("Doppelklick: Notiz · N: Notiz · T: Text · R: Rechteck · A: Pfeil", 13.5, style.muted),
+        ("Mausrad: verschieben · Strg+Mausrad: zoomen · F1 oder ?: alle Tastenkürzel", 13.5, style.muted),
+    ];
+    let wrap = (rect.width() - 64.0).max(120.0);
+    let galleys: Vec<_> = lines.iter().map(|(t, size, color)| ui.fonts_mut(|f| f.layout_job(text_job(t, *size, *color, wrap, true)))).collect();
+    let h: f32 = galleys.iter().map(|g| g.size().y).sum::<f32>() + 10.0 * (galleys.len() as f32 - 1.0);
+    let w = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max);
+    let card = Rect::from_center_size(rect.center(), vec2(w + 40.0, h + 32.0));
+    painter.rect_filled(card, 14.0, style.surface.gamma_multiply(0.92));
+    painter.rect_stroke(card, 14.0, Stroke::new(1.0, style.border), StrokeKind::Inside);
+    let mut y = card.min.y + 16.0;
+    for g in galleys {
+        let gh = g.size().y;
+        painter.galley(pos2(card.center().x, y), g, style.text);
+        y += gh + 10.0;
+    }
+}
+
+const SHORTCUTS: [(&str, &str); 18] = [
+    ("V · H · N · R · O", "Auswählen · Hand · Notiz · Rechteck · Ellipse"),
+    ("A · L · T · P · E · F", "Pfeil · Linie · Text · Stift · Radierer · Rahmen"),
+    ("Doppelklick", "Notiz anlegen oder Text bearbeiten"),
+    ("Enter", "Text bearbeiten / fertig"),
+    ("Umschalt+Enter", "Neue Zeile"),
+    ("Tab beim Schreiben", "Verbundene Unteridee anlegen"),
+    ("„+“ an einer Notiz", "Klicken: verbundene Notiz · Ziehen: verbinden"),
+    ("Pfeilende ziehen", "Pfeil an ein anderes Element hängen"),
+    ("Entf", "Auswahl löschen"),
+    ("Strg+D", "Duplizieren"),
+    ("Strg+C · X · V", "Kopieren · Ausschneiden · Einfügen"),
+    ("Strg+A", "Alles auswählen"),
+    ("Strg+Z · Strg+Umschalt+Z", "Rückgängig · Wiederholen"),
+    ("Pfeiltasten", "Auswahl verschieben (Umschalt: 10er-Schritte)"),
+    ("Alt beim Ziehen", "Ohne Einrasten verschieben"),
+    ("Leertaste + Ziehen", "Ansicht verschieben"),
+    ("Strg+Mausrad · Umschalt+1 · Strg+0", "Zoomen · Alles zeigen · 100 %"),
+    ("Esc · F1 · ?", "Hilfe schließen"),
+];
+
+/// Overlay listing all shortcuts.
+fn help_overlay(ui: &Ui, painter: &Painter, rect: Rect, style: &BoardStyle) {
+    painter.rect_filled(rect, 0.0, Color32::from_black_alpha(70));
+    let key_w = 210.0_f32.min(rect.width() * 0.38);
+    let desc_w = (rect.width() - 48.0 - key_w - 24.0).clamp(120.0, 320.0);
+    let rows: Vec<_> = SHORTCUTS
+        .iter()
+        .map(|(k, d)| {
+            let kg = ui.fonts_mut(|f| f.layout(k.to_string(), FontId::proportional(13.0), style.accent, key_w));
+            let dg = ui.fonts_mut(|f| f.layout(d.to_string(), FontId::proportional(13.0), style.text, desc_w));
+            (kg, dg)
+        })
+        .collect();
+    let row_h: Vec<f32> = rows.iter().map(|(k, d)| k.size().y.max(d.size().y) + 7.0).collect();
+    let title_h = 34.0;
+    let h = title_h + row_h.iter().sum::<f32>() + 24.0;
+    let w = key_w + desc_w + 16.0 + 40.0;
+    let card = Rect::from_center_size(rect.center(), vec2(w, h.min(rect.height() - 16.0)));
+    painter.rect_filled(card.translate(vec2(0.0, 3.0)), 16.0, Color32::from_black_alpha(40));
+    painter.rect_filled(card, 16.0, style.surface);
+    painter.rect_stroke(card, 16.0, Stroke::new(1.0, style.border), StrokeKind::Inside);
+    let clip = painter.with_clip_rect(card.intersect(rect));
+    clip.text(card.min + vec2(20.0, 16.0), Align2::LEFT_TOP, "Tastenkürzel", FontId::proportional(17.0), style.text);
+    let mut y = card.min.y + 16.0 + title_h;
+    for ((kg, dg), rh) in rows.into_iter().zip(row_h) {
+        clip.galley(pos2(card.min.x + 20.0, y), kg, style.accent);
+        clip.galley(pos2(card.min.x + 20.0 + key_w + 16.0, y), dg, style.text);
+        y += rh;
     }
 }
