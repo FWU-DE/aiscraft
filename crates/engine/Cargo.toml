@@ -1,8 +1,24 @@
 [package]
 name = "aiscraft-engine"
+description = "AISCraft engine: state, the command registry every surface dispatches through, secrets, generation."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aiscraft-core.workspace = true
+aiscraft-store.workspace = true
+aiscraft-backends.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+futures.workspace = true
+tokio.workspace = true
+keyring.workspace = true
+directories.workspace = true
+log.workspace = true
+base64 = "0.22"
 
 [lints]
 workspace = true

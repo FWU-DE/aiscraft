@@ -455,6 +455,24 @@ impl Backend for AisChat {
         })
     }
 
+    fn remote_messages(&self, id: String) -> BoxFuture<'_, Result<Vec<(String, Role, String)>>> {
+        Box::pin(async move {
+            if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                return Err(Error::invalid("Ungültige Chat-ID"));
+            }
+            let resp = self.send(self.request(Method::GET, &format!("/d/{id}"))?.header("Accept", "text/html")).await?;
+            if !resp.status().is_success() {
+                return Err(status_error(resp, "Chat laden").await);
+            }
+            let payload = scrape::rsc_payload(&read_capped(resp, PAGE_CAP).await?);
+            let msgs: Vec<_> = scrape::page_messages(&payload).into_iter().filter_map(|(id, role, content)| Some((id, Role::parse(&role)?, content))).collect();
+            if msgs.is_empty() {
+                return Err(Error::protocol("In diesem AIS.chat-Verlauf wurden keine Nachrichten gefunden"));
+            }
+            Ok(msgs)
+        })
+    }
+
     fn web_url(&self, conversation_id: &str) -> Option<String> {
         Some(format!("{}/d/{conversation_id}", self.base))
     }

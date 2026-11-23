@@ -1,0 +1,335 @@
+//! Sending a message and streaming the answer.
+
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+use aiscraft_core::{ChatRequest, Conversation, Error, ErrorKind, MemoryNote, Message, Result, Role, StreamEvent, Usage, extract_explicit_memory, memory_prompt, title_from};
+use futures::StreamExt;
+use serde_json::{Value, json};
+
+use crate::{Ctx, NoticeAction, NoticeLevel, files, new_id, now_ms};
+
+/// How often streamed text is pushed to the state (the UI redraws on each push).
+const FLUSH_EVERY: Duration = Duration::from_millis(40);
+
+pub(crate) fn stop(c: &Ctx, conv: &str) -> bool {
+    let cancels = c.0.cancels.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    match cancels.get(conv) {
+        Some(tx) => {
+            tx.send_replace(true);
+            true
+        }
+        None => false,
+    }
+}
+
+fn patch_message(c: &Ctx, conv: &str, id: &str, f: impl FnOnce(&mut Message)) {
+    c.update(|s| {
+        if s.current.as_deref() == Some(conv)
+            && let Some(m) = s.messages.iter_mut().find(|m| m.id == id)
+        {
+            f(m);
+        }
+    });
+}
+
+/// Create the conversation for a new chat on its first message.
+fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
+    let state = c.state();
+    if let Some(id) = &state.current {
+        return Ok(id.clone());
+    }
+    let sel = &state.selection;
+    if sel.backend_id.is_empty() {
+        return Err(Error::invalid("Kein Backend gewählt"));
+    }
+    let now = now_ms();
+    let conv = Conversation {
+        id: new_id(),
+        title: title_from(first_text),
+        backend_id: sel.backend_id.clone(),
+        model_id: sel.model_id.clone(),
+        project_id: sel.project_id.clone(),
+        created_at: now,
+        updated_at: now,
+        pinned: false,
+    };
+    c.store(|st| st.save_conversation(&conv))?;
+    let id = conv.id.clone();
+    c.update(|s| {
+        let pos = s.conversations.iter().position(|x| !x.pinned).unwrap_or(s.conversations.len());
+        s.conversations.insert(pos, conv);
+        s.current = Some(id.clone());
+        s.messages.clear();
+    });
+    Ok(id)
+}
+
+pub(crate) async fn send(c: Ctx, text: String, paths: Vec<String>) -> Result<Value> {
+    let text = text.trim().to_string();
+    if text.is_empty() && paths.is_empty() {
+        return Err(Error::invalid("Nachricht ist leer"));
+    }
+    let state = c.state();
+    let backend = c.backend(&state.selection.backend_id)?;
+    if state.selection.model_id.is_empty() {
+        return Err(Error::invalid(format!("Kein Modell gewählt. {} ist vielleicht nicht angemeldet.", backend.config().name)));
+    }
+    if let Some(cur) = &state.current
+        && state.is_generating(cur)
+    {
+        return Err(Error::invalid("Die vorige Antwort läuft noch"));
+    }
+    let caps = backend.capabilities();
+
+    // Attachments first, so a bad file fails before anything is saved.
+    let mut attachments = Vec::new();
+    for p in &paths {
+        let (mut a, bytes) = files::load(Path::new(p), !caps.uploads)?;
+        if caps.uploads {
+            a.remote_id = Some(backend.upload(a.name.clone(), a.mime.clone(), bytes).await?);
+        } else if a.text.is_none() && a.data_base64.is_none() {
+            return Err(Error::unsupported(format!("{} kann {} nicht lesen. Text, Bilder und PDFs gehen.", backend.config().name, a.name)));
+        }
+        attachments.push(a);
+    }
+
+    let conv = ensure_conversation(&c, if text.is_empty() { paths.first().map(String::as_str).unwrap_or("Datei") } else { &text })?;
+    let user = Message {
+        id: new_id(),
+        conversation_id: conv.clone(),
+        role: Role::User,
+        content: text.clone(),
+        created_at: now_ms(),
+        model: None,
+        attachments,
+        activity: vec![],
+        error: None,
+        usage: None,
+    };
+    c.store(|st| st.save_message(&user))?;
+    c.update(|s| {
+        if s.current.as_deref() == Some(&conv) {
+            s.messages.push(user.clone());
+        }
+    });
+
+    if c.state().settings.memory
+        && let Some((area, note_text)) = extract_explicit_memory(&text)
+    {
+        let note = MemoryNote { id: new_id(), area, text: note_text.clone(), source_message_id: Some(user.id.clone()), source_quote: text.clone(), created_at: now_ms(), archived: false };
+        c.store(|st| st.save_memory(&note))?;
+        let nid = note.id.clone();
+        c.update(|s| s.memory.push(note));
+        c.notice_with(
+            NoticeLevel::Success,
+            format!("Gemerkt ({}): {note_text}", area.label()),
+            Some(NoticeAction { label: "Rückgängig".into(), command: "memory.archive".into(), params: json!({"id": nid}) }),
+        );
+    }
+
+    generate(c, conv).await
+}
+
+pub(crate) async fn regenerate(c: Ctx) -> Result<Value> {
+    let state = c.state();
+    let conv = state.current.clone().ok_or_else(|| Error::invalid("Kein Chat offen"))?;
+    if state.is_generating(&conv) {
+        return Err(Error::invalid("Die Antwort läuft noch"));
+    }
+    if let Some(last) = state.messages.last().filter(|m| m.role == Role::Assistant) {
+        let id = last.id.clone();
+        c.store(|st| st.truncate_from(&conv, &id))?;
+        c.update(|s| s.messages.retain(|m| m.id != id));
+    }
+    if !state.messages.iter().any(|m| m.role == Role::User) {
+        return Err(Error::invalid("Nichts zum neu Erzeugen"));
+    }
+    generate(c, conv).await
+}
+
+pub(crate) async fn edit(c: Ctx, message_id: String, text: String) -> Result<Value> {
+    let state = c.state();
+    let conv = state.current.clone().ok_or_else(|| Error::invalid("Kein Chat offen"))?;
+    if state.is_generating(&conv) {
+        return Err(Error::invalid("Die Antwort läuft noch"));
+    }
+    let pos = state.messages.iter().position(|m| m.id == message_id && m.role == Role::User).ok_or_else(|| Error::not_found("Nachricht nicht gefunden"))?;
+    c.store(|st| st.truncate_from(&conv, &message_id))?;
+    c.update(|s| s.messages.truncate(pos));
+    send(c, text, vec![]).await
+}
+
+/// The system prompt: project instructions and memory, where the backend takes them.
+fn system_prompt(c: &Ctx, conv: &Conversation, send_context: bool, takes_system: bool) -> Option<String> {
+    if !(send_context && takes_system) {
+        return None;
+    }
+    let state = c.state();
+    let mut parts = Vec::new();
+    if let Some(p) = conv.project_id.as_ref().and_then(|pid| state.projects.iter().find(|p| &p.id == pid))
+        && !p.instructions.trim().is_empty()
+    {
+        parts.push(p.instructions.trim().to_string());
+    }
+    if state.settings.memory
+        && let Some(m) = memory_prompt(&state.memory)
+    {
+        parts.push(m);
+    }
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
+async fn generate(c: Ctx, conv_id: String) -> Result<Value> {
+    let conv = c.state().conversation(&conv_id).cloned().ok_or_else(|| Error::not_found("Chat nicht gefunden"))?;
+    let backend = c.backend(&conv.backend_id)?;
+    let caps = backend.capabilities();
+    let history = c.store(|st| st.messages(&conv_id))?;
+    let system = system_prompt(&c, &conv, backend.config().send_context, caps.system_prompt);
+    let model_name = c.state().model_name(&conv.backend_id, &conv.model_id);
+
+    let mut answer = Message {
+        id: new_id(),
+        conversation_id: conv_id.clone(),
+        role: Role::Assistant,
+        content: String::new(),
+        created_at: now_ms(),
+        model: Some(model_name),
+        attachments: vec![],
+        activity: vec![],
+        error: None,
+        usage: None,
+    };
+    c.store(|st| st.save_message(&answer))?;
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    c.0.cancels.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(conv_id.clone(), cancel_tx);
+    c.update(|s| {
+        s.generating.push(conv_id.clone());
+        if s.current.as_deref() == Some(&conv_id) {
+            s.messages.push(answer.clone());
+        }
+    });
+
+    let req = ChatRequest { conversation_id: conv_id.clone(), model: conv.model_id.clone(), system, messages: history };
+    let outcome: Result<()> = async {
+        let mut stream = tokio::select! {
+            s = backend.chat(req) => s?,
+            _ = cancel_rx.changed() => return Err(Error::cancelled()),
+        };
+        let mut last_flush = Instant::now();
+        let mut dirty = false;
+        let mut usage = Usage::default();
+        loop {
+            let flush_at = tokio::time::Instant::from_std(last_flush + FLUSH_EVERY);
+            let ev = tokio::select! {
+                ev = stream.next() => ev,
+                _ = cancel_rx.changed() => return Err(Error::cancelled()),
+                // Text that arrives just before a pause must not wait for the next chunk.
+                _ = tokio::time::sleep_until(flush_at), if dirty => {
+                    let (content, activity) = (answer.content.clone(), answer.activity.clone());
+                    patch_message(&c, &conv_id, &answer.id, |m| {
+                        m.content = content;
+                        m.activity = activity;
+                    });
+                    last_flush = Instant::now();
+                    dirty = false;
+                    continue;
+                }
+            };
+            let Some(ev) = ev else { break };
+            match ev? {
+                StreamEvent::Delta { text } => {
+                    answer.content.push_str(&text);
+                    dirty = true;
+                }
+                StreamEvent::MessageId { id } => {
+                    c.store(|st| st.rename_message(&answer.id, &id))?;
+                    let old = std::mem::replace(&mut answer.id, id.clone());
+                    patch_message(&c, &conv_id, &old, |m| m.id = id);
+                }
+                StreamEvent::Activity { steps } => {
+                    answer.activity = steps;
+                    dirty = true;
+                }
+                StreamEvent::Usage { usage: u } => {
+                    usage.input_tokens = usage.input_tokens.max(u.input_tokens);
+                    usage.output_tokens = usage.output_tokens.max(u.output_tokens);
+                    answer.usage = Some(usage);
+                }
+                StreamEvent::Done => break,
+            }
+            if dirty && last_flush.elapsed() >= FLUSH_EVERY {
+                let (content, activity) = (answer.content.clone(), answer.activity.clone());
+                patch_message(&c, &conv_id, &answer.id, |m| {
+                    m.content = content;
+                    m.activity = activity;
+                });
+                last_flush = Instant::now();
+                dirty = false;
+            }
+        }
+        Ok(())
+    }
+    .await;
+
+    let mut result = Ok(());
+    match outcome {
+        Ok(()) => {}
+        Err(e) if e.kind == ErrorKind::Cancelled => {
+            if answer.content.is_empty() {
+                answer.content = "_(angehalten)_".into();
+            }
+        }
+        Err(e) => {
+            answer.error = Some(e.message.clone());
+            result = Err(e);
+        }
+    }
+    if result.is_ok() && answer.content.trim().is_empty() && answer.activity.iter().all(|s| s.document.is_none()) {
+        answer.error = Some("Keine Antwort erhalten".into());
+    }
+    let _ = c.store(|st| st.save_message(&answer));
+    let mut updated = conv.clone();
+    updated.updated_at = now_ms();
+    let _ = c.store(|st| st.save_conversation(&updated));
+    c.0.cancels.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&conv_id);
+    let final_msg = answer.clone();
+    c.update(|s| {
+        s.generating.retain(|g| g != &conv_id);
+        if let Some(x) = s.conversations.iter_mut().find(|x| x.id == conv_id) {
+            x.updated_at = updated.updated_at;
+        }
+        s.conversations.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.updated_at.cmp(&a.updated_at)));
+        if s.current.as_deref() == Some(&conv_id)
+            && let Some(m) = s.messages.iter_mut().find(|m| m.id == final_msg.id)
+        {
+            *m = final_msg;
+        }
+    });
+
+    // AIS.chat names conversations itself; adopt its title for chats we started.
+    if caps.remote_history && result.is_ok() {
+        let ctx = c.clone();
+        let id = conv_id.clone();
+        let auto_title = conv.title.clone();
+        c.spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if let Ok(list) = backend.remote_conversations().await
+                && let Some(r) = list.iter().find(|r| r.id == id)
+                && !r.title.trim().is_empty()
+                && r.title != auto_title
+                && ctx.state().conversation(&id).is_some_and(|x| x.title == auto_title)
+            {
+                let title = r.title.clone();
+                let _ = crate::commands::edit_conversation(&ctx, &id, |x| x.title = title);
+            }
+        });
+    }
+
+    result.map(|()| json!({"conversation_id": conv_id, "message_id": answer.id, "text": answer.content}))
+}
+
+#[cfg(test)]
+pub(crate) fn system_prompt_pub(c: &Ctx, conv: &Conversation, send: bool, takes: bool) -> Option<String> {
+    system_prompt(c, conv, send, takes)
+}

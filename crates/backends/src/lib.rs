@@ -35,6 +35,10 @@ pub trait Backend: Send + Sync {
     fn remote_conversations(&self) -> BoxFuture<'_, Result<Vec<RemoteConversation>>> {
         Box::pin(async { Err(Error::unsupported("Dieses Backend hat keinen Verlauf auf dem Server")) })
     }
+    /// The messages of a server-side conversation, oldest first: `(id, role, content)`.
+    fn remote_messages(&self, _id: String) -> BoxFuture<'_, Result<Vec<(String, aiscraft_core::Role, String)>>> {
+        Box::pin(async { Err(Error::unsupported("Dieses Backend hat keinen Verlauf auf dem Server")) })
+    }
     /// The conversation in the backend's own web app, if it has one.
     fn web_url(&self, _conversation_id: &str) -> Option<String> {
         None

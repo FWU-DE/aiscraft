@@ -117,6 +117,23 @@ pub fn initial_model_name(payload: &str) -> Option<String> {
     found
 }
 
+/// Chat messages in a conversation page's payload: objects with an `id`, a `role` of `user` or
+/// `assistant` and string `content`. Deduplicated by id, in first-seen order.
+pub fn page_messages(payload: &str) -> Vec<(String, String, String)> {
+    let mut out: Vec<(String, String, String)> = Vec::new();
+    for v in payload_values(payload) {
+        walk(&v, 0, &mut |o| {
+            let s = |k: &str| o.get(k).and_then(Value::as_str);
+            let (Some(id), Some(role), Some(content)) = (s("id"), s("role"), s("content")) else { return };
+            if (role == "user" || role == "assistant") && !out.iter().any(|m| m.0 == id) {
+                let content = content.strip_prefix("$$").map(|r| format!("${r}")).unwrap_or_else(|| content.to_string());
+                out.push((id.to_string(), role.to_string(), content));
+            }
+        });
+    }
+    out
+}
+
 fn walk(v: &Value, depth: usize, f: &mut dyn FnMut(&serde_json::Map<String, Value>)) {
     if depth > 64 {
         return;
@@ -156,6 +173,13 @@ mod tests {
         let p = chunk_paths(html);
         assert!(p.contains(&"/_next/static/chunks/0ocyeb5hp4dlt.js".to_string()));
         assert!(p.contains(&"/_next/static/chunks/abc-123.js".to_string()));
+    }
+
+    #[test]
+    fn messages_from_conversation_page() {
+        let row = r#"7:["$","$L8",null,{"initialMessages":[{"id":"a","role":"user","content":"Hallo"},{"id":"b","role":"assistant","content":"$$9 Euro"},{"id":"a","role":"user","content":"dup"},{"id":"s","role":"system","content":"x"}]}]"#;
+        let msgs = page_messages(&format!("{row}\n"));
+        assert_eq!(msgs, vec![("a".into(), "user".into(), "Hallo".into()), ("b".into(), "assistant".into(), "$9 Euro".into())]);
     }
 
     #[test]
