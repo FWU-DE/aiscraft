@@ -247,6 +247,57 @@ pub(crate) fn parse_verdict(model_out: &str, owner_words: &str) -> TrustVerdict 
     TrustVerdict { covered: covered && quoted, quote, reason }
 }
 
+// ---- presets --------------------------------------------------------------------------------
+
+/// Obsidian vaults from Obsidian's own list (`obsidian.json`), per platform.
+pub fn obsidian_vaults() -> Vec<String> {
+    let cfg = if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Application Support/obsidian/obsidian.json"))
+    } else if cfg!(windows) {
+        std::env::var_os("APPDATA").map(|a| std::path::PathBuf::from(a).join("obsidian").join("obsidian.json"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+            .map(|d| d.join("obsidian/obsidian.json"))
+    };
+    cfg.and_then(|p| std::fs::read_to_string(p).ok()).map(|s| vaults_from_json(&s)).unwrap_or_default()
+}
+
+pub fn vaults_from_json(s: &str) -> Vec<String> {
+    let v: Value = serde_json::from_str(s).unwrap_or(Value::Null);
+    let mut out: Vec<String> = v
+        .get("vaults")
+        .and_then(Value::as_object)
+        .map(|o| o.values().filter_map(|x| x.get("path").and_then(Value::as_str).map(str::to_string)).filter(|p| std::path::Path::new(p).is_dir()).collect())
+        .unwrap_or_default();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// A ready-made connector: (label, name, command line).
+pub fn presets() -> Vec<(String, String, String)> {
+    let quote = |p: &str| if p.contains(' ') { format!("\"{p}\"") } else { p.to_string() };
+    let mut out = Vec::new();
+    for vault in obsidian_vaults() {
+        let name = std::path::Path::new(&vault).file_name().and_then(|n| n.to_str()).unwrap_or("Obsidian").to_string();
+        out.push((format!("Obsidian „{name}“ (lesen)"), format!("Obsidian {name}"), format!("npx -y @modelcontextprotocol/server-filesystem --read-only {}", quote(&vault))));
+        out.push((format!("Obsidian „{name}“ (lesen und schreiben)"), format!("Obsidian {name}"), format!("npx -y @modelcontextprotocol/server-filesystem {}", quote(&vault))));
+    }
+    if let Some(docs) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::path::PathBuf::from(h).join("Dokumente")).filter(|d| d.is_dir()).or_else(|| {
+        std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(|h| std::path::PathBuf::from(h).join("Documents")).filter(|d| d.is_dir())
+    }) {
+        let d = docs.display().to_string();
+        out.push(("Dokumente-Ordner (lesen)".into(), "Dokumente".into(), format!("npx -y @modelcontextprotocol/server-filesystem --read-only {}", quote(&d))));
+    }
+    out.push(("Webseiten abrufen".into(), "Web abrufen".into(), "uvx mcp-server-fetch".into()));
+    if let Some(cli) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(if cfg!(windows) { "aiscraft-cli.exe" } else { "aiscraft-cli" }))).filter(|p| p.is_file()) {
+        out.push(("AISCraft selbst (Chats, Suche, Dokumente)".into(), "AISCraft".into(), format!("{} mcp", quote(&cli.display().to_string()))));
+    }
+    out
+}
+
 // ---- connectors -----------------------------------------------------------------------------
 
 fn load_configs(c: &Ctx) -> Vec<ServerConfig> {
@@ -472,6 +523,16 @@ mod tests {
         assert!(!junk.covered);
         let prose = parse_verdict("Ergebnis: {\"covered\": false, \"quote\": \"\", \"reason\": \"anderer Empfänger\"} Ende", words);
         assert_eq!(prose.reason, "anderer Empfänger");
+    }
+
+    #[test]
+    fn obsidian_vault_list() {
+        let dir = std::env::temp_dir().join(format!("aiscraft-vault-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let json = format!(r#"{{"vaults":{{"a1":{{"path":"{}","ts":1,"open":true}},"b2":{{"path":"/does/not/exist"}}}}}}"#, dir.display());
+        assert_eq!(vaults_from_json(&json), vec![dir.display().to_string()]);
+        assert!(vaults_from_json("kaputt").is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 mod aischat;
 mod anthropic;
+pub mod browser_login;
 mod claude_cli;
 mod http;
 mod openai;
@@ -50,6 +51,10 @@ pub trait Backend: Send + Sync {
     }
     fn remote_conversations(&self) -> BoxFuture<'_, Result<Vec<RemoteConversation>>> {
         Box::pin(async { Err(Error::unsupported("Dieses Backend hat keinen Verlauf auf dem Server")) })
+    }
+    /// The allowance used so far, for backends with one (AIS.chat token points).
+    fn quota(&self) -> BoxFuture<'_, Result<Option<aiscraft_core::Quota>>> {
+        Box::pin(async { Ok(None) })
     }
     /// The messages of a server-side conversation, oldest first: `(id, role, content)`.
     fn remote_messages(&self, _id: String) -> BoxFuture<'_, Result<Vec<(String, aiscraft_core::Role, String)>>> {

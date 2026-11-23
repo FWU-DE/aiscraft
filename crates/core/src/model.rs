@@ -306,6 +306,20 @@ pub struct AccountInfo {
     pub expires: Option<String>,
 }
 
+/// How much of a backend's allowance is used (AIS.chat token points).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Quota {
+    pub used: f64,
+    pub max: f64,
+}
+
+impl Quota {
+    /// Share still available, 0..=1.
+    pub fn left(&self) -> f64 {
+        if self.max <= 0.0 { 0.0 } else { (1.0 - self.used / self.max).clamp(0.0, 1.0) }
+    }
+}
+
 /// A conversation that exists on the server (AIS.chat history).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RemoteConversation {

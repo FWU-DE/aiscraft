@@ -177,6 +177,7 @@ static COMMANDS: &[CommandSpec] = &[
         c.update(|s| set_status(s, &id, BackendStatus::SignedOut { message: "Abgemeldet".into() }));
         Ok(json!({}))
     })),
+    cmd!("backend.browser_login", "Im Browser anmelden", "Backends", None, "id?: string (AIS.chat), silent?: bool (erst ohne Fenster versuchen), window?: bool (false: nie ein Fenster)", true, |c, p| Box::pin(browser_login(c, p))),
     cmd!("backend.check", "Verbindung prüfen", "Backends", None, "id?: string", true, |c, p| Box::pin(async move {
         let id = opt_str(&p, "id").unwrap_or_else(|| c.state().selection.backend_id.clone());
         refresh_backend(&c, &id).await?;
@@ -299,6 +300,13 @@ pub(crate) async fn refresh_backend(c: &Ctx, id: &str) -> Result<()> {
         }
     }
     let models = backend.models().await?;
+    if let Ok(quota) = backend.quota().await {
+        c.update(|s| {
+            if let Some(b) = s.backends.iter_mut().find(|b| b.config.id == id) {
+                b.quota = quota;
+            }
+        });
+    }
     let default = backend.config().default_model.clone();
     c.update(|s| {
         if let Some(b) = s.backends.iter_mut().find(|b| b.config.id == id) {
@@ -597,6 +605,39 @@ async fn backend_remove(c: Ctx, p: Value) -> Result<Value> {
     });
     persist_selection(&c);
     Ok(json!({}))
+}
+
+/// Sign in to AIS.chat in a browser window and take the session cookie from it. With
+/// `silent`, try without a window first (works while the identity provider still knows the
+/// person), then fall back to the window.
+pub(crate) async fn browser_login(c: Ctx, p: Value) -> Result<Value> {
+    let id = opt_str(&p, "id").unwrap_or_else(|| "ais-chat".into());
+    let config = c.backend(&id)?.config().clone();
+    if config.kind != BackendKind::AisChat {
+        return Err(Error::unsupported("Anmelden im Browser gibt es nur für AIS.chat"));
+    }
+    if !c.0.browser_allowed {
+        return Err(Error::unsupported("In dieser Umgebung startet AISCraft keinen Browser (Tests, Skripte, AISCRAFT_NO_BROWSER)"));
+    }
+    let opts = |headless: bool, secs: u64| aiscraft_backends::browser_login::LoginOptions {
+        base_url: config.base_url.clone(),
+        profile_dir: c.0.browser_profile.clone(),
+        headless,
+        timeout: std::time::Duration::from_secs(secs),
+        browser: None,
+    };
+    let silent = p.get("silent").and_then(Value::as_bool).unwrap_or(false);
+    // `window: false` never opens a visible window (tests, agents, the automatic re-login).
+    let window = p.get("window").and_then(Value::as_bool).unwrap_or(true);
+    let cookie = match (silent, window) {
+        (true, true) => match aiscraft_backends::browser_login::login(opts(true, 25)).await {
+            Ok(c) => c,
+            Err(_) => aiscraft_backends::browser_login::login(opts(false, 600)).await?,
+        },
+        (true, false) => aiscraft_backends::browser_login::login(opts(true, 25)).await?,
+        (false, _) => aiscraft_backends::browser_login::login(opts(false, 600)).await?,
+    };
+    backend_login(c, json!({"id": id, "secret": cookie})).await
 }
 
 async fn backend_login(c: Ctx, p: Value) -> Result<Value> {

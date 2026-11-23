@@ -214,6 +214,20 @@ impl AisCraftApp {
             Dialog::AddConnector { name, command, env, url, headers, http } => {
                 ui.heading("Konnektor hinzufügen");
                 ui.add_space(4.0);
+                let presets = aiscraft_engine::connector_presets();
+                if !presets.is_empty() {
+                    ui.label(small_muted(&t, "Vorlagen"));
+                    ui.horizontal_wrapped(|ui| {
+                        for (label, pname, cmdline) in &presets {
+                            if ui.button(label).on_hover_text(cmdline).clicked() {
+                                *http = false;
+                                *name = pname.clone();
+                                *command = cmdline.clone();
+                            }
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
                 ui.horizontal(|ui| {
                     ui.selectable_value(http, false, "Programm (lokal)");
                     ui.selectable_value(http, true, "Adresse (entfernt)");
@@ -238,7 +252,7 @@ impl AisCraftApp {
                         ui.end_row();
                     }
                 });
-                ui.label(small_muted(&t, "Beispiele: Dateien (server-filesystem), Abrufen (mcp-server-fetch), AISCraft selbst (aiscraft-cli mcp). Zugangsdaten liegen im Schlüsselbund."));
+                ui.label(small_muted(&t, "Lesende Werkzeuge laufen direkt, alles andere fragt vorher. Die Vorlagen brauchen Node (npx) bzw. uv (uvx). Zugangsdaten liegen im Schlüsselbund."));
                 ui.add_space(8.0);
                 let mut keep = true;
                 ui.horizontal(|ui| {
@@ -340,31 +354,54 @@ impl AisCraftApp {
         ui.heading(format!("Bei {} anmelden", view.config.name));
         ui.add_space(4.0);
         let mut keep = true;
+        let mut manual = view.config.kind != BackendKind::AisChat;
         if view.config.kind == BackendKind::AisChat {
-            ui.label(muted(&t, "AISCraft nutzt deine AIS.chat-Sitzung aus dem Browser. Die Anmeldung selbst (VIDIS, Schulkonto oder Microsoft 365) bleibt im Browser."));
+            ui.label(muted(&t, "Die Anmeldung (VIDIS, Schulkonto oder Microsoft 365) läuft in einem eigenen Browserfenster. AISCraft übernimmt danach die Sitzung und schließt das Fenster."));
             ui.add_space(8.0);
-            card(&t).show(ui, |ui| {
-                ui.label(RichText::new("1.  AIS.chat im Browser öffnen und anmelden").strong());
-                if ui.button("AIS.chat öffnen ↗").clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(&view.config.base_url));
+            let checking = matches!(view.status, BackendStatus::Checking);
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!checking, egui::Button::new(RichText::new("Im Browser anmelden").color(t.on_accent).strong()).fill(t.accent)).clicked() {
+                    self.run("backend.browser_login", json!({"id": backend_id}));
+                    *sent = true;
                 }
-                ui.add_space(6.0);
-                ui.label(RichText::new("2.  Entwicklerwerkzeuge öffnen (F12)").strong());
-                ui.label(small_muted(&t, "Chrome/Edge: Anwendung › Cookies. Firefox: Web-Speicher › Cookies."));
-                ui.add_space(6.0);
-                ui.label(RichText::new("3.  Diesen Cookie-Wert kopieren:").strong());
-                ui.horizontal(|ui| {
-                    ui.code(aiscraft_backends_cookie_name());
-                    if ui.small_button("Kopieren").on_hover_text("Namen kopieren").clicked() {
-                        ui.ctx().copy_text(aiscraft_backends_cookie_name().to_string());
-                    }
-                });
-                ui.add_space(6.0);
-                ui.label(RichText::new("4.  Hier einfügen").strong());
+                if checking {
+                    ui.add(egui::Spinner::new());
+                    ui.label(small_muted(&t, "Warte auf die Anmeldung im Browserfenster …"));
+                }
             });
+            ui.label(small_muted(&t, "Braucht Chrome, Chromium, Edge, Brave oder Vivaldi. Das Profil bleibt, damit die nächste Anmeldung meist ohne Fenster klappt."));
             ui.add_space(6.0);
+            let open = egui::CollapsingHeader::new(small_muted(&t, "Oder den Sitzungs-Cookie von Hand einfügen")).id_salt("manual-cookie").show(ui, |ui| {
+                card(&t).show(ui, |ui| {
+                    ui.label(RichText::new("1.  AIS.chat im Browser öffnen und anmelden").strong());
+                    if ui.button("AIS.chat öffnen ↗").clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(&view.config.base_url));
+                    }
+                    ui.label(RichText::new("2.  F12 › Anwendung/Web-Speicher › Cookies, diesen Wert kopieren:").strong());
+                    ui.horizontal(|ui| {
+                        ui.code(aiscraft_backends_cookie_name());
+                        if ui.small_button("Kopieren").on_hover_text("Namen kopieren").clicked() {
+                            ui.ctx().copy_text(aiscraft_backends_cookie_name().to_string());
+                        }
+                    });
+                });
+            });
+            manual = open.fully_open() || !secret.is_empty();
         } else {
             ui.label(muted(&t, "API-Schlüssel eingeben. Er liegt danach im Schlüsselbund des Systems."));
+        }
+        if !manual {
+            match &view.status {
+                BackendStatus::SignedOut { message } | BackendStatus::Failed { message } if *sent => {
+                    ui.label(RichText::new(message).color(t.danger));
+                }
+                _ => {}
+            }
+            ui.add_space(6.0);
+            if ui.button("Abbrechen").clicked() {
+                keep = false;
+            }
+            return keep;
         }
         let r = ui.add(egui::TextEdit::singleline(secret).password(true).hint_text("Wert einfügen").desired_width(f32::INFINITY));
         if !*sent {

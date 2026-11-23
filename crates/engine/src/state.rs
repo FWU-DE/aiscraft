@@ -102,6 +102,9 @@ pub struct BackendView {
     pub has_secret: bool,
     pub status: BackendStatus,
     pub models: Vec<ModelInfo>,
+    /// The allowance used, where the backend has one (AIS.chat token points).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota: Option<aiscraft_core::Quota>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

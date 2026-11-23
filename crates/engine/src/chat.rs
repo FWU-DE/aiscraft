@@ -478,6 +478,22 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         s.conversations.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.updated_at.cmp(&a.updated_at)));
     });
 
+    // The allowance moved; read it again in the background.
+    if caps.remote_history {
+        let ctx = c.clone();
+        let b = backend.clone();
+        let bid = conv.backend_id.clone();
+        c.spawn(async move {
+            if let Ok(q) = b.quota().await {
+                ctx.update(|s| {
+                    if let Some(v) = s.backends.iter_mut().find(|v| v.config.id == bid) {
+                        v.quota = q;
+                    }
+                });
+            }
+        });
+    }
+
     // AIS.chat names conversations itself; adopt its title for chats we started.
     if caps.remote_history && result.is_ok() {
         let ctx = c.clone();

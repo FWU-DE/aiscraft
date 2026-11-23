@@ -147,7 +147,9 @@ fn panic_hunt_every_command_with_hostile_params() {
         json!({"files": ["/dev/null", "/etc", "/nonexistent"]}),
     ];
     for cmd in crate::commands() {
-        if cmd.id == "chat.send" || cmd.id == "backend.remove" {
+        // chat.send hits the network, backend.remove drops the test backend, and the browser
+        // login must never be started by a test (in-memory engines refuse it anyway).
+        if cmd.id == "chat.send" || cmd.id == "backend.remove" || cmd.id == "backend.browser_login" {
             continue; // covered elsewhere; would hit the network or drop the test backend
         }
         for p in &hostile {
@@ -536,7 +538,9 @@ fn ais_chat_login_history_and_import() {
                     let n = sock.read(&mut buf).await.unwrap_or(0);
                     let req = String::from_utf8_lossy(&buf[..n]).to_string();
                     let authed = req.contains("ais-chat-app.authjs.session-token=good");
-                    let (status, ctype, body) = if !authed {
+                    let (status, ctype, body) = if req.starts_with("GET /login") {
+                        ("200 OK\r\nset-cookie: __Secure-ais-chat-app.authjs.session-token=good; Path=/; Secure; HttpOnly", "text/html", "<p>angemeldet</p>".to_string())
+                    } else if !authed {
                         ("307 Temporary Redirect\r\nlocation: /login", "text/plain", String::new())
                     } else if req.starts_with("GET /api/auth/session") {
                         ("200 OK", "application/json", r#"{"user":{"firstName":"Ada","lastName":"Lehrerin","school":{"name":"Gesamtschule"}},"expires":"2030-01-01"}"#.to_string())
@@ -546,7 +550,7 @@ fn ais_chat_login_history_and_import() {
                         let row = r#"5:{"messages":[{"id":"u1","role":"user","content":"Hallo AIS"},{"id":"a1","role":"assistant","content":"Hallo zurück"}]}"#;
                         ("200 OK", "text/html", format!("<script>self.__next_f.push([1,{}])</script>", serde_json::to_string(&format!("{row}\n")).unwrap()))
                     } else if req.starts_with("GET / ") {
-                        let row = r#"3:{"models":[{"id":"m-uuid","name":"gpt","displayName":"GPT","priceMetadata":{"type":"text"}}]}"#;
+                        let row = r#"3:{"usedBudget":250,"maxBudget":1000,"models":[{"id":"m-uuid","name":"gpt","displayName":"GPT","priceMetadata":{"type":"text"}}]}"#;
                         ("200 OK", "text/html", format!("<script>self.__next_f.push([1,{}])</script>", serde_json::to_string(&format!("{row}\n")).unwrap()))
                     } else {
                         ("404 Not Found", "text/plain", String::new())
@@ -560,9 +564,17 @@ fn ais_chat_login_history_and_import() {
     engine.call("backend.update", json!({"id": "ais-chat", "base_url": base})).ok();
     assert!(engine.call("backend.login", json!({"id": "ais-chat", "secret": "bad"})).is_err(), "a wrong cookie is an auth error");
     assert!(matches!(engine.state().backend("ais-chat").unwrap().status, crate::BackendStatus::SignedOut { .. }));
+    // Engines in memory never start a browser: the login refuses instead of opening a window.
+    // (The login itself is tested against a fake DevTools endpoint in aiscraft-backends, and
+    // live, headless, with `cargo test -p aiscraft-backends -- --ignored real_browser_login`.)
+    let err = engine.call("backend.browser_login", json!({"id": "ais-chat"})).unwrap_err();
+    assert_eq!(err.kind, aiscraft_core::ErrorKind::Unsupported);
     let account = engine.call("backend.login", json!({"id": "ais-chat", "secret": "good"})).unwrap();
     assert_eq!(account["display_name"], "Ada Lehrerin");
     assert_eq!(engine.state().backend("ais-chat").unwrap().models[0].id, "m-uuid");
+    let q = engine.state().backend("ais-chat").unwrap().quota.unwrap();
+    assert_eq!((q.used, q.max), (250.0, 1000.0));
+    assert!((q.left() - 0.75).abs() < 1e-9);
     let list = engine.call("remote.refresh", json!({"backend": "ais-chat"})).unwrap();
     assert_eq!(list[0]["title"], "Alter Chat");
     engine.call("remote.import", json!({"backend": "ais-chat", "id": "r1"})).unwrap();

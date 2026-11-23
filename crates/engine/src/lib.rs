@@ -9,7 +9,7 @@ mod files;
 mod secrets;
 mod schedules;
 mod state;
-mod tools;
+pub mod tools;
 mod usage;
 
 use std::collections::HashMap;
@@ -29,6 +29,7 @@ pub use artifacts::{doc_text, markdown_html};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use schedules::{Cron, Schedule, next_run as schedule_next_run};
 pub use secrets::Secrets;
+pub use tools::{obsidian_vaults, presets as connector_presets};
 pub use state::*;
 
 pub fn now_ms() -> i64 {
@@ -84,6 +85,11 @@ pub(crate) struct Inner {
     tools: tools::ToolRuntime,
     /// Copies of attached files, so they stay readable for later requests.
     pub(crate) attachments_dir: PathBuf,
+    /// The browser profile for signing in to AIS.chat.
+    pub(crate) browser_profile: PathBuf,
+    /// May this engine start a browser? Only the real app (with a data folder) does; engines in
+    /// memory (tests, scripts) never open windows or start browsers.
+    pub(crate) browser_allowed: bool,
 }
 
 /// What commands and tasks hold. It never owns the runtime, so it can be dropped anywhere.
@@ -141,6 +147,8 @@ impl Engine {
             cancels: Mutex::new(HashMap::new()),
             next_notice: std::sync::atomic::AtomicU64::new(1),
             tools: Default::default(),
+            browser_allowed: opts.data_dir.is_some() && std::env::var_os("AISCRAFT_NO_BROWSER").is_none(),
+            browser_profile: opts.data_dir.clone().map(|d| d.join("browser-profile")).unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-browser-{}", std::process::id()))),
             attachments_dir: opts.data_dir.clone().map(|d| d.join("attachments")).unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-attachments-{}", std::process::id()))),
         }));
         ctx.load()?;
@@ -292,7 +300,8 @@ impl Ctx {
         self.0.backends.lock().unwrap_or_else(PoisonError::into_inner).insert(config.id.clone(), backend);
         self.update(|s| {
             let models = s.backend(&config.id).map(|b| b.models.clone()).unwrap_or_default();
-            let view = BackendView { config: config.clone(), capabilities: caps, has_secret, status: BackendStatus::Unknown, models };
+            let quota = s.backend(&config.id).and_then(|b| b.quota);
+            let view = BackendView { config: config.clone(), capabilities: caps, has_secret, status: BackendStatus::Unknown, models, quota };
             match s.backends.iter_mut().find(|b| b.config.id == config.id) {
                 Some(b) => *b = view,
                 None => s.backends.push(view),
@@ -342,8 +351,18 @@ impl Ctx {
         for b in self.state().backends.iter().filter(|b| b.has_secret || matches!(b.config.kind, BackendKind::OpenAi | BackendKind::ClaudeCli)) {
             let ctx = self.clone();
             let id = b.config.id.clone();
+            let kind = b.config.kind;
             self.spawn(async move {
-                let _ = commands::refresh_backend(&ctx, &id).await;
+                let r = commands::refresh_backend(&ctx, &id).await;
+                // An expired AIS.chat session: sign in again without a window if the browser
+                // profile still has the identity provider's session. Never opens a window.
+                if kind == BackendKind::AisChat
+                    && r.as_ref().is_err_and(|e| e.kind == aiscraft_core::ErrorKind::Auth)
+                    && ctx.0.browser_profile.join("Default").is_dir()
+                    && commands::browser_login(ctx.clone(), serde_json::json!({"id": id, "silent": true, "window": false})).await.is_ok()
+                {
+                    ctx.notice(NoticeLevel::Info, "AIS.chat-Sitzung automatisch erneuert");
+                }
             });
         }
     }

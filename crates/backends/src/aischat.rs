@@ -455,6 +455,13 @@ impl Backend for AisChat {
         })
     }
 
+    fn quota(&self) -> BoxFuture<'_, Result<Option<aiscraft_core::Quota>>> {
+        Box::pin(async move {
+            let payload = scrape::rsc_payload(&self.page().await?);
+            Ok(scrape::page_budget(&payload).map(|(used, max)| aiscraft_core::Quota { used, max }))
+        })
+    }
+
     fn remote_messages(&self, id: String) -> BoxFuture<'_, Result<Vec<(String, Role, String)>>> {
         Box::pin(async move {
             if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {

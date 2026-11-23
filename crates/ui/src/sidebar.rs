@@ -46,6 +46,8 @@ impl AisCraftApp {
         ui.add_space(8.0);
 
         ScrollArea::vertical().id_salt("sidebar-list").auto_shrink([false, false]).show(ui, |ui| {
+            // Leave room for the scroll bar, so it never covers the "+" buttons on the right.
+            ui.set_max_width((ui.available_width() - 12.0).max(80.0));
             if self.state.search.is_some() && !self.search_text.trim().is_empty() {
                 self.search_results(ui);
             } else {
@@ -307,6 +309,18 @@ impl AisCraftApp {
             })
             .response
             .interact(Sense::click());
+        if let Some(q) = self.state.backends.iter().filter(|b| b.config.kind == BackendKind::AisChat && matches!(b.status, BackendStatus::Ready { .. })).find_map(|b| b.quota) {
+            let left = q.left() as f32;
+            ui.horizontal(|ui| {
+                ui.label(small_muted(&t, format!("AIS.chat-Kontingent: {:.0} % übrig", left * 100.0)));
+            });
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 5.0), Sense::hover());
+            ui.painter().rect_filled(rect, CornerRadius::same(3), t.surface_hi);
+            let mut fill = rect;
+            fill.set_width((rect.width() * left).max(2.0));
+            ui.painter().rect_filled(fill, CornerRadius::same(3), if left < 0.1 { t.danger } else if left < 0.3 { t.warning } else { t.accent });
+            resp.on_hover_text(format!("{:.0} von {:.0} Token-Punkten verbraucht (aus AIS.chat, nach jeder Antwort aktualisiert)", q.used, q.max));
+        }
         if r.clicked() {
             if let Some(b) = view.filter(|b| !matches!(b.status, BackendStatus::Ready { .. })) {
                 self.dialog = Some(Dialog::login(&b.config.id));

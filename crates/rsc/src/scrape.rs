@@ -102,6 +102,24 @@ pub fn page_models(payload: &str) -> Vec<PageModel> {
     out
 }
 
+/// The token-point budget the page shows (`usedBudget`, `maxBudget`), if any.
+pub fn page_budget(payload: &str) -> Option<(f64, f64)> {
+    let mut found = None;
+    for v in payload_values(payload) {
+        walk(&v, 0, &mut |o| {
+            if found.is_none()
+                && let (Some(u), Some(m)) = (o.get("usedBudget").and_then(Value::as_f64), o.get("maxBudget").and_then(Value::as_f64))
+                && m > 0.0
+                && u.is_finite()
+                && m.is_finite()
+            {
+                found = Some((u, m));
+            }
+        });
+    }
+    found
+}
+
 /// The name of the model the person last used, if the page says so (`initialModelName`).
 pub fn initial_model_name(payload: &str) -> Option<String> {
     let mut found = None;
@@ -180,6 +198,14 @@ mod tests {
         let row = r#"7:["$","$L8",null,{"initialMessages":[{"id":"a","role":"user","content":"Hallo"},{"id":"b","role":"assistant","content":"$$9 Euro"},{"id":"a","role":"user","content":"dup"},{"id":"s","role":"system","content":"x"}]}]"#;
         let msgs = page_messages(&format!("{row}\n"));
         assert_eq!(msgs, vec![("a".into(), "user".into(), "Hallo".into()), ("b".into(), "assistant".into(), "$9 Euro".into())]);
+    }
+
+    #[test]
+    fn budget_from_page_payload() {
+        let row = r#"9:["$","$L4",null,{"federalState":{},"usedBudget":370.5,"maxBudget":1000}]"#;
+        assert_eq!(page_budget(&format!("{row}\n")), Some((370.5, 1000.0)));
+        assert_eq!(page_budget("1:{\"maxBudget\":0,\"usedBudget\":1}\n"), None);
+        assert_eq!(page_budget(""), None);
     }
 
     #[test]
