@@ -5,6 +5,9 @@
 //!     --script '[["chat.send", {"text": "Erkläre Photosynthese"}], ["ui.show", {"what": "settings"}]]'
 //! ```
 //!
+//! `"$last"` in params is the id the previous command returned; `["ui.click", {"label": "Teilen"}]`
+//! clicks a widget by its label.
+//!
 //! `--demo` starts a local OpenAI-compatible server that streams a Markdown answer, adds it as a
 //! backend and fills projects, notes and a few chats. `--demo-ais` adds a local stand-in for
 //! AIS.chat (assistants, characters, learning scenarios, image generation, a plot answer for
@@ -18,6 +21,7 @@ use std::time::Duration;
 
 use aiscraft_engine::{Engine, Options};
 use aiscraft_ui::{AisCraftApp, UiRequest};
+use egui_kittest::kittest::Queryable as _;
 use serde_json::{Value, json};
 
 fn arg(args: &[String], name: &str) -> Option<String> {
@@ -232,8 +236,13 @@ fn main() {
         .wgpu()
         .build_eframe(move |cc| AisCraftApp::new(cc, app_engine.clone(), rx.take()));
     harness.run_steps(4);
+    // "$last" in a string param stands for the id the previous command returned.
+    let mut last = String::new();
     for (cmd, params) in script {
-        if cmd == "ui.show" {
+        let params: Value = serde_json::from_str(&params.to_string().replace("$last", &last)).unwrap_or(params);
+        if cmd == "ui.click" {
+            harness.get_by_label(params["label"].as_str().unwrap_or("")).click();
+        } else if cmd == "ui.show" {
             let (rtx, _rrx) = mpsc::channel();
             tx.send(UiRequest::Show { what: params["what"].as_str().unwrap_or("").into(), reply: rtx }).unwrap();
         } else if cmd == "ui.key" {
@@ -247,8 +256,15 @@ fn main() {
         } else if let Some(c) = cmd.strip_prefix("dispatch:") {
             engine.dispatch(c, params.clone());
             std::thread::sleep(Duration::from_millis(800));
-        } else if let Err(e) = engine.call(&cmd, params.clone()) {
-            eprintln!("{cmd}: {e}");
+        } else {
+            match engine.call(&cmd, params.clone()) {
+                Ok(v) => {
+                    if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                        last = id.to_string();
+                    }
+                }
+                Err(e) => eprintln!("{cmd}: {e}"),
+            }
         }
         harness.run_steps(6);
     }

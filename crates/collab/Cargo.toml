@@ -1,0 +1,21 @@
+[package]
+name = "aiscraft-collab"
+description = "AIS.ChatCraft collaboration plug-in: y-sync over WebSocket for yrs artifacts, join codes, the relay client."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+yrs = "0.28"
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+log.workspace = true
+thiserror.workspace = true
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+
+[lints]
+workspace = true

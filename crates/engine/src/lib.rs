@@ -5,6 +5,8 @@
 mod artifacts;
 mod bridge;
 mod chat;
+#[cfg(feature = "collab")]
+mod collab;
 mod commands;
 mod files;
 mod proactive;
@@ -30,7 +32,7 @@ use futures::future::BoxFuture;
 use serde_json::Value;
 
 pub use aiscraft_backends::SESSION_COOKIE;
-pub use artifacts::{change_blocks, doc_text, markdown_html};
+pub use artifacts::{change_blocks, doc_replace, doc_text, markdown_html, merge_states};
 pub use commands::{CommandSpec, commands};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use schedules::{Cron, Schedule, next_run as schedule_next_run};
@@ -93,6 +95,8 @@ pub(crate) struct Inner {
     tools: tools::ToolRuntime,
     bridge: bridge::Bridge,
     voice: voice::Voice,
+    #[cfg(feature = "collab")]
+    collab: collab::Hub,
     /// Copies of attached files, so they stay readable for later requests.
     pub(crate) attachments_dir: PathBuf,
     /// The browser profile for signing in to AIS.chat.
@@ -159,6 +163,8 @@ impl Engine {
             tools: Default::default(),
             bridge: Default::default(),
             voice: Default::default(),
+            #[cfg(feature = "collab")]
+            collab: Default::default(),
             browser_allowed: opts.data_dir.is_some() && std::env::var_os("AISCRAFT_NO_BROWSER").is_none(),
             browser_profile: opts
                 .data_dir
@@ -188,6 +194,8 @@ impl Engine {
             });
             schedules::start(&engine.ctx);
             vault::refresh(&engine.ctx);
+            #[cfg(feature = "collab")]
+            collab::load(&engine.ctx);
         }
         Ok(engine)
     }

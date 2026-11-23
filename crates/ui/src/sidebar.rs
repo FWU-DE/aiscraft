@@ -146,6 +146,10 @@ impl AisCraftApp {
                         self.run("artifact.create", json!({"kind": "board"}));
                         ui.close();
                     }
+                    if self.state.collab.available {
+                        ui.separator();
+                        self.collab_join_row(ui);
+                    }
                 });
             });
         });

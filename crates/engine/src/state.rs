@@ -39,6 +39,35 @@ pub struct State {
     pub recording: bool,
     /// Vault entries, without their secrets.
     pub vault: Vec<crate::vault::EntryInfo>,
+    /// Live collaboration (the `collab` plug-in); empty and unavailable without it.
+    #[serde(default)]
+    pub collab: CollabState,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CollabState {
+    /// The plug-in is built in.
+    pub available: bool,
+    /// The relay new shares go to; empty = none set.
+    pub server: String,
+    pub shares: Vec<CollabView>,
+}
+
+/// One shared artifact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CollabView {
+    pub artifact_id: String,
+    pub server: String,
+    /// The join code (`XXXXX-XXXXX`) and link, to hand on.
+    pub code: String,
+    pub link: String,
+    /// Made this room (may end it for everyone).
+    pub owner: bool,
+    /// "connecting", "online", "offline" or "ended".
+    pub status: String,
+    /// The status for people, in German.
+    pub detail: String,
+    pub peers: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,6 +268,9 @@ impl State {
     }
     pub fn conversation(&self, id: &str) -> Option<&Conversation> {
         self.conversations.iter().find(|c| c.id == id)
+    }
+    pub fn share(&self, artifact: &str) -> Option<&CollabView> {
+        self.collab.shares.iter().find(|s| s.artifact_id == artifact)
     }
     pub fn is_generating(&self, conv: &str) -> bool {
         self.generating.iter().any(|g| g == conv)

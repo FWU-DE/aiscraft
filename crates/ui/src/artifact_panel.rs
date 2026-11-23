@@ -20,6 +20,9 @@ pub struct ArtifactView {
     /// Our own save is on its way; the next revision bump is ours and needs no reload.
     own_saves: u32,
     doc: String,
+    /// The document state `doc` was loaded from or last saved as: saves are edits on top of
+    /// it, so changes that arrived meanwhile (model, people in a shared room) are kept.
+    base: Vec<u8>,
     dirty_since: Option<Instant>,
     pub preview: bool,
     board: Option<(Board, ViewState, u64)>,
@@ -42,6 +45,7 @@ impl AisCraftApp {
                     rev_loaded: self.state.artifact_rev,
                     own_saves: 0,
                     doc: String::new(),
+                    base: Vec::new(),
                     dirty_since: None,
                     preview: false,
                     board: None,
@@ -54,8 +58,8 @@ impl AisCraftApp {
         };
         let kind = v.pointer("/artifact/kind").and_then(|k| k.as_str()).and_then(ArtifactKind::parse).unwrap_or(ArtifactKind::Document);
         let text = v.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
+        let bytes = v.get("state_b64").and_then(|s| s.as_str()).and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()).unwrap_or_default();
         let board = if kind == ArtifactKind::Board {
-            let bytes = v.get("state_b64").and_then(|s| s.as_str()).and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()).unwrap_or_default();
             Board::from_state(&bytes).ok().map(|b| {
                 let rev = b.revision();
                 let mut vs = ViewState::default();
@@ -72,6 +76,7 @@ impl AisCraftApp {
             own_saves: 0,
             preview: kind == ArtifactKind::Document && !text.is_empty(),
             doc: text,
+            base: if kind == ArtifactKind::Document { bytes } else { Vec::new() },
             dirty_since: None,
             board,
             revise: String::new(),
@@ -89,9 +94,14 @@ impl AisCraftApp {
             (Some(id), Some(v)) if &v.id == id => {
                 let rev = self.state.artifact_rev;
                 if rev != v.rev_loaded {
-                    let ours = v.own_saves > 0;
+                    // Shared: any change may carry someone else's edits, so take them in.
+                    let shared = self.state.share(id).is_some();
+                    let ours = v.own_saves > 0 && !shared;
                     let dirty = v.dirty_since.is_some();
-                    if ours {
+                    if shared && !dirty && v.kind == ArtifactKind::Board {
+                        let id = id.clone();
+                        self.merge_board(&id, rev);
+                    } else if ours {
                         if let Some(v) = self.artifact.as_mut() {
                             v.own_saves -= 1;
                             v.rev_loaded = rev;
@@ -110,10 +120,34 @@ impl AisCraftApp {
         }
     }
 
+    /// Merge the stored whiteboard into the open one, keeping zoom and selection.
+    fn merge_board(&mut self, id: &str, rev: u64) {
+        let bytes = self
+            .engine
+            .call("artifact.get", json!({"id": id}))
+            .ok()
+            .and_then(|v| v.get("state_b64").and_then(|s| s.as_str()).and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok()));
+        let Some(v) = self.artifact.as_mut() else { return };
+        v.rev_loaded = rev;
+        v.own_saves = v.own_saves.saturating_sub(1);
+        if let (Some(bytes), Some((board, _, saved))) = (bytes, v.board.as_mut())
+            && board.apply_update(&bytes).is_ok()
+        {
+            *saved = board.revision();
+        }
+    }
+
     fn save_artifact_now(&mut self) {
         let Some(v) = self.artifact.as_mut() else { return };
         match v.kind {
-            ArtifactKind::Document => self.engine.dispatch("artifact.save", json!({"id": v.id, "text": v.doc})),
+            ArtifactKind::Document => match aiscraft_engine::doc_replace(&v.base, &v.doc) {
+                Ok(state) => {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(&state);
+                    v.base = state;
+                    self.engine.dispatch("artifact.save", json!({"id": v.id, "state_b64": b64}));
+                }
+                Err(_) => self.engine.dispatch("artifact.save", json!({"id": v.id, "text": v.doc})),
+            },
             ArtifactKind::Board => {
                 if let Some((b, _, saved)) = v.board.as_mut() {
                     let b64 = base64::engine::general_purpose::STANDARD.encode(b.encode_state());
@@ -188,10 +222,14 @@ impl AisCraftApp {
                     if ui.toggle_value(&mut attach, "Im Chat").on_hover_text("Inhalt bei der nächsten Nachricht als Kontext mitschicken").changed() {
                         self.attach_artifact = attach;
                     }
+                    if self.state.collab.available {
+                        self.share_menu(ui, &meta);
+                    }
                 });
             });
         });
         ui.separator();
+        self.share_strip(ui, &meta.id);
         if let Some(err) = self.artifact.as_ref().and_then(|v| v.error.clone()) {
             ui.label(RichText::new(err).color(t.danger));
             return;

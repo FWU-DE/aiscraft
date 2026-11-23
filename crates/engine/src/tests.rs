@@ -1254,3 +1254,109 @@ fn inline_context_for_backends_without_system_prompt() {
     let (block, print2) = crate::chat::inline_context(engine.ctx(), &sent, false).unwrap();
     assert!(block.contains("NEUE NOTIZ") && print2 != print);
 }
+
+/// The collab plug-in without a relay: present, but nothing is shared and nothing connects.
+#[cfg(feature = "collab")]
+#[test]
+fn collab_without_server_stays_local() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let s = engine.call("collab.status", json!({})).unwrap();
+    assert_eq!(s["available"], true);
+    assert_eq!(s["server"], "");
+    let id = engine.call("artifact.create", json!({"kind": "document", "content": "# Lokal"})).unwrap()["id"].as_str().unwrap().to_string();
+    let e = engine.call("collab.share", json!({"id": id})).unwrap_err();
+    assert!(e.message.contains("Kein Server"), "{}", e.message);
+    assert!(engine.call("collab.join", json!({"code": "ABCDE-FGHJK"})).unwrap_err().message.contains("Kein Server"));
+    assert!(engine.call("collab.join", json!({"code": "kein code"})).is_err());
+    assert!(engine.call("collab.leave", json!({"id": id})).is_err(), "not shared");
+    assert!(engine.call("collab.set_server", json!({"url": "ftp://x"})).is_err());
+    assert_eq!(engine.call("collab.status", json!({"id": id})).unwrap()["shared"], false);
+    // Saving works exactly as without the plug-in.
+    engine.call("artifact.save", json!({"id": id, "text": "# Lokal\n\nText"})).unwrap();
+    assert_eq!(engine.call("artifact.get", json!({"id": id})).unwrap()["text"], "# Lokal\n\nText");
+}
+
+/// Poll until `f` holds (10 s); for checks that need engine calls.
+#[cfg(feature = "collab")]
+fn eventually(f: impl Fn() -> bool) -> bool {
+    for _ in 0..400 {
+        if f() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    false
+}
+
+#[cfg(feature = "collab")]
+fn text_of(engine: &Engine, id: &str) -> String {
+    engine.call("artifact.get", json!({"id": id})).map(|v| v["text"].as_str().unwrap_or("").to_string()).unwrap_or_default()
+}
+
+/// Two engines share a document and a whiteboard through an in-process relay and converge.
+#[cfg(feature = "collab")]
+#[test]
+fn collab_two_engines_converge() {
+    let a = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let b = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let dir = std::env::temp_dir().join(format!("aiscraft-engine-collab-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let relay = a.block_on(async {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        aiscraft_collab_server::start(l, aiscraft_collab_server::Config::new(dir.clone())).await.unwrap()
+    });
+    let url = format!("http://{}", relay.addr);
+    assert_eq!(a.call("collab.set_server", json!({"url": url, "key": ""})).unwrap()["server"], url.as_str());
+
+    // A shares a document; B joins by link without any server set.
+    let doc = a.call("artifact.create", json!({"kind": "document", "content": "# Plan\n\nEins\n"})).unwrap()["id"].as_str().unwrap().to_string();
+    let shared = a.call("collab.share", json!({"id": doc})).unwrap();
+    let link = shared["link"].as_str().unwrap().to_string();
+    assert!(link.starts_with(&url) && link.contains("/join/"));
+    assert_eq!(a.call("collab.share", json!({"id": doc})).unwrap()["code"], shared["code"], "sharing again shows the same code");
+    let joined = b.call("collab.join", json!({"link": link})).unwrap();
+    assert_eq!(joined["id"], doc.as_str(), "the room is the artifact id");
+    assert_eq!(joined["synced"], true);
+    assert_eq!(text_of(&b, &doc), "# Plan\n\nEins\n");
+    assert_eq!(b.state().open_artifact.as_deref(), Some(doc.as_str()));
+    assert!(a.wait_for(Duration::from_secs(10), |s| s.share(&doc).is_some_and(|v| v.status == "online" && v.peers == 2)));
+    let st = b.call("collab.status", json!({"id": doc})).unwrap();
+    assert_eq!(st["share"]["owner"], false);
+
+    // B edits, A sees it.
+    b.call("artifact.save", json!({"id": doc, "text": "# Plan\n\nEins\nZwei\n"})).unwrap();
+    assert!(eventually(|| text_of(&a, &doc) == "# Plan\n\nEins\nZwei\n"));
+
+    // Both edit at the same time, each from the state it had: both edits survive, everywhere.
+    let base = a.call("artifact.get", json!({"id": doc})).unwrap()["state_b64"].as_str().unwrap().to_string();
+    use base64::Engine as _;
+    let base_bytes = base64::engine::general_purpose::STANDARD.decode(&base).unwrap();
+    let mine = crate::doc_replace(&base_bytes, "# Plan!\n\nEins\nZwei\n").unwrap();
+    b.call("artifact.save", json!({"id": doc, "text": "# Plan\n\nEins\nZwei\nDrei\n"})).unwrap();
+    a.call("artifact.save", json!({"id": doc, "state_b64": base64::engine::general_purpose::STANDARD.encode(mine)})).unwrap();
+    let want = "# Plan!\n\nEins\nZwei\nDrei\n";
+    assert!(eventually(|| text_of(&a, &doc) == want), "a: {:?}", text_of(&a, &doc));
+    assert!(eventually(|| text_of(&b, &doc) == want), "b: {:?}", text_of(&b, &doc));
+
+    // A whiteboard, joined by code with the server set.
+    let board = a.call("artifact.create", json!({"kind": "board", "content": "# Wald\n- Bäume"})).unwrap()["id"].as_str().unwrap().to_string();
+    let code = a.call("collab.share", json!({"id": board})).unwrap()["code"].as_str().unwrap().to_string();
+    b.call("collab.set_server", json!({"url": url})).unwrap();
+    b.call("collab.join", json!({"code": code.to_lowercase()})).unwrap();
+    assert!(text_of(&b, &board).contains("Bäume"));
+    b.call("artifact.board_add", json!({"id": board, "outline": "# Tiere\n- Fuchs"})).unwrap();
+    assert!(eventually(|| text_of(&a, &board).contains("Fuchs")));
+
+    // B leaves (keeps its copy); A ends the room for everyone.
+    b.call("collab.leave", json!({"id": board})).unwrap();
+    assert!(b.state().share(&board).is_none());
+    assert!(text_of(&b, &board).contains("Fuchs"));
+    assert!(b.call("collab.leave", json!({"id": doc, "end": true})).is_err(), "only the owner ends a room");
+    a.call("collab.leave", json!({"id": board, "end": true})).unwrap();
+    assert!(b.call("collab.join", json!({"code": code})).is_err(), "the room is gone");
+    // Deleting a shared artifact stops sharing it.
+    a.call("artifact.delete", json!({"id": doc})).unwrap();
+    assert!(a.state().collab.shares.is_empty());
+    a.block_on(relay.shutdown());
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -14,7 +14,7 @@ use yrs::{GetString, ReadTxn, Text, Transact};
 use crate::commands::{opt_str, req_str};
 use crate::{Ctx, NoticeLevel, new_id, now_ms};
 
-const MAX_STATE: usize = 32 * 1024 * 1024;
+pub(crate) const MAX_STATE: usize = 32 * 1024 * 1024;
 const MAX_TEXT_CHARS: usize = 2_000_000;
 
 // ---- documents ------------------------------------------------------------------------------
@@ -56,6 +56,16 @@ pub fn doc_replace(state: &[u8], new: &str) -> Result<Vec<u8>> {
         if !ins.is_empty() {
             text.insert(&mut txn, start16, &ins);
         }
+    }
+    Ok(encode(&doc))
+}
+
+/// Both states in one (CRDT merge), as a full v1 update.
+pub fn merge_states(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
+    let doc = doc_from_state(a)?;
+    if !b.is_empty() {
+        let update = yrs::Update::decode_v1(b).map_err(|e| Error::invalid(format!("Artefakt beschädigt: {e}")))?;
+        doc.transact_mut().apply_update(update).map_err(|e| Error::invalid(format!("Artefakt beschädigt: {e}")))?;
     }
     Ok(encode(&doc))
 }
@@ -104,11 +114,11 @@ pub fn markdown_html(title: &str, md: &str) -> String {
 
 // ---- commands -------------------------------------------------------------------------------
 
-fn get_artifact(c: &Ctx, id: &str) -> Result<Artifact> {
+pub(crate) fn get_artifact(c: &Ctx, id: &str) -> Result<Artifact> {
     c.state().artifacts.iter().find(|a| a.id == id).cloned().ok_or_else(|| Error::not_found("Artefakt nicht gefunden"))
 }
 
-fn state_of(c: &Ctx, id: &str) -> Result<Vec<u8>> {
+pub(crate) fn state_of(c: &Ctx, id: &str) -> Result<Vec<u8>> {
     c.store(|st| st.artifact_state(id))?.ok_or_else(|| Error::not_found("Artefakt nicht gefunden"))
 }
 
@@ -120,6 +130,14 @@ pub(crate) fn save_state(c: &Ctx, id: &str, state: &[u8], version_note: Option<&
     let mut a = get_artifact(c, id)?;
     a.updated_at = now_ms();
     c.store(|st| {
+        // A shared artifact: merged with what came from the room, and what is new goes there.
+        #[cfg(feature = "collab")]
+        let merged = crate::collab::merge_local(c, id, state)?;
+        #[cfg(feature = "collab")]
+        let state: &[u8] = merged.as_deref().unwrap_or(state);
+        if state.len() > MAX_STATE {
+            return Err(Error::invalid("Artefakt ist zu groß (über 32 MB)"));
+        }
         st.save_artifact(&a, Some(state))?;
         if let Some(note) = version_note {
             st.add_artifact_version(id, note, state, a.updated_at)?;
@@ -204,7 +222,9 @@ pub(crate) async fn save(c: Ctx, p: Value) -> Result<Value> {
         let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).map_err(|_| Error::invalid("state_b64 ist kein Base64"))?;
         // Reject content that does not parse, before it reaches the store.
         artifact_text(a.kind, &bytes)?;
-        bytes
+        // Merged, not replaced: an editor's state that missed a change made meanwhile (by the
+        // model, or by someone in a shared room) keeps that change.
+        merge_states(&state_of(&c, &id)?, &bytes)?
     } else if let Some(text) = opt_str(&p, "text") {
         if a.kind != ArtifactKind::Document {
             return Err(Error::invalid("text gibt es nur für Dokumente"));
@@ -315,6 +335,8 @@ pub(crate) async fn edit_meta(c: Ctx, p: Value, f: impl FnOnce(&mut Artifact, &V
 
 pub(crate) async fn delete(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
+    #[cfg(feature = "collab")]
+    crate::collab::forget(&c, &id);
     c.store(|st| st.delete_artifact(&id))?;
     c.update(|s| {
         s.artifacts.retain(|a| a.id != id);

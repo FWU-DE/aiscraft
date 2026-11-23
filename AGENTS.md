@@ -23,12 +23,16 @@ crates/
   mcp        L1  MCP client (stdio, Streamable HTTP) for connectors
   board      L1  whiteboard: yrs CRDT model + egui widget + mind map layout
   voice      L1  recording, playback, transcription, text to speech (OpenAI, AIS.chat)
+  collab     L1  plug-in: live collaboration on yrs artifacts (y-sync over WebSocket, join codes);
+                 engine feature `collab`, see crates/collab/README.md
   engine     L2  state, command registry, chat/tool loop, artifacts, schedules, connectors, usage
   ui         L3  egui shell (thin: renders state, dispatches commands)
 apps/
   aiscraft      desktop app (+ `--control` JSON control channel, token-protected)
   aiscraft-cli  CLI (chat, login, status, search, export, `call`, `mcp` server)
+  aiscraft-collab-server  relay for live collaboration (rooms on disk, compaction, /healthz)
 deploy/autocraft  Coolify compose for AutoCraft
+deploy/collab     Dockerfile and Coolify compose for the collab relay
 ```
 
 ## 2. Golden rules

@@ -9,6 +9,7 @@ mod dialogs;
 pub mod manual;
 mod palette;
 pub mod plot;
+mod share;
 mod sidebar;
 pub mod theme;
 mod widgets;
