@@ -39,10 +39,10 @@ pub fn find(id: &str) -> Option<&'static CommandSpec> {
 static COMMANDS: &[CommandSpec] = &[
     cmd!("chat.new", "Neuer Chat", "Chat", Some("Ctrl+N"), "backend?: string, model?: string, project?: string", true, |c, p| Box::pin(chat_new(c, p))),
     cmd!("chat.open", "Chat öffnen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_open(c, p))),
-    cmd!("chat.send", "Senden", "Chat", Some("Enter"), "text: string, files?: [path], artifact?: string (as context)", false, |c, p| Box::pin(async move {
+    cmd!("chat.send", "Senden", "Chat", Some("Enter"), "text: string, files?: [path], artifact?: string (as context), force?: bool (past the monthly limit)", false, |c, p| Box::pin(async move {
         let text = opt_str(&p, "text").unwrap_or_default();
         let files: Vec<String> = p.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-        chat::send_with(c, text, files, opt_str(&p, "artifact")).await
+        chat::send_with(c, text, files, opt_str(&p, "artifact"), p.get("force").and_then(Value::as_bool).unwrap_or(false)).await
     })),
     cmd!("chat.stop", "Antwort anhalten", "Chat", Some("Escape"), "conversation?: string", true, |c, p| Box::pin(async move {
         let conv = opt_str(&p, "conversation").or_else(|| c.state().current.clone()).ok_or_else(|| Error::invalid("Kein Chat offen"))?;
@@ -193,7 +193,7 @@ static COMMANDS: &[CommandSpec] = &[
         Ok(out)
     })),
     cmd!("remote.import", "Chat vom Server übernehmen", "Backends", None, "backend: string, id: string, title?: string", false, |c, p| Box::pin(remote_import(c, p))),
-    cmd!("settings.set", "Einstellung ändern", "Einstellungen", None, "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered, value: any", false, |c, p| Box::pin(async move {
+    cmd!("settings.set", "Einstellung ändern", "Einstellungen", None, "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit, value: any", false, |c, p| Box::pin(async move {
         let key = req_str(&p, "key")?;
         let value = p.get("value").cloned().unwrap_or(Value::Null);
         let mut settings = serde_json::to_value(&c.state().settings)?;
@@ -249,6 +249,11 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("connector.refresh", "Konnektor neu verbinden", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::refresh(c, p))),
     cmd!("tool.answer", "Werkzeugaufruf erlauben oder ablehnen", "Konnektoren", None, "id: string, allow: bool", false, |c, p| Box::pin(crate::tools::answer(c, p))),
     cmd!("tools.list", "Werkzeuge auflisten", "Konnektoren", None, "", false, |c, _| Box::pin(async move { Ok(serde_json::to_value(crate::tools::specs(&c))?) })),
+    cmd!("schedule.create", "Zeitplan anlegen", "Zeitpläne", None, "title: string, prompt: string, cron?: \"0 7 * * 1-5\" | at?: \"morgen 7:30\", watch?: bool, backend?: string, model?: string, conversation?: string", false, |c, p| Box::pin(crate::schedules::create(c, p))),
+    cmd!("schedule.update", "Zeitplan ändern", "Zeitpläne", None, "id: string, enabled?: bool, title?: string, prompt?: string, cron?: string", false, |c, p| Box::pin(crate::schedules::edit(c, p))),
+    cmd!("schedule.delete", "Zeitplan löschen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::delete(c, p))),
+    cmd!("schedule.run", "Zeitplan jetzt ausführen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::run_now(c, p))),
+    cmd!("usage.report", "Nutzung", "App", None, "months?: number (default 6)", true, |c, p| Box::pin(crate::usage::report(c, p))),
     cmd!("app.state", "Zustand lesen", "App", None, "", false, |c, _| Box::pin(async move { Ok(serde_json::to_value(&*c.state())?) })),
     cmd!("app.commands", "Befehle auflisten", "App", None, "", false, |_, _| Box::pin(async move {
         Ok(Value::Array(

@@ -48,6 +48,11 @@ fn builtin_specs() -> Vec<ToolSpec> {
             input_schema: json!({"type": "object", "properties": {"id": {"type": "string"}, "markdown": {"type": "string"}}, "required": ["id", "markdown"], "additionalProperties": false}),
         },
         ToolSpec {
+            name: "schedule_create".into(),
+            description: "Plant etwas für später: eine Nachfrage in diesem Chat („Ich schaue Freitag nach“) oder etwas Wiederkehrendes. Nur auf Wunsch der Person oder wenn du ausdrücklich eine Nachfrage zusagst. Entweder at (einmalig, z. B. „in 2 Tagen“, „morgen 7:30“, „2026-12-04 08:00“) oder cron (fünf Felder, Ortszeit).".into(),
+            input_schema: json!({"type": "object", "properties": {"title": {"type": "string"}, "prompt": {"type": "string", "description": "Was dann zu tun ist"}, "at": {"type": "string"}, "cron": {"type": "string"}, "watch": {"type": "boolean", "description": "nur melden, wenn sich etwas geändert hat"}}, "required": ["title", "prompt"], "additionalProperties": false}),
+        },
+        ToolSpec {
             name: "board_create".into(),
             description: "Legt ein Whiteboard als Mindmap an, aus einer eingerückten Markdown-Liste (erste Zeile = Mitte).".into(),
             input_schema: json!({"type": "object", "properties": {"title": {"type": "string"}, "outline": {"type": "string"}}, "required": ["title", "outline"], "additionalProperties": false}),
@@ -84,8 +89,31 @@ async fn run_builtin(c: &Ctx, call: &ToolCall) -> Option<Result<String>> {
         )
         .await
         .map(|v| format!("Whiteboard angelegt und geöffnet (ID {}).", v.get("id").and_then(Value::as_str).unwrap_or(""))),
+        "schedule_create" => {
+            let mut p = a.clone();
+            if let Some(o) = p.as_object_mut()
+                && let Some(conv) = c.state().current.clone()
+            {
+                // A check-in answers in the chat it was promised in.
+                o.insert("conversation".into(), json!(conv));
+            }
+            crate::schedules::create(c.clone(), p).await.map(|v| {
+                let when = v.get("next_run").and_then(Value::as_i64).map(|t| chrono_fmt(t)).unwrap_or_else(|| "–".into());
+                c.notice_with(
+                    NoticeLevel::Info,
+                    format!("Geplant: {} ({when})", a.get("title").and_then(Value::as_str).unwrap_or("")),
+                    Some(crate::NoticeAction { label: "Rückgängig".into(), command: "schedule.delete".into(), params: json!({"id": v.get("id")}) }),
+                );
+                format!("Geplant für {when}.")
+            })
+        }
         _ => return None,
     })
+}
+
+fn chrono_fmt(ms: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Local.timestamp_millis_opt(ms).single().map(|t| t.format("%d.%m.%Y %H:%M").to_string()).unwrap_or_default()
 }
 
 /// Every tool on offer right now.

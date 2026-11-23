@@ -7,8 +7,10 @@ mod chat;
 mod commands;
 mod files;
 mod secrets;
+mod schedules;
 mod state;
 mod tools;
+mod usage;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,6 +27,7 @@ pub use aiscraft_backends::SESSION_COOKIE;
 pub use commands::{CommandSpec, commands};
 pub use artifacts::{doc_text, markdown_html};
 pub use files::{MAX_FILE_BYTES, mime_of};
+pub use schedules::{Cron, Schedule, next_run as schedule_next_run};
 pub use secrets::Secrets;
 pub use state::*;
 
@@ -55,6 +58,12 @@ pub fn local_user_name() -> String {
         full.unwrap_or(login)
     })
     .clone()
+}
+
+/// "04.12. 07:30" in local time.
+pub fn format_local(ms: i64) -> String {
+    use chrono::TimeZone;
+    chrono::Local.timestamp_millis_opt(ms).single().map(|t| t.format("%d.%m. %H:%M").to_string()).unwrap_or_default()
 }
 
 pub fn new_id() -> String {
@@ -143,6 +152,9 @@ impl Engine {
         {
             let _guard = engine._rt.enter();
             tools::load(&engine.ctx);
+            let schedules = schedules::load(&engine.ctx);
+            engine.ctx.update(|s| s.schedules = schedules);
+            schedules::start(&engine.ctx);
         }
         Ok(engine)
     }

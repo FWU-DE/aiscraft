@@ -68,7 +68,7 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
 }
 
 pub(crate) async fn send(c: Ctx, text: String, paths: Vec<String>) -> Result<Value> {
-    send_with(c, text, paths, None).await
+    send_with(c, text, paths, None, false).await
 }
 
 /// One model call outside any conversation, with the selected backend and model: for revising
@@ -109,7 +109,7 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
     Ok(out)
 }
 
-pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact: Option<String>) -> Result<Value> {
+pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact: Option<String>, force: bool) -> Result<Value> {
     let text = text.trim().to_string();
     if text.is_empty() && paths.is_empty() {
         return Err(Error::invalid("Nachricht ist leer"));
@@ -125,6 +125,9 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact
         return Err(Error::invalid("Die vorige Antwort läuft noch"));
     }
     let caps = backend.capabilities();
+    if !force {
+        crate::usage::check_limit(&c, &text, &paths, artifact.as_deref())?;
+    }
 
     // Attachments first, so a bad file fails before anything is saved.
     let mut attachments = Vec::new();
@@ -184,11 +187,40 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact
         Some(id) => Some(crate::artifacts::context_block(&c, &id)?),
         None => None,
     };
-    generate_with(c, conv, context).await
+    generate_with(c, conv, context, true).await
 }
 
 async fn generate(c: Ctx, conv_id: String) -> Result<Value> {
-    generate_with(c, conv_id, None).await
+    generate_with(c, conv_id, None, true).await
+}
+
+/// Send a prompt into a conversation without a person present (schedules, tasks): it does not
+/// have to be open, and tools that need a yes are refused.
+pub(crate) async fn send_background(c: &Ctx, conv_id: &str, prompt: &str) -> Result<Value> {
+    if c.state().is_generating(conv_id) {
+        return Err(Error::invalid("In diesem Chat läuft gerade eine Antwort"));
+    }
+    let user = Message {
+        id: new_id(),
+        conversation_id: conv_id.to_string(),
+        role: Role::User,
+        content: prompt.to_string(),
+        created_at: now_ms(),
+        model: None,
+        attachments: vec![],
+        activity: vec![],
+        error: None,
+        usage: None,
+        tool_calls: vec![],
+        tool_result: None,
+    };
+    c.store(|st| st.save_message(&user))?;
+    put_message(c, conv_id, &user);
+    let mut out = generate_with(c.clone(), conv_id.to_string(), None, false).await?;
+    if let Some(o) = out.as_object_mut() {
+        o.insert("user_message_id".into(), json!(user.id));
+    }
+    Ok(out)
 }
 
 pub(crate) async fn regenerate(c: Ctx) -> Result<Value> {
@@ -346,7 +378,7 @@ fn put_message(c: &Ctx, conv_id: &str, m: &Message) {
     });
 }
 
-async fn generate_with(c: Ctx, conv_id: String, context: Option<String>) -> Result<Value> {
+async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interactive: bool) -> Result<Value> {
     let conv = c.state().conversation(&conv_id).cloned().ok_or_else(|| Error::not_found("Chat nicht gefunden"))?;
     let backend = c.backend(&conv.backend_id)?;
     let caps = backend.capabilities();
@@ -394,7 +426,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>) -> Resu
                         result = Err(Error::cancelled());
                         break;
                     }
-                    let (text, is_error, outcome) = crate::tools::run(&c, &conv_id, &call, &owner_words, true).await;
+                    let (text, is_error, outcome) = crate::tools::run(&c, &conv_id, &call, &owner_words, interactive).await;
                     if let Some(tc) = answer.tool_calls.iter_mut().find(|t| t.id == call.id) {
                         tc.outcome = Some(outcome.to_string());
                     }

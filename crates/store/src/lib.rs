@@ -59,6 +59,16 @@ struct Extra {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageRow {
+    pub month: String,
+    pub backend_id: String,
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub answers: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchHit {
     pub conversation_id: String,
     pub message_id: String,
@@ -431,6 +441,32 @@ impl Store {
             .query_row("SELECT state FROM artifact_versions WHERE artifact_id = ?1 AND version = ?2", params![id, version], |r| r.get(0))
             .optional()
             .map_err(db_err)
+    }
+
+    // ---- usage ----------------------------------------------------------------------------
+
+    /// Tokens per month (local time), backend and model, newest month first.
+    pub fn usage_by_month(&self, months: u32) -> Result<Vec<UsageRow>> {
+        let mut st = self
+            .db
+            .prepare(
+                "SELECT strftime('%Y-%m', m.created_at / 1000, 'unixepoch', 'localtime') AS month, COALESCE(c.backend_id, ''),
+                        COALESCE(json_extract(m.extra, '$.model'), ''), SUM(COALESCE(json_extract(m.extra, '$.usage.input_tokens'), 0)),
+                        SUM(COALESCE(json_extract(m.extra, '$.usage.output_tokens'), 0)), COUNT(*)
+                 FROM messages m LEFT JOIN conversations c ON c.id = m.conversation_id
+                 WHERE m.role = 'assistant' AND json_extract(m.extra, '$.usage') IS NOT NULL
+                 GROUP BY month, c.backend_id, json_extract(m.extra, '$.model') ORDER BY month DESC",
+            )
+            .map_err(db_err)?;
+        let rows = st
+            .query_map([], |r| Ok(UsageRow { month: r.get(0)?, backend_id: r.get(1)?, model: r.get(2)?, input_tokens: r.get(3)?, output_tokens: r.get(4)?, answers: r.get(5)? }))
+            .map_err(db_err)?;
+        let mut out: Vec<UsageRow> = rows.collect::<rusqlite::Result<_>>().map_err(db_err)?;
+        let mut months_seen: Vec<String> = out.iter().map(|r| r.month.clone()).collect();
+        months_seen.dedup();
+        let keep: Vec<String> = months_seen.into_iter().take(months as usize).collect();
+        out.retain(|r| keep.contains(&r.month));
+        Ok(out)
     }
 
     // ---- settings -------------------------------------------------------------------------

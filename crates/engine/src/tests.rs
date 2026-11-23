@@ -584,3 +584,70 @@ fn every_command_has_a_functional_test() {
     let missing: Vec<&str> = crate::commands().iter().map(|c| c.id).filter(|id| !outside.contains(&format!("\"{id}\""))).collect();
     assert!(missing.is_empty(), "commands without a functional test: {missing:?}");
 }
+
+/// Schedules: create, run, watch without change, change, delete; check-ins from the model.
+#[test]
+fn schedules_run_watch_and_check_in() {
+    let (engine, seen) = engine_with_recording("Heute: Mathe, Deutsch.");
+    let created = engine.call("schedule.create", json!({"title": "Morgenplan", "prompt": "Was steht heute an?", "cron": "0 7 * * 1-5"})).unwrap();
+    let id = created["id"].as_str().unwrap().to_string();
+    assert!(created["next_run"].as_i64().is_some());
+    assert!(engine.call("schedule.create", json!({"title": "x", "prompt": "y", "cron": "99 * * * *"})).is_err());
+    assert!(engine.call("schedule.create", json!({"title": "x", "prompt": "y"})).is_err(), "cron or at required");
+    assert!(engine.call("schedule.create", json!({"title": "x", "prompt": "y", "at": "irgendwann"})).is_err());
+    let out = engine.call("schedule.run", json!({"id": id})).unwrap();
+    assert_eq!(out["text"], "Heute: Mathe, Deutsch.");
+    let s = engine.state();
+    let sched = s.schedules.iter().find(|x| x.id == id).unwrap().clone();
+    let conv = sched.conversation_id.clone().unwrap();
+    assert!(s.conversation(&conv).unwrap().title.contains("Morgenplan"));
+    assert_eq!(engine.ctx().store(|st| st.messages(&conv)).unwrap().len(), 2);
+    assert!(seen.lock().unwrap().last().unwrap().contains("Was steht heute an?"));
+    engine.call("schedule.update", json!({"id": id, "enabled": false})).unwrap();
+    assert!(!engine.state().schedules[0].enabled);
+    engine.call("schedule.delete", json!({"id": id})).unwrap();
+    assert!(engine.state().schedules.is_empty());
+
+    // A watch whose answer is "no change" leaves no trace in its chat.
+    let (engine2, _) = engine_with_recording(crate::schedules::NO_CHANGE);
+    let w = engine2.call("schedule.create", json!({"title": "Vertretungsplan", "prompt": "Prüfe den Plan", "cron": "*/30 * * * *", "watch": true})).unwrap()["id"].as_str().unwrap().to_string();
+    engine2.call("schedule.run", json!({"id": w})).unwrap();
+    let conv2 = engine2.state().schedules[0].conversation_id.clone().unwrap();
+    assert!(engine2.ctx().store(|st| st.messages(&conv2)).unwrap().is_empty(), "unchanged watch runs are removed");
+}
+
+#[test]
+fn check_in_tool_answers_in_the_same_chat() {
+    let (engine, _) = engine_with_recording("ok");
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let conv = engine.state().current.clone().unwrap();
+    let call = aiscraft_core::ToolCall { id: "t".into(), name: "schedule_create".into(), arguments: json!({"title": "Nachfragen", "prompt": "Hat Frau Yilmaz geantwortet?", "at": "in 2 Tagen"}), outcome: None };
+    let (text, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, "", true));
+    assert!(!err && text.starts_with("Geplant für"), "{text}");
+    let s = engine.state();
+    assert_eq!(s.schedules[0].conversation_id.as_deref(), Some(conv.as_str()));
+    assert!(s.schedules[0].run_at.is_some());
+}
+
+/// The usage ledger and the monthly limit.
+#[test]
+fn usage_report_and_monthly_limit() {
+    let (engine, _) = engine_with_recording("ok");
+    let mut m = engine.call("chat.send", json!({"text": "eins"})).unwrap();
+    // The recording server sends no usage; give the answer some, as a real server would.
+    let mid = m["message_id"].take();
+    let conv = engine.state().current.clone().unwrap();
+    let mut msgs = engine.ctx().store(|st| st.messages(&conv)).unwrap();
+    let a = msgs.iter_mut().find(|x| json!(x.id) == mid).unwrap();
+    a.usage = Some(aiscraft_core::Usage { input_tokens: 900, output_tokens: 200 });
+    engine.ctx().store(|st| st.save_message(a)).unwrap();
+    let r = engine.call("usage.report", json!({})).unwrap();
+    let row = &r["rows"][0];
+    assert_eq!((row["input_tokens"].as_i64(), row["output_tokens"].as_i64()), (Some(900), Some(200)));
+    assert_eq!(row["month"], r["this_month"]);
+    engine.call("settings.set", json!({"key": "monthly_token_limit", "value": 1000})).unwrap();
+    let err = engine.call("chat.send", json!({"text": "zwei"})).unwrap_err();
+    assert_eq!(err.kind, aiscraft_core::ErrorKind::Refused);
+    assert!(engine.state().notices.iter().any(|n| n.action.as_ref().is_some_and(|a| a.params["force"] == true)), "offers to send anyway");
+    engine.call("chat.send", json!({"text": "zwei", "force": true})).unwrap();
+}

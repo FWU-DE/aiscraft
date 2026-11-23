@@ -33,6 +33,7 @@ pub struct State {
     pub connectors: Vec<ConnectorView>,
     /// Tool calls waiting for the owner's yes or no.
     pub approvals: Vec<Approval>,
+    pub schedules: Vec<crate::schedules::Schedule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,11 +170,13 @@ pub struct Settings {
     pub trust_check: bool,
     /// Run a tool call without asking when the trust check found the owner's words cover it.
     pub auto_allow_covered: bool,
+    /// Ask before sending once this month's tokens reach this number (0 = no limit).
+    pub monthly_token_limit: u64,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { theme: "system".into(), memory: true, zoom: 1.0, enter_sends: true, tools: true, trust_check: true, auto_allow_covered: false }
+        Self { theme: "system".into(), memory: true, zoom: 1.0, enter_sends: true, tools: true, trust_check: true, auto_allow_covered: false, monthly_token_limit: 0 }
     }
 }
 

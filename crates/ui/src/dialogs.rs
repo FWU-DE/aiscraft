@@ -10,6 +10,8 @@ use crate::widgets::{accent_button, card, muted, small_muted, status_dot};
 pub enum SettingsTab {
     Backends,
     Connectors,
+    Schedules,
+    Usage,
     Memory,
     Appearance,
     About,
@@ -21,6 +23,7 @@ pub enum Dialog {
     Login { backend_id: String, secret: String, sent: bool },
     AddBackend { preset: usize, name: String, base_url: String, secret: String },
     Settings { tab: SettingsTab, new_note: String },
+    AddSchedule { title: String, prompt: String, when: String, recurring: bool, watch: bool },
     AddConnector { name: String, command: String, env: String, url: String, headers: String, http: bool },
     Project { id: Option<String>, name: String, instructions: String },
     Rename { id: String, title: String },
@@ -72,7 +75,7 @@ impl AisCraftApp {
         let mut keep = true;
         let modal = egui::Modal::new(Id::unique("dialog")).show(ctx, |ui| {
             ui.set_width(match dialog {
-                Dialog::Settings { .. } => 620.0,
+                Dialog::Settings { .. } => 780.0,
                 Dialog::Login { .. } | Dialog::Welcome => 520.0,
                 _ => 460.0,
             });
@@ -254,6 +257,45 @@ impl AisCraftApp {
                 });
                 keep
             }
+            Dialog::AddSchedule { title, prompt, when, recurring, watch } => {
+                ui.heading("Zeitplan anlegen");
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(*recurring, "Wiederkehrend").clicked() && !*recurring {
+                        *recurring = true;
+                        *when = "0 7 * * 1-5".into();
+                    }
+                    if ui.selectable_label(!*recurring, "Einmalig").clicked() && *recurring {
+                        *recurring = false;
+                        *when = "morgen 7:30".into();
+                    }
+                });
+                egui::Grid::new("add-sched").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+                    ui.label("Titel");
+                    ui.add(egui::TextEdit::singleline(title).hint_text("z. B. Morgenüberblick").desired_width(320.0));
+                    ui.end_row();
+                    ui.label("Auftrag");
+                    ui.add(egui::TextEdit::multiline(prompt).hint_text("Was soll dann passieren?").desired_rows(3).desired_width(320.0));
+                    ui.end_row();
+                    ui.label(if *recurring { "Regel (cron)" } else { "Wann" });
+                    ui.add(egui::TextEdit::singleline(when).desired_width(320.0));
+                    ui.end_row();
+                });
+                ui.label(small_muted(&t, if *recurring { "Minute Stunde Tag Monat Wochentag, Ortszeit. „0 7 * * 1-5“ = werktags 7:00, „*/30 * * * *“ = alle 30 Minuten." } else { "„in 30 min“, „in 2 Tagen“, „morgen 7:30“ oder „2026-12-04 08:00“." }));
+                ui.checkbox(watch, "Beobachten: nur melden, wenn sich etwas geändert hat");
+                ui.add_space(8.0);
+                let mut keep = true;
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!title.trim().is_empty() && !prompt.trim().is_empty(), egui::Button::new("Anlegen")).clicked() {
+                        let p = if *recurring { json!({"title": title, "prompt": prompt, "cron": when, "watch": watch}) } else { json!({"title": title, "prompt": prompt, "at": when, "watch": watch}) };
+                        self.run("schedule.create", p);
+                        keep = false;
+                    }
+                    if ui.button("Abbrechen").clicked() {
+                        keep = false;
+                    }
+                });
+                keep
+            }
             Dialog::RenameArtifact { id, title } => {
                 ui.heading("Umbenennen");
                 let r = ui.add(egui::TextEdit::singleline(title).desired_width(f32::INFINITY));
@@ -367,8 +409,8 @@ impl AisCraftApp {
                 }
             });
         });
-        ui.horizontal(|ui| {
-            for (k, label) in [(SettingsTab::Backends, "Backends"), (SettingsTab::Connectors, "Konnektoren"), (SettingsTab::Memory, "Gedächtnis"), (SettingsTab::Appearance, "Darstellung"), (SettingsTab::About, "Über")] {
+        ui.horizontal_wrapped(|ui| {
+            for (k, label) in [(SettingsTab::Backends, "Backends"), (SettingsTab::Connectors, "Konnektoren"), (SettingsTab::Schedules, "Zeitpläne"), (SettingsTab::Usage, "Nutzung"), (SettingsTab::Memory, "Gedächtnis"), (SettingsTab::Appearance, "Darstellung"), (SettingsTab::About, "Über")] {
                 ui.selectable_value(tab, k, label);
             }
         });
@@ -491,6 +533,81 @@ impl AisCraftApp {
                     self.dialog = Some(Dialog::AddConnector { name: String::new(), command: String::new(), env: String::new(), url: String::new(), headers: String::new(), http: false });
                 }
             }
+            SettingsTab::Schedules => {
+                ui.label(muted(&t, "Zeitpläne schicken einen Auftrag wiederkehrend oder einmal ab; die Antwort landet in einem eigenen Chat. Sie laufen, solange AISCraft läuft, und Werkzeuge, die eine Freigabe brauchen, werden dabei abgelehnt."));
+                ui.add_space(6.0);
+                let now = aiscraft_engine::now_ms();
+                for sch in self.state.schedules.clone() {
+                    card(&t).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            status_dot(ui, if sch.enabled { t.success } else { t.muted });
+                            ui.label(RichText::new(&sch.title).strong());
+                            let rule = sch.cron.clone().map(|c| format!("cron {c}")).unwrap_or_else(|| "einmalig".into());
+                            ui.label(small_muted(&t, if sch.watch { format!("{rule} · beobachtet") } else { rule }));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button("Löschen").clicked() {
+                                    self.run("schedule.delete", json!({"id": sch.id}));
+                                }
+                                if ui.small_button("Jetzt ausführen").clicked() {
+                                    self.run("schedule.run", json!({"id": sch.id}));
+                                }
+                                let mut en = sch.enabled;
+                                if ui.checkbox(&mut en, "aktiv").changed() {
+                                    self.run("schedule.update", json!({"id": sch.id, "enabled": en}));
+                                }
+                            });
+                        });
+                        ui.label(small_muted(&t, sch.prompt.chars().take(160).collect::<String>()));
+                        let next = aiscraft_engine::schedule_next_run(&sch, now).map(fmt_time).unwrap_or_else(|| "–".into());
+                        ui.label(small_muted(&t, format!("Nächster Lauf: {next}{}", sch.last_run.map(|l| format!(" · zuletzt {}", fmt_time(l))).unwrap_or_default())));
+                        if let Some(conv) = &sch.conversation_id
+                            && ui.small_button("Chat öffnen").clicked()
+                        {
+                            self.run("chat.open", json!({"id": conv}));
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
+                if ui.button("+ Zeitplan anlegen").clicked() {
+                    self.dialog = Some(Dialog::AddSchedule { title: String::new(), prompt: String::new(), when: "0 7 * * 1-5".into(), recurring: true, watch: false });
+                }
+            }
+            SettingsTab::Usage => {
+                match self.engine.call("usage.report", json!({})) {
+                    Ok(r) => {
+                        let rows = r["rows"].as_array().cloned().unwrap_or_default();
+                        if rows.is_empty() {
+                            ui.label(muted(&t, "Noch keine Token-Zahlen. AIS.chat über die Anmeldung meldet keine."));
+                        }
+                        egui::Grid::new("usage").striped(true).num_columns(5).spacing([14.0, 6.0]).show(ui, |ui| {
+                            for h in ["Monat", "Backend", "Modell", "Tokens (ein/aus)", "Kosten"] {
+                                ui.label(RichText::new(h).strong());
+                            }
+                            ui.end_row();
+                            for row in rows {
+                                ui.label(row["month"].as_str().unwrap_or(""));
+                                ui.label(row["backend"].as_str().unwrap_or(""));
+                                ui.label(row["model"].as_str().unwrap_or(""));
+                                ui.label(format!("{} / {}", row["input_tokens"].as_i64().unwrap_or(0), row["output_tokens"].as_i64().unwrap_or(0)));
+                                ui.label(row["usd"].as_f64().map(|u| format!("≈ {u:.2} $")).unwrap_or_else(|| "–".into()));
+                                ui.end_row();
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        ui.label(RichText::new(e.message).color(t.danger));
+                    }
+                }
+                ui.add_space(10.0);
+                let mut limit = self.state.settings.monthly_token_limit;
+                ui.horizontal(|ui| {
+                    ui.label("Monatsgrenze (Tokens, 0 = keine):");
+                    if ui.add(egui::DragValue::new(&mut limit).speed(10_000.0).range(0..=1_000_000_000u64)).changed() {
+                        self.run("settings.set", json!({"key": "monthly_token_limit", "value": limit}));
+                    }
+                });
+                ui.label(small_muted(&t, "Ab der Grenze fragt AISCraft vor dem Senden nach. Kosten nur für Claude über API (Preise je Million Tokens); Abo und AIS.chat rechnen nicht pro Token ab."));
+            }
             SettingsTab::Memory => {
                 let mut on = self.state.settings.memory;
                 if ui.checkbox(&mut on, "Gedächtnis verwenden").changed() {
@@ -581,4 +698,8 @@ impl AisCraftApp {
 }
 fn aiscraft_backends_cookie_name() -> &'static str {
     aiscraft_engine::SESSION_COOKIE
+}
+
+fn fmt_time(ms: i64) -> String {
+    aiscraft_engine::format_local(ms)
 }
