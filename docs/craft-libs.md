@@ -41,7 +41,8 @@ Fork = needs the storytold egui fork (`[patch.crates-io]`, see below).
 | craft-menu, craft-keymap, craft-window | Menu bar, shortcuts, window frame | palette shortcuts in `commands.rs`, eframe frame | would restructure shortcuts and chrome | yes | later |
 | craft-markdown, craft-flow | Markdown to and from the craft-flow model | egui_commonmark (render), pulldown-cmark (HTML export) | export path for #38 | no | later (#38) |
 | craft-docx, craft-xlsx, craft-pptx, craft-pdf | Office and PDF read/write | — | Word/Excel/PowerPoint/PDF export (#38) | no | later (#38) |
-| craft-latex, craft-math | LaTeX documents; equations as one tree (OMML, MathML, LaTeX) | — | parsing for formulas (#36); drawing stays ours | no | later (#36) |
+| craft-math | Equations as one tree (OMML, MathML, LaTeX math, UnicodeMath), bounded readers | — | `math_latex::parse_latex` reads the formulas in answers and documents (#36); layout and drawing are ours (`ui/src/math.rs`) | no | **adopted** |
+| craft-latex | Whole LaTeX documents to and from the craft-flow model | — | answers hold formulas, not `.tex` documents | no | later (LaTeX export with #38) |
 | craft-ical, craft-dav, craft-vcard | iCalendar, CalDAV/CardDAV, vCard | — | calendar connectors (#26) | no | later (#26) |
 | craft-ai-core / craft-ai | AI connection/model contract | `backends`, `engine` | AIS.chat is a Next.js server action, not a provider API | no | no |
 

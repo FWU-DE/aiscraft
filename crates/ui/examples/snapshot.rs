@@ -9,7 +9,8 @@
 //! clicks a widget by its label.
 //!
 //! `--demo` starts a local OpenAI-compatible server that streams a Markdown answer, adds it as a
-//! backend and fills projects, notes and a few chats. `--demo-ais` adds a local stand-in for
+//! backend and fills projects, notes and a few chats (a prompt with "Formel" gets formulas and
+//! Mermaid diagrams). `--demo-ais` adds a local stand-in for
 //! AIS.chat (assistants, characters, learning scenarios, image generation, a plot answer for
 //! prompts with "Parabel"), with a catalogue of placeholder portraits for the "Entdecken" page
 //! (`["ui.show", {"what": "personas"}]`, `{"what": "persona:character:c1"}` for one entry;
@@ -31,6 +32,10 @@ fn arg(args: &[String], name: &str) -> Option<String> {
 }
 
 const ANSWER: &str = "Die **Photosynthese** ist der Vorgang, mit dem Pflanzen aus Licht Energie gewinnen.\n\n## Was passiert?\n\n1. Blätter nehmen **Kohlenstoffdioxid** aus der Luft auf.\n2. Die Wurzeln liefern **Wasser**.\n3. Mit Sonnenlicht entsteht daraus **Traubenzucker** und **Sauerstoff**.\n\n> 6 CO₂ + 6 H₂O → C₆H₁₂O₆ + 6 O₂\n\n| Stoff | Rolle |\n|---|---|\n| Chlorophyll | fängt das Licht ein |\n| Wasser | liefert Elektronen |\n\n```python\n# Sauerstoff pro Stunde (vereinfacht)\nblaetter = 120\nprint(blaetter * 0.5, \"ml\")\n```\n\nSoll ich daraus ein Arbeitsblatt für Klasse 7 machen?";
+
+/// The answer for prompts with "Formel": formulas in the text and on their own line, a Mermaid
+/// flowchart and a mind map.
+const MATH_ANSWER: &str = "Die **Mitternachtsformel** löst $ax^2 + bx + c = 0$ für $a \\neq 0$:\n\n$$x_{1,2} = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$\n\nDer Ausdruck unter der Wurzel heißt Diskriminante \\(D = b^2 - 4ac\\). Außerdem gilt\n\n\\[\n\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}, \\quad \\int_0^1 x^2\\,dx = \\frac{1}{3}, \\quad A = \\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}\n\\]\n\nSo gehst du vor:\n\n```mermaid\ngraph TD\n  A[Gleichung aufstellen] --> B{D berechnen}\n  B -->|D > 0| C(Zwei Lösungen)\n  B -->|D = 0| D(Eine Lösung)\n  B -->|D < 0| E([Keine reelle Lösung])\n  C & D --> F[/Probe machen/]\n```\n\n```mermaid\nmindmap\n  root((Quadratische Gleichungen))\n    Formen\n      Normalform\n      Scheitelpunktform\n    Lösen\n      Mitternachtsformel\n      pq-Formel\n      Faktorisieren\n    Graph\n      Parabel\n      Nullstellen\n```\n\nSoll ich Übungsaufgaben dazu erstellen?";
 
 fn demo_server(engine: &Engine) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -61,7 +66,8 @@ fn demo_server(engine: &Engine) -> String {
                             return;
                         }
                     }
-                    for chunk in ANSWER.split_inclusive(' ') {
+                    let answer = if req.contains("Formel") { MATH_ANSWER } else { ANSWER };
+                    for chunk in answer.split_inclusive(' ') {
                         let c = json!({"choices":[{"delta":{"content":chunk}}]});
                         let _ = sock.write_all(format!("data: {c}\n\n").as_bytes()).await;
                     }

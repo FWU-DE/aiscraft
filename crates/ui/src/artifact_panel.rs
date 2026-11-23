@@ -297,13 +297,18 @@ impl AisCraftApp {
         if v.revising {
             ui.ctx().request_repaint_after(Duration::from_millis(200));
         }
+        let mut board = None;
         ScrollArea::vertical().id_salt(("doc", v.id.clone())).auto_shrink([false, false]).show(ui, |ui| {
             Frame::new().inner_margin(Margin::symmetric(16, 8)).show(ui, |ui| {
                 if v.preview {
                     if v.doc.trim().is_empty() {
                         ui.label(muted(&t, "Noch leer. Unter „Bearbeiten“ schreiben oder eine Antwort als Dokument öffnen."));
                     }
-                    egui_commonmark::CommonMarkViewer::new().show(ui, &mut self.md, &v.doc);
+                    for (k, seg) in crate::markup::segments(&v.doc).into_iter().enumerate() {
+                        if let Some(crate::markup::Action::Board(outline)) = crate::markup::show(ui, &mut self.md, &t, &seg, ("doc", &v.id, k)) {
+                            board = Some(outline);
+                        }
+                    }
                 } else {
                     let r = ui.add(
                         egui::TextEdit::multiline(&mut v.doc)
@@ -318,6 +323,9 @@ impl AisCraftApp {
                 }
             });
         });
+        if let Some(outline) = board {
+            self.run("artifact.create", json!({"kind": "board", "content": outline}));
+        }
         if self.artifact.as_ref().and_then(|v| v.dirty_since).is_some_and(|d| d.elapsed() >= SAVE_AFTER) {
             self.save_artifact_now();
         } else if self.artifact.as_ref().is_some_and(|v| v.dirty_since.is_some()) {

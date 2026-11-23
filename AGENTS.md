@@ -41,7 +41,7 @@ docs/craft-libs.md  which shared Craft libraries we use, defer or reject, and wh
 Where a crate of [storytold/craft-libs](https://github.com/storytold/craft-libs) does the job, use
 it instead of writing our own; check `docs/craft-libs.md` before adding plumbing. In use:
 `craft-atomic` (every file write: exports, secrets, tokens, attachments), `craft-jsonrpc` +
-`craft-mcp` (`aiscraft-cli mcp`), `craft-control-protocol` (`aiscraft --control`, requests are
+`craft-mcp` (`aiscraft-cli mcp`), `craft-math` (LaTeX formulas in `ui/src/math.rs`), `craft-control-protocol` (`aiscraft --control`, requests are
 `{"token", "id", "method", "params"}`). All entries in `[workspace.dependencies]` share one pin
 (full rev until craft-libs tags a release); update them together and commit `Cargo.lock`.
 The egui crates come from the storytold egui fork through `[patch.crates-io]`, like craft-libs
