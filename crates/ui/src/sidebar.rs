@@ -277,9 +277,11 @@ impl AisCraftApp {
         let sel = self.state.selection.backend_id.clone();
         let view = self.state.backend(&sel).cloned();
         let (color, line1, line2) = match view.as_ref().map(|b| &b.status) {
-            Some(BackendStatus::Ready { account }) => {
-                (t.success, account.display_name.clone().unwrap_or_else(|| view.as_ref().map(|b| b.config.name.clone()).unwrap_or_default()), account.detail.clone().unwrap_or_default())
-            }
+            Some(BackendStatus::Ready { account }) => (
+                t.success,
+                account.display_name.clone().filter(|n| !n.contains('@')).unwrap_or_else(|| view.as_ref().map(|b| b.config.name.clone()).unwrap_or_default()),
+                account.detail.clone().unwrap_or_default(),
+            ),
             Some(BackendStatus::Checking) => (t.warning, "Verbinde …".into(), String::new()),
             Some(BackendStatus::SignedOut { .. }) | Some(BackendStatus::Unknown) => (t.muted, view.as_ref().map(|b| b.config.name.clone()).unwrap_or_default(), "Nicht angemeldet".into()),
             Some(BackendStatus::Failed { message }) => (t.danger, view.as_ref().map(|b| b.config.name.clone()).unwrap_or_default(), message.clone()),

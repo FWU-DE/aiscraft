@@ -290,6 +290,9 @@ pub struct ModelInfo {
     pub description: Option<String>,
     #[serde(default)]
     pub vision: bool,
+    /// How many input tokens the model accepts, when the backend says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

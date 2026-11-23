@@ -378,7 +378,7 @@ impl Backend for AisChat {
             let mut models: Vec<ModelInfo> = scrape::page_models(&payload)
                 .into_iter()
                 .filter(|m| m.kind == "text")
-                .map(|m| ModelInfo { id: m.id, name: m.display_name, description: (!m.description.is_empty()).then_some(m.description), vision: m.vision })
+                .map(|m| ModelInfo { id: m.id, name: m.display_name, description: (!m.description.is_empty()).then_some(m.description), vision: m.vision, context_window: None })
                 .collect();
             if models.is_empty() {
                 return Err(Error::protocol("AIS.chat hat keine Modelle geliefert. Ist die Schulung abgeschlossen?"));

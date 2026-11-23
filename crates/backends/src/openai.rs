@@ -176,7 +176,8 @@ impl Backend for OpenAi {
                         .filter_map(|m| {
                             let id = m.get("id")?.as_str()?.to_string();
                             let name = m.get("name").and_then(Value::as_str).unwrap_or(&id).to_string();
-                            Some(ModelInfo { id, name, description: None, vision: false })
+                            let context_window = ["context_length", "context_window", "max_model_len", "max_context_length"].iter().find_map(|k| m.get(*k).and_then(Value::as_u64));
+                            Some(ModelInfo { id, name, description: None, vision: false, context_window })
                         })
                         .collect()
                 })

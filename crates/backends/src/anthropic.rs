@@ -219,7 +219,7 @@ impl Backend for Anthropic {
                         .filter_map(|m| {
                             let id = m.get("id")?.as_str()?.to_string();
                             let name = m.get("display_name").and_then(Value::as_str).unwrap_or(&id).to_string();
-                            Some(ModelInfo { id, name, description: None, vision: true })
+                            Some(ModelInfo { id, name, description: None, vision: true, context_window: m.get("max_input_tokens").and_then(Value::as_u64) })
                         })
                         .collect()
                 })

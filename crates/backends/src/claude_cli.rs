@@ -138,13 +138,17 @@ impl Backend for ClaudeCli {
                 return Err(Error::auth("Claude-CLI ist nicht angemeldet. Im Terminal `claude auth login` ausführen."));
             }
             let method = v.get("authMethod").and_then(Value::as_str).unwrap_or("");
-            let detail = match method {
+            let mut detail = match method {
                 "claude.ai" => "claude.ai-Abo".to_string(),
                 "" => "angemeldet".to_string(),
                 other => format!("angemeldet über {other} (nicht das Abo)"),
             };
+            if let Some(email) = v.get("email").and_then(Value::as_str) {
+                detail = format!("{detail} · {email}");
+            }
+            // No person's name: the account is an email address, and a greeting should not use it.
             Ok(AccountInfo {
-                display_name: v.get("email").and_then(Value::as_str).map(str::to_string),
+                display_name: None,
                 detail: Some(detail),
                 expires: v.get("loginExpiresAt").and_then(Value::as_str).map(str::to_string),
             })
@@ -153,7 +157,7 @@ impl Backend for ClaudeCli {
 
     fn models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>>> {
         Box::pin(async move {
-            Ok(MODELS.iter().map(|(id, name, d)| ModelInfo { id: id.to_string(), name: name.to_string(), description: Some(d.to_string()), vision: true }).collect())
+            Ok(MODELS.iter().map(|(id, name, d)| ModelInfo { id: id.to_string(), name: name.to_string(), description: Some(d.to_string()), vision: true, context_window: Some(1_000_000) }).collect())
         })
     }
 

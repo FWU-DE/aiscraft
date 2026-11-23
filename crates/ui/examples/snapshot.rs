@@ -37,7 +37,7 @@ fn demo_server(engine: &Engine) -> String {
                     let n = sock.read(&mut buf).await.unwrap_or(0);
                     let req = String::from_utf8_lossy(&buf[..n]).to_string();
                     if req.starts_with("GET") {
-                        let body = r#"{"data":[{"id":"demo-sonnet","name":"Demo Sonnet"},{"id":"demo-haiku","name":"Demo Haiku"}]}"#;
+                        let body = r#"{"data":[{"id":"demo-sonnet","name":"Demo Sonnet","context_length":200000},{"id":"demo-haiku","name":"Demo Haiku"}]}"#;
                         let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
                         return;
                     }

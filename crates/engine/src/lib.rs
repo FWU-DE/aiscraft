@@ -32,6 +32,31 @@ pub fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
+/// The person at this computer, for greetings when no sign-in (SSO) names them: the full name
+/// of the OS account where the system has one, else the login name. Windows, Linux and macOS.
+pub fn local_user_name() -> String {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let login = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).or_else(|_| std::env::var("LOGNAME")).unwrap_or_default();
+        let run = |cmd: &str, args: &[&str]| -> Option<String> {
+            let out = std::process::Command::new(cmd).args(args).output().ok()?;
+            out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|s| !s.is_empty())
+        };
+        let full = if cfg!(target_os = "macos") {
+            run("id", &["-F"])
+        } else if cfg!(windows) {
+            None
+        } else if login.is_empty() {
+            None
+        } else {
+            // passwd: name:x:uid:gid:GECOS:home:shell; the full name is GECOS up to the first comma.
+            run("getent", &["passwd", &login]).and_then(|l| l.split(':').nth(4).map(|g| g.split(',').next().unwrap_or("").trim().to_string())).filter(|g| !g.is_empty())
+        };
+        full.unwrap_or(login)
+    })
+    .clone()
+}
+
 pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }

@@ -59,6 +59,7 @@ impl AisCraftApp {
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if self.state.current.is_some() {
+                        self.context_meter(ui);
                         if icon_button(ui, &t, "⬇", "Exportieren (Strg+Umschalt+E)").clicked() {
                             self.export_dialog();
                         }
@@ -132,11 +133,16 @@ impl AisCraftApp {
 
     fn empty_state(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
-        let name = self.state.backends.iter().find_map(|b| match &b.status {
-            BackendStatus::Ready { account } => account.display_name.clone(),
+        // A name from a sign-in (AIS.chat via VIDIS), else the person logged in to this computer.
+        let sso = self.state.backends.iter().filter(|b| b.config.kind == BackendKind::AisChat).find_map(|b| match &b.status {
+            BackendStatus::Ready { account } => account.display_name.clone().filter(|n| !n.contains('@')),
             _ => None,
         });
-        let first = name.as_deref().and_then(|n| n.split_whitespace().next()).map(str::to_string);
+        let name = sso.unwrap_or_else(aiscraft_engine::local_user_name);
+        let first = name.split_whitespace().next().filter(|n| !n.is_empty()).map(|n| {
+            let mut c = n.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        });
         let any_ready = self.state.backends.iter().any(|b| matches!(b.status, BackendStatus::Ready { .. }));
         ui.add_space((ui.available_height() * 0.22).max(20.0));
         centered(ui, |ui| {
@@ -346,6 +352,64 @@ impl AisCraftApp {
                     ui.label(small_muted(&t, format!("{} ➡ {} Tokens", u.input_tokens, u.output_tokens)));
                 }
             });
+        }
+    }
+
+    /// How full the model's context window is: counted by the server where it reports usage,
+    /// estimated from the text otherwise.
+    fn context_meter(&self, ui: &mut Ui) {
+        let t = &self.tokens;
+        let sel = &self.state.selection;
+        let window = self.state.backend(&sel.backend_id).and_then(|b| b.models.iter().find(|m| m.id == sel.model_id)).and_then(|m| m.context_window);
+        let counted = self.state.messages.iter().rev().find(|m| m.role == Role::Assistant && m.usage.is_some_and(|u| u.input_tokens > 0)).and_then(|m| m.usage).map(|u| u.input_tokens + u.output_tokens);
+        let (used, estimated) = match counted {
+            Some(n) => (n, false),
+            None => {
+                let chars: usize = self.state.messages.iter().map(|m| m.content.chars().count() + m.attachments.iter().filter_map(|a| a.text.as_ref()).map(|x| x.chars().count()).sum::<usize>()).sum();
+                ((chars / 4) as u64, true)
+            }
+        };
+        if used == 0 {
+            return;
+        }
+        let fmt = |n: u64| -> String {
+            if n >= 1_000_000 {
+                format!("{:.1}M", n as f64 / 1e6).replace(".0M", "M").replace('.', ",")
+            } else if n >= 1000 {
+                format!("{:.1}k", n as f64 / 1e3).replace(".0k", "k").replace('.', ",")
+            } else {
+                n.to_string()
+            }
+        };
+        let prefix = if estimated { "≈ " } else { "" };
+        let tip = if estimated {
+            "Kontext geschätzt aus der Textlänge (dieses Backend meldet keine Token-Zahlen)".to_string()
+        } else {
+            "Kontext laut Server: Eingabe der letzten Antwort plus Antwort, also ungefähr das, was die nächste Nachricht mitschickt".to_string()
+        };
+        match window {
+            Some(w) if w > 0 => {
+                let frac = (used as f32 / w as f32).clamp(0.0, 1.0);
+                let color = if frac > 0.9 {
+                    t.danger
+                } else if frac > 0.7 {
+                    t.warning
+                } else {
+                    t.accent
+                };
+                let r = ui.label(small_muted(t, format!("{prefix}{} / {}", fmt(used), fmt(w))));
+                let (rect, bar) = ui.allocate_exact_size(egui::vec2(64.0, 6.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, CornerRadius::same(3), t.surface_hi);
+                let mut fill = rect;
+                fill.set_width((rect.width() * frac).max(2.0));
+                ui.painter().rect_filled(fill, CornerRadius::same(3), color);
+                let tip = format!("{tip}. {:.0} % von {} Tokens belegt.", frac * 100.0, fmt(w));
+                r.on_hover_text(&tip);
+                bar.on_hover_text(tip);
+            }
+            _ => {
+                ui.label(small_muted(t, format!("Kontext {prefix}{}", fmt(used)))).on_hover_text(format!("{tip}. Die Größe des Kontextfensters meldet dieses Backend nicht."));
+            }
         }
     }
 
