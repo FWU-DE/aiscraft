@@ -1,0 +1,15 @@
+[package]
+name = "aiscraft-core"
+description = "AISCraft data model: conversations, messages, backends, memory, errors. Serde only, no I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

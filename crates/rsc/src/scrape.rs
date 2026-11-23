@@ -1,0 +1,174 @@
+//! Reading what a Next.js page ships: chunk URLs, server action ids, the embedded RSC payload.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
+
+use regex::Regex;
+use serde_json::Value;
+
+use crate::flight::{Row, RowParser};
+
+fn re(cell: &'static OnceLock<Option<Regex>>, pattern: &str) -> Option<&'static Regex> {
+    cell.get_or_init(|| Regex::new(pattern).ok()).as_ref()
+}
+
+/// JS chunk paths (`/_next/static/chunks/…js`) referenced by a page, in the HTML or the RSC
+/// payload (which lists them without the leading `/_next/`).
+pub fn chunk_paths(html: &str) -> Vec<String> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    let Some(r) = re(&RE, r#"(?:/_next/)?static/chunks/[A-Za-z0-9_\-./\[\]%~]+?\.js"#) else { return Vec::new() };
+    let mut out = BTreeSet::new();
+    for m in r.find_iter(html) {
+        let p = m.as_str();
+        let p = p.strip_prefix("/_next/").unwrap_or(p);
+        if !p.contains("..") {
+            out.insert(format!("/_next/{p}"));
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// Server action ids by exported name, from a client JS chunk. Next.js emits
+/// `createServerReference)("<hex id>", callServer, void 0, findSourceMapURL, "<name>")`.
+pub fn action_ids(js: &str) -> BTreeMap<String, String> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    let Some(r) = re(&RE, r#"createServerReference\)?\(\s*"([0-9a-f]{40,48})"\s*,[^"()]{0,200}?"([A-Za-z_$][A-Za-z0-9_$]*)"\s*\)"#) else {
+        return BTreeMap::new();
+    };
+    r.captures_iter(js).filter_map(|c| Some((c.get(2)?.as_str().to_string(), c.get(1)?.as_str().to_string()))).collect()
+}
+
+/// The RSC payload a server-rendered page carries in `self.__next_f.push([1, "<string>"])`
+/// calls, concatenated.
+pub fn rsc_payload(html: &str) -> String {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    let Some(r) = re(&RE, r#"self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)"#) else { return String::new() };
+    let mut out = String::new();
+    for c in r.captures_iter(html) {
+        if let Some(lit) = c.get(1)
+            && let Ok(s) = serde_json::from_str::<String>(lit.as_str())
+        {
+            out.push_str(&s);
+        }
+    }
+    out
+}
+
+/// Every JSON value in an RSC payload (rows that are not JSON are skipped).
+pub fn payload_values(payload: &str) -> Vec<Value> {
+    // Parse line by line so that one odd row does not hide the rest.
+    let mut out = Vec::new();
+    let mut parser = RowParser::new();
+    for line in payload.split_inclusive('\n') {
+        match parser.feed(line.as_bytes()) {
+            Ok(rows) => out.extend(rows.into_iter().filter_map(|r| match r {
+                Row::Json { value, .. } => Some(value),
+                _ => None,
+            })),
+            Err(_) => parser = RowParser::new(),
+        }
+    }
+    out
+}
+
+/// A model as AIS.chat's `llm_model` table describes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageModel {
+    pub id: String,
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub kind: String,
+    pub vision: bool,
+}
+
+/// Find AIS.chat model rows (objects with `id`, `name`, `displayName` and `priceMetadata`)
+/// anywhere in the page payload. Deduplicated by id, in first-seen order.
+pub fn page_models(payload: &str) -> Vec<PageModel> {
+    let mut out: Vec<PageModel> = Vec::new();
+    for v in payload_values(payload) {
+        walk(&v, 0, &mut |o| {
+            let s = |k: &str| o.get(k).and_then(Value::as_str).map(str::to_string);
+            let (Some(id), Some(name), Some(display_name)) = (s("id"), s("name"), s("displayName")) else { return };
+            let Some(price) = o.get("priceMetadata") else { return };
+            if o.get("isDeleted").and_then(Value::as_bool) == Some(true) || out.iter().any(|m| m.id == id) {
+                return;
+            }
+            let kind = price.get("type").and_then(Value::as_str).unwrap_or("text").to_string();
+            let vision = o.get("supportedImageFormats").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+            out.push(PageModel { id, name, display_name, description: s("description").unwrap_or_default(), kind, vision });
+        });
+    }
+    out
+}
+
+/// The name of the model the person last used, if the page says so (`initialModelName`).
+pub fn initial_model_name(payload: &str) -> Option<String> {
+    let mut found = None;
+    for v in payload_values(payload) {
+        walk(&v, 0, &mut |o| {
+            if found.is_none()
+                && let Some(n) = o.get("initialModelName").and_then(Value::as_str)
+            {
+                found = Some(n.to_string());
+            }
+        });
+    }
+    found
+}
+
+fn walk(v: &Value, depth: usize, f: &mut dyn FnMut(&serde_json::Map<String, Value>)) {
+    if depth > 64 {
+        return;
+    }
+    match v {
+        Value::Object(o) => {
+            f(o);
+            for x in o.values() {
+                walk(x, depth + 1, f);
+            }
+        }
+        Value::Array(a) => {
+            for x in a {
+                walk(x, depth + 1, f);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_action_ids_in_minified_js() {
+        // Shape observed in app.ais-chat.schule chunks on 2026-11-23.
+        let js = r#"let a=(0,f.createServerReference)("401cb40b76f1bad93befce223b14e9683a270cd045",f.callServer,void 0,f.findSourceMapURL,"getChatInfoByInviteCodeAction");var b=(0,g.createServerReference)("60aa11bb22cc33dd44ee55ff66778899aabbccddee",g.callServer,void 0,g.findSourceMapURL,"sendChatMessageAction")"#;
+        let ids = action_ids(js);
+        assert_eq!(ids.get("sendChatMessageAction").map(String::as_str), Some("60aa11bb22cc33dd44ee55ff66778899aabbccddee"));
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn chunk_paths_from_html_and_payload() {
+        let html = r#"<script src="/_next/static/chunks/0ocyeb5hp4dlt.js" async></script><script>self.__next_f.push([1,"1:I[\"static/chunks/abc-123.js\"]\n"])</script>"#;
+        let p = chunk_paths(html);
+        assert!(p.contains(&"/_next/static/chunks/0ocyeb5hp4dlt.js".to_string()));
+        assert!(p.contains(&"/_next/static/chunks/abc-123.js".to_string()));
+    }
+
+    #[test]
+    fn models_from_page_payload() {
+        let row = r#"5:["$","$L6",null,{"initialModelName":"gpt-5","models":[{"id":"u1","provider":"azure","name":"gpt-5","displayName":"GPT-5","description":"schnell","priceMetadata":{"type":"text"},"supportedImageFormats":["png"],"isDeleted":false},{"id":"u2","provider":"x","name":"img","displayName":"Bild","priceMetadata":{"type":"image"}},{"id":"u3","provider":"x","name":"gone","displayName":"Weg","priceMetadata":{"type":"text"},"isDeleted":true}]}]"#;
+        let lit = serde_json::to_string(&format!("{row}\n")).unwrap();
+        let html = format!("<script>self.__next_f.push([1,{lit}])</script>");
+        let payload = rsc_payload(&html);
+        let models = page_models(&payload);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].display_name, "GPT-5");
+        assert!(models[0].vision);
+        assert_eq!(models[1].kind, "image");
+        assert_eq!(initial_model_name(&payload).as_deref(), Some("gpt-5"));
+    }
+}
