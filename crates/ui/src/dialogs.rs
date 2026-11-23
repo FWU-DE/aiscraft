@@ -27,7 +27,8 @@ pub enum Dialog {
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
 pub const PRESETS: &[(&str, BackendKind, &str, bool, &str)] = &[
-    ("Claude (Anthropic)", BackendKind::Anthropic, "https://api.anthropic.com", true, "API-Schlüssel von console.anthropic.com"),
+    ("Claude (Abo)", BackendKind::ClaudeCli, "claude", false, "Nutzt dein claude.ai-Abo über die lokale Claude-CLI (vorher `claude auth login`). Ohne Werkzeuge, nur Chat."),
+    ("Claude (API)", BackendKind::Anthropic, "https://api.anthropic.com", true, "API-Schlüssel von console.anthropic.com, Abrechnung nach Verbrauch"),
     ("OpenAI", BackendKind::OpenAi, "https://api.openai.com/v1", true, "API-Schlüssel von platform.openai.com"),
     ("AIS.chat API", BackendKind::OpenAi, "https://api.ais-chat.schule/v1", true, "API-Schlüssel aus dem AIS.chat-Admin; eigener Verlauf, getrennt von der Web-App"),
     ("Ollama (lokal)", BackendKind::OpenAi, "http://127.0.0.1:11434/v1", false, "Läuft auf diesem Rechner, kein Schlüssel nötig"),
@@ -42,6 +43,7 @@ fn kind_str(k: BackendKind) -> &'static str {
         BackendKind::AisChat => "ais_chat",
         BackendKind::OpenAi => "openai",
         BackendKind::Anthropic => "anthropic",
+        BackendKind::ClaudeCli => "claude_cli",
     }
 }
 
@@ -131,10 +133,10 @@ impl AisCraftApp {
                     ui.label("Name");
                     ui.add(egui::TextEdit::singleline(name).desired_width(300.0));
                     ui.end_row();
-                    ui.label("Adresse");
+                    ui.label(if kind == BackendKind::ClaudeCli { "Programm" } else { "Adresse" });
                     ui.add(egui::TextEdit::singleline(base_url).desired_width(300.0));
                     ui.end_row();
-                    if kind != BackendKind::AisChat {
+                    if !matches!(kind, BackendKind::AisChat | BackendKind::ClaudeCli) {
                         ui.label(if needs_key { "API-Schlüssel" } else { "Schlüssel (optional)" });
                         ui.add(egui::TextEdit::singleline(secret).password(true).desired_width(300.0));
                         ui.end_row();
@@ -324,7 +326,9 @@ impl AisCraftApp {
                                     self.dialog = Some(Dialog::Confirm { text: format!("{} entfernen?", b.config.name), command: "backend.remove".into(), params: json!({"id": b.config.id}) });
                                 }
                                 let is_ais = b.config.kind == BackendKind::AisChat;
-                                if b.has_secret {
+                                if b.config.kind == BackendKind::ClaudeCli {
+                                    // Signed in through `claude auth login`; nothing to store here.
+                                } else if b.has_secret {
                                     if ui.small_button(if is_ais { "Abmelden" } else { "Schlüssel entfernen" }).clicked() {
                                         self.run("backend.logout", json!({"id": b.config.id}));
                                     }

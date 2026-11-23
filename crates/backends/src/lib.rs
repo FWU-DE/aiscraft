@@ -3,6 +3,7 @@
 
 mod aischat;
 mod anthropic;
+mod claude_cli;
 mod http;
 mod openai;
 mod sse;
@@ -48,6 +49,9 @@ pub trait Backend: Send + Sync {
 /// Build a backend from its config and secret.
 pub fn build(config: BackendConfig, secret: Option<String>, on_secret: SecretSink) -> Result<Arc<dyn Backend>> {
     let base = config.base_url.trim().trim_end_matches('/').to_string();
+    if config.kind == BackendKind::ClaudeCli {
+        return Ok(Arc::new(claude_cli::ClaudeCli::new(config, base)?));
+    }
     if !(base.starts_with("https://") || base.starts_with("http://")) {
         return Err(Error::invalid(format!("Adresse muss mit https:// beginnen: {base}")));
     }
@@ -55,5 +59,6 @@ pub fn build(config: BackendConfig, secret: Option<String>, on_secret: SecretSin
         BackendKind::AisChat => Arc::new(aischat::AisChat::new(config, base, secret, on_secret)?),
         BackendKind::OpenAi => Arc::new(openai::OpenAi::new(config, base, secret)?),
         BackendKind::Anthropic => Arc::new(anthropic::Anthropic::new(config, base, secret)?),
+        BackendKind::ClaudeCli => Arc::new(claude_cli::ClaudeCli::new(config, base)?),
     })
 }

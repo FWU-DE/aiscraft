@@ -165,7 +165,7 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("memory.restore", "Notiz wiederherstellen", "Gedächtnis", None, "id: string", false, |c, p| Box::pin(async move {
         edit_memory(&c, &req_str(&p, "id")?, |n| n.archived = false)
     })),
-    cmd!("backend.add", "Backend hinzufügen", "Backends", None, "kind: ais_chat|openai|anthropic, name?: string, base_url?: string, secret?: string", false, |c, p| Box::pin(backend_add(c, p))),
+    cmd!("backend.add", "Backend hinzufügen", "Backends", None, "kind: ais_chat|openai|anthropic|claude_cli, name?: string, base_url?: string, secret?: string", false, |c, p| Box::pin(backend_add(c, p))),
     cmd!("backend.update", "Backend bearbeiten", "Backends", None, "id: string, name?: string, base_url?: string, default_model?: string, send_context?: bool", false, |c, p| Box::pin(backend_update(c, p))),
     cmd!("backend.remove", "Backend entfernen", "Backends", None, "id: string", false, |c, p| Box::pin(backend_remove(c, p))),
     cmd!("backend.login", "Anmelden", "Backends", None, "id: string, secret: string", false, |c, p| Box::pin(backend_login(c, p))),
@@ -473,11 +473,12 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
 // ---- backends ---------------------------------------------------------------------------
 
 async fn backend_add(c: Ctx, p: Value) -> Result<Value> {
-    let kind = BackendKind::parse(&req_str(&p, "kind")?).ok_or_else(|| Error::invalid("kind muss ais_chat, openai oder anthropic sein"))?;
+    let kind = BackendKind::parse(&req_str(&p, "kind")?).ok_or_else(|| Error::invalid("kind muss ais_chat, openai, anthropic oder claude_cli sein"))?;
     let base_url = opt_str(&p, "base_url").filter(|u| !u.trim().is_empty()).unwrap_or_else(|| kind.default_base_url().to_string());
     let name = opt_str(&p, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| match kind {
         BackendKind::AisChat => "AIS.chat".into(),
-        BackendKind::Anthropic => "Claude".into(),
+        BackendKind::Anthropic => "Claude (API)".into(),
+        BackendKind::ClaudeCli => "Claude (Abo)".into(),
         BackendKind::OpenAi if base_url.contains("11434") => "Ollama".into(),
         BackendKind::OpenAi if base_url.contains("1234") => "LM Studio".into(),
         BackendKind::OpenAi if base_url.contains("openrouter") => "OpenRouter".into(),
@@ -485,7 +486,7 @@ async fn backend_add(c: Ctx, p: Value) -> Result<Value> {
         BackendKind::OpenAi => "OpenAI".into(),
     });
     let default_model = match kind {
-        BackendKind::Anthropic => Some(aiscraft_backends::ANTHROPIC_DEFAULT_MODEL.to_string()),
+        BackendKind::Anthropic | BackendKind::ClaudeCli => Some(aiscraft_backends::ANTHROPIC_DEFAULT_MODEL.to_string()),
         _ => None,
     };
     let config = BackendConfig { id: format!("{}-{}", kind_slug(kind), &new_id()[..8]), name, kind, base_url, default_model, send_context: kind != BackendKind::AisChat };
@@ -509,6 +510,7 @@ fn kind_slug(k: BackendKind) -> &'static str {
         BackendKind::AisChat => "ais",
         BackendKind::OpenAi => "openai",
         BackendKind::Anthropic => "anthropic",
+        BackendKind::ClaudeCli => "claude",
     }
 }
 

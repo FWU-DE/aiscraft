@@ -136,6 +136,8 @@ pub enum BackendKind {
     /// OpenRouter, vLLM, and AIS.chat's own `/v1` API with an API key.
     OpenAi,
     Anthropic,
+    /// The local Claude Code CLI (`claude -p`), signed in with a claude.ai subscription.
+    ClaudeCli,
 }
 
 impl BackendKind {
@@ -144,6 +146,7 @@ impl BackendKind {
             BackendKind::AisChat => "AIS.chat (Anmeldung)",
             BackendKind::OpenAi => "OpenAI-kompatibel",
             BackendKind::Anthropic => "Anthropic",
+            BackendKind::ClaudeCli => "Claude-Abo (lokale CLI)",
         }
     }
     pub fn default_base_url(self) -> &'static str {
@@ -151,6 +154,8 @@ impl BackendKind {
             BackendKind::AisChat => "https://app.ais-chat.schule",
             BackendKind::OpenAi => "https://api.openai.com/v1",
             BackendKind::Anthropic => "https://api.anthropic.com",
+            // For the CLI the "address" is the program to run.
+            BackendKind::ClaudeCli => "claude",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -158,6 +163,7 @@ impl BackendKind {
             "ais_chat" | "aischat" | "ais" => Some(BackendKind::AisChat),
             "openai" | "open_ai" => Some(BackendKind::OpenAi),
             "anthropic" => Some(BackendKind::Anthropic),
+            "claude_cli" | "claude-cli" | "claude" => Some(BackendKind::ClaudeCli),
             _ => None,
         }
     }

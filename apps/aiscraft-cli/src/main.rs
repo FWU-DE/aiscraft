@@ -98,7 +98,13 @@ fn call(engine: &Engine, cmd: &str, params: Value) -> Result<Value, String> {
 }
 
 fn wait_backend(engine: &Engine, id: &str) {
-    engine.wait_for(Duration::from_secs(20), |s| s.backend(id).is_some_and(|b| !matches!(b.status, BackendStatus::Checking | BackendStatus::Unknown)) || s.backend(id).is_some_and(|b| !b.has_secret));
+    use aiscraft_core::BackendKind;
+    engine.wait_for(Duration::from_secs(20), |s| {
+        s.backend(id).is_none_or(|b| {
+            let needs_secret = matches!(b.config.kind, BackendKind::AisChat | BackendKind::Anthropic);
+            !matches!(b.status, BackendStatus::Checking | BackendStatus::Unknown) || (needs_secret && !b.has_secret)
+        })
+    });
 }
 
 fn run(engine: &Engine, cmd: Cmd) -> Result<(), String> {

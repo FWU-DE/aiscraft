@@ -289,7 +289,7 @@ impl Ctx {
     }
 
     fn spawn_startup_checks(&self) {
-        for b in self.state().backends.iter().filter(|b| b.has_secret || b.config.kind == BackendKind::OpenAi) {
+        for b in self.state().backends.iter().filter(|b| b.has_secret || matches!(b.config.kind, BackendKind::OpenAi | BackendKind::ClaudeCli)) {
             let ctx = self.clone();
             let id = b.config.id.clone();
             self.spawn(async move {
