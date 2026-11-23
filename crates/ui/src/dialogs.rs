@@ -510,7 +510,23 @@ impl AisCraftApp {
             }
         });
         ui.separator();
-        egui::ScrollArea::vertical().max_height((ui.ctx().content_rect().height() * 0.8 - 140.0).max(300.0)).show(ui, |ui| match tab {
+        let chapter = match tab {
+            SettingsTab::Backends => "Anmelden",
+            SettingsTab::Connectors => "Konnektoren und Freigaben",
+            SettingsTab::Schedules => "Zeitpläne und Aufgaben",
+            SettingsTab::Skills => "Fähigkeiten und Hinweise",
+            SettingsTab::Vault => "Tresor",
+            SettingsTab::Usage => "Nutzung",
+            SettingsTab::Memory => "Gedächtnis",
+            SettingsTab::Appearance | SettingsTab::About => "Tastenkürzel",
+        };
+        ui.horizontal(|ui| {
+            ui.label(small_muted(&t, "Mehr dazu im Handbuch:"));
+            if ui.link(chapter).clicked() {
+                self.open_manual(chapter);
+            }
+        });
+        egui::ScrollArea::vertical().max_height((ui.ctx().content_rect().height() * 0.8 - 160.0).max(300.0)).show(ui, |ui| match tab {
             SettingsTab::Backends => {
                 for b in self.state.backends.clone() {
                     card(&t).show(ui, |ui| {

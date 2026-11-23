@@ -309,6 +309,9 @@ impl AisCraftApp {
                     }
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(egui::Button::new(RichText::new("?").color(t.muted).size(15.0)).frame(false)).on_hover_text("Handbuch (F1)").clicked() {
+                        self.manual = Some(Default::default());
+                    }
                     if icon_button(ui, &t, "⚙", "Einstellungen (Strg+,)").clicked() {
                         self.dialog = Some(Dialog::settings());
                     }

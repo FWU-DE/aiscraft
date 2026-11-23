@@ -43,3 +43,26 @@ fn sidebar_collapse_button_collapses() {
     h.run_steps(30);
     assert!(h.query_by_label_contains("Neuer Chat").is_none(), "sidebar hidden");
 }
+
+
+#[test]
+fn handbook_opens_closes_and_follows_settings_links() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let mut h = harness(&engine);
+    h.key_press(egui::Key::F1);
+    h.run_steps(6);
+    assert!(h.query_by_label("Erste Schritte").is_some(), "F1 opens the handbook with its chapters");
+    h.get_by_label("Tresor").click();
+    h.run_steps(6);
+    assert!(h.query_by_label_contains("{{vault:").is_some(), "a chapter opens");
+    h.key_press(egui::Key::F1);
+    h.run_steps(6);
+    assert!(h.query_by_label("Erste Schritte").is_none(), "F1 closes it again");
+    // From the settings: the link opens the chapter of the tab.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
+    h.run_steps(6);
+    h.get_by_role_and_label(egui::accesskit::Role::Link, "Anmelden").click();
+    h.run_steps(6);
+    assert!(h.query_by_label("Erste Schritte").is_some(), "settings link opens the handbook");
+    assert!(h.query_by_label_contains("Im Browser anmelden").is_some(), "at the sign-in chapter");
+}

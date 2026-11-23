@@ -68,10 +68,19 @@ enum Cmd {
     Commands,
     /// MCP-Server über stdio: jeder Befehl wird ein Werkzeug.
     Mcp,
+    /// Das Handbuch ausgeben (Markdown).
+    Manual,
 }
+
+/// The same handbook as in the app (F1).
+const MANUAL: &str = include_str!("../../../crates/ui/manual/de.md");
 
 fn main() {
     let cli = Cli::parse();
+    if matches!(cli.cmd, Cmd::Manual) {
+        print!("{MANUAL}");
+        return;
+    }
     let engine = match Engine::open(Options::default_dirs()) {
         Ok(e) => e,
         Err(e) => fail(&e.message),
@@ -198,7 +207,7 @@ fn run(engine: &Engine, cmd: Cmd) -> Result<(), String> {
                 println!("{:<22} {:<42} {}", c.id, c.label, c.params);
             }
         }
-        Cmd::Mcp => {}
+        Cmd::Mcp | Cmd::Manual => {}
     }
     Ok(())
 }

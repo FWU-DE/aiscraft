@@ -5,6 +5,7 @@
 mod app;
 mod artifact_panel;
 mod conversation;
+pub mod manual;
 mod dialogs;
 mod palette;
 mod sidebar;

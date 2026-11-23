@@ -30,6 +30,7 @@ enum UiAction {
     AddBackend,
     NewProject,
     ToggleSidebar,
+    Manual,
     Export,
     Search,
 }
@@ -60,6 +61,7 @@ impl AisCraftApp {
         let mut items: Vec<Item> = commands().iter().filter(|c| c.palette && !ui_handled.contains(&c.id)).map(|c| Item::Command { id: c.id, label: c.label, shortcut: c.shortcut }).collect();
         items.extend([
             Item::Ui { label: "Einstellungen", action: UiAction::Settings },
+            Item::Ui { label: "Handbuch", action: UiAction::Manual },
             Item::Ui { label: "Gedächtnis öffnen", action: UiAction::Memory },
             Item::Ui { label: "Backend hinzufügen", action: UiAction::AddBackend },
             Item::Ui { label: "Neues Projekt", action: UiAction::NewProject },
@@ -157,6 +159,7 @@ impl AisCraftApp {
                 UiAction::AddBackend => self.dialog = Some(Dialog::add_backend()),
                 UiAction::NewProject => self.dialog = Some(Dialog::project(None)),
                 UiAction::ToggleSidebar => self.sidebar_open = !self.sidebar_open,
+                UiAction::Manual => self.manual = Some(Default::default()),
                 UiAction::Export => self.export_dialog(),
                 UiAction::Search => {
                     self.sidebar_open = true;

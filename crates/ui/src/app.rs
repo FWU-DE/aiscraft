@@ -41,6 +41,8 @@ pub struct AisCraftApp {
     pub(crate) artifact: Option<crate::artifact_panel::ArtifactView>,
     /// Send the open artifact as context with the next message.
     pub(crate) attach_artifact: bool,
+    /// The handbook window, when open.
+    pub(crate) manual: Option<crate::manual::ManualView>,
     /// Text from a finished dictation, picked up by the composer.
     pub(crate) dictated: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
@@ -80,6 +82,7 @@ impl AisCraftApp {
             artifact: None,
             attach_artifact: false,
             dictated: Default::default(),
+            manual: None,
         }
     }
 
@@ -101,6 +104,12 @@ impl AisCraftApp {
     fn shortcuts(&mut self, ctx: &egui::Context) {
         let sc = |m: Modifiers, k: Key| KeyboardShortcut::new(m, k);
         let pressed = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
+        // F1: the handbook, except over an open whiteboard, which has its own shortcut overview.
+        let over_board = self.state.open_artifact.as_ref().and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id)).is_some_and(|a| a.kind == aiscraft_core::ArtifactKind::Board)
+            && ctx.pointer_hover_pos().is_some_and(|p| p.x > ctx.content_rect().center().x);
+        if !over_board && pressed(sc(Modifiers::NONE, Key::F1)) {
+            self.manual = if self.manual.is_some() { None } else { Some(Default::default()) };
+        }
         let modal_open = self.dialog.is_some() || self.palette.is_some();
         if pressed(sc(Modifiers::COMMAND, Key::K)) || pressed(sc(Modifiers::COMMAND | Modifiers::SHIFT, Key::P)) {
             self.palette = if self.palette.is_some() { None } else { Some(Palette::default()) };
@@ -255,6 +264,10 @@ impl AisCraftApp {
                             self.dialog = Some(Dialog::Welcome);
                             true
                         }
+                        "manual" => {
+                            self.manual = Some(Default::default());
+                            true
+                        }
                         "palette" => {
                             self.palette = Some(Palette::default());
                             true
@@ -326,6 +339,7 @@ impl eframe::App for AisCraftApp {
         egui::CentralPanel::default().frame(Frame::new().fill(t.bg)).show(ui, |ui| self.conversation(ui));
 
         self.toasts(&ctx);
+        self.manual_ui(&ctx);
         self.dialogs(&ctx);
         self.palette_ui(&ctx);
 
