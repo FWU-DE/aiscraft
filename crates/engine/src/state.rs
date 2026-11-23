@@ -101,6 +101,9 @@ pub struct Selection {
     /// Sources of the open chat, or of the next new one.
     #[serde(default)]
     pub sources: aiscraft_core::Sources,
+    /// The assistant, character or learning scenario of the open (or next) chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<aiscraft_core::Persona>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +116,12 @@ pub struct BackendView {
     /// The allowance used, where the backend has one (AIS.chat token points).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quota: Option<aiscraft_core::Quota>,
+    /// Assistants, characters and learning scenarios (AIS.chat), once loaded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personas: Option<Vec<aiscraft_core::PersonaInfo>>,
+    /// Why the last attempt to load them failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personas_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -210,6 +219,10 @@ impl State {
     }
     pub fn is_generating(&self, conv: &str) -> bool {
         self.generating.iter().any(|g| g == conv)
+    }
+    /// What a backend lists about a persona (description, greeting, suggestions), if loaded.
+    pub fn persona_info(&self, backend: &str, p: &aiscraft_core::Persona) -> Option<&aiscraft_core::PersonaInfo> {
+        self.backend(backend)?.personas.as_ref()?.iter().find(|x| x.kind == p.kind && x.id == p.id)
     }
     pub fn model_name(&self, backend: &str, model: &str) -> String {
         self.backend(backend).and_then(|b| b.models.iter().find(|m| m.id == model)).map(|m| m.name.clone()).unwrap_or_else(|| model.to_string())

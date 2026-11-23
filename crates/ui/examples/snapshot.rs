@@ -6,7 +6,8 @@
 //! ```
 //!
 //! `--demo` starts a local OpenAI-compatible server that streams a Markdown answer, adds it as a
-//! backend and fills projects, notes and a few chats. `--theme light|dark|omarchy`.
+//! backend and fills projects, notes and a few chats. `--demo-ais` adds a local stand-in for
+//! AIS.chat (assistants, characters, learning scenarios). `--theme light|dark|omarchy`.
 //! The engine runs in memory; nothing touches your real data.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
@@ -63,6 +64,84 @@ fn demo_server(engine: &Engine) -> String {
     })
 }
 
+/// A local stand-in for AIS.chat (`--demo-ais`): signs in, lists assistants, characters and
+/// learning scenarios and answers chats. Nothing goes to the real app.
+fn demo_ais(engine: &Engine) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let base = engine.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 8192];
+                    loop {
+                        let n = sock.read(&mut chunk).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                        let s = String::from_utf8_lossy(&buf);
+                        if let Some(end) = s.find("\r\n\r\n") {
+                            let len = s[..end].lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+                            if buf.len() >= end + 4 + len {
+                                break;
+                            }
+                        }
+                    }
+                    let req = String::from_utf8_lossy(&buf).to_string();
+                    let id = |n: u8| format!("{n:02x}").repeat(21);
+                    let page = |chunk: &str, row: &str| format!(r#"<script src="/_next/static/chunks/{chunk}.js"></script><script>self.__next_f.push([1,{}])</script>"#, serde_json::to_string(&format!("{row}\n")).unwrap());
+                    let reference = |n: u8, name: &str| format!(r#"(0,a.createServerReference)("{}",a.callServer,void 0,a.findSourceMapURL,"{name}");"#, id(n));
+                    let flight = |value: &str| format!("0:{{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}}\n1:{value}\n");
+                    let action = req.lines().find_map(|l| l.strip_prefix("next-action: ")).unwrap_or("").to_string();
+                    let models = r#"3:{"usedBudget":120,"maxBudget":1000,"models":[{"id":"m-gpt","name":"gpt","displayName":"GPT-5","priceMetadata":{"type":"text"}},{"id":"m-img","name":"img","displayName":"Bildmodell","priceMetadata":{"type":"image"}}]}"#;
+                    let (ctype, body) = if req.starts_with("GET /api/auth/session") {
+                        ("application/json", r#"{"user":{"id":"me","firstName":"Ada","lastName":"Lehrerin","school":{"name":"Gesamtschule Nord"}},"expires":"2030-01-01"}"#.to_string())
+                    } else if req.starts_with("GET /api/conversations") {
+                        ("application/json", r#"{"conversations":[]}"#.to_string())
+                    } else if req.starts_with("GET /assistants ") {
+                        ("text/html", page("assistants", "1:{}"))
+                    } else if req.starts_with("GET /characters ") {
+                        ("text/html", page("characters", "1:{}"))
+                    } else if req.starts_with("GET /learning-scenarios ") {
+                        ("text/html", page("scenarios", "1:{}"))
+                    } else if req.starts_with("GET / ") {
+                        ("text/html", page("app", models))
+                    } else if req.starts_with("GET /_next/static/chunks/app.js") {
+                        ("application/javascript", reference(0x7f, "sendChatMessageAction"))
+                    } else if req.starts_with("GET /_next/static/chunks/assistants.js") {
+                        ("application/javascript", reference(0x11, "getAssistantsByFilterAction"))
+                    } else if req.starts_with("GET /_next/static/chunks/characters.js") {
+                        ("application/javascript", reference(0x22, "getCharactersByFilterAction"))
+                    } else if req.starts_with("GET /_next/static/chunks/scenarios.js") {
+                        ("application/javascript", reference(0x33, "getLearningScenariosByFilterAction"))
+                    } else if req.starts_with("POST / ") && action == id(0x11) {
+                        ("text/x-component", flight(r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung Schritt für Schritt","promptSuggestions":["Erkläre 3/4 + 1/8","Gib mir eine Übungsaufgabe"]},{"id":"a2","name":"Elternbrief-Helfer","userId":"x","description":"Formuliert freundliche Elternbriefe"}]"#))
+                    } else if req.starts_with("POST / ") && action == id(0x22) {
+                        ("text/x-component", flight(r#"[{"id":"c1","name":"Johann Wolfgang von Goethe","userId":"x","description":"Dichter und Naturforscher aus Weimar","initialMessage":"Seid gegrüßt! Was möchtet Ihr über mein Leben und Werk erfahren?"},{"id":"c2","name":"Marie Curie","userId":"me","description":"Physikerin und Chemikerin"}]"#))
+                    } else if req.starts_with("POST / ") && action == id(0x33) {
+                        ("text/x-component", flight(r#"[{"id":"l1","name":"Photosynthese erforschen","userId":"me","description":"Klasse 7, Biologie","studentExercise":"Finde heraus, was eine Pflanze zum Wachsen braucht, und erkläre es in drei Sätzen."}]"#))
+                    } else if req.starts_with("POST / ") && action == id(0x7f) {
+                        let text = serde_json::to_string(ANSWER).unwrap();
+                        ("text/x-component", format!("0:{{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}}\n1:{{\"stream\":\"$2\",\"messageId\":\"$undefined\"}}\n2:R\n2:{text}\n2:C\n"))
+                    } else {
+                        ("text/plain", String::new())
+                    };
+                    let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: {ctype}\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    });
+    engine.call("backend.update", json!({"id": "ais-chat", "base_url": base})).unwrap();
+    engine.call("backend.login", json!({"id": "ais-chat", "secret": "demo"})).unwrap();
+    engine.call("chat.select_model", json!({"backend": "ais-chat", "model": "m-gpt"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+}
+
 fn seed(engine: &Engine) {
     let url = demo_server(engine);
     let id = engine.call("backend.add", json!({"kind": "openai", "name": "Demo", "base_url": url})).unwrap()["id"].as_str().unwrap().to_string();
@@ -93,6 +172,9 @@ fn main() {
     }
     if args.iter().any(|a| a == "--demo") {
         seed(&engine);
+    }
+    if args.iter().any(|a| a == "--demo-ais") {
+        demo_ais(&engine);
     }
     let (tx, rx) = mpsc::channel::<UiRequest>();
     let app_engine = engine.clone();

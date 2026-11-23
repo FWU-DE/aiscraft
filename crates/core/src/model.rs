@@ -155,6 +155,108 @@ pub struct Conversation {
     /// What this chat may use besides the conversation itself.
     #[serde(default)]
     pub sources: Sources,
+    /// The assistant, character or learning scenario this chat talks to (AIS.chat).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<Persona>,
+}
+
+/// What kind of configured partner a chat can talk to on AIS.chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonaKind {
+    /// A custom assistant ("Assistent", `assistantId`).
+    Assistant,
+    /// A character, e.g. a historical figure ("Figur", `characterId`).
+    Character,
+    /// A learning scenario ("Lernszenario", `learningScenarioId`).
+    LearningScenario,
+}
+
+impl PersonaKind {
+    pub const ALL: [PersonaKind; 3] = [PersonaKind::Assistant, PersonaKind::Character, PersonaKind::LearningScenario];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PersonaKind::Assistant => "assistant",
+            PersonaKind::Character => "character",
+            PersonaKind::LearningScenario => "learning_scenario",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "assistant" | "assistent" | "custom_gpt" => Some(PersonaKind::Assistant),
+            "character" | "figur" => Some(PersonaKind::Character),
+            "learning_scenario" | "learning-scenario" | "lernszenario" | "scenario" => Some(PersonaKind::LearningScenario),
+            _ => None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            PersonaKind::Assistant => "Assistent",
+            PersonaKind::Character => "Figur",
+            PersonaKind::LearningScenario => "Lernszenario",
+        }
+    }
+    pub fn plural(self) -> &'static str {
+        match self {
+            PersonaKind::Assistant => "Assistenten",
+            PersonaKind::Character => "Figuren",
+            PersonaKind::LearningScenario => "Lernszenarien",
+        }
+    }
+}
+
+/// The partner a conversation remembers: enough to send to the right one again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Persona {
+    pub kind: PersonaKind,
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+/// An assistant, character or learning scenario as the backend lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PersonaInfo {
+    pub kind: PersonaKind,
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Made by the signed-in person (otherwise shared with them).
+    #[serde(default)]
+    pub own: bool,
+    /// The character's first line, shown before the person writes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_message: Option<String>,
+    /// The task a learning scenario sets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exercise: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompt_suggestions: Vec<String>,
+    /// The model it was made for, if it says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+}
+
+/// A chat's path in AIS.chat's web app (`getConversationPath`).
+pub fn ais_conversation_path(persona: Option<&Persona>, conversation_id: &str) -> String {
+    match persona {
+        Some(p) => {
+            let base = match p.kind {
+                PersonaKind::Assistant => "assistants",
+                PersonaKind::Character => "characters",
+                PersonaKind::LearningScenario => "learning-scenarios",
+            };
+            format!("/{base}/d/{}/{conversation_id}", p.id)
+        }
+        None => format!("/d/{conversation_id}"),
+    }
+}
+
+impl PersonaInfo {
+    pub fn persona(&self) -> Persona {
+        Persona { kind: self.kind, id: self.id.clone(), name: self.name.clone() }
+    }
 }
 
 /// The sources a chat draws on. All on by default; each can be switched off per chat.
@@ -369,6 +471,9 @@ pub struct RemoteConversation {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    /// The assistant, character or learning scenario it was held with (name may be empty).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<Persona>,
 }
 
 /// What a backend can do beyond plain chat.
@@ -399,6 +504,9 @@ pub struct ChatRequest {
     /// tool bridge listens and the token for this answer.
     #[serde(skip)]
     pub tool_bridge: Option<ToolBridge>,
+    /// The assistant, character or learning scenario to answer as (AIS.chat).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<Persona>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

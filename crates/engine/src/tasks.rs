@@ -31,6 +31,7 @@ pub(crate) async fn start(c: Ctx, p: Value) -> Result<Value> {
         updated_at: now,
         pinned: false,
         sources,
+        persona: None,
     };
     c.store(|st| st.save_conversation(&conv))?;
     let task_id = conv.id.clone();

@@ -57,6 +57,9 @@ impl AisCraftApp {
                 if let Some(p) = self.state.selection.project_id.as_ref().and_then(|pid| self.state.projects.iter().find(|p| &p.id == pid)) {
                     ui.label(small_muted(&t, format!("▣ {}", p.name)));
                 }
+                if let Some(p) = self.state.selection.persona.as_ref().filter(|_| self.state.current.is_some()) {
+                    ui.label(small_muted(&t, format!("{}: {}", p.kind.label(), p.name)));
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if self.state.current.is_some() {
                         self.context_meter(ui);
@@ -66,7 +69,7 @@ impl AisCraftApp {
                         if let Some(url) = self.state.current.as_ref().and_then(|id| {
                             let c = self.state.conversation(id)?;
                             let b = self.state.backend(&c.backend_id).filter(|b| b.config.kind == BackendKind::AisChat)?;
-                            Some(format!("{}/d/{}", b.config.base_url.trim_end_matches('/'), c.id))
+                            Some(format!("{}{}", b.config.base_url.trim_end_matches('/'), aiscraft_core::ais_conversation_path(c.persona.as_ref(), &c.id)))
                         }) && icon_button(ui, &t, "↗", "In AIS.chat öffnen").clicked()
                         {
                             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
@@ -131,8 +134,56 @@ impl AisCraftApp {
         });
     }
 
+    /// A new chat with an assistant, character or learning scenario: who it is, the task, the
+    /// greeting and its suggestions.
+    fn persona_empty_state(&mut self, ui: &mut Ui, p: aiscraft_core::Persona) {
+        let t = self.tokens.clone();
+        let info = self.state.persona_info(&self.state.selection.backend_id, &p).cloned();
+        ui.add_space((ui.available_height() * 0.16).max(20.0));
+        centered(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.label(small_muted(&t, p.kind.label().to_uppercase()));
+                ui.label(RichText::new(&p.name).size(26.0));
+                if let Some(d) = info.as_ref().and_then(|i| i.description.clone()) {
+                    ui.add(egui::Label::new(muted(&t, d)).wrap());
+                }
+            });
+            ui.add_space(12.0);
+            if let Some(ex) = info.as_ref().and_then(|i| i.exercise.clone()) {
+                card(&t).show(ui, |ui| {
+                    ui.label(RichText::new("Aufgabe").strong());
+                    ui.add(egui::Label::new(ex).wrap());
+                });
+                ui.add_space(8.0);
+            }
+            if let Some(g) = info.as_ref().and_then(|i| i.initial_message.clone()) {
+                Frame::new().fill(t.surface_hi).corner_radius(CornerRadius::same(t.radius)).inner_margin(Margin::symmetric(14, 10)).show(ui, |ui| {
+                    ui.add(egui::Label::new(g).wrap());
+                });
+                ui.add_space(8.0);
+            }
+            self.composer(ui);
+            ui.add_space(12.0);
+            ui.horizontal_wrapped(|ui| {
+                for s in info.as_ref().map(|i| i.prompt_suggestions.clone()).unwrap_or_default() {
+                    if ui.add(egui::Button::new(small_muted(&t, &s)).corner_radius(CornerRadius::same(t.radius))).clicked() {
+                        self.composer = s;
+                        self.focus_composer = true;
+                    }
+                }
+                if ui.add(egui::Button::new(small_muted(&t, format!("Ohne {} chatten", p.kind.label()))).frame(false)).clicked() {
+                    self.new_chat();
+                }
+            });
+        });
+    }
+
     fn empty_state(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
+        if let Some(p) = self.state.selection.persona.clone() {
+            self.persona_empty_state(ui, p);
+            return;
+        }
         // A name from a sign-in (AIS.chat via VIDIS), else the person logged in to this computer.
         let sso = self.state.backends.iter().filter(|b| b.config.kind == BackendKind::AisChat).find_map(|b| match &b.status {
             BackendStatus::Ready { account } => account.display_name.clone().filter(|n| !n.contains('@')),

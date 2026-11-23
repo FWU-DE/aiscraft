@@ -37,6 +37,10 @@ pub struct AisCraftApp {
     pub(crate) focus_composer: bool,
     pub(crate) focus_search: bool,
     pub(crate) remote_open: bool,
+    /// The personas section asked for its list already (while open).
+    pub(crate) personas_open: bool,
+    /// Open the personas section on the next frame (control channel `ui.show personas`).
+    pub(crate) show_personas: bool,
     last_current: Option<String>,
     pub(crate) artifact: Option<crate::artifact_panel::ArtifactView>,
     /// Send the open artifact as context with the next message.
@@ -78,6 +82,8 @@ impl AisCraftApp {
             focus_composer: true,
             focus_search: false,
             remote_open: false,
+            personas_open: false,
+            show_personas: false,
             last_current: None,
             artifact: None,
             attach_artifact: false,
@@ -270,6 +276,10 @@ impl AisCraftApp {
                         }
                         "palette" => {
                             self.palette = Some(Palette::default());
+                            true
+                        }
+                        "personas" => {
+                            self.show_personas = true;
                             true
                         }
                         "none" => {

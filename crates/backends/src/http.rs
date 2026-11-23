@@ -64,6 +64,20 @@ pub async fn read_capped(resp: Response, cap: usize) -> Result<String> {
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
+/// Read a whole body as bytes; more than `cap` bytes is an error.
+pub async fn read_bytes_capped(resp: Response, cap: usize, what: &str) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(net_err)?;
+        if out.len() + chunk.len() > cap {
+            return Err(Error::protocol(format!("{what} ist größer als {} MB", cap / (1024 * 1024))));
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
 /// Bodies we parse whole (model lists, pages) are capped so a hostile server cannot exhaust memory.
 pub const PAGE_CAP: usize = 16 * 1024 * 1024;
 

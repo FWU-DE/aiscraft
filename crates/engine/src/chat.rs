@@ -56,14 +56,34 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
         updated_at: now,
         pinned: false,
         sources: sel.sources.clone(),
+        persona: sel.persona.clone(),
     };
+    // A character opens with its greeting, as in AIS.chat; it goes along as the first answer.
+    let greeting = conv.persona.as_ref().and_then(|p| state.persona_info(&sel.backend_id, p)).and_then(|i| i.initial_message.clone()).map(|text| Message {
+        id: new_id(),
+        conversation_id: conv.id.clone(),
+        role: Role::Assistant,
+        content: text,
+        created_at: now,
+        model: None,
+        attachments: vec![],
+        activity: vec![],
+        error: None,
+        usage: None,
+        tool_calls: vec![],
+        tool_result: None,
+    });
     c.store(|st| st.save_conversation(&conv))?;
+    if let Some(g) = &greeting {
+        c.store(|st| st.save_message(g))?;
+    }
     let id = conv.id.clone();
     c.update(|s| {
         let pos = s.conversations.iter().position(|x| !x.pinned).unwrap_or(s.conversations.len());
         s.conversations.insert(pos, conv);
         s.current = Some(id.clone());
         s.messages.clear();
+        s.messages.extend(greeting);
     });
     Ok(id)
 }
@@ -97,7 +117,7 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
         error: None,
         usage: None, tool_calls: vec![], tool_result: None,
     };
-    let req = ChatRequest { conversation_id: new_id(), model: sel.model_id, system: if takes_system { system.map(str::to_string) } else { None }, messages: vec![msg], tools: vec![], tool_bridge: None };
+    let req = ChatRequest { conversation_id: new_id(), model: sel.model_id, system: if takes_system { system.map(str::to_string) } else { None }, messages: vec![msg], tools: vec![], tool_bridge: None, persona: None };
     let mut stream = backend.chat(req).await?;
     let mut out = String::new();
     while let Some(ev) = stream.next().await {
@@ -452,6 +472,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
             messages: history,
             tools: round_tools,
             tool_bridge: bridge.as_ref().map(|(b, _)| b.clone()),
+            persona: conv.persona.clone(),
         };
         match stream_round(&c, &backend, req, &mut answer, &conv_id, &mut cancel_rx).await {
             Ok(calls) if calls.is_empty() => break,

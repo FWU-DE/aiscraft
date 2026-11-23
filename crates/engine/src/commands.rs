@@ -194,6 +194,8 @@ static COMMANDS: &[CommandSpec] = &[
         });
         Ok(out)
     })),
+    cmd!("persona.refresh", "Assistenten, Figuren und Lernszenarien laden", "Backends", None, "backend?: string", true, |c, p| Box::pin(persona_refresh(c, p))),
+    cmd!("persona.start", "Chat mit Assistent, Figur oder Lernszenario", "Chat", None, "kind: assistant|character|learning_scenario, id: string, backend?: string", false, |c, p| Box::pin(persona_start(c, p))),
     cmd!("remote.import", "Chat vom Server übernehmen", "Backends", None, "backend: string, id: string, title?: string", false, |c, p| Box::pin(remote_import(c, p))),
     cmd!("settings.set", "Einstellung ändern", "Einstellungen", None, "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|proactive|quiet_start|quiet_end, value: any", false, |c, p| Box::pin(async move {
         let key = req_str(&p, "key")?;
@@ -386,7 +388,7 @@ async fn chat_new(c: Ctx, p: Value) -> Result<Value> {
     c.update(|s| {
         s.current = None;
         s.messages.clear();
-        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default() };
+        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: None };
     });
     persist_selection(&c);
     Ok(json!({}))
@@ -400,7 +402,13 @@ async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
     c.update(|s| {
         s.current = Some(id.clone());
         s.messages = messages;
-        s.selection = Selection { backend_id: conv.backend_id.clone(), model_id: conv.model_id.clone(), project_id: conv.project_id.clone(), sources: conv.sources.clone() };
+        s.selection = Selection {
+            backend_id: conv.backend_id.clone(),
+            model_id: conv.model_id.clone(),
+            project_id: conv.project_id.clone(),
+            sources: conv.sources.clone(),
+            persona: conv.persona.clone(),
+        };
     });
     Ok(json!({"messages": n}))
 }
@@ -531,7 +539,14 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
     let state = c.state();
     let model_id = if state.selection.backend_id == backend_id { state.selection.model_id.clone() } else { String::new() };
     // The local id is the server's id, so continuing the chat continues it on the server too.
-    let conv = Conversation { id: id.clone(), title, backend_id, model_id, project_id: None, created_at: now, updated_at: now, pinned: false, sources: Default::default() };
+    // Held with an assistant, character or learning scenario: keep sending through it.
+    let persona = state.remote.get(&backend_id).and_then(|l| l.iter().find(|r| r.id == id)).and_then(|r| r.persona.clone()).map(|mut p| {
+        if p.name.is_empty() {
+            p.name = state.persona_info(&backend_id, &p).map(|i| i.name.clone()).unwrap_or_else(|| p.kind.label().to_string());
+        }
+        p
+    });
+    let conv = Conversation { id: id.clone(), title, backend_id, model_id, project_id: None, created_at: now, updated_at: now, pinned: false, sources: Default::default(), persona };
     c.store(|st| {
         st.save_conversation(&conv)?;
         for (i, (mid, role, content)) in msgs.iter().enumerate() {
@@ -555,6 +570,61 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
         s.conversations.insert(0, conv);
     });
     chat_open(c, json!({"id": id})).await
+}
+
+// ---- assistants, characters, learning scenarios -----------------------------------------
+
+async fn persona_refresh(c: Ctx, p: Value) -> Result<Value> {
+    let id = opt_str(&p, "backend").unwrap_or_else(|| c.state().selection.backend_id.clone());
+    let result = c.backend(&id)?.personas().await;
+    c.update(|s| {
+        if let Some(b) = s.backends.iter_mut().find(|b| b.config.id == id) {
+            match &result {
+                Ok(list) => {
+                    b.personas = Some(list.clone());
+                    b.personas_error = None;
+                }
+                Err(e) => b.personas_error = Some(e.message.clone()),
+            }
+        }
+    });
+    Ok(serde_json::to_value(result?)?)
+}
+
+/// Start a new chat with an assistant, character or learning scenario. The chat is created on
+/// the first message, like any new chat; a character's greeting comes first.
+async fn persona_start(c: Ctx, p: Value) -> Result<Value> {
+    let backend_id = opt_str(&p, "backend").unwrap_or_else(|| c.state().selection.backend_id.clone());
+    let kind = aiscraft_core::PersonaKind::parse(&req_str(&p, "kind")?).ok_or_else(|| Error::invalid("kind muss assistant, character oder learning_scenario sein"))?;
+    let id = req_str(&p, "id")?;
+    if c.state().backend(&backend_id).is_some_and(|b| b.personas.is_none()) {
+        persona_refresh(c.clone(), json!({"backend": backend_id})).await?;
+    }
+    let state = c.state();
+    let view = state.backend(&backend_id).ok_or_else(|| Error::not_found(format!("Kein Backend {backend_id}")))?;
+    let info = view
+        .personas
+        .as_ref()
+        .and_then(|l| l.iter().find(|x| x.kind == kind && x.id == id))
+        .cloned()
+        .ok_or_else(|| Error::not_found(format!("{} nicht gefunden. Vielleicht gelöscht oder nicht mehr geteilt.", kind.label())))?;
+    // Its own model where the backend offers it, else the chosen one.
+    let model_id = info
+        .model_id
+        .clone()
+        .filter(|m| view.models.iter().any(|x| &x.id == m))
+        .or_else(|| (state.selection.backend_id == backend_id).then(|| state.selection.model_id.clone()).filter(|m| !m.is_empty()))
+        .or_else(|| view.config.default_model.clone())
+        .or_else(|| view.models.first().map(|m| m.id.clone()))
+        .unwrap_or_default();
+    let project_id = state.selection.project_id.clone();
+    c.update(|s| {
+        s.current = None;
+        s.messages.clear();
+        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: Some(info.persona()) };
+    });
+    persist_selection(&c);
+    Ok(serde_json::to_value(&info)?)
 }
 
 // ---- backends ---------------------------------------------------------------------------
