@@ -735,10 +735,22 @@ impl AisCraftApp {
             if let Some(st) = server_tools.filter(|s| !s.is_empty()) {
                 ui.separator();
                 ui.label(small_muted(&t, "Auf dem AIS.chat-Server (vom Land eingestellt)"));
+                // An assistant, character or scenario can switch web search off in its AIS.chat settings.
+                let persona = self
+                    .state
+                    .selection
+                    .persona
+                    .as_ref()
+                    .and_then(|p| self.state.persona_info(&self.state.selection.backend_id, p).map(|i| (p.kind, i.web_search)));
                 for tool in st {
+                    let off_by_persona = tool.id == "web_search" && tool.enabled && matches!(persona, Some((_, Some(false))));
+                    let enabled = tool.enabled && !off_by_persona;
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(if tool.enabled { "✔" } else { "×" }).color(if tool.enabled { t.success } else { t.muted }));
-                        ui.label(if tool.enabled { RichText::new(&tool.label) } else { RichText::new(&tool.label).color(t.muted) });
+                        ui.label(RichText::new(if enabled { "✔" } else { "×" }).color(if enabled { t.success } else { t.muted }));
+                        ui.label(if enabled { RichText::new(&tool.label) } else { RichText::new(&tool.label).color(t.muted) });
+                        if let (true, Some((kind, _))) = (off_by_persona, persona) {
+                            ui.label(small_muted(&t, format!("aus ({})", kind.label())));
+                        }
                     });
                 }
             }

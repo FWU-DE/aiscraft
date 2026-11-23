@@ -34,6 +34,15 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 - **Kontextfenster:** oben rechts im Chat, wie viel vom Kontext des Modells belegt ist. „≈“ heißt geschätzt.
 - **AIS.chat-Kontingent:** unten links, wie viele Token-Punkte noch übrig sind.
 
+**Assistenten, Figuren und Lernszenarien.** „Assistenten & Figuren entdecken“ in der Seitenleiste (oder Strg+K) öffnet eine Seite mit allem, was AIS.chat dir anbietet: eigene, an der Schule geteilte und offizielle Einträge, mit Bild und Beschreibung.
+
+- **Suchen:** Strg+F, dann Name oder Beschreibung. Groß- und Kleinschreibung und Umlaute spielen keine Rolle („uebung“ findet „Übung“). Bleibt genau ein Treffer, öffnet Enter ihn.
+- **Eingrenzen:** Alle, Assistenten, Figuren, Lernszenarien; dazu „★ Favoriten“ und „Eigene“. Favoriten markierst du in AIS.chat.
+- **Details:** Ein Klick auf eine Karte zeigt Beschreibung, Begrüßung, Aufgabe, ob die Websuche an ist, und Gesprächsanfänge. „Chat starten“ (oder Enter) beginnt einen neuen Chat; ein Gesprächsanfang startet ihn und schickt den Satz gleich ab.
+- **Zurück:** Esc, erst zur Übersicht, dann zum Chat.
+
+Bis zu fünf Favoriten stehen als Abkürzung in der Seitenleiste. Bilder speichert AIS.ChatCraft im Datenordner (`personas`) und lädt sie nach einem halben Tag neu.
+
 Chats von AIS.chat tragen in der Seitenleiste das AIS.chat-Zeichen. Über „AIS.CHAT – VERLAUF“ holst du ältere AIS.chat-Chats herüber und schreibst darin weiter.
 
 ## Quellen pro Chat
@@ -120,6 +129,7 @@ Unter **Einstellungen › Nutzung** stehen die Tokens pro Monat, Backend und Mod
 | Strg+N | Neuer Chat |
 | Strg+B | Seitenleiste ein und aus |
 | Strg+Umschalt+F | Alle Chats durchsuchen |
+| Strg+F | Auf der Seite „Entdecken“: suchen |
 | Strg+R | Antwort neu erzeugen |
 | Esc | Antwort anhalten |
 | Strg+, | Einstellungen |

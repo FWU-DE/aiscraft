@@ -379,6 +379,9 @@ pub fn parse_personas(kind: PersonaKind, v: &Value, me: Option<&str>) -> Vec<Per
                     })
                     .unwrap_or_default(),
                 model_id: s(o, "modelId"),
+                picture_url: s(o, "maybeSignedPictureUrl").filter(|u| picture_url_ok(u)),
+                favorite: o.get("isFavorite").and_then(Value::as_bool) == Some(true),
+                web_search: o.get("isWebSearchEnabled").and_then(Value::as_bool),
             })
         })
         .take(500)
@@ -386,6 +389,13 @@ pub fn parse_personas(kind: PersonaKind, v: &Value, me: Option<&str>) -> Vec<Per
     out.sort_by(|a, b| b.own.cmp(&a.own).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     out.dedup_by(|a, b| a.id == b.id);
     out
+}
+
+/// A picture URL worth fetching: https, a host, at most 4096 characters, no spaces or controls.
+fn picture_url_ok(u: &str) -> bool {
+    u.len() <= 4096
+        && u.strip_prefix("https://").is_some_and(|rest| rest.split(['/', '?', '#']).next().is_some_and(|host| !host.is_empty() && !host.contains('@')))
+        && !u.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 /// The action's single argument.
@@ -1046,6 +1056,30 @@ mod tests {
         assert!(list[0].own && !list[1].own);
         assert_eq!(list[0].prompt_suggestions, ["Was ist ein Algorithmus?"]);
         assert_eq!(list[1].initial_message.as_deref(), Some("Seid gegrüßt!"));
+        assert!(!list[0].favorite && list[0].picture_url.is_none());
+
+        let long = format!("https://s3.example/{}", "a".repeat(4100));
+        let v = json!([
+            {"id": "p1", "name": "Mit Bild", "maybeSignedPictureUrl": "https://s3.example/avatar_1?X-Amz-Signature=abc", "isFavorite": true, "isWebSearchEnabled": true},
+            {"id": "p2", "name": "Http", "maybeSignedPictureUrl": "http://s3.example/a.png", "isFavorite": "ja", "isWebSearchEnabled": false},
+            {"id": "p7", "name": "Websuche kaputt", "isWebSearchEnabled": "ja"},
+            {"id": "p3", "name": "Lang", "maybeSignedPictureUrl": long},
+            {"id": "p4", "name": "Leer", "maybeSignedPictureUrl": "https:///x"},
+            {"id": "p5", "name": "Leerzeichen", "maybeSignedPictureUrl": "https://s3.example/a b.png"},
+            {"id": "p6", "name": "Nutzer", "maybeSignedPictureUrl": "https://ich@s3.example/a.png"}
+        ]);
+        let list = parse_personas(PersonaKind::LearningScenario, &v, None);
+        let by = |n: &str| list.iter().find(|p| p.name == n).unwrap();
+        assert_eq!(by("Mit Bild").picture_url.as_deref(), Some("https://s3.example/avatar_1?X-Amz-Signature=abc"));
+        assert!(by("Mit Bild").favorite);
+        assert!(!by("Http").favorite, "only a real true counts");
+        assert_eq!(by("Mit Bild").web_search, Some(true));
+        assert_eq!(by("Http").web_search, Some(false));
+        assert_eq!(by("Leer").web_search, None, "absent: unknown");
+        assert_eq!(by("Websuche kaputt").web_search, None, "not a bool: unknown");
+        for n in ["Http", "Lang", "Leer", "Leerzeichen", "Nutzer"] {
+            assert!(by(n).picture_url.is_none(), "{n}: only plain https URLs up to 4096 characters");
+        }
         assert!(parse_personas(PersonaKind::Assistant, &json!({"success": false}), None).is_empty());
         let err = server_result(json!({"success": false, "error": {"name": "NotFoundError", "message": "weg"}})).unwrap_err();
         assert_eq!(err.kind, aiscraft_core::ErrorKind::NotFound);

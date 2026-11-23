@@ -687,7 +687,7 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                     let flight = |value: &str| format!("0:{{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}}\n1:{value}\n");
                     let action = req.lines().find_map(|l| l.strip_prefix("next-action: ")).unwrap_or("").to_string();
                     // Static chunks need no session, everything else does.
-                    let authed = req.contains("ais-chat-app.authjs.session-token=good") || req.starts_with("GET /_next/");
+                    let authed = req.contains("ais-chat-app.authjs.session-token=good") || req.starts_with("GET /_next/") || req.starts_with("GET /avatars/");
                     let (status, ctype, body) = if !authed {
                         ("307 Temporary Redirect\r\nlocation: /login", "text/plain", String::new())
                     } else if req.starts_with("GET /api/auth/session") {
@@ -704,6 +704,15 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                         ("200 OK", "text/html", page("images", r#"4:{"models":[{"id":"m-img","name":"img","displayName":"Bildmodell","priceMetadata":{"type":"image"}}]}"#))
                     } else if req.starts_with("GET /_next/static/chunks/images.js") {
                         ("200 OK", "application/javascript", reference(0x44, "generateImageAction"))
+                    } else if req.starts_with("GET /avatars/") && req.to_ascii_lowercase().contains("\r\ncookie:") {
+                        // Signed storage URLs never get the session cookie.
+                        ("403 Forbidden", "text/plain", String::new())
+                    } else if req.starts_with("GET /avatars/goethe.png?X-Amz-Signature=") {
+                        ("200 OK", "image/gif", "GIF89aGoethe".to_string())
+                    } else if req.starts_with("GET /avatars/coach.png") {
+                        ("200 OK", "text/html", "<html>kein Bild</html>".to_string())
+                    } else if req.starts_with("GET /avatars/riesig.png") {
+                        ("200 OK", "image/gif", format!("GIF89a{}", "x".repeat(3 * 1024 * 1024)))
                     } else if req.starts_with("GET /files/bild.png") {
                         ("200 OK", "image/png", "\u{89}PNG-bytes".to_string())
                     } else if req.starts_with("GET /assistants ") {
@@ -725,11 +734,11 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                     } else if req.starts_with("POST / ") {
                         rec.lock().unwrap().push(req.clone());
                         let body = if action == id(0x11) {
-                            flight(r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung","promptSuggestions":["Erkläre 3/4"]}]"#)
+                            flight(r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung","promptSuggestions":["Erkläre 3/4"],"maybeSignedPictureUrl":"https://s3.example/avatars/coach.png"}]"#)
                         } else if action == id(0x22) {
-                            flight(r#"[{"id":"c1","name":"Goethe","userId":"x","description":"Dichter aus Weimar","initialMessage":"Seid gegrüßt!","modelId":"m-other"}]"#)
+                            flight(r#"[{"id":"c1","name":"Goethe","userId":"x","description":"Dichter aus Weimar","initialMessage":"Seid gegrüßt!","modelId":"m-other","isFavorite":true,"maybeSignedPictureUrl":"https://s3.example/avatars/goethe.png?X-Amz-Signature=abc"}]"#)
                         } else if action == id(0x33) {
-                            flight(r#"[{"id":"l1","name":"Photosynthese erforschen","userId":"me","studentExercise":"Finde heraus, was Pflanzen brauchen."}]"#)
+                            flight(r#"[{"id":"l1","name":"Photosynthese erforschen","userId":"me","studentExercise":"Finde heraus, was Pflanzen brauchen.","maybeSignedPictureUrl":"https://s3.example/avatars/riesig.png"}]"#)
                         } else if action == id(0x55) {
                             if req.contains("kaputt") {
                                 flight(r#"{"success":true,"value":{"processedUrls":[],"errorUrls":["https://kaputt.example/"]}}"#)
@@ -821,6 +830,56 @@ fn ais_chat_personas() {
     // Backends without personas say so.
     let (other, id) = engine_with_backend();
     assert_eq!(other.call("persona.refresh", json!({"backend": id})).unwrap_err().kind, aiscraft_core::ErrorKind::Unsupported);
+}
+
+/// Pictures: fetched from the signed URL (through the local origin, without the session
+/// cookie), cached by id, refused when too large or not an image; no network without an origin.
+#[test]
+fn ais_chat_persona_pictures() {
+    let (engine, _) = ais_engine();
+    let base = engine.state().backend("ais-chat").unwrap().config.base_url.clone();
+    engine.call("persona.refresh", json!({"backend": "ais-chat"})).unwrap();
+    let goethe = engine.state().backend("ais-chat").unwrap().personas.as_ref().unwrap().iter().find(|p| p.id == "c1").cloned().unwrap();
+    assert!(goethe.favorite);
+    // An engine in memory has no origin yet: it stays offline.
+    let err = engine.call("persona.picture", json!({"kind": "character", "id": "c1"})).unwrap_err();
+    assert_eq!(err.kind, aiscraft_core::ErrorKind::Unsupported);
+    assert!(engine.set_picture_origin(Some("https://elsewhere.example")).is_err(), "only a local server");
+    engine.set_picture_origin(Some(&base)).unwrap();
+
+    let first = engine.call("persona.picture", json!({"backend": "ais-chat", "kind": "character", "id": "c1"})).unwrap();
+    assert_eq!(first["cached"], false, "{first}");
+    assert_eq!(first["content_type"], "image/gif");
+    let path = first["path"].as_str().unwrap().to_string();
+    assert!(path.starts_with(&engine.pictures_dir().display().to_string()));
+    assert_eq!(std::fs::read(&path).unwrap(), b"GIF89aGoethe");
+    let key = crate::picture_key("ais-chat", aiscraft_core::PersonaKind::Character, "c1");
+    assert_eq!(engine.state().persona_pictures.get(&key).cloned().flatten().as_deref(), Some(path.as_str()));
+    assert_eq!(engine.call("persona.picture", json!({"kind": "character", "id": "c1"})).unwrap()["cached"], true, "second time from the cache");
+    assert_eq!(engine.call("persona.picture", json!({"kind": "character", "id": "c1", "fresh": true})).unwrap()["cached"], false);
+
+    // Not an image, too large: errors, nothing cached.
+    let err = engine.call("persona.picture", json!({"kind": "assistant", "id": "a1"})).unwrap_err();
+    assert!(err.message.contains("Kein Bild"), "{}", err.message);
+    let err = engine.call("persona.picture", json!({"kind": "learning_scenario", "id": "l1"})).unwrap_err();
+    assert!(err.message.contains("2 MB"), "{}", err.message);
+    let s = engine.state();
+    assert_eq!(s.persona_pictures.get(&crate::picture_key("ais-chat", aiscraft_core::PersonaKind::LearningScenario, "l1")), Some(&None));
+    // Unknown ones and bad kinds.
+    assert_eq!(engine.call("persona.picture", json!({"kind": "character", "id": "weg"})).unwrap_err().kind, aiscraft_core::ErrorKind::NotFound);
+    assert!(engine.call("persona.picture", json!({"kind": "robot", "id": "c1"})).is_err());
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A suggestion click: start the persona chat and send the text right away.
+#[test]
+fn persona_start_with_text_sends() {
+    let (engine, posted) = ais_engine();
+    engine.call("persona.start", json!({"kind": "character", "id": "c1", "text": "Wer bist du?"})).unwrap();
+    let s = engine.state();
+    assert!(s.current.is_some(), "the chat exists");
+    assert_eq!(s.messages.last().map(|m| m.content.as_str()), Some("Ich bin Goethe."));
+    assert!(posted.lock().unwrap().last().unwrap().contains(r#""characterId":"c1""#));
 }
 
 /// Image chats: the AIS.chat image models appear, a prompt becomes an image attachment that can

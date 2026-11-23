@@ -280,9 +280,18 @@ static COMMANDS: &[CommandSpec] = &[
         "Chat mit Assistent, Figur oder Lernszenario",
         "Chat",
         None,
-        "kind: assistant|character|learning_scenario, id: string, backend?: string",
+        "kind: assistant|character|learning_scenario, id: string, backend?: string, text?: string (gleich senden)",
         false,
         |c, p| Box::pin(persona_start(c, p))
+    ),
+    cmd!(
+        "persona.picture",
+        "Bild eines Assistenten, einer Figur oder eines Lernszenarios laden",
+        "Backends",
+        None,
+        "kind: assistant|character|learning_scenario, id: string, backend?: string, fresh?: bool (nicht aus dem Zwischenspeicher)",
+        false,
+        |c, p| Box::pin(crate::pictures::picture(c, p))
     ),
     cmd!("remote.import", "Chat vom Server übernehmen", "Backends", None, "backend: string, id: string, title?: string", false, |c, p| Box::pin(
         remote_import(c, p)
@@ -896,7 +905,11 @@ async fn persona_start(c: Ctx, p: Value) -> Result<Value> {
         };
     });
     persist_selection(&c);
-    Ok(serde_json::to_value(&info)?)
+    let out = serde_json::to_value(&info)?;
+    if let Some(text) = opt_str(&p, "text").filter(|t| !t.trim().is_empty()) {
+        chat::send_with(c, text, Vec::new(), Vec::new(), None, false).await?;
+    }
+    Ok(out)
 }
 
 // ---- backends ---------------------------------------------------------------------------

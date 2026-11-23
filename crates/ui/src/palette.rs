@@ -33,6 +33,7 @@ enum UiAction {
     Manual,
     Export,
     Search,
+    Explore,
 }
 
 impl Item {
@@ -72,6 +73,7 @@ impl AisCraftApp {
             Item::Ui { label: "Seitenleiste ein/aus", action: UiAction::ToggleSidebar },
             Item::Ui { label: "Chat exportieren", action: UiAction::Export },
             Item::Ui { label: "Alle Chats durchsuchen", action: UiAction::Search },
+            Item::Ui { label: "Assistenten, Figuren & Lernszenarien entdecken", action: UiAction::Explore },
         ]);
         for b in &self.state.backends {
             if matches!(b.status, BackendStatus::Ready { .. }) {
@@ -171,6 +173,7 @@ impl AisCraftApp {
                 UiAction::ToggleSidebar => self.sidebar_open = !self.sidebar_open,
                 UiAction::Manual => self.manual = Some(Default::default()),
                 UiAction::Export => self.export_dialog(),
+                UiAction::Explore => self.open_explore(),
                 UiAction::Search => {
                     self.sidebar_open = true;
                     self.focus_search = true;
