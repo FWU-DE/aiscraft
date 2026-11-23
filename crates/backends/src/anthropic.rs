@@ -36,7 +36,9 @@ impl Anthropic {
 pub fn text_with_files(m: &Message) -> String {
     let mut text = m.content.clone();
     for a in &m.attachments {
-        if let Some(t) = &a.text {
+        if a.is_link() {
+            text.push_str(&format!("\n\nLink: {}", a.name));
+        } else if let Some(t) = &a.text {
             text.push_str(&format!("\n\n<datei name=\"{}\">\n{t}\n</datei>", a.name.replace('"', "'")));
         }
     }

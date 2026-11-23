@@ -86,6 +86,9 @@ pub struct AisChat {
     on_secret: SecretSink,
     /// Server action ids by name, as far as found in the shipped JS so far.
     actions: tokio::sync::Mutex<BTreeMap<String, String>>,
+    /// Editor pages of the person's own assistants, characters and scenarios: the only pages
+    /// whose JS carries `ingestWebContentAction`.
+    editor_pages: Mutex<Vec<String>>,
 }
 
 /// Pages whose JS carries an action, in the order to look. Every page also loads the shared
@@ -108,10 +111,12 @@ fn action_label(name: &str) -> &'static str {
         "getCharactersByFilterAction" => "Die Liste der Figuren",
         "getLearningScenariosByFilterAction" => "Die Liste der Lernszenarien",
         "generateImageAction" => "Die Bilderzeugung",
+        INGEST_ACTION => "Das Einlesen von Webseiten",
         _ => "Diese Funktion",
     }
 }
 
+const INGEST_ACTION: &str = "ingestWebContentAction";
 const IMAGE_CAP: usize = 25 * 1024 * 1024;
 
 impl AisChat {
@@ -124,6 +129,7 @@ impl AisChat {
             jar: Mutex::new(jar),
             on_secret,
             actions: tokio::sync::Mutex::new(BTreeMap::new()),
+            editor_pages: Mutex::new(Vec::new()),
         })
     }
 
@@ -263,7 +269,11 @@ impl AisChat {
     }
 
     fn pages_for(&self, name: &str) -> Vec<String> {
-        action_pages(name).iter().map(|p| p.to_string()).collect()
+        let mut pages: Vec<String> = action_pages(name).iter().map(|p| p.to_string()).collect();
+        if name == INGEST_ACTION {
+            pages.extend(self.editor_pages.lock().unwrap_or_else(PoisonError::into_inner).iter().cloned());
+        }
+        pages
     }
 
     async fn session_user_id(&self) -> Option<String> {
@@ -374,7 +384,12 @@ pub fn action_payload(req: &ChatRequest) -> Value {
         .messages
         .iter()
         .filter(|m| m.role == Role::User || (m.role == Role::Assistant && !m.content.is_empty()))
-        .map(|m| json!({"id": m.id, "role": m.role.as_str(), "content": m.content}))
+        .map(|m| {
+            // Links go along as text: AIS.chat's web scraper reads the pages a message names.
+            let links: Vec<&str> = m.attachments.iter().filter(|a| a.is_link()).map(|a| a.name.as_str()).collect();
+            let content = if links.is_empty() { m.content.clone() } else { format!("{}\n\n{}", m.content, links.join("\n")).trim().to_string() };
+            json!({"id": m.id, "role": m.role.as_str(), "content": content})
+        })
         .collect();
     let file_ids: Vec<&str> =
         req.messages.iter().rev().find(|m| m.role == Role::User).map(|m| m.attachments.iter().filter_map(|a| a.remote_id.as_deref()).collect()).unwrap_or_default();
@@ -434,6 +449,8 @@ fn tool_label(tool: &str) -> &'static str {
         "Websuche"
     } else if t.contains("scrap") {
         "Webseite lesen"
+    } else if t.contains("entire") {
+        "Datei lesen"
     } else if t.contains("chunk") || t.contains("file") {
         "Datei durchsuchen"
     } else if t.contains("mundo") {
@@ -441,7 +458,7 @@ fn tool_label(tool: &str) -> &'static str {
     } else if t.contains("math") || t.contains("calc") {
         "Rechnen"
     } else if t.contains("plot") || t.contains("graph") {
-        "Diagramm"
+        "Diagramm erstellen"
     } else if t.contains("document") {
         "Dokument erstellen"
     } else {
@@ -469,7 +486,15 @@ pub fn activity_steps(v: &Value) -> Vec<ActivityStep> {
                     links: st
                         .get("links")
                         .and_then(Value::as_array)
-                        .map(|a| a.iter().filter_map(|l| Some(ActivityLink { title: s(l, "title")?, url: s(l, "url")? })).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|l| {
+                                    let url = s(l, "url")?;
+                                    let title = s(l, "title").filter(|t| !t.trim().is_empty()).unwrap_or_else(|| url.clone());
+                                    Some(ActivityLink { title, url, failed: l.get("failed").and_then(Value::as_bool).unwrap_or(false) })
+                                })
+                                .collect()
+                        })
                         .unwrap_or_default(),
                     document: st.get("document").and_then(|d| {
                         Some(GeneratedDocument { file_name: s(d, "fileName")?, format: s(d, "format").unwrap_or_default(), content: s(d, "content")? })
@@ -720,6 +745,19 @@ impl Backend for AisChat {
             {
                 return Err(e);
             }
+            let pages: Vec<String> = PersonaKind::ALL
+                .iter()
+                .filter_map(|k| out.iter().find(|p| p.own && p.kind == *k))
+                .map(|p| {
+                    let base = match p.kind {
+                        PersonaKind::Assistant => "/assistants",
+                        PersonaKind::Character => "/characters",
+                        PersonaKind::LearningScenario => "/learning-scenarios",
+                    };
+                    format!("{base}/editor/{}", p.id)
+                })
+                .collect();
+            *self.editor_pages.lock().unwrap_or_else(PoisonError::into_inner) = pages;
             Ok(out)
         })
     }
@@ -758,6 +796,22 @@ impl Backend for AisChat {
                 return Err(Error::protocol("AIS.chat hat ein leeres Bild geliefert"));
             }
             Ok(ImageResult { bytes, mime, conversation_id: s("conversationId"), message_id: s("assistantMessageId") })
+        })
+    }
+
+    fn check_link(&self, url: String) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async move {
+            let v = match self.call_action(INGEST_ACTION, &self.pages_for(INGEST_ACTION), &[json!({"url": url})]).await {
+                Ok(v) => server_result(v)?,
+                // The action ships only with editor pages; without one, the server cannot be asked.
+                Err(e) if e.kind == aiscraft_core::ErrorKind::Protocol && e.message.contains("nicht gefunden") => return Ok(false),
+                Err(e) => return Err(e),
+            };
+            let failed = v.get("errorUrls").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+            if failed {
+                return Err(Error::invalid(format!("AIS.chat kann die Seite {url} nicht lesen. Ist die Adresse richtig und öffentlich erreichbar?")));
+            }
+            Ok(true)
         })
     }
 
@@ -833,6 +887,12 @@ mod tests {
         assert_eq!(steps[0].label, "Websuche");
         assert_eq!(steps[0].links[0].url, "https://dwd.de");
         assert_eq!(steps[1].document.as_ref().unwrap().file_name, "a.docx");
+        // Tool names as AIS.chat sends them (TOOL_NAMES), a plot description, a page it could not read.
+        let ev = ActionEvent::Chunk("\u{1e}{\"type\":\"ai_activity\",\"steps\":[{\"kind\":\"tool\",\"id\":\"1\",\"tool\":\"create_plot\",\"detail\":\"Parabel y=x^2\",\"detailPlacement\":\"below\"},{\"kind\":\"tool\",\"id\":\"2\",\"tool\":\"web_scraper\",\"links\":[{\"title\":\"\",\"url\":\"https://a.example\",\"failed\":true}],\"failed\":true},{\"kind\":\"tool\",\"id\":\"3\",\"tool\":\"retrieve_entire_file\"}]}".into());
+        let StreamEvent::Activity { steps } = &map_action_event(ev).unwrap()[0] else { panic!() };
+        assert_eq!(steps.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(), ["Diagramm erstellen", "Webseite lesen", "Datei lesen"]);
+        assert_eq!(steps[0].detail.as_deref(), Some("Parabel y=x^2"));
+        assert!(steps[1].failed && steps[1].links[0].failed && steps[1].links[0].title == "https://a.example");
         let err = map_action_event(ActionEvent::Result(json!({"stream":"$2","messageId":"m","error":{"name":"TokenPointsExceededError","message":"x"}}))).unwrap_err();
         assert_eq!(err.kind, aiscraft_core::ErrorKind::Refused);
         assert_eq!(map_action_event(ActionEvent::Result(json!({"messageId":"m9"}))).unwrap(), vec![StreamEvent::MessageId { id: "m9".into() }]);

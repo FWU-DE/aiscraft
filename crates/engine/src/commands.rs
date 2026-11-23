@@ -39,13 +39,14 @@ pub fn find(id: &str) -> Option<&'static CommandSpec> {
 static COMMANDS: &[CommandSpec] = &[
     cmd!("chat.new", "Neuer Chat", "Chat", Some("Ctrl+N"), "backend?: string, model?: string, project?: string, kind?: chat|image", true, |c, p| Box::pin(chat_new(c, p))),
     cmd!("chat.open", "Chat öffnen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_open(c, p))),
-    cmd!("chat.send", "Senden", "Chat", Some("Enter"), "text: string, files?: [path], artifact?: string (as context), force?: bool (past the monthly limit), aspect_ratio?: quadratic|landscape|portrait (image chats)", false, |c, p| Box::pin(async move {
+    cmd!("chat.send", "Senden", "Chat", Some("Enter"), "text: string, files?: [path], artifact?: string (as context), force?: bool (past the monthly limit), aspect_ratio?: quadratic|landscape|portrait (image chats), links?: [url] (web pages, at most 5)", false, |c, p| Box::pin(async move {
         let text = opt_str(&p, "text").unwrap_or_default();
         if let Some(r) = opt_str(&p, "aspect_ratio") {
             set_aspect(&c, &r)?;
         }
         let files: Vec<String> = p.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-        chat::send_with(c, text, files, opt_str(&p, "artifact"), p.get("force").and_then(Value::as_bool).unwrap_or(false)).await
+        let links: Vec<String> = p.get("links").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+        chat::send_with(c, text, files, links, opt_str(&p, "artifact"), p.get("force").and_then(Value::as_bool).unwrap_or(false)).await
     })),
     cmd!("chat.stop", "Antwort anhalten", "Chat", Some("Escape"), "conversation?: string", true, |c, p| Box::pin(async move {
         let conv = opt_str(&p, "conversation").or_else(|| c.state().current.clone()).ok_or_else(|| Error::invalid("Kein Chat offen"))?;

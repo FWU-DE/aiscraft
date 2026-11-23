@@ -28,6 +28,9 @@ pub struct AisCraftApp {
     pub(crate) md: egui_commonmark::CommonMarkCache,
     pub(crate) composer: String,
     pub(crate) pending_files: Vec<PathBuf>,
+    /// Web links for the next message, and the address being typed (`Some` while the field is open).
+    pub(crate) pending_links: Vec<String>,
+    pub(crate) link_input: Option<String>,
     pub(crate) sidebar_open: bool,
     pub(crate) search_text: String,
     pub(crate) project_filter: Option<String>,
@@ -75,6 +78,8 @@ impl AisCraftApp {
             md: Default::default(),
             composer: String::new(),
             pending_files: Vec::new(),
+            pending_links: Vec::new(),
+            link_input: None,
             sidebar_open: true,
             search_text: String::new(),
             project_filter: None,
@@ -179,6 +184,8 @@ impl AisCraftApp {
         self.run("chat.new", json!({}));
         self.composer.clear();
         self.pending_files.clear();
+        self.pending_links.clear();
+        self.link_input = None;
         self.editing = None;
         self.focus_composer = true;
     }

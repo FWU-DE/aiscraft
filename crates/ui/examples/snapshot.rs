@@ -7,7 +7,8 @@
 //!
 //! `--demo` starts a local OpenAI-compatible server that streams a Markdown answer, adds it as a
 //! backend and fills projects, notes and a few chats. `--demo-ais` adds a local stand-in for
-//! AIS.chat (assistants, characters, learning scenarios, image generation). `--theme light|dark|omarchy`.
+//! AIS.chat (assistants, characters, learning scenarios, image generation, a plot answer for
+//! prompts with "Parabel"). `--theme light|dark|omarchy`.
 //! The engine runs in memory; nothing touches your real data.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
@@ -153,6 +154,16 @@ fn demo_ais(engine: &Engine) {
                         ("text/x-component", flight(r#"[{"id":"c1","name":"Johann Wolfgang von Goethe","userId":"x","description":"Dichter und Naturforscher aus Weimar","initialMessage":"Seid gegrüßt! Was möchtet Ihr über mein Leben und Werk erfahren?"},{"id":"c2","name":"Marie Curie","userId":"me","description":"Physikerin und Chemikerin"}]"#))
                     } else if req.starts_with("POST / ") && action == id(0x33) {
                         ("text/x-component", flight(r#"[{"id":"l1","name":"Photosynthese erforschen","userId":"me","description":"Klasse 7, Biologie","studentExercise":"Finde heraus, was eine Pflanze zum Wachsen braucht, und erkläre es in drei Sätzen."}]"#))
+                    } else if req.starts_with("POST / ") && action == id(0x7f) && req.contains("Parabel") {
+                        // A create_plot answer, as AIS.chat streams it: activity, then text with the spec.
+                        let activity = serde_json::to_string(&format!("\u{1e}{}", json!({"type": "ai_activity", "steps": [
+                            {"kind": "tool", "id": "1", "tool": "web_scraper", "links": [{"title": "Lehrplan Mathematik", "url": "https://schule.example/plan"}, {"title": "", "url": "https://kaputt.example/", "failed": true}]},
+                            {"kind": "tool", "id": "2", "tool": "create_plot", "detail": "Parabel y = a·x² mit Schieberegler a, Scheitel markiert", "detailPlacement": "below", "result": "ok"},
+                            {"kind": "done"}
+                        ]}))).unwrap();
+                        let plot = r##"{"board":{"boundingBox":[-5,9,5,-2],"grid":true},"elements":[["slider",[0,1,3],{"name":"a"}],["functiongraph",["a*x^2"],{"name":"f","strokeColor":"#2563eb"}],["functiongraph",["2*x+3"],{"strokeColor":"#dc2626","dash":2}],["point",[0,0],{"name":"S"}],["text",[1.2,7.5,"y = a·x²"]]]}"##;
+                        let text = serde_json::to_string(&format!("Hier ist die Parabel mit dem Schieberegler *a*:\n\n```jsxgraph-json\n{plot}\n```\n\nDie rote Gerade schneidet sie zweimal.")).unwrap();
+                        ("text/x-component", format!("0:{{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}}\n1:{{\"stream\":\"$2\",\"messageId\":\"$undefined\"}}\n2:R\n2:{activity}\n2:{text}\n2:C\n"))
                     } else if req.starts_with("POST / ") && action == id(0x7f) {
                         let text = serde_json::to_string(ANSWER).unwrap();
                         ("text/x-component", format!("0:{{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}}\n1:{{\"stream\":\"$2\",\"messageId\":\"$undefined\"}}\n2:R\n2:{text}\n2:C\n"))

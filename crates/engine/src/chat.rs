@@ -91,7 +91,7 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
 }
 
 pub(crate) async fn send(c: Ctx, text: String, paths: Vec<String>) -> Result<Value> {
-    send_with(c, text, paths, None, false).await
+    send_with(c, text, paths, vec![], None, false).await
 }
 
 /// One model call outside any conversation, with the selected backend and model: for revising
@@ -132,11 +132,28 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
     Ok(out)
 }
 
-pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact: Option<String>, force: bool) -> Result<Value> {
+/// At most this many links per message (AIS.chat's web scraper reads five at a time).
+const MAX_LINKS: usize = 5;
+
+/// A web address a person attached: http(s), no spaces, not too long.
+pub(crate) fn check_url(url: &str) -> Result<String> {
+    let u = url.trim();
+    let ok = (u.starts_with("https://") || u.starts_with("http://")) && u.len() <= 2000 && !u.chars().any(char::is_whitespace) && u.split("://").nth(1).is_some_and(|h| !h.is_empty() && !h.starts_with('/'));
+    if !ok {
+        return Err(Error::invalid(format!("Das ist keine Webadresse: {}", u.chars().take(80).collect::<String>())));
+    }
+    Ok(u.to_string())
+}
+
+pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: Vec<String>, artifact: Option<String>, force: bool) -> Result<Value> {
     let text = text.trim().to_string();
-    if text.is_empty() && paths.is_empty() {
+    if text.is_empty() && paths.is_empty() && links.is_empty() {
         return Err(Error::invalid("Nachricht ist leer"));
     }
+    if links.len() > MAX_LINKS {
+        return Err(Error::invalid(format!("Höchstens {MAX_LINKS} Links pro Nachricht")));
+    }
+    let links = links.iter().map(|l| check_url(l)).collect::<Result<Vec<_>>>()?;
     let state = c.state();
     let backend = c.backend(&state.selection.backend_id)?;
     if state.selection.model_id.is_empty() {
@@ -149,7 +166,7 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact
     }
     let kind = state.current.as_ref().and_then(|id| state.conversation(id)).map(|c| c.kind).unwrap_or(state.selection.kind);
     if kind == ConversationKind::Image {
-        if !paths.is_empty() {
+        if !paths.is_empty() || !links.is_empty() {
             return Err(Error::unsupported("Vorlagenbilder für die Bilderzeugung kann AIS.ChatCraft noch nicht mitschicken."));
         }
         if text.is_empty() {
@@ -180,8 +197,13 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact
         }
         attachments.push(a);
     }
+    // Links: the server reads the page first where it can, so a page it cannot read fails here.
+    for url in &links {
+        backend.check_link(url.clone()).await?;
+        attachments.push(aiscraft_core::Attachment::link(url));
+    }
 
-    let conv = ensure_conversation(&c, if text.is_empty() { paths.first().map(String::as_str).unwrap_or("Datei") } else { &text })?;
+    let conv = ensure_conversation(&c, if text.is_empty() { paths.first().or(links.first()).map(String::as_str).unwrap_or("Datei") } else { &text })?;
     let user = Message {
         id: new_id(),
         conversation_id: conv.clone(),

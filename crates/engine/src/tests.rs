@@ -670,6 +670,10 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                         ("200 OK", "application/json", r#"{"conversations":[{"id":"r2","name":"Mit Goethe","characterId":"c1","type":"chat"}]}"#.to_string())
                     } else if req.starts_with("GET /d/r2") || req.starts_with("GET /characters/d/c1/r2") {
                         ("200 OK", "text/html", page("none", r#"5:{"messages":[{"id":"u9","role":"user","content":"Hallo Goethe"},{"id":"a9","role":"assistant","content":"Seid gegrüßt!"}]}"#))
+                    } else if req.starts_with("GET /assistants/editor/a1 ") {
+                        ("200 OK", "text/html", page("editor", "1:{}"))
+                    } else if req.starts_with("GET /_next/static/chunks/editor.js") {
+                        ("200 OK", "application/javascript", reference(0x55, "ingestWebContentAction"))
                     } else if req.starts_with("GET /image-generation ") {
                         ("200 OK", "text/html", page("images", r#"4:{"models":[{"id":"m-img","name":"img","displayName":"Bildmodell","priceMetadata":{"type":"image"}}]}"#))
                     } else if req.starts_with("GET /_next/static/chunks/images.js") {
@@ -700,6 +704,12 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                             flight(r#"[{"id":"c1","name":"Goethe","userId":"x","description":"Dichter aus Weimar","initialMessage":"Seid gegrüßt!","modelId":"m-other"}]"#)
                         } else if action == id(0x33) {
                             flight(r#"[{"id":"l1","name":"Photosynthese erforschen","userId":"me","studentExercise":"Finde heraus, was Pflanzen brauchen."}]"#)
+                        } else if action == id(0x55) {
+                            if req.contains("kaputt") {
+                                flight(r#"{"success":true,"value":{"processedUrls":[],"errorUrls":["https://kaputt.example/"]}}"#)
+                            } else {
+                                flight(r#"{"success":true,"value":{"processedUrls":["https://schule.example/plan"],"errorUrls":[]}}"#)
+                            }
                         } else if action == id(0x44) {
                             if req.contains("Fehler bitte") {
                                 flight(r#"{"success":false,"error":{"name":"TokenPointsExceededError","message":"leer"}}"#)
@@ -843,6 +853,41 @@ fn ais_chat_image_generation() {
     let (other, id) = engine_with_backend();
     assert_eq!(other.call("chat.new_image", json!({"backend": id})).unwrap_err().kind, aiscraft_core::ErrorKind::Unsupported);
     assert!(other.call("chat.new", json!({"kind": "video"})).is_err());
+}
+
+/// Web links on a message: AIS.chat reads the page first where it can (ingestWebContentAction,
+/// shipped with the editor pages of the person's own assistants), the link goes along in the
+/// text for its web scraper; other backends get it as text too.
+#[test]
+fn links_on_messages() {
+    let (engine, posted) = ais_engine();
+    // Not checkable yet (no own assistant known): the link goes along unchecked.
+    engine.call("chat.send", json!({"text": "Fasse zusammen", "links": ["https://schule.example/plan"]})).unwrap();
+    let sent = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(sent.contains(r#""content":"Fasse zusammen\n\nhttps://schule.example/plan""#), "{sent}");
+    let user = engine.state().messages.iter().find(|m| m.role == aiscraft_core::Role::User).cloned().unwrap();
+    assert!(user.attachments[0].is_link() && user.attachments[0].name == "https://schule.example/plan");
+
+    // With an own assistant, the editor page carries the ingest action: a page AIS.chat cannot
+    // read is refused before anything is sent.
+    engine.call("persona.refresh", json!({})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    let before = posted.lock().unwrap().len();
+    let err = engine.call("chat.send", json!({"text": "Lies das", "links": ["https://kaputt.example/"]})).unwrap_err();
+    assert!(err.message.contains("nicht lesen"), "{}", err.message);
+    assert!(engine.state().current.is_none(), "nothing was saved");
+    engine.call("chat.send", json!({"text": "Lies das", "links": ["https://schule.example/plan"]})).unwrap();
+    let posts = posted.lock().unwrap()[before..].to_vec();
+    assert!(posts.iter().any(|p| p.contains(r#"[{"url":"https://schule.example/plan"}]"#)), "ingest was asked: {posts:?}");
+
+    for bad in [json!(["ftp://x.example"]), json!(["https://"]), json!(["https://a b"]), json!(vec!["https://x.example"; 6])] {
+        assert_eq!(engine.call("chat.send", json!({"text": "x", "links": bad})).unwrap_err().kind, aiscraft_core::ErrorKind::Invalid, "{bad}");
+    }
+
+    // Other backends read the address in the text.
+    let (other, seen) = engine_with_recording("Ok.");
+    other.call("chat.send", json!({"text": "", "links": ["https://schule.example/plan"]})).unwrap();
+    assert!(seen.lock().unwrap().iter().any(|r| r.contains("Link: https://schule.example/plan")));
 }
 
 /// Rule: every command has a functional test (beyond the panic hunt). A new command without one

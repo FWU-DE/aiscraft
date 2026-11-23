@@ -51,6 +51,19 @@ pub struct Attachment {
     pub data_base64: Option<String>,
 }
 
+/// The type of an attachment that is a web link (its name is the URL).
+pub const LINK_MIME: &str = "text/uri-list";
+
+impl Attachment {
+    /// A web link attached to a message. Backends without uploads read it as text.
+    pub fn link(url: &str) -> Self {
+        Attachment { name: url.to_string(), mime: LINK_MIME.into(), size: 0, text: Some(format!("Link: {url}")), ..Default::default() }
+    }
+    pub fn is_link(&self) -> bool {
+        self.mime == LINK_MIME
+    }
+}
+
 /// One step of server-side agent work (AIS.chat shows "Websuche", "Datei lesen"…).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ActivityStep {
@@ -73,6 +86,9 @@ pub struct ActivityStep {
 pub struct ActivityLink {
     pub title: String,
     pub url: String,
+    /// The server could not read this page.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub failed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

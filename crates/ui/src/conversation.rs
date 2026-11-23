@@ -300,7 +300,11 @@ impl AisCraftApp {
                 if !m.attachments.is_empty() {
                     ui.horizontal_wrapped(|ui| {
                         for a in &m.attachments {
-                            ui.label(small_muted(&t, format!("📎 {}", a.name)));
+                            if a.is_link() {
+                                ui.hyperlink_to(RichText::new(format!("🔗 {}", short_url(&a.name))).small(), &a.name);
+                            } else {
+                                ui.label(small_muted(&t, format!("📎 {}", a.name)));
+                            }
                         }
                     });
                 }
@@ -348,7 +352,14 @@ impl AisCraftApp {
                         }
                     });
                     for l in &s.links {
-                        ui.hyperlink_to(RichText::new(format!("   ↗ {}", l.title)).small(), &l.url);
+                        if l.failed {
+                            ui.horizontal(|ui| {
+                                ui.hyperlink_to(RichText::new(format!("   ↗ {}", l.title)).small().color(t.muted).strikethrough(), &l.url);
+                                ui.label(RichText::new("nicht lesbar").small().color(t.danger));
+                            });
+                        } else {
+                            ui.hyperlink_to(RichText::new(format!("   ↗ {}", l.title)).small(), &l.url);
+                        }
                     }
                     if let Some(doc) = &s.document
                         && ui.button(format!("💾  {} speichern", doc.file_name)).clicked()
@@ -415,7 +426,15 @@ impl AisCraftApp {
                 ui.label(muted(&t, if image_chat { "Bild wird gezeichnet …" } else { "Denkt nach …" }));
             });
         } else if !m.content.is_empty() || images.is_empty() {
-            egui_commonmark::CommonMarkViewer::new().default_width(Some(CONTENT_WIDTH as usize)).show(ui, &mut self.md, &m.content);
+            // Diagrams from AIS.chat's create_plot tool come as ```jsxgraph-json blocks.
+            for (k, seg) in crate::plot::segments(&m.content).into_iter().enumerate() {
+                match seg {
+                    crate::plot::Segment::Markdown(md) => {
+                        egui_commonmark::CommonMarkViewer::new().default_width(Some(CONTENT_WIDTH as usize)).show(ui, &mut self.md, md);
+                    }
+                    crate::plot::Segment::Plot(src) => self.plot_block(ui, &m.id, k, src),
+                }
+            }
         }
         if let Some(err) = &m.error {
             Frame::new().fill(t.danger.gamma_multiply(0.12)).stroke(Stroke::new(1.0, t.danger.gamma_multiply(0.5))).corner_radius(CornerRadius::same(t.radius)).inner_margin(Margin::same(10)).show(ui, |ui| {
@@ -483,6 +502,34 @@ impl AisCraftApp {
                 }
             });
         }
+    }
+
+    /// A diagram from a ```jsxgraph-json block: drawn where possible, the data one click away.
+    fn plot_block(&mut self, ui: &mut Ui, message_id: &str, k: usize, src: &str) {
+        let t = self.tokens.clone();
+        Frame::new().stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(t.radius)).inner_margin(Margin::same(10)).show(ui, |ui| {
+            match crate::plot::parse_plot(src) {
+                Ok(p) => {
+                    crate::plot::show(ui, &p, t.text, t.muted, t.code_bg);
+                    if !p.sliders.is_empty() {
+                        let s: Vec<String> = p.sliders.iter().map(|(n, v)| format!("{n} = {}", format!("{v}").replace('.', ","))).collect();
+                        ui.label(small_muted(&t, format!("Schieberegler (Startwert): {}", s.join(", "))));
+                    }
+                    if !p.skipped.is_empty() {
+                        ui.label(small_muted(&t, format!("Nicht dargestellt: {} (in AIS.chat interaktiv)", p.skipped.join(", "))));
+                    }
+                }
+                Err(e) => {
+                    ui.label(RichText::new(format!("Diagramm: {e}")).color(t.warning).small());
+                }
+            }
+            egui::CollapsingHeader::new(small_muted(&t, "Diagrammdaten")).id_salt(("plot", message_id, k)).default_open(false).show(ui, |ui| {
+                ui.add(egui::Label::new(RichText::new(src.chars().take(6000).collect::<String>()).monospace().small()).wrap());
+                if ui.small_button("Kopieren").clicked() {
+                    ui.ctx().copy_text(src.to_string());
+                }
+            });
+        });
     }
 
     /// How full the model's context window is: counted by the server where it reports usage,
@@ -719,6 +766,54 @@ impl AisCraftApp {
                         self.pending_files.remove(i);
                     }
                 }
+                if !self.pending_links.is_empty() {
+                    let mut remove = None;
+                    ui.horizontal_wrapped(|ui| {
+                        for (i, l) in self.pending_links.iter().enumerate() {
+                            Frame::new().fill(t.surface_hi).corner_radius(CornerRadius::same(6)).inner_margin(Margin::symmetric(8, 3)).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(format!("🔗 {}", short_url(l))).small()).on_hover_text(l);
+                                    if icon_button(ui, &t, "×", "Entfernen").clicked() {
+                                        remove = Some(i);
+                                    }
+                                });
+                            });
+                        }
+                    });
+                    if let Some(i) = remove {
+                        self.pending_links.remove(i);
+                    }
+                }
+                if let Some(input) = self.link_input.as_mut() {
+                    let mut done = false;
+                    let mut cancel = false;
+                    ui.horizontal(|ui| {
+                        let r = ui.add(egui::TextEdit::singleline(input).hint_text("https://… (Enter fügt hinzu)").desired_width(ui.available_width() - 90.0));
+                        if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                            done = true;
+                        }
+                        if !r.has_focus() && input.is_empty() && !r.gained_focus() {
+                            r.request_focus();
+                        }
+                        if ui.small_button("Abbrechen").clicked() {
+                            cancel = true;
+                        }
+                    });
+                    if done {
+                        let url = input.trim().to_string();
+                        if url.starts_with("http://") || url.starts_with("https://") {
+                            if !self.pending_links.contains(&url) && self.pending_links.len() < 5 {
+                                self.pending_links.push(url);
+                            }
+                            self.link_input = None;
+                            self.focus_composer = true;
+                        } else if !url.is_empty() {
+                            self.engine.ctx().notice(aiscraft_engine::NoticeLevel::Warning, "Bitte eine Webadresse mit https:// eingeben.");
+                        }
+                    } else if cancel {
+                        self.link_input = None;
+                    }
+                }
                 if self.attach_artifact
                     && let Some(a) = self.state.open_artifact.as_ref().and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id))
                 {
@@ -789,6 +884,9 @@ impl AisCraftApp {
                     {
                         self.pending_files.extend(files);
                     }
+                    if !image_mode && self.link_input.is_none() && icon_button(ui, &t, "🔗", "Webseite anhängen (bis zu 5 Links)").clicked() {
+                        self.link_input = Some(String::new());
+                    }
                     self.model_picker(ui);
                     if image_mode {
                         let cur = self.state.selection.aspect_ratio.clone();
@@ -810,7 +908,7 @@ impl AisCraftApp {
                                 self.run("chat.stop", json!({}));
                             }
                         } else {
-                            let ok = !self.composer.trim().is_empty() || !self.pending_files.is_empty();
+                            let ok = !self.composer.trim().is_empty() || !self.pending_files.is_empty() || !self.pending_links.is_empty();
                             let b = ui.add_enabled(ok, egui::Button::new(RichText::new("⬆").strong().color(t.on_accent)).fill(t.accent).corner_radius(CornerRadius::same(t.radius)));
                             if b.on_hover_text("Senden").clicked() {
                                 send = true;
@@ -823,10 +921,12 @@ impl AisCraftApp {
         if send && !generating {
             let text = std::mem::take(&mut self.composer);
             let files: Vec<String> = self.pending_files.drain(..).map(|p| p.display().to_string()).collect();
-            if !text.trim().is_empty() || !files.is_empty() {
+            let links = std::mem::take(&mut self.pending_links);
+            self.link_input = None;
+            if !text.trim().is_empty() || !files.is_empty() || !links.is_empty() {
                 self.save_if_dirty();
                 let artifact = if self.attach_artifact { self.state.open_artifact.clone() } else { None };
-                self.run("chat.send", json!({"text": text, "files": files, "artifact": artifact}));
+                self.run("chat.send", json!({"text": text, "files": files, "links": links, "artifact": artifact}));
             }
             self.focus_composer = true;
         }
@@ -864,4 +964,10 @@ pub(crate) fn centered<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
     })
     .inner
+}
+
+/// A link as people read it: host and path, without the scheme, shortened.
+fn short_url(url: &str) -> String {
+    let s = url.split_once("://").map(|(_, r)| r).unwrap_or(url).trim_end_matches('/');
+    if s.chars().count() > 48 { format!("{}…", s.chars().take(47).collect::<String>()) } else { s.to_string() }
 }
