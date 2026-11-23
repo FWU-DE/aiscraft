@@ -646,6 +646,14 @@ impl Board {
         self.undo.reset();
     }
 
+    /// A fresh id that is not in use, to link elements (an arrow to a new note) before adding
+    /// them together with [`Board::add_many`].
+    pub fn fresh_element_id(&mut self) -> String {
+        let client = self.client_id();
+        let txn = self.doc.transact();
+        fresh_id(&self.elements, &txn, client, &mut self.next_id, &HashSet::new())
+    }
+
     /// Add an element on top; returns its id (the given one if free, else a new one).
     pub fn add(&mut self, el: Element) -> String {
         self.add_many(vec![el]).into_iter().next().unwrap_or_default()

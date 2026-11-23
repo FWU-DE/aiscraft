@@ -12,10 +12,14 @@ const MAX_DEPTH: usize = 6;
 const MAX_NODE_TEXT: usize = 200;
 const MAX_SUMMARY: usize = 40_000;
 
-const ROOT_W: f64 = 260.0;
-const NODE_W: f64 = 220.0;
-const COL_GAP: f64 = 90.0;
-const ROW_GAP: f64 = 28.0;
+const ROOT_W: f64 = 240.0;
+const NODE_W: f64 = 200.0;
+const COL_GAP: f64 = 56.0;
+const ROW_GAP: f64 = 16.0;
+/// Extra room between two main branches on the same side.
+const BRANCH_GAP: f64 = 20.0;
+/// View (world units at 100 %) the layout is chosen for: the board usually sits in a side panel.
+const REF_VIEW: (f64, f64) = (900.0, 800.0);
 const BRANCH_COLORS: [&str; 6] = ["orange", "blue", "green", "pink", "violet", "red"];
 
 /// One node of a parsed outline.
@@ -197,10 +201,19 @@ pub fn parse_outline(text: &str) -> OutlineNode {
 }
 
 /// Height of a note that fits `text` at width `w` (rough estimate: ~8.5 px per character).
-fn note_height(text: &str, w: f64) -> f64 {
+pub(crate) fn note_height(text: &str, w: f64) -> f64 {
     let per_line = ((w - 24.0) / 8.5).max(1.0);
     let lines = (text.chars().count() as f64 / per_line).ceil().max(1.0);
     (lines * 21.0 + 34.0).clamp(64.0, 240.0)
+}
+
+/// How the main branches are arranged around the root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MapLayout {
+    /// Root in the middle, branches split into a right and a left half.
+    TwoSided,
+    /// Root on the left, all branches stacked above and below it on the right (narrow panels).
+    OneSided,
 }
 
 struct Layout<'a> {
@@ -222,12 +235,18 @@ impl Layout<'_> {
         own.max(kids)
     }
 
+    /// Span of a main branch, with the gap to its neighbour.
+    fn branch_span(node: &OutlineNode) -> f64 {
+        Self::span(node) + BRANCH_GAP
+    }
+
     /// Place `node` in column `depth` on `side` (+1 right, -1 left) inside `[top, top + span)`.
-    fn place(&mut self, node: &OutlineNode, parent: &Element, depth: usize, side: f64, top: f64, color: &str) {
+    #[allow(clippy::too_many_arguments)]
+    fn place(&mut self, node: &OutlineNode, parent: &Element, depth: usize, side: f64, top: f64, color: &str, cx: f64) {
         let span = Self::span(node);
         let h = note_height(&node.text, NODE_W);
         let col = ROOT_W / 2.0 + COL_GAP + (depth as f64 - 1.0) * (NODE_W + COL_GAP);
-        let x = if side > 0.0 { col } else { -col - NODE_W };
+        let x = if side > 0.0 { cx + col } else { cx - col - NODE_W };
         let y = top + span / 2.0 - h / 2.0;
         let mut el = Element::new(Kind::Note, x, y).with_size(NODE_W, h).with_text(node.text.clone()).with_color(color);
         el.id = self.id();
@@ -238,44 +257,88 @@ impl Layout<'_> {
         let kids_span: f64 = node.children.iter().map(Self::span).sum();
         let mut t = top + (span - kids_span) / 2.0;
         for c in &node.children {
-            self.place(c, &el, depth + 1, side, t, color);
+            self.place(c, &el, depth + 1, side, t, color, cx);
             t += Self::span(c);
         }
     }
 }
 
+/// Split the branches into a right part (first `k`) and a left part with heights as equal as
+/// possible, keeping reading order (clockwise: right top to bottom, then left).
+fn balanced_split(spans: &[f64]) -> usize {
+    let total: f64 = spans.iter().sum();
+    let n = spans.len();
+    let mut best = (f64::INFINITY, usize::MAX, n.div_ceil(2));
+    let mut acc = 0.0;
+    for k in 0..=n {
+        if k > 0 {
+            acc += spans.get(k - 1).copied().unwrap_or(0.0);
+        }
+        let worst = acc.max(total - acc);
+        let count_diff = k.abs_diff(n - k);
+        // Taller side first, then fewer extra nodes on one side; prefer the right side on ties.
+        if worst < best.0 - 1e-6 || ((worst - best.0).abs() <= 1e-6 && count_diff < best.1) {
+            best = (worst, count_diff, k);
+        }
+    }
+    best.2
+}
+
 /// Mind-map elements for an outline, root centred on `(cx, cy)`.
-fn mind_map(root: &OutlineNode, cx: f64, cy: f64, prefix: &str) -> Vec<Element> {
+fn mind_map_with(root: &OutlineNode, cx: f64, cy: f64, prefix: &str, layout: MapLayout) -> Vec<Element> {
     let rh = note_height(&root.text, ROOT_W).max(110.0);
     let mut root_el = Element::new(Kind::Note, cx - ROOT_W / 2.0, cy - rh / 2.0).with_size(ROOT_W, rh).with_text(root.text.clone()).with_color("yellow");
     let mut lay = Layout { els: Vec::new(), next: 0, prefix };
     root_el.id = lay.id();
     lay.els.push(root_el.clone());
-    // Split the branches into a right and a left half of similar height.
-    let mut right = Vec::new();
-    let mut left = Vec::new();
-    let (mut rs, mut ls) = (0.0, 0.0);
-    for (i, c) in root.children.iter().enumerate() {
-        let s = Layout::span(c);
-        // Each branch goes to the lighter side (right first), so both halves get similar height.
-        if root.children.len() < 3 || rs <= ls {
-            right.push((i, c));
-            rs += s;
-        } else {
-            left.push((i, c));
-            ls += s;
-        }
-    }
-    for (side, list) in [(1.0, right), (-1.0, left)] {
-        let span: f64 = list.iter().map(|(_, c)| Layout::span(c)).sum();
-        let mut top = cy - span / 2.0;
+    let spans: Vec<f64> = root.children.iter().map(Layout::branch_span).collect();
+    let k = match layout {
+        MapLayout::TwoSided => balanced_split(&spans),
+        MapLayout::OneSided => root.children.len(),
+    };
+    let branches: Vec<(usize, &OutlineNode)> = root.children.iter().enumerate().collect();
+    let (right, left) = branches.split_at(k.min(branches.len()));
+    // Left side reads bottom to top (clockwise), so reverse it.
+    let left: Vec<(usize, &OutlineNode)> = left.iter().rev().copied().collect();
+    for (side, list) in [(1.0, right.to_vec()), (-1.0, left)] {
+        let span: f64 = list.iter().map(|(_, c)| Layout::branch_span(c)).sum();
+        let mut top = cy - span / 2.0 + BRANCH_GAP / 2.0;
         for (i, c) in list {
             let color = BRANCH_COLORS.get(i % BRANCH_COLORS.len()).copied().unwrap_or("orange");
-            lay.place(c, &root_el, 1, side, top, color);
-            top += Layout::span(c);
+            lay.place(c, &root_el, 1, side, top, color, cx);
+            top += Layout::branch_span(c);
         }
     }
     lay.els
+}
+
+/// World bounds of the notes of a layout.
+fn bounds(els: &[Element]) -> (f64, f64) {
+    let notes = els.iter().filter(|e| e.kind == Kind::Note);
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for e in notes {
+        x0 = x0.min(e.x);
+        y0 = y0.min(e.y);
+        x1 = x1.max(e.x + e.w);
+        y1 = y1.max(e.y + e.h);
+    }
+    if x0.is_finite() { (x1 - x0, y1 - y0) } else { (0.0, 0.0) }
+}
+
+/// Zoom at which a layout of this size fits the reference view (capped at 1).
+fn fit_score((w, h): (f64, f64)) -> f64 {
+    (REF_VIEW.0 / w.max(1.0)).min(REF_VIEW.1 / h.max(1.0)).min(1.0)
+}
+
+/// The layout that is most readable once zoomed to fit: two-sided unless one side stacks better.
+pub(crate) fn choose_layout(root: &OutlineNode) -> MapLayout {
+    let two = fit_score(bounds(&mind_map_with(root, 0.0, 0.0, "t", MapLayout::TwoSided)));
+    let one = fit_score(bounds(&mind_map_with(root, 0.0, 0.0, "t", MapLayout::OneSided)));
+    if one > two * 1.05 { MapLayout::OneSided } else { MapLayout::TwoSided }
+}
+
+fn mind_map(root: &OutlineNode, cx: f64, cy: f64, prefix: &str) -> Vec<Element> {
+    mind_map_with(root, cx, cy, prefix, choose_layout(root))
 }
 
 impl Board {
