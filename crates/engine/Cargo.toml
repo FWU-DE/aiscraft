@@ -28,6 +28,15 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 aiscraft-board = { path = "../board" }
 aiscraft-mcp = { path = "../mcp" }
 aiscraft-voice = { path = "../voice" }
+aiscraft-collab = { path = "../collab", optional = true }
+
+[features]
+default = ["collab"]
+# Live collaboration on artifacts (a plug-in: without it the engine is unchanged).
+collab = ["dep:aiscraft-collab"]
+
+[dev-dependencies]
+aiscraft-collab-server = { path = "../../apps/aiscraft-collab-server" }
 
 [lints]
 workspace = true

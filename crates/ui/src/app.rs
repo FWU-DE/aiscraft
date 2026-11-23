@@ -48,6 +48,10 @@ pub struct AisCraftApp {
     pub(crate) artifact: Option<crate::artifact_panel::ArtifactView>,
     /// Send the open artifact as context with the next message.
     pub(crate) attach_artifact: bool,
+    /// Teilen: code or link to join, relay address and key being typed.
+    pub(crate) collab_join: String,
+    pub(crate) collab_url: String,
+    pub(crate) collab_key: String,
     /// The handbook window, when open.
     pub(crate) manual: Option<crate::manual::ManualView>,
     /// Text from a finished dictation, picked up by the composer.
@@ -94,6 +98,9 @@ impl AisCraftApp {
             last_current: None,
             artifact: None,
             attach_artifact: false,
+            collab_join: String::new(),
+            collab_url: String::new(),
+            collab_key: String::new(),
             dictated: Default::default(),
             manual: None,
             images: Default::default(),

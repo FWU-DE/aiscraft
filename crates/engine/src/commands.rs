@@ -28,12 +28,26 @@ macro_rules! cmd {
     };
 }
 
+/// Every command: the core ones and those of built-in plug-ins.
 pub fn commands() -> &'static [CommandSpec] {
-    COMMANDS
+    static ALL: std::sync::OnceLock<Vec<CommandSpec>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        #[cfg_attr(not(feature = "collab"), allow(unused_mut))]
+        let mut all: Vec<CommandSpec> = COMMANDS.iter().map(CommandSpec::copy).collect();
+        #[cfg(feature = "collab")]
+        all.extend(crate::collab::COMMANDS.iter().map(CommandSpec::copy));
+        all
+    })
+}
+
+impl CommandSpec {
+    fn copy(&self) -> CommandSpec {
+        CommandSpec { id: self.id, label: self.label, group: self.group, shortcut: self.shortcut, params: self.params, palette: self.palette, run: self.run }
+    }
 }
 
 pub fn find(id: &str) -> Option<&'static CommandSpec> {
-    COMMANDS.iter().find(|c| c.id == id)
+    commands().iter().find(|c| c.id == id)
 }
 
 static COMMANDS: &[CommandSpec] = &[
@@ -435,7 +449,9 @@ static COMMANDS: &[CommandSpec] = &[
     })),
     cmd!("app.state", "Zustand lesen", "App", None, "", false, |c, _| Box::pin(async move { Ok(serde_json::to_value(&*c.state())?) })),
     cmd!("app.commands", "Befehle auflisten", "App", None, "", false, |_, _| Box::pin(async move {
-        Ok(Value::Array(COMMANDS.iter().map(|c| json!({"id": c.id, "label": c.label, "group": c.group, "shortcut": c.shortcut, "params": c.params})).collect()))
+        Ok(Value::Array(
+            commands().iter().map(|c| json!({"id": c.id, "label": c.label, "group": c.group, "shortcut": c.shortcut, "params": c.params})).collect(),
+        ))
     })),
 ];
 
