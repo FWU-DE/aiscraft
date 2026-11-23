@@ -1,8 +1,20 @@
 [package]
 name = "aiscraft-cli"
+description = "AISCraft on the command line: chat, login, search, export, any engine command, and an MCP server."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "aiscraft-cli"
+path = "src/main.rs"
+
+[dependencies]
+aiscraft-engine.workspace = true
+aiscraft-core.workspace = true
+serde_json.workspace = true
+clap.workspace = true
 
 [lints]
 workspace = true

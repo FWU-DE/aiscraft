@@ -19,6 +19,7 @@ use aiscraft_store::Store;
 use futures::future::BoxFuture;
 use serde_json::Value;
 
+pub use aiscraft_backends::SESSION_COOKIE;
 pub use commands::{CommandSpec, commands};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use secrets::Secrets;
