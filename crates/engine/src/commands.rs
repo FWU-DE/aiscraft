@@ -262,6 +262,10 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("skill.update", "Vorgehen ändern", "Fähigkeiten", None, "id: string, title?: string, when?: string, steps?: string", false, |c, p| Box::pin(crate::skills::update(c, p))),
     cmd!("skill.delete", "Vorgehen löschen", "Fähigkeiten", None, "id: string", false, |c, p| Box::pin(crate::skills::delete(c, p))),
     cmd!("memory.tidy", "Notizen aufräumen", "Gedächtnis", None, "", false, |c, _| Box::pin(async move { Ok(json!({"archived": crate::skills::lint_memory(&c)?})) })),
+    cmd!("voice.speak", "Vorlesen", "Sprache", None, "message_id?: string, text?: string", false, |c, p| Box::pin(crate::voice::speak(c, p))),
+    cmd!("voice.stop", "Vorlesen anhalten", "Sprache", None, "", false, |c, p| Box::pin(crate::voice::stop_speaking(c, p))),
+    cmd!("voice.record_start", "Diktat starten", "Sprache", Some("Ctrl+D"), "", false, |c, p| Box::pin(crate::voice::record_start(c, p))),
+    cmd!("voice.record_stop", "Diktat beenden", "Sprache", None, "cancel?: bool", false, |c, p| Box::pin(crate::voice::record_stop(c, p))),
     cmd!("app.state", "Zustand lesen", "App", None, "", false, |c, _| Box::pin(async move { Ok(serde_json::to_value(&*c.state())?) })),
     cmd!("app.commands", "Befehle auflisten", "App", None, "", false, |_, _| Box::pin(async move {
         Ok(Value::Array(

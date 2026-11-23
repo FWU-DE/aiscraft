@@ -41,6 +41,8 @@ pub struct AisCraftApp {
     pub(crate) artifact: Option<crate::artifact_panel::ArtifactView>,
     /// Send the open artifact as context with the next message.
     pub(crate) attach_artifact: bool,
+    /// Text from a finished dictation, picked up by the composer.
+    pub(crate) dictated: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 pub(crate) const CONTENT_WIDTH: f32 = 760.0;
@@ -77,6 +79,7 @@ impl AisCraftApp {
             last_current: None,
             artifact: None,
             attach_artifact: false,
+            dictated: Default::default(),
         }
     }
 

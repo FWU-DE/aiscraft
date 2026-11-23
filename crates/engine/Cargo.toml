@@ -25,6 +25,7 @@ notify-rust = { version = "4", default-features = false, features = ["z"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 aiscraft-board = { path = "../board" }
 aiscraft-mcp = { path = "../mcp" }
+aiscraft-voice = { path = "../voice" }
 
 [lints]
 workspace = true

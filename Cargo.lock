@@ -221,6 +221,7 @@ dependencies = [
  "aiscraft-core",
  "aiscraft-mcp",
  "aiscraft-store",
+ "aiscraft-voice",
  "base64 0.22.1",
  "chrono",
  "directories",

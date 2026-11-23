@@ -35,6 +35,8 @@ pub struct State {
     pub approvals: Vec<Approval>,
     pub schedules: Vec<crate::schedules::Schedule>,
     pub skills: Vec<crate::skills::Skill>,
+    /// Dictation is recording.
+    pub recording: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

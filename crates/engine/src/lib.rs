@@ -14,6 +14,7 @@ mod tasks;
 mod state;
 pub mod tools;
 mod usage;
+mod voice;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -88,6 +89,7 @@ pub(crate) struct Inner {
     next_notice: std::sync::atomic::AtomicU64,
     tools: tools::ToolRuntime,
     bridge: bridge::Bridge,
+    voice: voice::Voice,
     /// Copies of attached files, so they stay readable for later requests.
     pub(crate) attachments_dir: PathBuf,
     /// The browser profile for signing in to AIS.chat.
@@ -153,6 +155,7 @@ impl Engine {
             next_notice: std::sync::atomic::AtomicU64::new(1),
             tools: Default::default(),
             bridge: Default::default(),
+            voice: Default::default(),
             browser_allowed: opts.data_dir.is_some() && std::env::var_os("AISCRAFT_NO_BROWSER").is_none(),
             browser_profile: opts.data_dir.clone().map(|d| d.join("browser-profile")).unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-browser-{}", std::process::id()))),
             attachments_dir: opts.data_dir.clone().map(|d| d.join("attachments")).unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-attachments-{}", std::process::id()))),
@@ -184,6 +187,11 @@ impl Engine {
     /// The current state. Cheap: an `Arc` that stays valid while the engine moves on.
     pub fn state(&self) -> Arc<State> {
         self.ctx.state()
+    }
+
+    /// The microphone level while dictating, 0..1.
+    pub fn mic_level(&self) -> f32 {
+        voice::level(&self.ctx)
     }
 
     /// Run a command and wait for it (CLI, control channel, tests).

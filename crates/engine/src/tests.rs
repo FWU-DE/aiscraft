@@ -149,7 +149,7 @@ fn panic_hunt_every_command_with_hostile_params() {
     for cmd in crate::commands() {
         // chat.send hits the network, backend.remove drops the test backend, and the browser
         // login must never be started by a test (in-memory engines refuse it anyway).
-        if cmd.id == "chat.send" || cmd.id == "backend.remove" || cmd.id == "backend.browser_login" {
+        if cmd.id == "chat.send" || cmd.id == "backend.remove" || cmd.id == "backend.browser_login" || cmd.id.starts_with("voice.") {
             continue; // covered elsewhere; would hit the network or drop the test backend
         }
         for p in &hostile {
@@ -828,4 +828,23 @@ fn claude_subscription_uses_tools() {
     engine.call("chat.new", json!({})).unwrap();
     engine.call("chat.send", json!({"text": "Lege mit dem Werkzeug document_create ein Dokument mit dem Titel „Brückentest“ und einem Satz Inhalt an. Antworte danach nur mit „erledigt“."})).unwrap();
     assert!(engine.state().artifacts.iter().any(|a| a.title.contains("Brückentest")), "document created through the bridge: {:?}", engine.state().messages.last());
+}
+
+
+/// Voice: engines in memory never touch devices; provider choice prefers AIS.chat, then OpenAI.
+#[test]
+fn voice_refuses_devices_in_tests_and_picks_providers() {
+    let (engine, _) = engine_with_recording("Hallo **Welt**");
+    engine.call("chat.send", json!({"text": "x"})).unwrap();
+    let mid = engine.state().messages[1].id.clone();
+    for (cmd, p) in [("voice.speak", json!({"message_id": mid})), ("voice.stop", json!({})), ("voice.record_start", json!({})), ("voice.record_stop", json!({}))] {
+        let e = engine.call(cmd, p).unwrap_err();
+        assert!(matches!(e.kind, aiscraft_core::ErrorKind::Unsupported | aiscraft_core::ErrorKind::Invalid), "{cmd}: {e:?}");
+    }
+    assert!(!engine.state().recording);
+    assert!(crate::voice::tts_provider(engine.ctx()).is_err(), "no key yet");
+    let id = engine.state().selection.backend_id.clone();
+    engine.call("backend.login", json!({"id": id, "secret": "sk-x"})).unwrap();
+    assert_eq!(crate::voice::tts_provider(engine.ctx()).unwrap().0, aiscraft_core::BackendKind::OpenAi);
+    assert_eq!(engine.mic_level(), 0.0);
 }

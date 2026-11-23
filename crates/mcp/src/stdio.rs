@@ -110,10 +110,10 @@ async fn read_loop(weak: Weak<Inner>, stdout: ChildStdout, stderr_done: oneshot:
         }
     }
     // stdout closed: the server exited or closed it. Give stderr a moment to drain for the message.
-    let _ = tokio::time::timeout(Duration::from_millis(300), stderr_done).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), stderr_done).await;
     let Some(inner) = weak.upgrade() else { return };
     let status = match &inner.conn {
-        Conn::Stdio(s) => tokio::time::timeout(Duration::from_millis(500), async {
+        Conn::Stdio(s) => tokio::time::timeout(Duration::from_secs(2), async {
             let mut child = s.child.lock().await;
             match child.as_mut() {
                 Some(c) => c.wait().await.ok(),

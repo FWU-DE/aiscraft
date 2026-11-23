@@ -362,6 +362,9 @@ impl AisCraftApp {
                 if ui.add(egui::Button::new(small_muted(&t, "Kopieren")).frame(false)).clicked() {
                     ui.ctx().copy_text(m.content.clone());
                 }
+                if ui.add(egui::Button::new(small_muted(&t, "Vorlesen")).frame(false)).on_hover_text("Antwort vorlesen (AIS.chat oder OpenAI-kompatibles Backend)").clicked() {
+                    self.run("voice.speak", json!({"message_id": m.id}));
+                }
                 if ui.add(egui::Button::new(small_muted(&t, "Als Dokument")).frame(false)).on_hover_text("Antwort neben dem Chat als bearbeitbares Dokument öffnen").clicked() {
                     self.run("artifact.create", json!({"kind": "document", "from_message": m.id}));
                 }
@@ -624,7 +627,39 @@ impl AisCraftApp {
                     r.request_focus();
                     self.focus_composer = false;
                 }
+                if let Some(text) = self.dictated.lock().ok().and_then(|mut d| d.take()) {
+                    if !self.composer.is_empty() && !self.composer.ends_with(' ') {
+                        self.composer.push(' ');
+                    }
+                    self.composer.push_str(text.trim());
+                    self.focus_composer = true;
+                }
                 ui.horizontal(|ui| {
+                    if self.state.recording {
+                        let level = self.engine.mic_level();
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 10.0), egui::Sense::hover());
+                        ui.painter().rect_filled(rect, CornerRadius::same(4), t.surface_hi);
+                        let mut fill = rect;
+                        fill.set_width((rect.width() * (level * 3.0).clamp(0.05, 1.0)).max(2.0));
+                        ui.painter().rect_filled(fill, CornerRadius::same(4), t.danger);
+                        if ui.add(egui::Button::new(RichText::new("■ Diktat beenden").color(t.danger))).clicked() {
+                            let engine = self.engine.clone();
+                            let out = self.dictated.clone();
+                            std::thread::spawn(move || match engine.call("voice.record_stop", json!({})) {
+                                Ok(v) => {
+                                    if let (Some(t), Ok(mut slot)) = (v.get("text").and_then(|x| x.as_str()), out.lock()) {
+                                        *slot = Some(t.to_string());
+                                    }
+                                }
+                                Err(e) => {
+                                    engine.ctx().notice(aiscraft_engine::NoticeLevel::Error, e.message);
+                                }
+                            });
+                        }
+                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+                    } else if icon_button(ui, &t, "🎤", "Diktieren").clicked() {
+                        self.run("voice.record_start", json!({}));
+                    }
                     if icon_button(ui, &t, "📎", "Dateien anhängen (oder hineinziehen)").clicked()
                         && let Some(files) = rfd::FileDialog::new().pick_files()
                     {
