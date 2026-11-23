@@ -73,6 +73,8 @@ pub(crate) struct Inner {
     cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
     next_notice: std::sync::atomic::AtomicU64,
     tools: tools::ToolRuntime,
+    /// Copies of attached files, so they stay readable for later requests.
+    pub(crate) attachments_dir: PathBuf,
 }
 
 /// What commands and tasks hold. It never owns the runtime, so it can be dropped anywhere.
@@ -130,6 +132,7 @@ impl Engine {
             cancels: Mutex::new(HashMap::new()),
             next_notice: std::sync::atomic::AtomicU64::new(1),
             tools: Default::default(),
+            attachments_dir: opts.data_dir.clone().map(|d| d.join("attachments")).unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-attachments-{}", std::process::id()))),
         }));
         ctx.load()?;
         if let Some(n) = secret_notice {

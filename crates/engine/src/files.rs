@@ -59,3 +59,60 @@ pub fn load(path: &Path, inline_binary: bool) -> Result<(Attachment, Vec<u8>)> {
     }
     Ok((a, bytes))
 }
+
+/// Keep a copy of an attached file in AISCraft's data folder and return its path.
+pub fn keep_copy(dir: &Path, original: &Path, bytes: &[u8]) -> Result<std::path::PathBuf> {
+    std::fs::create_dir_all(dir).map_err(|e| Error::storage(format!("Anhänge-Ordner: {e}")))?;
+    let ext = original.extension().and_then(|e| e.to_str()).filter(|e| e.len() <= 8 && e.chars().all(|c| c.is_ascii_alphanumeric())).unwrap_or("bin");
+    let path = dir.join(format!("{}.{ext}", uuid::Uuid::new_v4()));
+    std::fs::write(&path, bytes).map_err(|e| Error::storage(format!("Anhang speichern: {e}")))?;
+    Ok(path)
+}
+
+/// Images and PDFs are not kept in the database; read them back for a request.
+pub fn hydrate(messages: &mut [aiscraft_core::Message]) {
+    for m in messages.iter_mut() {
+        for a in m.attachments.iter_mut() {
+            if a.data_base64.is_some() || a.remote_id.is_some() || !(is_image(&a.mime) || a.mime == "application/pdf") {
+                continue;
+            }
+            let Some(p) = a.local_path.as_deref() else { continue };
+            let Ok(meta) = std::fs::metadata(p) else { continue };
+            if meta.len() > MAX_FILE_BYTES {
+                continue;
+            }
+            if let Ok(bytes) = std::fs::read(p) {
+                a.data_base64 = Some(base64::engine::general_purpose::STANDARD.encode(&bytes));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copies_and_hydrates_images() {
+        let dir = std::env::temp_dir().join(format!("aiscraft-files-test-{}", std::process::id()));
+        let png = [0x89u8, b'P', b'N', b'G', 1, 2, 3];
+        let copy = keep_copy(&dir, Path::new("/x/Foto.PNG"), &png).unwrap();
+        let mut m = aiscraft_core::Message {
+            id: "m".into(),
+            conversation_id: "c".into(),
+            role: aiscraft_core::Role::User,
+            content: String::new(),
+            created_at: 0,
+            model: None,
+            attachments: vec![Attachment { name: "Foto.PNG".into(), mime: "image/png".into(), local_path: Some(copy.display().to_string()), ..Default::default() }],
+            activity: vec![],
+            error: None,
+            usage: None,
+            tool_calls: vec![],
+            tool_result: None,
+        };
+        hydrate(std::slice::from_mut(&mut m));
+        assert_eq!(m.attachments[0].data_base64.as_deref(), Some(base64::engine::general_purpose::STANDARD.encode(png).as_str()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

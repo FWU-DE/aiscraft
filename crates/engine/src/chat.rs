@@ -130,6 +130,9 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact
     let mut attachments = Vec::new();
     for p in &paths {
         let (mut a, bytes) = files::load(Path::new(p), !caps.uploads)?;
+        // Keep a copy: the bytes are not stored in the database and are read back per request.
+        let copy = files::keep_copy(&c.0.attachments_dir, Path::new(p), &bytes)?;
+        a.local_path = Some(copy.display().to_string());
         if caps.uploads {
             a.remote_id = Some(backend.upload(a.name.clone(), a.mime.clone(), bytes).await?);
         } else if a.text.is_none() && a.data_base64.is_none() {
@@ -152,9 +155,14 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact
         usage: None, tool_calls: vec![], tool_result: None,
     };
     c.store(|st| st.save_message(&user))?;
+    // The state is copied on every change; image bytes stay out of it (requests read the copy).
+    let mut shown = user.clone();
+    for a in shown.attachments.iter_mut() {
+        a.data_base64 = None;
+    }
     c.update(|s| {
         if s.current.as_deref() == Some(&conv) {
-            s.messages.push(user.clone());
+            s.messages.push(shown);
         }
     });
 
@@ -365,6 +373,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>) -> Resu
     for round in 0..MAX_TOOL_ROUNDS {
         let mut history = c.store(|st| st.messages(&conv_id))?;
         history.retain(|m| m.id != answer.id);
+        files::hydrate(&mut history);
         // An attached document or board goes in front of the last user message, for this request only.
         if let Some(ctx_block) = &context
             && let Some(last) = history.iter_mut().rev().find(|m| m.role == Role::User)
