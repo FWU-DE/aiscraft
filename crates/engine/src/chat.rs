@@ -132,6 +132,7 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
         tools: vec![],
         tool_bridge: None,
         persona: None,
+        web: false,
     };
     let mut stream = backend.chat(req).await?;
     let mut out = String::new();
@@ -520,7 +521,11 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     let system = system_prompt_for(&c, &conv, backend.config().send_context, caps.system_prompt, &request);
     let model_name = c.state().model_name(&conv.backend_id, &conv.model_id);
     let tools_on = c.state().settings.tools && conv.sources.tools;
-    let tools = if caps.tools && tools_on { crate::tools::specs_for(&c, &conv.sources) } else { vec![] };
+    let mut tools = if caps.tools && tools_on { crate::tools::specs_for(&c, &conv.sources) } else { vec![] };
+    // Backends without web tools of their own read pages with the built-in reader.
+    if caps.tools && tools_on && conv.sources.web && !caps.web_search {
+        tools.push(crate::tools::web_fetch_spec());
+    }
     // Backends that call tools through MCP themselves get a bridge to the same tools.
     let bridge = if caps.tools_via_mcp && tools_on { crate::bridge::open(&c, &conv_id).await.ok() } else { None };
     let system = if tools.is_empty() {
@@ -553,6 +558,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     let mut answer = new_answer(&conv_id, &model_name);
     put_message(&c, &conv_id, &answer);
     let mut result = Ok(());
+    let mut read_pages: Vec<aiscraft_core::ActivityLink> = Vec::new();
     for round in 0..MAX_TOOL_ROUNDS {
         let mut history = c.store(|st| st.messages(&conv_id))?;
         history.retain(|m| m.id != answer.id);
@@ -574,6 +580,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
             tools: round_tools,
             tool_bridge: bridge.as_ref().map(|(b, _)| b.clone()),
             persona: conv.persona.clone(),
+            web: caps.web_search && conv.sources.web,
         };
         match stream_round(&c, &backend, req, &mut answer, &conv_id, &mut cancel_rx).await {
             Ok(calls) if calls.is_empty() => break,
@@ -586,6 +593,11 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
                         break;
                     }
                     let (text, is_error, outcome) = crate::tools::run(&c, &conv_id, &call, &owner_words, interactive).await;
+                    if let Some(link) = crate::tools::fetched_link(&call, &text).filter(|_| !is_error)
+                        && !read_pages.iter().any(|l| l.url == link.url)
+                    {
+                        read_pages.push(link);
+                    }
                     if let Some(tc) = answer.tool_calls.iter_mut().find(|t| t.id == call.id) {
                         tc.outcome = Some(outcome.to_string());
                     }
@@ -601,6 +613,11 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
                     break;
                 }
                 answer = new_answer(&conv_id, &model_name);
+                // Pages read for the answer are its sources.
+                if !read_pages.is_empty() {
+                    answer.activity =
+                        vec![aiscraft_core::ActivityStep { label: "Webseiten gelesen".into(), done: true, links: read_pages.clone(), ..Default::default() }];
+                }
                 put_message(&c, &conv_id, &answer);
             }
             Err(e) => {

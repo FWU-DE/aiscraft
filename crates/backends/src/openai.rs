@@ -155,7 +155,7 @@ impl Backend for OpenAi {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: true, tools_via_mcp: false }
+        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: true, tools_via_mcp: false, web_search: false }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
@@ -239,6 +239,7 @@ mod tests {
             tools: vec![],
             tool_bridge: None,
             persona: None,
+            web: false,
         };
         let b = body(&req);
         assert_eq!(b["messages"][0]["role"], "system");

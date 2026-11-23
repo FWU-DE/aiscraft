@@ -460,6 +460,7 @@ impl AisCraftApp {
                 }
             }
         }
+        sources_row(ui, &t, m);
         if let Some(err) = &m.error {
             Frame::new()
                 .fill(t.danger.gamma_multiply(0.12))
@@ -708,6 +709,13 @@ impl AisCraftApp {
             if ui.add_enabled(src.tools, egui::Checkbox::new(&mut history, "Andere Chats durchsuchen")).changed() {
                 set("history", history);
             }
+            if caps.web_search || caps.tools {
+                let mut web = src.web && (caps.web_search || src.tools);
+                let label = if caps.web_search { "Websuche (sucht und liest im Netz)" } else { "Webseiten lesen (nur lesen)" };
+                if ui.add_enabled(caps.web_search || src.tools, egui::Checkbox::new(&mut web, label)).changed() {
+                    set("web", web);
+                }
+            }
             let conns = self.state.connectors.clone();
             if !conns.is_empty() {
                 ui.separator();
@@ -770,6 +778,7 @@ impl AisCraftApp {
     fn tool_label(&self, name: &str) -> String {
         match name {
             "history_search" => "Verlauf durchsucht".into(),
+            "web_fetch" => "Webseite gelesen".into(),
             "document_create" => "Dokument angelegt".into(),
             "document_update" => "Dokument geändert".into(),
             "board_create" => "Whiteboard angelegt".into(),
@@ -1072,6 +1081,21 @@ pub(crate) fn centered<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
     })
     .inner
+}
+
+/// The pages an answer cites or read, as links under it.
+fn sources_row(ui: &mut Ui, t: &crate::theme::Tokens, m: &Message) {
+    let mut seen = std::collections::HashSet::new();
+    let links: Vec<_> = m.activity.iter().flat_map(|s| &s.links).filter(|l| l.cited && !l.failed && seen.insert(l.url.as_str())).take(20).collect();
+    if links.is_empty() {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.label(small_muted(t, "Quellen:"));
+        for (i, l) in links.iter().enumerate() {
+            ui.hyperlink_to(RichText::new(format!("[{}] {}", i + 1, l.title.chars().take(60).collect::<String>())).small(), &l.url).on_hover_text(&l.url);
+        }
+    });
 }
 
 /// A link as people read it: host and path, without the scheme, shortened.

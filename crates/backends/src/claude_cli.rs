@@ -138,7 +138,7 @@ impl Backend for ClaudeCli {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: false, tools_via_mcp: true }
+        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: false, tools_via_mcp: true, web_search: false }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
@@ -326,6 +326,7 @@ mod tests {
             tools: vec![],
             tool_bridge: None,
             persona: None,
+            web: false,
         };
         let v = input_message(&req);
         let text = v.pointer("/message/content/0/text").and_then(Value::as_str).unwrap();
@@ -370,6 +371,7 @@ mod tests {
             tools: vec![],
             tool_bridge: None,
             persona: None,
+            web: false,
         };
         let mut s = b.chat(req).await.unwrap();
         let mut text = String::new();

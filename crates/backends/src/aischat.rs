@@ -516,7 +516,7 @@ pub fn activity_steps(v: &Value) -> Vec<ActivityStep> {
                                 .filter_map(|l| {
                                     let url = s(l, "url")?;
                                     let title = s(l, "title").filter(|t| !t.trim().is_empty()).unwrap_or_else(|| url.clone());
-                                    Some(ActivityLink { title, url, failed: l.get("failed").and_then(Value::as_bool).unwrap_or(false) })
+                                    Some(ActivityLink { title, url, failed: l.get("failed").and_then(Value::as_bool).unwrap_or(false), cited: false })
                                 })
                                 .collect()
                         })
@@ -613,7 +613,7 @@ impl Backend for AisChat {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: true, uploads: true, system_prompt: false, vision: true, tools: false, tools_via_mcp: false }
+        Capabilities { remote_history: true, uploads: true, system_prompt: false, vision: true, tools: false, tools_via_mcp: false, web_search: false }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
@@ -925,6 +925,7 @@ mod tests {
             tools: vec![],
             tool_bridge: None,
             persona: None,
+            web: false,
         };
         let body = encode_action_args(&[action_payload(&req)]);
         assert_eq!(body, r#"[{"conversationId":"c1","fileIds":["f1"],"messages":[{"content":"$$5?","id":"u1","role":"user"}],"modelId":"uuid-m"}]"#);
@@ -1023,6 +1024,7 @@ mod tests {
                 tools: vec![],
                 tool_bridge: None,
                 persona: None,
+                web: false,
             })
             .await
             .unwrap();
@@ -1113,6 +1115,7 @@ mod tests {
                 tools: vec![],
                 tool_bridge: None,
                 persona: Some(Persona { kind, id: "p-1".into(), name: "X".into() }),
+                web: false,
             };
             let p = action_payload(&req);
             assert_eq!(p[key], "p-1");
@@ -1271,6 +1274,7 @@ mod tests {
             tools: vec![],
             tool_bridge: None,
             persona: Some(goethe.persona()),
+            web: false,
         };
         let mut s = backend.chat(req).await.unwrap();
         let mut text = String::new();
