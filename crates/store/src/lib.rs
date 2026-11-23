@@ -514,6 +514,21 @@ impl Store {
     }
 }
 
+impl Store {
+    /// The owner's messages since a time, newest first: (conversation, title, text, at).
+    pub fn user_messages_since(&self, since: i64, limit: usize) -> Result<Vec<(String, String, String, i64)>> {
+        let mut st = self
+            .db
+            .prepare(
+                "SELECT m.conversation_id, COALESCE(c.title, ''), m.content, m.created_at FROM messages m LEFT JOIN conversations c ON c.id = m.conversation_id
+                 WHERE m.role = 'user' AND m.created_at >= ?1 ORDER BY m.created_at DESC LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = st.query_map(params![since, limit as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).map_err(db_err)?;
+        rows.collect::<rusqlite::Result<_>>().map_err(db_err)
+    }
+}
+
 /// Turn what a person types into an FTS5 query: every word quoted, as a prefix, all required.
 fn fts_query(q: &str) -> Option<String> {
     let terms: Vec<String> = q

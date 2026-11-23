@@ -20,6 +20,8 @@ directories.workspace = true
 log.workspace = true
 base64 = "0.22"
 yrs = "0.28"
+hmac = "0.12"
+sha1 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 notify-rust = { version = "4", default-features = false, features = ["z"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }

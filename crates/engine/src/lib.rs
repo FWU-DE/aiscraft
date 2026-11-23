@@ -8,12 +8,14 @@ mod chat;
 mod commands;
 mod files;
 mod secrets;
+mod proactive;
 mod schedules;
 mod skills;
 mod tasks;
 mod state;
 pub mod tools;
 mod usage;
+mod vault;
 mod voice;
 
 use std::collections::HashMap;
@@ -34,6 +36,7 @@ pub use files::{MAX_FILE_BYTES, mime_of};
 pub use schedules::{Cron, Schedule, next_run as schedule_next_run};
 pub use secrets::Secrets;
 pub use skills::Skill;
+pub use vault::{EntryInfo as VaultEntry, totp_at};
 pub use tools::{obsidian_vaults, presets as connector_presets};
 pub use state::*;
 
@@ -176,6 +179,7 @@ impl Engine {
                 s.skills = skills;
             });
             schedules::start(&engine.ctx);
+            vault::refresh(&engine.ctx);
         }
         Ok(engine)
     }

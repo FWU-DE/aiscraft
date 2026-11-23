@@ -12,6 +12,7 @@ pub enum SettingsTab {
     Connectors,
     Schedules,
     Skills,
+    Vault,
     Usage,
     Memory,
     Appearance,
@@ -26,6 +27,7 @@ pub enum Dialog {
     Settings { tab: SettingsTab, new_note: String },
     AddSchedule { title: String, prompt: String, when: String, recurring: bool, watch: bool },
     EditSkill { id: Option<String>, title: String, when: String, steps: String },
+    AddVault { name: String, username: String, password: String, totp: String, url: String },
     AddConnector { name: String, command: String, env: String, url: String, headers: String, http: bool },
     Project { id: Option<String>, name: String, instructions: String },
     Rename { id: String, title: String },
@@ -312,6 +314,37 @@ impl AisCraftApp {
                 });
                 keep
             }
+            Dialog::AddVault { name, username, password, totp, url } => {
+                ui.heading("Tresor-Eintrag");
+                egui::Grid::new("vault").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+                    ui.label("Name");
+                    ui.add(egui::TextEdit::singleline(name).hint_text("z. B. schulportal").desired_width(300.0));
+                    ui.end_row();
+                    ui.label("Benutzer");
+                    ui.add(egui::TextEdit::singleline(username).desired_width(300.0));
+                    ui.end_row();
+                    ui.label("Passwort");
+                    ui.add(egui::TextEdit::singleline(password).password(true).desired_width(300.0));
+                    ui.end_row();
+                    ui.label("TOTP-Geheimnis");
+                    ui.add(egui::TextEdit::singleline(totp).password(true).hint_text("Base32, optional").desired_width(300.0));
+                    ui.end_row();
+                    ui.label("Adresse");
+                    ui.add(egui::TextEdit::singleline(url).hint_text("optional").desired_width(300.0));
+                    ui.end_row();
+                });
+                let mut keep = true;
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Speichern")).clicked() {
+                        self.run("vault.add", json!({"name": name, "username": username, "password": password, "totp": totp, "url": url}));
+                        keep = false;
+                    }
+                    if ui.button("Abbrechen").clicked() {
+                        keep = false;
+                    }
+                });
+                keep
+            }
             Dialog::EditSkill { id, title, when, steps } => {
                 ui.heading(if id.is_some() { "Vorgehen bearbeiten" } else { "Neues Vorgehen" });
                 ui.label("Titel");
@@ -472,7 +505,7 @@ impl AisCraftApp {
             });
         });
         ui.horizontal_wrapped(|ui| {
-            for (k, label) in [(SettingsTab::Backends, "Backends"), (SettingsTab::Connectors, "Konnektoren"), (SettingsTab::Schedules, "Zeitpläne"), (SettingsTab::Skills, "Fähigkeiten"), (SettingsTab::Usage, "Nutzung"), (SettingsTab::Memory, "Gedächtnis"), (SettingsTab::Appearance, "Darstellung"), (SettingsTab::About, "Über")] {
+            for (k, label) in [(SettingsTab::Backends, "Backends"), (SettingsTab::Connectors, "Konnektoren"), (SettingsTab::Schedules, "Zeitpläne"), (SettingsTab::Skills, "Fähigkeiten & Hinweise"), (SettingsTab::Vault, "Tresor"), (SettingsTab::Usage, "Nutzung"), (SettingsTab::Memory, "Gedächtnis"), (SettingsTab::Appearance, "Darstellung"), (SettingsTab::About, "Über")] {
                 ui.selectable_value(tab, k, label);
             }
         });
@@ -646,6 +679,27 @@ impl AisCraftApp {
                 }
                 ui.label(small_muted(&t, format!("Gelernte Vorgehen enthalten keine persönlichen Daten, sind nur Hinweise und nie eine Erlaubnis. Höchstens {} werden behalten; die am meisten genutzten bleiben.", 40)));
                 ui.add_space(6.0);
+                let mut pro = st.proactive;
+                if ui.checkbox(&mut pro, "Hinweise: stündlich auf offene Zusagen, Fristen und Erinnerungswünsche achten").changed() {
+                    self.run("settings.set", json!({"key": "proactive", "value": pro}));
+                }
+                ui.horizontal(|ui| {
+                    ui.label(small_muted(&t, "Ruhezeit von"));
+                    let mut qs = st.quiet_start;
+                    if ui.add(egui::DragValue::new(&mut qs).range(0..=23u8).suffix(" Uhr")).changed() {
+                        self.run("settings.set", json!({"key": "quiet_start", "value": qs}));
+                    }
+                    ui.label(small_muted(&t, "bis"));
+                    let mut qe = st.quiet_end;
+                    if ui.add(egui::DragValue::new(&mut qe).range(0..=23u8).suffix(" Uhr")).changed() {
+                        self.run("settings.set", json!({"key": "quiet_end", "value": qe}));
+                    }
+                    if ui.small_button("Jetzt prüfen").clicked() {
+                        self.run("hints.check", json!({}));
+                    }
+                });
+                ui.label(small_muted(&t, "Nur bei einem konkreten offenen Punkt, nie zweimal derselbe Hinweis."));
+                ui.add_space(6.0);
                 if self.state.skills.is_empty() {
                     ui.label(muted(&t, "Noch keine Vorgehen."));
                 }
@@ -673,6 +727,53 @@ impl AisCraftApp {
                 if ui.button("+ Vorgehen anlegen").clicked() {
                     self.dialog = Some(Dialog::EditSkill { id: None, title: String::new(), when: String::new(), steps: String::new() });
                 }
+            }
+            SettingsTab::Vault => {
+                ui.label(muted(&t, "Zugangsdaten, die AIS.ChatCraft selbst in Konnektor-Aufrufe einsetzt. Das Modell schreibt nur Platzhalter wie {{vault:name.password}} und sieht die Werte nie; jeder Aufruf mit Tresor-Daten fragt vorher. Gespeichert im Schlüsselbund des Systems."));
+                ui.add_space(6.0);
+                for e in self.state.vault.clone() {
+                    card(&t).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&e.name).strong().monospace());
+                            let mut f = Vec::new();
+                            if e.has_username {
+                                f.push("Benutzer");
+                            }
+                            if e.has_password {
+                                f.push("Passwort");
+                            }
+                            if e.has_totp {
+                                f.push("Einmalcode");
+                            }
+                            ui.label(small_muted(&t, f.join(" · ")));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button("Löschen").clicked() {
+                                    self.dialog = Some(Dialog::Confirm { text: format!("Tresor-Eintrag {} löschen?", e.name), command: "vault.remove".into(), params: json!({"id": e.id}) });
+                                }
+                                if e.has_totp
+                                    && ui.small_button("Code kopieren").clicked()
+                                    && let Ok(v) = self.engine.call("vault.code", json!({"id": e.id}))
+                                {
+                                    ui.ctx().copy_text(v["code"].as_str().unwrap_or("").to_string());
+                                }
+                            });
+                        });
+                        if !e.url.is_empty() {
+                            ui.label(small_muted(&t, &e.url));
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("+ Eintrag").clicked() {
+                        self.dialog = Some(Dialog::AddVault { name: String::new(), username: String::new(), password: String::new(), totp: String::new(), url: String::new() });
+                    }
+                    if ui.button("Aus Bitwarden (CSV) übernehmen …").clicked()
+                        && let Some(path) = rfd::FileDialog::new().add_filter("CSV", &["csv"]).pick_file()
+                    {
+                        self.run("vault.import_bitwarden", json!({"path": path.display().to_string()}));
+                    }
+                });
             }
             SettingsTab::Usage => {
                 match self.engine.call("usage.report", json!({})) {

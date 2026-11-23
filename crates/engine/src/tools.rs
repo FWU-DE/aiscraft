@@ -215,7 +215,12 @@ pub(crate) async fn run(c: &Ctx, conv: &str, call: &ToolCall, owner_words: &str,
     {
         return (format!("{} ist in diesem Chat nicht freigegeben.", conn.name), true, "denied");
     }
-    if !tool.read_only {
+    // Vault placeholders: fill them in here; using a secret always needs the owner's yes.
+    let (arguments, secrets) = match crate::vault::fill(c, &call.arguments) {
+        Ok(x) => x,
+        Err(e) => return (e.message, true, "error"),
+    };
+    if !tool.read_only || !secrets.is_empty() {
         let trust = if c.state().settings.trust_check { trust_check(c, &conn.name, &tool, &call.arguments, owner_words).await } else { None };
         let auto = c.state().settings.auto_allow_covered && trust.as_ref().is_some_and(|t| t.covered) && !tool.destructive;
         if !auto {
@@ -232,9 +237,9 @@ pub(crate) async fn run(c: &Ctx, conv: &str, call: &ToolCall, owner_words: &str,
         Ok(cl) => cl,
         Err(e) => return (format!("Konnektor {} nicht erreichbar: {}", conn.name, e.message), true, "error"),
     };
-    match client.call_tool(&tool.name, call.arguments.clone()).await {
-        Ok(r) => (wrap_untrusted(&call.name, &r.text()), r.is_error, if r.is_error { "error" } else { "ok" }),
-        Err(e) => (format!("Fehler: {}", e.message), true, "error"),
+    match client.call_tool(&tool.name, arguments).await {
+        Ok(r) => (wrap_untrusted(&call.name, &crate::vault::scrub(&r.text(), &secrets)), r.is_error, if r.is_error { "error" } else { "ok" }),
+        Err(e) => (format!("Fehler: {}", crate::vault::scrub(&e.message, &secrets)), true, "error"),
     }
 }
 

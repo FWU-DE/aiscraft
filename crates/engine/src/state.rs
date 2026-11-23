@@ -37,6 +37,8 @@ pub struct State {
     pub skills: Vec<crate::skills::Skill>,
     /// Dictation is recording.
     pub recording: bool,
+    /// Vault entries, without their secrets.
+    pub vault: Vec<crate::vault::EntryInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,11 +187,17 @@ pub struct Settings {
     pub learn_skills: bool,
     /// Put fitting skills and excerpts from earlier chats into the context.
     pub recall: bool,
+    /// Hourly hints for concrete open needs (off by default).
+    pub proactive: bool,
+    /// No hints from this hour …
+    pub quiet_start: u8,
+    /// … until this hour.
+    pub quiet_end: u8,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { theme: "system".into(), memory: true, zoom: 1.0, enter_sends: true, tools: true, trust_check: true, auto_allow_covered: false, monthly_token_limit: 0, learn_skills: true, recall: true }
+        Self { theme: "system".into(), memory: true, zoom: 1.0, enter_sends: true, tools: true, trust_check: true, auto_allow_covered: false, monthly_token_limit: 0, learn_skills: true, recall: true, proactive: false, quiet_start: 22, quiet_end: 7 }
     }
 }
 

@@ -287,6 +287,37 @@ fn connector_tools_need_approval_unless_read_only() {
     // An answer for a question that is gone is an error, not a crash.
     assert!(engine.call("tool.answer", json!({"id": "nope", "allow": true})).is_err());
 
+    // Vault placeholders: filled in before the call, always asked, taken out of the result.
+    engine.call("vault.add", json!({"name": "Schulportal", "username": "frau.ada", "password": "geheim-123", "totp": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"})).unwrap();
+    assert_eq!(engine.state().vault[0].name, "schulportal");
+    assert!(serde_json::to_string(&*engine.state()).unwrap().find("geheim-123").is_none(), "secrets never in state");
+    let ctx2 = ctx.clone();
+    let c3 = call(&echo.llm_name, json!({"text": "Login {{vault:schulportal.username}} / {{vault:schulportal.password}}"}));
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn({
+        let engine = engine.clone();
+        move || {
+            let _ = tx.send(engine.block_on(crate::tools::run(&ctx2, "conv", &c3, "", true)));
+        }
+    });
+    assert!(engine.wait_for(Duration::from_secs(30), |s| !s.approvals.is_empty()), "a read-only tool still asks when a secret goes out");
+    let a = engine.state().approvals[0].clone();
+    assert!(a.arguments.to_string().contains("{{vault:schulportal.password}}"), "the approval shows the placeholder, not the secret");
+    engine.call("tool.answer", json!({"id": a.id, "allow": true})).unwrap();
+    let (text, err, _) = rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    assert!(!err && !text.contains("geheim-123") && !text.contains("frau.ada") && text.contains("[Tresor]"), "{text}");
+    let bad = call(&echo.llm_name, json!({"text": "{{vault:gibtsnicht.password}}"}));
+    let (t, err, _) = engine.block_on(crate::tools::run(&ctx, "conv", &bad, "", true));
+    assert!(err && t.contains("gibtsnicht"));
+    let code = engine.call("vault.code", json!({"id": engine.state().vault[0].id})).unwrap();
+    assert_eq!(code["code"].as_str().unwrap().len(), 6);
+    let csv = std::env::temp_dir().join(format!("bw-{}.csv", std::process::id()));
+    std::fs::write(&csv, "folder,favorite,type,name,notes,fields,reprompt,login_uri,login_username,login_password,login_totp\n,,login,Moodle,,,,https://moodle,ada,pw\"x,\n,,login,Schulportal,,,,,dup,dup,\n").unwrap();
+    assert_eq!(engine.call("vault.import_bitwarden", json!({"path": csv.display().to_string()})).unwrap()["added"], 1, "duplicates are skipped");
+    let _ = std::fs::remove_file(csv);
+    let vid = engine.state().vault.iter().find(|v| v.name == "moodle").unwrap().id.clone();
+    engine.call("vault.remove", json!({"id": vid})).unwrap();
+
     // Switch off, on, reconnect, remove.
     let id = engine.state().connectors[0].id.clone();
     engine.call("connector.toggle", json!({"id": id, "enabled": false})).unwrap();
@@ -847,4 +878,21 @@ fn voice_refuses_devices_in_tests_and_picks_providers() {
     engine.call("backend.login", json!({"id": id, "secret": "sk-x"})).unwrap();
     assert_eq!(crate::voice::tts_provider(engine.ctx()).unwrap().0, aiscraft_core::BackendKind::OpenAi);
     assert_eq!(engine.mic_level(), 0.0);
+}
+
+
+/// Hints: one concrete need gives one hint, never twice; "nothing" gives none.
+#[test]
+fn hints_once_per_need() {
+    let (engine, _) = engine_with_recording(r#"{"need": true, "text": "Du wolltest Frau Yilmaz bis Freitag den Plan schicken.", "conversation_id": "x"}"#);
+    engine.call("chat.send", json!({"text": "Erinnere mich: Plan bis Freitag an Frau Yilmaz"})).unwrap();
+    let first = engine.call("hints.check", json!({})).unwrap();
+    assert!(first["hint"].as_str().unwrap().contains("Yilmaz"));
+    assert!(engine.state().notices.iter().any(|n| n.text.starts_with("Hinweis:")));
+    assert!(engine.call("hints.check", json!({})).unwrap()["hint"].is_null(), "the same hint never comes twice");
+    let (engine2, _) = engine_with_recording(r#"{"need": false}"#);
+    engine2.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    assert!(engine2.call("hints.check", json!({})).unwrap()["hint"].is_null());
+    // Off by default: the hourly check does nothing.
+    assert!(engine2.block_on(crate::proactive::check(engine2.ctx(), false)).unwrap().is_none());
 }

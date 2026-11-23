@@ -111,9 +111,12 @@ behaviour, then the code.
 ## 5. Nod parity
 
 Feature parity with n8n Nod is tracked in the issues (Nod: …). Done: memory from the owner's own
-words, trust check and approvals, connectors (MCP), schedules, watches, check-ins, usage ledger,
-history search, documents/boards. Open: learned skills, recall packet, voice in the UI, nudges,
-vault, background tasks. Nod's repo (`n8n-io/nod`, Apache-2.0) is a reference for behaviour, not for
+words (with provenance, hourly tidy-up), trust check and approvals bound to exact arguments,
+connectors (MCP, also for the Claude subscription via the tool bridge), schedules, page watches,
+check-ins, usage ledger with monthly limit, history search and recall, learned skills, background
+tasks, voice in and out, hints (nudges) with quiet hours, vault with placeholders and TOTP.
+Not adopted on purpose: Nod's own sandbox computer and browser (AIS.ChatCraft has no webview and
+runs no code), WhatsApp/Telegram channels (out of scope for a school client). Nod's repo (`n8n-io/nod`, Apache-2.0) is a reference for behaviour, not for
 code; it is Node/Electron, AIS.ChatCraft is Rust.
 
 ## 6. Before you finish

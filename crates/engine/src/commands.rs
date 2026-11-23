@@ -195,7 +195,7 @@ static COMMANDS: &[CommandSpec] = &[
         Ok(out)
     })),
     cmd!("remote.import", "Chat vom Server übernehmen", "Backends", None, "backend: string, id: string, title?: string", false, |c, p| Box::pin(remote_import(c, p))),
-    cmd!("settings.set", "Einstellung ändern", "Einstellungen", None, "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall, value: any", false, |c, p| Box::pin(async move {
+    cmd!("settings.set", "Einstellung ändern", "Einstellungen", None, "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|proactive|quiet_start|quiet_end, value: any", false, |c, p| Box::pin(async move {
         let key = req_str(&p, "key")?;
         let value = p.get("value").cloned().unwrap_or(Value::Null);
         let mut settings = serde_json::to_value(&c.state().settings)?;
@@ -266,6 +266,11 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("voice.stop", "Vorlesen anhalten", "Sprache", None, "", false, |c, p| Box::pin(crate::voice::stop_speaking(c, p))),
     cmd!("voice.record_start", "Diktat starten", "Sprache", Some("Ctrl+D"), "", false, |c, p| Box::pin(crate::voice::record_start(c, p))),
     cmd!("voice.record_stop", "Diktat beenden", "Sprache", None, "cancel?: bool", false, |c, p| Box::pin(crate::voice::record_stop(c, p))),
+    cmd!("vault.add", "Tresor-Eintrag anlegen", "Tresor", None, "name: string, username?: string, password?: string, totp?: base32, url?: string", false, |c, p| Box::pin(crate::vault::add(c, p))),
+    cmd!("vault.remove", "Tresor-Eintrag löschen", "Tresor", None, "id: string", false, |c, p| Box::pin(crate::vault::remove(c, p))),
+    cmd!("vault.code", "Einmalcode anzeigen", "Tresor", None, "id: string", false, |c, p| Box::pin(crate::vault::code(c, p))),
+    cmd!("vault.import_bitwarden", "Aus Bitwarden übernehmen", "Tresor", None, "path: string (CSV-Export)", false, |c, p| Box::pin(crate::vault::import_bitwarden(c, p))),
+    cmd!("hints.check", "Jetzt auf offene Punkte prüfen", "Hinweise", None, "", true, |c, _| Box::pin(async move { Ok(json!({"hint": crate::proactive::check(&c, true).await?})) })),
     cmd!("app.state", "Zustand lesen", "App", None, "", false, |c, _| Box::pin(async move { Ok(serde_json::to_value(&*c.state())?) })),
     cmd!("app.commands", "Befehle auflisten", "App", None, "", false, |_, _| Box::pin(async move {
         Ok(Value::Array(

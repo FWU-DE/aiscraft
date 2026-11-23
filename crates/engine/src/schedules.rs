@@ -170,6 +170,10 @@ pub(crate) fn start(c: &Ctx) {
             if ticks % 180 == 0 {
                 let _ = crate::skills::lint_memory(&ctx);
             }
+            // Hourly too, half an hour later: maybe one hint.
+            if ticks % 180 == 90 {
+                let _ = crate::proactive::check(&ctx, false).await;
+            }
             let now = now_ms();
             for s in load(&ctx).into_iter().filter(|s| s.enabled) {
                 if due(&s, now) {
