@@ -11,6 +11,7 @@ pub enum SettingsTab {
     Backends,
     Connectors,
     Schedules,
+    Skills,
     Usage,
     Memory,
     Appearance,
@@ -24,6 +25,7 @@ pub enum Dialog {
     AddBackend { preset: usize, name: String, base_url: String, secret: String },
     Settings { tab: SettingsTab, new_note: String },
     AddSchedule { title: String, prompt: String, when: String, recurring: bool, watch: bool },
+    EditSkill { id: Option<String>, title: String, when: String, steps: String },
     AddConnector { name: String, command: String, env: String, url: String, headers: String, http: bool },
     Project { id: Option<String>, name: String, instructions: String },
     Rename { id: String, title: String },
@@ -310,6 +312,29 @@ impl AisCraftApp {
                 });
                 keep
             }
+            Dialog::EditSkill { id, title, when, steps } => {
+                ui.heading(if id.is_some() { "Vorgehen bearbeiten" } else { "Neues Vorgehen" });
+                ui.label("Titel");
+                ui.add(egui::TextEdit::singleline(title).desired_width(f32::INFINITY));
+                ui.label("Wann es passt");
+                ui.add(egui::TextEdit::singleline(when).hint_text("z. B. Wenn ein Elternbrief gebraucht wird").desired_width(f32::INFINITY));
+                ui.label("Schritte");
+                ui.add(egui::TextEdit::multiline(steps).hint_text("1. …\n2. …").desired_rows(6).desired_width(f32::INFINITY));
+                let mut keep = true;
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!title.trim().is_empty() && !steps.trim().is_empty(), egui::Button::new("Speichern")).clicked() {
+                        match id {
+                            Some(id) => self.run("skill.update", json!({"id": id, "title": title, "when": when, "steps": steps})),
+                            None => self.run("skill.create", json!({"title": title, "when": when, "steps": steps})),
+                        }
+                        keep = false;
+                    }
+                    if ui.button("Abbrechen").clicked() {
+                        keep = false;
+                    }
+                });
+                keep
+            }
             Dialog::RenameArtifact { id, title } => {
                 ui.heading("Umbenennen");
                 let r = ui.add(egui::TextEdit::singleline(title).desired_width(f32::INFINITY));
@@ -447,7 +472,7 @@ impl AisCraftApp {
             });
         });
         ui.horizontal_wrapped(|ui| {
-            for (k, label) in [(SettingsTab::Backends, "Backends"), (SettingsTab::Connectors, "Konnektoren"), (SettingsTab::Schedules, "Zeitpläne"), (SettingsTab::Usage, "Nutzung"), (SettingsTab::Memory, "Gedächtnis"), (SettingsTab::Appearance, "Darstellung"), (SettingsTab::About, "Über")] {
+            for (k, label) in [(SettingsTab::Backends, "Backends"), (SettingsTab::Connectors, "Konnektoren"), (SettingsTab::Schedules, "Zeitpläne"), (SettingsTab::Skills, "Fähigkeiten"), (SettingsTab::Usage, "Nutzung"), (SettingsTab::Memory, "Gedächtnis"), (SettingsTab::Appearance, "Darstellung"), (SettingsTab::About, "Über")] {
                 ui.selectable_value(tab, k, label);
             }
         });
@@ -607,6 +632,46 @@ impl AisCraftApp {
                 }
                 if ui.button("+ Zeitplan anlegen").clicked() {
                     self.dialog = Some(Dialog::AddSchedule { title: String::new(), prompt: String::new(), when: "0 7 * * 1-5".into(), recurring: true, watch: false });
+                }
+            }
+            SettingsTab::Skills => {
+                let st = self.state.settings.clone();
+                let mut learn = st.learn_skills;
+                if ui.checkbox(&mut learn, "Vorgehen lernen: nach Aufgaben mit mehreren Werkzeugschritten").changed() {
+                    self.run("settings.set", json!({"key": "learn_skills", "value": learn}));
+                }
+                let mut recall = st.recall;
+                if ui.checkbox(&mut recall, "Erinnern: passende Vorgehen und Ausschnitte aus früheren Chats mitgeben").changed() {
+                    self.run("settings.set", json!({"key": "recall", "value": recall}));
+                }
+                ui.label(small_muted(&t, format!("Gelernte Vorgehen enthalten keine persönlichen Daten, sind nur Hinweise und nie eine Erlaubnis. Höchstens {} werden behalten; die am meisten genutzten bleiben.", 40)));
+                ui.add_space(6.0);
+                if self.state.skills.is_empty() {
+                    ui.label(muted(&t, "Noch keine Vorgehen."));
+                }
+                for sk in self.state.skills.clone() {
+                    card(&t).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&sk.title).strong());
+                            ui.label(small_muted(&t, format!("{}× genutzt", sk.uses)));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button("Löschen").clicked() {
+                                    self.run("skill.delete", json!({"id": sk.id}));
+                                }
+                                if ui.small_button("Bearbeiten").clicked() {
+                                    self.dialog = Some(Dialog::EditSkill { id: Some(sk.id.clone()), title: sk.title.clone(), when: sk.when.clone(), steps: sk.steps.clone() });
+                                }
+                            });
+                        });
+                        if !sk.when.is_empty() {
+                            ui.label(small_muted(&t, format!("Wann: {}", sk.when)));
+                        }
+                        ui.label(small_muted(&t, sk.steps.lines().take(3).collect::<Vec<_>>().join(" · ")));
+                    });
+                    ui.add_space(6.0);
+                }
+                if ui.button("+ Vorgehen anlegen").clicked() {
+                    self.dialog = Some(Dialog::EditSkill { id: None, title: String::new(), when: String::new(), steps: String::new() });
                 }
             }
             SettingsTab::Usage => {

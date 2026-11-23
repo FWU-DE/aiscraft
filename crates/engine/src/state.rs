@@ -34,6 +34,7 @@ pub struct State {
     /// Tool calls waiting for the owner's yes or no.
     pub approvals: Vec<Approval>,
     pub schedules: Vec<crate::schedules::Schedule>,
+    pub skills: Vec<crate::skills::Skill>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -178,11 +179,15 @@ pub struct Settings {
     pub auto_allow_covered: bool,
     /// Ask before sending once this month's tokens reach this number (0 = no limit).
     pub monthly_token_limit: u64,
+    /// After answers with several tool steps, keep the procedure as a skill.
+    pub learn_skills: bool,
+    /// Put fitting skills and excerpts from earlier chats into the context.
+    pub recall: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { theme: "system".into(), memory: true, zoom: 1.0, enter_sends: true, tools: true, trust_check: true, auto_allow_covered: false, monthly_token_limit: 0 }
+        Self { theme: "system".into(), memory: true, zoom: 1.0, enter_sends: true, tools: true, trust_check: true, auto_allow_covered: false, monthly_token_limit: 0, learn_skills: true, recall: true }
     }
 }
 

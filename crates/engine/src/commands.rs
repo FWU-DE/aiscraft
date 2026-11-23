@@ -195,7 +195,7 @@ static COMMANDS: &[CommandSpec] = &[
         Ok(out)
     })),
     cmd!("remote.import", "Chat vom Server übernehmen", "Backends", None, "backend: string, id: string, title?: string", false, |c, p| Box::pin(remote_import(c, p))),
-    cmd!("settings.set", "Einstellung ändern", "Einstellungen", None, "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit, value: any", false, |c, p| Box::pin(async move {
+    cmd!("settings.set", "Einstellung ändern", "Einstellungen", None, "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall, value: any", false, |c, p| Box::pin(async move {
         let key = req_str(&p, "key")?;
         let value = p.get("value").cloned().unwrap_or(Value::Null);
         let mut settings = serde_json::to_value(&c.state().settings)?;
@@ -256,6 +256,11 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("schedule.delete", "Zeitplan löschen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::delete(c, p))),
     cmd!("schedule.run", "Zeitplan jetzt ausführen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::run_now(c, p))),
     cmd!("usage.report", "Nutzung", "App", None, "months?: number (default 6)", true, |c, p| Box::pin(crate::usage::report(c, p))),
+    cmd!("task.start", "Aufgabe im Hintergrund starten", "Aufgaben", None, "title: string, instructions: string, conversation?: string (wohin das Ergebnis geht)", false, |c, p| Box::pin(crate::tasks::start(c, p))),
+    cmd!("skill.create", "Vorgehen anlegen", "Fähigkeiten", None, "title: string, when?: string, steps: string", false, |c, p| Box::pin(crate::skills::create(c, p))),
+    cmd!("skill.update", "Vorgehen ändern", "Fähigkeiten", None, "id: string, title?: string, when?: string, steps?: string", false, |c, p| Box::pin(crate::skills::update(c, p))),
+    cmd!("skill.delete", "Vorgehen löschen", "Fähigkeiten", None, "id: string", false, |c, p| Box::pin(crate::skills::delete(c, p))),
+    cmd!("memory.tidy", "Notizen aufräumen", "Gedächtnis", None, "", false, |c, _| Box::pin(async move { Ok(json!({"archived": crate::skills::lint_memory(&c)?})) })),
     cmd!("app.state", "Zustand lesen", "App", None, "", false, |c, _| Box::pin(async move { Ok(serde_json::to_value(&*c.state())?) })),
     cmd!("app.commands", "Befehle auflisten", "App", None, "", false, |_, _| Box::pin(async move {
         Ok(Value::Array(

@@ -8,6 +8,8 @@ mod commands;
 mod files;
 mod secrets;
 mod schedules;
+mod skills;
+mod tasks;
 mod state;
 pub mod tools;
 mod usage;
@@ -29,6 +31,7 @@ pub use artifacts::{doc_text, markdown_html};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use schedules::{Cron, Schedule, next_run as schedule_next_run};
 pub use secrets::Secrets;
+pub use skills::Skill;
 pub use tools::{obsidian_vaults, presets as connector_presets};
 pub use state::*;
 
@@ -161,7 +164,11 @@ impl Engine {
             let _guard = engine._rt.enter();
             tools::load(&engine.ctx);
             let schedules = schedules::load(&engine.ctx);
-            engine.ctx.update(|s| s.schedules = schedules);
+            let skills = skills::load(&engine.ctx);
+            engine.ctx.update(|s| {
+                s.schedules = schedules;
+                s.skills = skills;
+            });
             schedules::start(&engine.ctx);
         }
         Ok(engine)

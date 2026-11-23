@@ -53,6 +53,11 @@ fn builtin_specs() -> Vec<ToolSpec> {
             input_schema: json!({"type": "object", "properties": {"title": {"type": "string"}, "prompt": {"type": "string", "description": "Was dann zu tun ist"}, "at": {"type": "string"}, "cron": {"type": "string"}, "watch": {"type": "boolean", "description": "nur melden, wenn sich etwas geändert hat"}}, "required": ["title", "prompt"], "additionalProperties": false}),
         },
         ToolSpec {
+            name: "task_start".into(),
+            description: "Startet eine längere Aufgabe im Hintergrund in einem eigenen Chat (z. B. mehrere Dokumente erstellen, viel recherchieren). Die Person kann weiterchatten; das Ergebnis kommt hierher zurück. Werkzeuge, die eine Freigabe brauchen, sind in Aufgaben abgeschaltet.".into(),
+            input_schema: json!({"type": "object", "properties": {"title": {"type": "string"}, "instructions": {"type": "string", "description": "vollständiger Auftrag, ohne Bezug auf diesen Chat"}}, "required": ["title", "instructions"], "additionalProperties": false}),
+        },
+        ToolSpec {
             name: "board_create".into(),
             description: "Legt ein Whiteboard als Mindmap an, aus einer eingerückten Markdown-Liste (erste Zeile = Mitte).".into(),
             input_schema: json!({"type": "object", "properties": {"title": {"type": "string"}, "outline": {"type": "string"}}, "required": ["title", "outline"], "additionalProperties": false}),
@@ -93,6 +98,16 @@ async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<Stri
         )
         .await
         .map(|v| format!("Whiteboard angelegt und geöffnet (ID {}).", v.get("id").and_then(Value::as_str).unwrap_or(""))),
+        "task_start" => {
+            if c.state().conversation(conv).is_some_and(|x| x.title.starts_with("▶ ")) {
+                return Some(Err(Error::refused("In einer Aufgabe startet keine weitere Aufgabe.")));
+            }
+            let mut p = a.clone();
+            if let Some(o) = p.as_object_mut() {
+                o.insert("conversation".into(), json!(conv));
+            }
+            crate::tasks::start(c.clone(), p).await.map(|v| format!("Aufgabe gestartet (Chat {}). Das Ergebnis kommt in diesen Chat.", v.get("id").and_then(Value::as_str).unwrap_or("")))
+        }
         "schedule_create" => {
             let mut p = a.clone();
             if let Some(o) = p.as_object_mut()
@@ -131,6 +146,10 @@ pub(crate) fn specs_for(c: &Ctx, sources: &aiscraft_core::Sources) -> Vec<ToolSp
         return Vec::new();
     }
     let mut out: Vec<ToolSpec> = builtin_specs().into_iter().filter(|t| sources.history || t.name != "history_search").collect();
+    // No tasks inside tasks.
+    if c.state().current.as_deref().and_then(|id| c.state().conversation(id).map(|x| x.title.starts_with("▶ "))).unwrap_or(false) {
+        out.retain(|t| t.name != "task_start");
+    }
     for conn in c.state().connectors.iter().filter(|x| x.enabled && x.status == "connected" && sources.allows_connector(&x.id)) {
         for t in &conn.tools {
             let mut desc = format!("[{}] {}", conn.name, if t.description.is_empty() { &t.title } else { &t.description });

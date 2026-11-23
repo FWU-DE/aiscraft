@@ -490,6 +490,30 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Full-text search where any of the words may match (for recall), best first.
+    pub fn search_any(&self, words: &[String], exclude_conversation: Option<&str>, limit: usize) -> Result<Vec<SearchHit>> {
+        let terms: Vec<String> = words.iter().map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>()).filter(|w| w.chars().count() >= 3).take(8).map(|w| format!("\"{w}\"*")).collect();
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut st = self
+            .db
+            .prepare(
+                "SELECT f.conversation_id, f.message_id, COALESCE(c.title, ''), snippet(messages_fts, 0, '«', '»', '…', 14)
+                 FROM messages_fts f LEFT JOIN conversations c ON c.id = f.conversation_id
+                 WHERE messages_fts MATCH ?1 AND f.conversation_id != ?2 ORDER BY rank LIMIT ?3",
+            )
+            .map_err(db_err)?;
+        let rows = st
+            .query_map(params![terms.join(" OR "), exclude_conversation.unwrap_or(""), limit as i64], |r| {
+                Ok(SearchHit { conversation_id: r.get(0)?, message_id: r.get(1)?, title: r.get(2)?, snippet: r.get(3)? })
+            })
+            .map_err(db_err)?;
+        rows.collect::<rusqlite::Result<_>>().map_err(db_err)
+    }
+}
+
 /// Turn what a person types into an FTS5 query: every word quoted, as a prefix, all required.
 fn fts_query(q: &str) -> Option<String> {
     let terms: Vec<String> = q

@@ -195,6 +195,13 @@ async fn generate(c: Ctx, conv_id: String) -> Result<Value> {
     generate_with(c, conv_id, None, true).await
 }
 
+/// `send_background` behind a boxed future that is declared `Send`. Tasks start from inside a
+/// tool call, which runs inside a generation, which tasks start again: the box breaks that
+/// cycle for the compiler.
+pub(crate) fn send_background_boxed(c: Ctx, conv_id: String, prompt: String) -> futures::future::BoxFuture<'static, Result<Value>> {
+    Box::pin(async move { send_background(&c, &conv_id, &prompt).await })
+}
+
 /// Send a prompt into a conversation without a person present (schedules, tasks): it does not
 /// have to be open, and tools that need a yes are refused.
 pub(crate) async fn send_background(c: &Ctx, conv_id: &str, prompt: &str) -> Result<Value> {
@@ -256,8 +263,14 @@ pub(crate) async fn edit(c: Ctx, message_id: String, text: String) -> Result<Val
     send(c, text, vec![]).await
 }
 
-/// The system prompt: project instructions and memory, where the backend takes them.
+/// The system prompt: project instructions, memory, fitting skills and earlier chats, where the
+/// backend takes them.
+#[cfg(test)]
 fn system_prompt(c: &Ctx, conv: &Conversation, send_context: bool, takes_system: bool) -> Option<String> {
+    system_prompt_for(c, conv, send_context, takes_system, "")
+}
+
+fn system_prompt_for(c: &Ctx, conv: &Conversation, send_context: bool, takes_system: bool, request: &str) -> Option<String> {
     if !(send_context && takes_system) {
         return None;
     }
@@ -274,6 +287,12 @@ fn system_prompt(c: &Ctx, conv: &Conversation, send_context: bool, takes_system:
         && let Some(m) = memory_prompt(&state.memory)
     {
         parts.push(m);
+    }
+    if state.settings.recall
+        && !request.trim().is_empty()
+        && let Some(r) = crate::skills::context_for(c, &conv.id, request, conv.sources.history)
+    {
+        parts.push(r);
     }
     (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
@@ -385,7 +404,8 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     let conv = c.state().conversation(&conv_id).cloned().ok_or_else(|| Error::not_found("Chat nicht gefunden"))?;
     let backend = c.backend(&conv.backend_id)?;
     let caps = backend.capabilities();
-    let system = system_prompt(&c, &conv, backend.config().send_context, caps.system_prompt);
+    let request = c.store(|st| st.messages(&conv_id))?.iter().rev().find(|m| m.role == Role::User).map(|m| m.content.clone()).unwrap_or_default();
+    let system = system_prompt_for(&c, &conv, backend.config().send_context, caps.system_prompt, &request);
     let model_name = c.state().model_name(&conv.backend_id, &conv.model_id);
     let tools = if caps.tools && c.state().settings.tools && conv.sources.tools { crate::tools::specs_for(&c, &conv.sources) } else { vec![] };
     let system = if tools.is_empty() {
@@ -469,6 +489,14 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     }
     put_message(&c, &conv_id, &answer);
     crate::tools::deny_all(&c, &conv_id);
+    // Several tool steps went well: maybe there is a procedure worth keeping.
+    if result.is_ok() && c.state().settings.learn_skills && caps.tools {
+        let ctx = c.clone();
+        let id = conv_id.clone();
+        c.spawn(async move {
+            let _ = crate::skills::learn_from(&ctx, &id).await;
+        });
+    }
     let mut updated = conv.clone();
     updated.updated_at = now_ms();
     let _ = c.store(|st| st.save_conversation(&updated));

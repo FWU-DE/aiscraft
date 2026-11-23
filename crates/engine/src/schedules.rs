@@ -162,8 +162,14 @@ pub fn next_run(s: &Schedule, now: i64) -> Option<i64> {
 pub(crate) fn start(c: &Ctx) {
     let ctx = c.clone();
     c.spawn(async move {
+        let mut ticks: u32 = 0;
         loop {
             tokio::time::sleep(Duration::from_secs(20)).await;
+            ticks = ticks.wrapping_add(1);
+            // Hourly: tidy up the notes (duplicates are archived, never deleted).
+            if ticks % 180 == 0 {
+                let _ = crate::skills::lint_memory(&ctx);
+            }
             let now = now_ms();
             for s in load(&ctx).into_iter().filter(|s| s.enabled) {
                 if due(&s, now) {

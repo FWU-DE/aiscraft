@@ -482,6 +482,8 @@ impl AisCraftApp {
             "document_create" => "Dokument angelegt".into(),
             "document_update" => "Dokument geändert".into(),
             "board_create" => "Whiteboard angelegt".into(),
+            "task_start" => "Aufgabe gestartet".into(),
+            "schedule_create" => "Nachfrage geplant".into(),
             other => self
                 .state
                 .connectors

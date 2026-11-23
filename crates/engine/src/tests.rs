@@ -695,3 +695,66 @@ fn per_chat_sources() {
     assert!(!engine.state().selection.sources.tools);
     assert!(engine.call("chat.set_sources", json!({"connectors": "alle"})).is_err());
 }
+
+
+/// Skills: created by hand, fitting ones reach the context; learned from tool-heavy chats.
+#[test]
+fn skills_recall_and_learning() {
+    let (engine, seen) = engine_with_recording(r#"{"title": "Elternbrief schreiben", "when": "Wenn ein Elternbrief gebraucht wird", "steps": "1. Anlass klären\n2. Entwurf als Dokument"}"#);
+    let id = engine.call("skill.create", json!({"title": "Arbeitsblatt erstellen", "when": "Arbeitsblatt für eine Klasse", "steps": "1. Ziel\n2. Aufgaben\n3. Lösungen"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("chat.send", json!({"text": "Erstelle ein Arbeitsblatt zur Photosynthese"})).unwrap();
+    let last = seen.lock().unwrap().last().cloned().unwrap();
+    assert!(last.contains("Gelernte Vorgehen") && last.contains("Arbeitsblatt erstellen"), "fitting skill in context");
+    assert_eq!(engine.state().skills[0].uses, 1);
+    // Recall: the next chat sees the earlier one.
+    engine.call("chat.new", json!({})).unwrap();
+    engine.call("chat.send", json!({"text": "Was war das mit der Photosynthese?"})).unwrap();
+    let last = seen.lock().unwrap().last().cloned().unwrap();
+    assert!(last.contains("früheren Chats") && last.contains("Photosynthese"), "recall excerpt");
+    engine.call("settings.set", json!({"key": "recall", "value": false})).unwrap();
+    engine.call("chat.send", json!({"text": "Und das Arbeitsblatt zur Photosynthese?"})).unwrap();
+    assert!(!seen.lock().unwrap().last().unwrap().contains("Gelernte Vorgehen"));
+    engine.call("skill.update", json!({"id": id, "when": "immer"})).unwrap();
+    assert_eq!(engine.state().skills.iter().find(|s| s.id == id).unwrap().when, "immer");
+    engine.call("skill.delete", json!({"id": id})).unwrap();
+    assert!(engine.state().skills.iter().all(|s| s.id != id));
+
+    // Learning needs two successful tool steps in the chat.
+    let conv = engine.state().current.clone().unwrap();
+    assert_eq!(engine.block_on(crate::skills::learn_from(engine.ctx(), &conv)).unwrap(), None);
+    let mut m = engine.ctx().store(|st| st.messages(&conv)).unwrap().into_iter().find(|m| m.role == aiscraft_core::Role::Assistant).unwrap();
+    for i in 0..2 {
+        m.tool_calls.push(aiscraft_core::ToolCall { id: format!("t{i}"), name: "document_create".into(), arguments: json!({}), outcome: Some("ok".into()) });
+    }
+    engine.ctx().store(|st| st.save_message(&m)).unwrap();
+    let learned = engine.block_on(crate::skills::learn_from(engine.ctx(), &conv)).unwrap();
+    assert!(learned.is_some());
+    assert!(engine.state().skills.iter().any(|s| s.title == "Elternbrief schreiben"));
+}
+
+#[test]
+fn memory_tidy_archives_duplicates() {
+    let (engine, _) = engine_with_recording("ok");
+    engine.call("memory.add", json!({"text": "Ich unterrichte Mathe."})).unwrap();
+    engine.call("memory.add", json!({"text": "ich  unterrichte mathe"})).unwrap();
+    engine.call("memory.add", json!({"text": "Ich mag Tee"})).unwrap();
+    assert_eq!(engine.call("memory.tidy", json!({})).unwrap()["archived"], 1);
+    assert_eq!(engine.state().memory.iter().filter(|n| !n.archived).count(), 2);
+}
+
+/// Background tasks: run in their own chat; the result comes back to the origin chat.
+#[test]
+fn background_task_reports_back() {
+    let (engine, _) = engine_with_recording("Drei Entwürfe sind fertig.");
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let origin = engine.state().current.clone().unwrap();
+    let id = engine.call("task.start", json!({"title": "Entwürfe", "instructions": "Schreibe drei Entwürfe"})).unwrap()["id"].as_str().unwrap().to_string();
+    let oc = origin.clone();
+    assert!(engine.wait_for(Duration::from_secs(30), |s| s.messages.iter().any(|m| m.conversation_id == oc && m.content.contains("Aufgabe „Entwürfe“ ist fertig"))));
+    assert!(engine.state().conversation(&id).unwrap().title.starts_with("▶ "));
+    assert_eq!(engine.ctx().store(|st| st.messages(&id)).unwrap().len(), 2);
+    // No task inside a task.
+    let call = aiscraft_core::ToolCall { id: "x".into(), name: "task_start".into(), arguments: json!({"title": "a", "instructions": "b"}), outcome: None };
+    let (_, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &id, &call, "", true));
+    assert!(err);
+}
