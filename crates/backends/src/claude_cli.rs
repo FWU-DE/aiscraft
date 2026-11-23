@@ -48,6 +48,25 @@ impl ClaudeCli {
     }
 }
 
+/// A file removed when dropped (the MCP config holds the bridge token).
+struct TempFile(std::path::PathBuf);
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    std::fs::write(path, bytes).map_err(|e| Error::storage(format!("MCP-Konfiguration: {e}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| Error::storage(e.to_string()))?;
+    }
+    Ok(())
+}
+
 /// The conversation so far as one prompt: earlier turns as a transcript, the last user message
 /// as the request, attachments as content blocks.
 pub fn input_message(req: &ChatRequest) -> Value {
@@ -122,7 +141,7 @@ impl Backend for ClaudeCli {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: false }
+        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: false, tools_via_mcp: true }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
@@ -186,6 +205,17 @@ impl Backend for ClaudeCli {
             if let Some(sys) = req.system.as_deref().filter(|s| !s.trim().is_empty()) {
                 c.args(["--system-prompt", sys]);
             }
+            // The app's tools, through its MCP bridge: only that server, every other tool stays off.
+            let mcp_file = match &req.tool_bridge {
+                Some(b) => {
+                    let path = dir.join(format!("mcp-{}.json", std::process::id() as u64 ^ req.conversation_id.len() as u64 ^ b.token.len() as u64));
+                    let cfg = json!({"mcpServers": {"aischatcraft": {"type": "http", "url": b.url, "headers": {"Authorization": format!("Bearer {}", b.token)}}}});
+                    write_private(&path, cfg.to_string().as_bytes())?;
+                    c.args(["--mcp-config", &path.display().to_string(), "--allowedTools", "mcp__aischatcraft"]);
+                    Some(path)
+                }
+                None => None,
+            };
             let mut child = c.spawn().map_err(|e| Error::not_found(format!("Claude-CLI „{}“ lässt sich nicht starten: {e}", self.program)))?;
             let mut stdin = child.stdin.take().ok_or_else(|| Error::protocol("Claude-CLI: keine Eingabe"))?;
             let stdout = child.stdout.take().ok_or_else(|| Error::protocol("Claude-CLI: keine Ausgabe"))?;
@@ -195,13 +225,14 @@ impl Backend for ClaudeCli {
             drop(stdin); // end of input: one turn
 
             struct St {
+                _mcp: Option<TempFile>,
                 child: tokio::process::Child,
                 lines: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
                 stderr: Option<tokio::process::ChildStderr>,
                 queue: std::collections::VecDeque<Result<StreamEvent>>,
                 finished: bool,
             }
-            let st = St { child, lines: BufReader::new(stdout).lines(), stderr: stderr.take(), queue: Default::default(), finished: false };
+            let st = St { _mcp: mcp_file.map(TempFile), child, lines: BufReader::new(stdout).lines(), stderr: stderr.take(), queue: Default::default(), finished: false };
             Ok(stream::unfold(st, |mut st| async move {
                 loop {
                     if let Some(item) = st.queue.pop_front() {
@@ -255,7 +286,7 @@ mod tests {
 
     #[test]
     fn transcript_and_last_message() {
-        let req = ChatRequest { conversation_id: "c".into(), model: "claude-haiku-5-5".into(), system: None, messages: vec![m(Role::User, "Hallo"), m(Role::Assistant, "Hi!"), m(Role::User, "Und jetzt?")], tools: vec![] };
+        let req = ChatRequest { conversation_id: "c".into(), model: "claude-haiku-5-5".into(), system: None, messages: vec![m(Role::User, "Hallo"), m(Role::Assistant, "Hi!"), m(Role::User, "Und jetzt?")], tools: vec![], tool_bridge: None };
         let v = input_message(&req);
         let text = v.pointer("/message/content/0/text").and_then(Value::as_str).unwrap();
         assert!(text.contains("<Person>\nHallo\n</Person>"));
@@ -281,7 +312,7 @@ mod tests {
         let cfg = BackendConfig { id: "cc".into(), name: "Claude".into(), kind: aiscraft_core::BackendKind::ClaudeCli, base_url: "claude".into(), default_model: None, send_context: true };
         let b = ClaudeCli::new(cfg, "claude".into()).unwrap();
         b.check().await.unwrap();
-        let req = ChatRequest { conversation_id: "c".into(), model: "claude-haiku-5-5".into(), system: Some("Antworte mit genau einem Wort.".into()), messages: vec![m(Role::User, "Sag Hallo")], tools: vec![] };
+        let req = ChatRequest { conversation_id: "c".into(), model: "claude-haiku-5-5".into(), system: Some("Antworte mit genau einem Wort.".into()), messages: vec![m(Role::User, "Sag Hallo")], tools: vec![], tool_bridge: None };
         let mut s = b.chat(req).await.unwrap();
         let mut text = String::new();
         while let Some(e) = s.next().await {

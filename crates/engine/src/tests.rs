@@ -412,6 +412,7 @@ fn document_flow_end_to_end() {
     engine.call("chat.send", json!({"text": "Fasse zusammen", "artifact": id})).unwrap();
     let last = seen.lock().unwrap().last().cloned().unwrap();
     assert!(last.contains("Lang und ausführlich"), "open document goes along as context");
+    assert!(!last.contains("aiscraft-dokument"), "backends with tools get no change-block instruction");
     // Boards from an outline, readable as text.
     let b = engine.call("artifact.create", json!({"kind": "board", "content": "# Wald\n- Bäume\n- Tiere"})).unwrap()["id"].as_str().unwrap().to_string();
     let text = engine.call("artifact.get", json!({"id": b})).unwrap()["text"].as_str().unwrap().to_string();
@@ -757,4 +758,74 @@ fn background_task_reports_back() {
     let call = aiscraft_core::ToolCall { id: "x".into(), name: "task_start".into(), arguments: json!({"title": "a", "instructions": "b"}), outcome: None };
     let (_, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &id, &call, "", true));
     assert!(err);
+}
+
+/// The tool bridge: token-bound, the chat's tools only, calls run in this engine.
+#[test]
+fn tool_bridge_serves_the_chats_tools() {
+    let (engine, _) = engine_with_recording("ok");
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let conv = engine.state().current.clone().unwrap();
+    let ctx = engine.ctx().clone();
+    let (b, guard) = engine.block_on(crate::bridge::open(&ctx, &conv)).unwrap();
+    let post = |token: &str, body: serde_json::Value| -> (u16, serde_json::Value) {
+        let url = b.url.clone();
+        engine.block_on(async move {
+            let addr = url.trim_start_matches("http://").trim_end_matches("/mcp").to_string();
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let body = body.to_string();
+            let req = format!("POST /mcp HTTP/1.1\r\nhost: x\r\nauthorization: Bearer {token}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}", body.len());
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).await.unwrap();
+            let status = out.split_whitespace().nth(1).unwrap().parse().unwrap();
+            let json = out.split("\r\n\r\n").nth(1).and_then(|b| serde_json::from_str(b).ok()).unwrap_or(serde_json::Value::Null);
+            (status, json)
+        })
+    };
+    assert_eq!(post("falsch", json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})).0, 401);
+    let (st, init) = post(&b.token, json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}));
+    assert_eq!((st, init["result"]["serverInfo"]["name"].as_str()), (200, Some("aischatcraft")));
+    assert_eq!(post(&b.token, json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).0, 202);
+    let (_, list) = post(&b.token, json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
+    let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert!(names.contains(&"document_create") && names.contains(&"board_add"));
+    let (_, call) = post(&b.token, json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "document_create", "arguments": {"title": "Über die Brücke", "markdown": "# Über die Brücke"}}}));
+    assert_eq!(call["result"]["isError"], false);
+    assert!(engine.state().artifacts.iter().any(|a| a.title == "Über die Brücke"));
+    assert!(engine.state().messages.iter().any(|m| m.tool_calls.iter().any(|t| t.name == "document_create" && t.outcome.as_deref() == Some("ok"))), "shown as a chip");
+    // Sources apply: no tools in this chat, none over the bridge.
+    engine.call("chat.set_sources", json!({"tools": false})).unwrap();
+    let (_, list) = post(&b.token, json!({"jsonrpc": "2.0", "id": 4, "method": "tools/list"}));
+    assert!(list["result"]["tools"].as_array().unwrap().is_empty());
+    drop(guard);
+    assert_eq!(post(&b.token, json!({"jsonrpc": "2.0", "id": 5, "method": "tools/list"})).0, 401, "the token ends with the answer");
+}
+
+#[test]
+fn board_tools_read_and_add() {
+    let (engine, _) = engine_with_recording("ok");
+    let id = engine.call("artifact.create", json!({"kind": "board", "content": "# Wald\n- Bäume"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("artifact.board_add", json!({"id": id, "outline": "# Tiere\n- Fuchs\n- Reh"})).unwrap();
+    let text = engine.call("artifact.get", json!({"id": id})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(text.contains("Bäume") && text.contains("Fuchs") && text.contains("Reh"), "{text}");
+    assert!(engine.call("artifact.board_add", json!({"id": id, "outline": "  "})).is_err());
+    // The tools use the open board when no id is given.
+    let read = aiscraft_core::ToolCall { id: "r".into(), name: "board_read".into(), arguments: json!({}), outcome: None };
+    let (t, err, _) = engine.block_on(crate::tools::run(engine.ctx(), "c", &read, "", true));
+    assert!(!err && t.contains("Fuchs"), "{t}");
+}
+
+/// Live: Claude through the subscription uses the app's tools over the bridge.
+/// `cargo test -p aiscraft-engine -- --ignored claude_subscription_uses_tools`
+#[test]
+#[ignore]
+fn claude_subscription_uses_tools() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let id = engine.call("backend.add", json!({"kind": "claude_cli"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    engine.call("chat.select_model", json!({"backend": id, "model": "claude-haiku-5-5"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    engine.call("chat.send", json!({"text": "Lege mit dem Werkzeug document_create ein Dokument mit dem Titel „Brückentest“ und einem Satz Inhalt an. Antworte danach nur mit „erledigt“."})).unwrap();
+    assert!(engine.state().artifacts.iter().any(|a| a.title.contains("Brückentest")), "document created through the bridge: {:?}", engine.state().messages.last());
 }

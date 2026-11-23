@@ -195,7 +195,7 @@ impl Backend for Anthropic {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: true }
+        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: true, tools_via_mcp: false }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
@@ -287,7 +287,7 @@ mod tests {
             error: None,
             usage: None, tool_calls: vec![], tool_result: None,
         };
-        let req = ChatRequest { conversation_id: "c".into(), model: DEFAULT_MODEL.into(), system: None, messages: vec![m(Role::User, "a"), m(Role::User, "b")], tools: vec![] };
+        let req = ChatRequest { conversation_id: "c".into(), model: DEFAULT_MODEL.into(), system: None, messages: vec![m(Role::User, "a"), m(Role::User, "b")], tools: vec![], tool_bridge: None };
         let b = body(&req);
         assert_eq!(b["messages"].as_array().unwrap().len(), 1);
         assert_eq!(b["fallbacks"], "default");

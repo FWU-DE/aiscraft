@@ -332,6 +332,31 @@ impl AisCraftApp {
                 });
             });
         }
+        // Changes an assistant without tools (AIS.chat) proposed as marked blocks: apply on click.
+        if !generating {
+            let blocks = aiscraft_engine::change_blocks(&m.content);
+            for (kind, content) in blocks {
+                let target = self.state.open_artifact.clone().filter(|id| self.state.artifacts.iter().any(|a| &a.id == id && a.kind == kind));
+                ui.horizontal(|ui| match (kind, target) {
+                    (aiscraft_core::ArtifactKind::Document, Some(id)) => {
+                        if accent_button(ui, &t, "Ins Dokument übernehmen").on_hover_text("Ersetzt den Inhalt; die vorige Fassung bleibt unter Versionen").clicked() {
+                            self.run("artifact.save", json!({"id": id, "text": content, "version": "Aus einer Antwort übernommen"}));
+                        }
+                    }
+                    (aiscraft_core::ArtifactKind::Board, Some(id)) => {
+                        if accent_button(ui, &t, "Aufs Whiteboard").on_hover_text("Ergänzt das geöffnete Whiteboard um diese Punkte").clicked() {
+                            self.run("artifact.board_add", json!({"id": id, "outline": content}));
+                        }
+                    }
+                    (kind, None) => {
+                        let label = if kind == aiscraft_core::ArtifactKind::Board { "Als neues Whiteboard öffnen" } else { "Als neues Dokument öffnen" };
+                        if ui.button(label).clicked() {
+                            self.run("artifact.create", json!({"kind": kind.as_str(), "content": content}));
+                        }
+                    }
+                });
+            }
+        }
         if !generating && !m.content.is_empty() {
             ui.horizontal(|ui| {
                 if ui.add(egui::Button::new(small_muted(&t, "Kopieren")).frame(false)).clicked() {

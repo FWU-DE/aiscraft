@@ -244,6 +244,7 @@ static COMMANDS: &[CommandSpec] = &[
         a.title = t;
         Ok(())
     }))),
+    cmd!("artifact.board_add", "Whiteboard ergänzen", "Artefakte", None, "id: string, outline: string (eingerückte Liste)", false, |c, p| Box::pin(crate::artifacts::board_add(c, p))),
     cmd!("artifact.delete", "Artefakt löschen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::delete(c, p))),
     cmd!("connector.add", "Konnektor hinzufügen", "Konnektoren", None, "name: string, command?: string (Befehlszeile), args?: [string], env?: {KEY: value} | \"KEY=value\\n…\", url?: string, headers?: {Name: value}", false, |c, p| Box::pin(crate::tools::add(c, p))),
     cmd!("connector.remove", "Konnektor entfernen", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::remove(c, p))),

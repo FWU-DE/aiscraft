@@ -151,7 +151,7 @@ impl Backend for OpenAi {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: true }
+        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: true, tools_via_mcp: false }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
@@ -223,7 +223,7 @@ mod tests {
     fn body_has_system_and_images() {
         let mut u = msg(Role::User, "Was ist das?");
         u.attachments.push(Attachment { name: "a.png".into(), mime: "image/png".into(), data_base64: Some("QUJD".into()), ..Default::default() });
-        let req = ChatRequest { conversation_id: "c".into(), model: "gpt".into(), system: Some("Sei kurz".into()), messages: vec![u, msg(Role::Assistant, "")], tools: vec![] };
+        let req = ChatRequest { conversation_id: "c".into(), model: "gpt".into(), system: Some("Sei kurz".into()), messages: vec![u, msg(Role::Assistant, "")], tools: vec![], tool_bridge: None };
         let b = body(&req);
         assert_eq!(b["messages"][0]["role"], "system");
         assert_eq!(b["messages"][1]["content"][1]["image_url"]["url"], "data:image/png;base64,QUJD");

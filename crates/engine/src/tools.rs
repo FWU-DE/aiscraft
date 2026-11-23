@@ -58,6 +58,16 @@ fn builtin_specs() -> Vec<ToolSpec> {
             input_schema: json!({"type": "object", "properties": {"title": {"type": "string"}, "instructions": {"type": "string", "description": "vollständiger Auftrag, ohne Bezug auf diesen Chat"}}, "required": ["title", "instructions"], "additionalProperties": false}),
         },
         ToolSpec {
+            name: "board_read".into(),
+            description: "Liest ein Whiteboard: Titel, Notizen und Verbindungen als Text. Ohne id das gerade geöffnete.".into(),
+            input_schema: json!({"type": "object", "properties": {"id": {"type": "string"}}, "additionalProperties": false}),
+        },
+        ToolSpec {
+            name: "board_add".into(),
+            description: "Ergänzt ein Whiteboard um Notizen als eingerückte Markdown-Liste (erste Zeile = neuer Knoten, darunter die Unterpunkte). Ohne id das gerade geöffnete.".into(),
+            input_schema: json!({"type": "object", "properties": {"id": {"type": "string"}, "outline": {"type": "string"}}, "required": ["outline"], "additionalProperties": false}),
+        },
+        ToolSpec {
             name: "board_create".into(),
             description: "Legt ein Whiteboard als Mindmap an, aus einer eingerückten Markdown-Liste (erste Zeile = Mitte).".into(),
             input_schema: json!({"type": "object", "properties": {"title": {"type": "string"}, "outline": {"type": "string"}}, "required": ["title", "outline"], "additionalProperties": false}),
@@ -98,6 +108,19 @@ async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<Stri
         )
         .await
         .map(|v| format!("Whiteboard angelegt und geöffnet (ID {}).", v.get("id").and_then(Value::as_str).unwrap_or(""))),
+        "board_read" | "board_add" => {
+            let id = a.get("id").and_then(Value::as_str).map(str::to_string).or_else(|| {
+                let s = c.state();
+                s.open_artifact.clone().filter(|o| s.artifacts.iter().any(|x| &x.id == o && x.kind == aiscraft_core::ArtifactKind::Board))
+            });
+            let Some(id) = id else { return Some(Err(Error::invalid("Kein Whiteboard angegeben oder geöffnet"))) };
+            if call.name == "board_read" {
+                crate::artifacts::get(c.clone(), json!({"id": id})).await.map(|v| v.get("text").and_then(Value::as_str).unwrap_or("").to_string())
+            } else {
+                let outline = a.get("outline").and_then(Value::as_str).unwrap_or("").to_string();
+                crate::artifacts::board_add_outline(c, &id, &outline).map(|n| format!("{n} Notizen ergänzt."))
+            }
+        }
         "task_start" => {
             if c.state().conversation(conv).is_some_and(|x| x.title.starts_with("▶ ")) {
                 return Some(Err(Error::refused("In einer Aufgabe startet keine weitere Aufgabe.")));

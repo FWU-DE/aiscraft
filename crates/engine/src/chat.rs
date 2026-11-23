@@ -97,7 +97,7 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
         error: None,
         usage: None, tool_calls: vec![], tool_result: None,
     };
-    let req = ChatRequest { conversation_id: new_id(), model: sel.model_id, system: if takes_system { system.map(str::to_string) } else { None }, messages: vec![msg], tools: vec![] };
+    let req = ChatRequest { conversation_id: new_id(), model: sel.model_id, system: if takes_system { system.map(str::to_string) } else { None }, messages: vec![msg], tools: vec![], tool_bridge: None };
     let mut stream = backend.chat(req).await?;
     let mut out = String::new();
     while let Some(ev) = stream.next().await {
@@ -185,7 +185,7 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact
     }
 
     let context = match artifact {
-        Some(id) => Some(crate::artifacts::context_block(&c, &id)?),
+        Some(id) => Some(crate::artifacts::context_block(&c, &id, !caps.tools && !caps.tools_via_mcp)?),
         None => None,
     };
     generate_with(c, conv, context, true).await
@@ -407,7 +407,10 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     let request = c.store(|st| st.messages(&conv_id))?.iter().rev().find(|m| m.role == Role::User).map(|m| m.content.clone()).unwrap_or_default();
     let system = system_prompt_for(&c, &conv, backend.config().send_context, caps.system_prompt, &request);
     let model_name = c.state().model_name(&conv.backend_id, &conv.model_id);
-    let tools = if caps.tools && c.state().settings.tools && conv.sources.tools { crate::tools::specs_for(&c, &conv.sources) } else { vec![] };
+    let tools_on = c.state().settings.tools && conv.sources.tools;
+    let tools = if caps.tools && tools_on { crate::tools::specs_for(&c, &conv.sources) } else { vec![] };
+    // Backends that call tools through MCP themselves get a bridge to the same tools.
+    let bridge = if caps.tools_via_mcp && tools_on { crate::bridge::open(&c, &conv_id).await.ok() } else { None };
     let system = if tools.is_empty() {
         system
     } else {
@@ -438,7 +441,14 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         let owner_words: String = history.iter().filter(|m| m.role == Role::User).map(|m| m.content.as_str()).collect::<Vec<_>>().join("\n");
         // The last round offers no tools, so the model has to answer.
         let round_tools = if round + 1 == MAX_TOOL_ROUNDS { vec![] } else { tools.clone() };
-        let req = ChatRequest { conversation_id: conv_id.clone(), model: conv.model_id.clone(), system: system.clone(), messages: history, tools: round_tools };
+        let req = ChatRequest {
+            conversation_id: conv_id.clone(),
+            model: conv.model_id.clone(),
+            system: system.clone(),
+            messages: history,
+            tools: round_tools,
+            tool_bridge: bridge.as_ref().map(|(b, _)| b.clone()),
+        };
         match stream_round(&c, &backend, req, &mut answer, &conv_id, &mut cancel_rx).await {
             Ok(calls) if calls.is_empty() => break,
             Ok(calls) => {
@@ -488,9 +498,10 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         answer.error = Some("Keine Antwort erhalten".into());
     }
     put_message(&c, &conv_id, &answer);
+    drop(bridge);
     crate::tools::deny_all(&c, &conv_id);
     // Several tool steps went well: maybe there is a procedure worth keeping.
-    if result.is_ok() && c.state().settings.learn_skills && caps.tools {
+    if result.is_ok() && c.state().settings.learn_skills && (caps.tools || caps.tools_via_mcp) {
         let ctx = c.clone();
         let id = conv_id.clone();
         c.spawn(async move {

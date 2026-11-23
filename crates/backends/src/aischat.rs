@@ -343,7 +343,7 @@ impl Backend for AisChat {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: true, uploads: true, system_prompt: false, vision: true, tools: false }
+        Capabilities { remote_history: true, uploads: true, system_prompt: false, vision: true, tools: false, tools_via_mcp: false }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
@@ -529,7 +529,7 @@ mod tests {
         };
         let a = Message { id: "a0".into(), role: Role::Assistant, content: String::new(), attachments: vec![], ..u.clone() };
         u.id = "u1".into();
-        let req = ChatRequest { conversation_id: "c1".into(), model: "uuid-m".into(), system: Some("ignored".into()), messages: vec![u, a], tools: vec![] };
+        let req = ChatRequest { conversation_id: "c1".into(), model: "uuid-m".into(), system: Some("ignored".into()), messages: vec![u, a], tools: vec![], tool_bridge: None };
         let body = encode_action_args(&[action_payload(&req)]);
         assert_eq!(body, r#"[{"conversationId":"c1","fileIds":["f1"],"messages":[{"content":"$$5?","id":"u1","role":"user"}],"modelId":"uuid-m"}]"#);
     }
@@ -604,7 +604,7 @@ mod tests {
             error: None,
             usage: None, tool_calls: vec![], tool_result: None,
         };
-        let mut s = backend.chat(ChatRequest { conversation_id: "c".into(), model: "m".into(), system: None, messages: vec![msg], tools: vec![] }).await.unwrap();
+        let mut s = backend.chat(ChatRequest { conversation_id: "c".into(), model: "m".into(), system: None, messages: vec![msg], tools: vec![], tool_bridge: None }).await.unwrap();
         let mut evs = Vec::new();
         while let Some(e) = s.next().await {
             evs.push(e.unwrap());

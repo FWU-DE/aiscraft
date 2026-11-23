@@ -178,6 +178,12 @@ pub(crate) async fn create(c: Ctx, p: Value) -> Result<Value> {
     Ok(json!({"id": id}))
 }
 
+pub(crate) async fn board_add(c: Ctx, p: Value) -> Result<Value> {
+    let id = req_str(&p, "id")?;
+    let n = board_add_outline(&c, &id, &req_str(&p, "outline")?)?;
+    Ok(json!({"added": n}))
+}
+
 pub(crate) async fn get(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let a = get_artifact(&c, &id)?;
@@ -313,11 +319,63 @@ pub(crate) async fn delete(c: Ctx, p: Value) -> Result<Value> {
     Ok(json!({}))
 }
 
+/// Add an outline to a board, to the right of what is there.
+pub(crate) fn board_add_outline(c: &Ctx, id: &str, outline: &str) -> Result<usize> {
+    let a = get_artifact(c, id)?;
+    if a.kind != ArtifactKind::Board {
+        return Err(Error::invalid("Das ist kein Whiteboard"));
+    }
+    if outline.trim().is_empty() {
+        return Err(Error::invalid("Die Gliederung ist leer"));
+    }
+    let mut board = Board::from_state(&state_of(c, id)?).map_err(|e| Error::invalid(format!("Whiteboard beschädigt: {e}")))?;
+    let right = board.elements().iter().map(|e| e.x + e.w).fold(0.0_f64, f64::max);
+    let ids = board.add_outline(&outline.chars().take(20_000).collect::<String>(), right + 400.0, 0.0);
+    save_state(c, id, &board.encode_state(), Some("Vom Modell ergänzt"))?;
+    Ok(ids.len())
+}
+
 /// Attach the open document's text to a chat message as context (used by "Im Chat verwenden").
-pub(crate) fn context_block(c: &Ctx, id: &str) -> Result<String> {
+/// For backends without tools (AIS.chat), ask for changes as a marked code block the person can
+/// apply with one click.
+pub(crate) fn context_block(c: &Ctx, id: &str, without_tools: bool) -> Result<String> {
     let a = get_artifact(c, id)?;
     let text = artifact_text(a.kind, &state_of(c, id)?)?;
-    Ok(format!("<{} titel=\"{}\">\n{}\n</{}>", a.kind.label().to_lowercase(), a.title.replace('"', "'"), text, a.kind.label().to_lowercase()))
+    let tag = a.kind.label().to_lowercase();
+    let mut block = format!("<{tag} titel=\"{}\">\n{text}\n</{tag}>", a.title.replace('"', "'"));
+    if without_tools {
+        block.push_str(match a.kind {
+            ArtifactKind::Document => "\n\n(Wenn du dieses Dokument ändern sollst, gib die vollständige neue Fassung in einem Codeblock mit der Sprache `aiscraft-dokument` aus.)",
+            ArtifactKind::Board => "\n\n(Wenn du dieses Whiteboard ergänzen sollst, gib nur die neuen Punkte als eingerückte Markdown-Liste in einem Codeblock mit der Sprache `aiscraft-whiteboard` aus.)",
+        });
+    }
+    Ok(block)
+}
+
+/// Marked change blocks in an answer: (kind, content), for "Ins Dokument übernehmen".
+pub fn change_blocks(answer: &str) -> Vec<(ArtifactKind, String)> {
+    let mut out = Vec::new();
+    let mut rest = answer;
+    while let Some(start) = rest.find("```aiscraft-") {
+        let after = rest.get(start + 3..).unwrap_or("");
+        let Some(nl) = after.find('\n') else { break };
+        let lang = after.get(..nl).unwrap_or("").trim();
+        let body = after.get(nl + 1..).unwrap_or("");
+        let Some(end) = body.find("\n```").or_else(|| body.strip_suffix("```").map(|b| b.len())) else { break };
+        let content = body.get(..end).unwrap_or("").to_string();
+        let kind = match lang {
+            "aiscraft-dokument" | "aiscraft-document" => Some(ArtifactKind::Document),
+            "aiscraft-whiteboard" | "aiscraft-board" => Some(ArtifactKind::Board),
+            _ => None,
+        };
+        if let Some(k) = kind
+            && !content.trim().is_empty()
+        {
+            out.push((k, content));
+        }
+        rest = body.get(end + 4..).unwrap_or("");
+    }
+    out
 }
 
 #[allow(dead_code)]
@@ -349,6 +407,18 @@ mod tests {
         doc.transact_mut().apply_update(yrs::Update::decode_v1(&b).unwrap()).unwrap();
         let merged = doc.get_or_insert_text("content").get_string(&doc.transact());
         assert_eq!(merged, "Eins!\nZwei?\n");
+    }
+
+    #[test]
+    fn change_blocks_in_answers() {
+        let a = "Hier die neue Fassung:\n```aiscraft-dokument\n# Plan\nKürzer\n```\nUnd fürs Board:\n```aiscraft-whiteboard\n- Wald\n  - Bäume\n```";
+        let b = change_blocks(a);
+        assert_eq!(b.len(), 2);
+        assert_eq!(b[0], (ArtifactKind::Document, "# Plan\nKürzer".to_string()));
+        assert_eq!(b[1].0, ArtifactKind::Board);
+        assert!(change_blocks("```python\nx\n```").is_empty());
+        assert!(change_blocks("```aiscraft-dokument\nohne Ende").is_empty());
+        assert!(change_blocks("```aiscraft-dokument\n\n```").is_empty());
     }
 
     #[test]

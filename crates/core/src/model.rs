@@ -370,6 +370,9 @@ pub struct Capabilities {
     pub vision: bool,
     /// The backend runs tools the client defines (tool calling).
     pub tools: bool,
+    /// The backend calls tools through an MCP server the app provides (the Claude CLI).
+    #[serde(default)]
+    pub tools_via_mcp: bool,
 }
 
 /// Everything a backend needs to answer the next turn.
@@ -382,6 +385,16 @@ pub struct ChatRequest {
     pub messages: Vec<Message>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolSpec>,
+    /// For backends that call tools through MCP themselves (the Claude CLI): where the app's
+    /// tool bridge listens and the token for this answer.
+    #[serde(skip)]
+    pub tool_bridge: Option<ToolBridge>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolBridge {
+    pub url: String,
+    pub token: String,
 }
 
 /// One piece of a streamed answer.

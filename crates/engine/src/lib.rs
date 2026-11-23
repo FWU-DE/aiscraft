@@ -3,6 +3,7 @@
 //! all dispatch the same commands by id, so everything a person can do, an agent can do.
 
 mod artifacts;
+mod bridge;
 mod chat;
 mod commands;
 mod files;
@@ -27,7 +28,7 @@ use serde_json::Value;
 
 pub use aiscraft_backends::SESSION_COOKIE;
 pub use commands::{CommandSpec, commands};
-pub use artifacts::{doc_text, markdown_html};
+pub use artifacts::{change_blocks, doc_text, markdown_html};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use schedules::{Cron, Schedule, next_run as schedule_next_run};
 pub use secrets::Secrets;
@@ -86,6 +87,7 @@ pub(crate) struct Inner {
     cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
     next_notice: std::sync::atomic::AtomicU64,
     tools: tools::ToolRuntime,
+    bridge: bridge::Bridge,
     /// Copies of attached files, so they stay readable for later requests.
     pub(crate) attachments_dir: PathBuf,
     /// The browser profile for signing in to AIS.chat.
@@ -150,6 +152,7 @@ impl Engine {
             cancels: Mutex::new(HashMap::new()),
             next_notice: std::sync::atomic::AtomicU64::new(1),
             tools: Default::default(),
+            bridge: Default::default(),
             browser_allowed: opts.data_dir.is_some() && std::env::var_os("AISCRAFT_NO_BROWSER").is_none(),
             browser_profile: opts.data_dir.clone().map(|d| d.join("browser-profile")).unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-browser-{}", std::process::id()))),
             attachments_dir: opts.data_dir.clone().map(|d| d.join("attachments")).unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-attachments-{}", std::process::id()))),
