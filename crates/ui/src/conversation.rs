@@ -420,9 +420,19 @@ impl AisCraftApp {
         let caps = self.state.backend(&self.state.selection.backend_id).map(|b| b.capabilities).unwrap_or_default();
         let on = [src.tools, src.memory, src.project, src.history].iter().filter(|x| **x).count();
         let label = if on == 4 && src.connectors.is_none() { "Quellen".to_string() } else { format!("Quellen ({on}/4)") };
-        ui.menu_button(RichText::new(format!("{label}  ⏷")).color(t.muted), |ui| {
+        // Stays open while switching; closes with its button, the toggle button or Esc.
+        let toggle = ui.button(RichText::new(format!("{label}  ⏷")).color(t.muted));
+        let popup_id = egui::Popup::default_response_id(&toggle);
+        egui::Popup::from_toggle_button_response(&toggle).close_behavior(egui::PopupCloseBehavior::IgnoreClicks).show(|ui| {
             ui.set_min_width(280.0);
-            ui.label(small_muted(&t, "Was dieser Chat nutzen darf"));
+            ui.horizontal(|ui| {
+                ui.label(small_muted(&t, "Was dieser Chat nutzen darf"));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.small_button("Schließen").clicked() {
+                        egui::Popup::close_id(ui.ctx(), popup_id);
+                    }
+                });
+            });
             let set = |key: &str, value: bool| self.engine.dispatch("chat.set_sources", json!({key: value}));
             let mut memory = src.memory;
             if ui.checkbox(&mut memory, "Gedächtnis (deine Notizen)").changed() {
