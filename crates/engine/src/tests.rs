@@ -30,7 +30,7 @@ fn scripted_openai(engine: &Engine) -> String {
                     if req.starts_with("GET /v1/models") {
                         let body = r#"{"data":[{"id":"test-model"}]}"#;
                         let _ = sock
-                            .write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes())
+                            .write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes())
                             .await;
                         return;
                     }
@@ -188,7 +188,7 @@ fn tool_loop_with_builtin_history_search() {
                     let req = String::from_utf8_lossy(&buf[..n]).to_string();
                     if req.starts_with("GET") {
                         let body = r#"{"data":[{"id":"m"}]}"#;
-                        let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
+                        let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
                         return;
                     }
                     let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
