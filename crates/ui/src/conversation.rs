@@ -41,48 +41,53 @@ impl AisCraftApp {
     fn header(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         Frame::new().inner_margin(Margin::symmetric(14, 8)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if !self.sidebar_open && icon_button(ui, &t, "☰", "Seitenleiste (Strg+B)").clicked() {
-                    self.sidebar_open = true;
-                }
-                let title = self.state.current.as_ref().and_then(|id| self.state.conversation(id)).map(|c| c.title.clone());
-                if let Some(title) = &title {
-                    let r = ui
-                        .add(egui::Label::new(RichText::new(title).strong()).truncate().sense(egui::Sense::click()))
-                        .on_hover_text("Doppelklick zum Umbenennen");
-                    if r.double_clicked()
-                        && let Some(id) = self.state.current.clone()
+            // The buttons on the right are placed first; title and persona truncate into what is left, so a long
+            // name never makes the row (and with it the whole chat column) wider than the window.
+            let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y.max(22.0));
+            ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                ui.set_max_width(row.x);
+                if self.state.current.is_some() {
+                    if self.state.selection.kind == aiscraft_core::ConversationKind::Chat {
+                        self.context_meter(ui);
+                    }
+                    if icon_button(ui, &t, "⬇", "Exportieren (Strg+Umschalt+E)").clicked() {
+                        self.export_dialog();
+                    }
+                    if let Some(url) = self.state.current.as_ref().and_then(|id| {
+                        let c = self.state.conversation(id)?;
+                        let b = self.state.backend(&c.backend_id).filter(|b| b.config.kind == BackendKind::AisChat)?;
+                        let path = if c.kind == aiscraft_core::ConversationKind::Image {
+                            format!("/image-generation/d/{}", c.remote_id.as_deref().unwrap_or(&c.id))
+                        } else {
+                            aiscraft_core::ais_conversation_path(c.persona.as_ref(), &c.id)
+                        };
+                        Some(format!("{}{path}", b.config.base_url.trim_end_matches('/')))
+                    }) && icon_button(ui, &t, "↗", "In AIS.chat öffnen").clicked()
                     {
-                        self.dialog = Some(Dialog::Rename { id, title: title.clone() });
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
                     }
                 }
-                if let Some(p) = self.state.selection.project_id.as_ref().and_then(|pid| self.state.projects.iter().find(|p| &p.id == pid)) {
-                    ui.label(small_muted(&t, format!("▣ {}", p.name)));
-                }
-                if let Some(p) = self.state.selection.persona.as_ref().filter(|_| self.state.current.is_some()) {
-                    ui.label(small_muted(&t, format!("{}: {}", p.kind.label(), p.name)));
-                }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if self.state.current.is_some() {
-                        if self.state.selection.kind == aiscraft_core::ConversationKind::Chat {
-                            self.context_meter(ui);
-                        }
-                        if icon_button(ui, &t, "⬇", "Exportieren (Strg+Umschalt+E)").clicked() {
-                            self.export_dialog();
-                        }
-                        if let Some(url) = self.state.current.as_ref().and_then(|id| {
-                            let c = self.state.conversation(id)?;
-                            let b = self.state.backend(&c.backend_id).filter(|b| b.config.kind == BackendKind::AisChat)?;
-                            let path = if c.kind == aiscraft_core::ConversationKind::Image {
-                                format!("/image-generation/d/{}", c.remote_id.as_deref().unwrap_or(&c.id))
-                            } else {
-                                aiscraft_core::ais_conversation_path(c.persona.as_ref(), &c.id)
-                            };
-                            Some(format!("{}{path}", b.config.base_url.trim_end_matches('/')))
-                        }) && icon_button(ui, &t, "↗", "In AIS.chat öffnen").clicked()
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    if !self.sidebar_open && icon_button(ui, &t, "☰", "Seitenleiste (Strg+B)").clicked() {
+                        self.sidebar_open = true;
+                    }
+                    let title = self.state.current.as_ref().and_then(|id| self.state.conversation(id)).map(|c| c.title.clone());
+                    if let Some(title) = &title {
+                        let r = ui
+                            .add(egui::Label::new(RichText::new(title).strong()).truncate().sense(egui::Sense::click()))
+                            .on_hover_text("Doppelklick zum Umbenennen");
+                        if r.double_clicked()
+                            && let Some(id) = self.state.current.clone()
                         {
-                            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                            self.dialog = Some(Dialog::Rename { id, title: title.clone() });
                         }
+                    }
+                    if let Some(p) = self.state.selection.project_id.as_ref().and_then(|pid| self.state.projects.iter().find(|p| &p.id == pid)) {
+                        ui.add(egui::Label::new(small_muted(&t, format!("▣ {}", p.name))).truncate());
+                    }
+                    if let Some(p) = self.state.selection.persona.as_ref().filter(|_| self.state.current.is_some()) {
+                        let text = format!("{}: {}", p.kind.label(), p.name);
+                        ui.add(egui::Label::new(small_muted(&t, text.clone())).truncate()).on_hover_text(text);
                     }
                 });
             });
@@ -324,7 +329,7 @@ impl AisCraftApp {
                     }
                 });
             let hovered = ui.rect_contains_pointer(r.response.rect.expand(24.0));
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.set_min_height(18.0);
                 if hovered && !self.state.current.as_ref().is_some_and(|c| self.state.is_generating(c)) {
                     if icon_button(ui, &t, "✏", "Bearbeiten").clicked() {
@@ -426,7 +431,7 @@ impl AisCraftApp {
                     ui.label(small_muted(&t, format!("Bild {} lässt sich nicht anzeigen", a.name)));
                 }
             }
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui.add(egui::Button::new(small_muted(&t, "Bild speichern …")).frame(false)).clicked()
                     && let Some(path) = rfd::FileDialog::new().set_file_name(&a.name).save_file()
                 {
@@ -449,7 +454,7 @@ impl AisCraftApp {
             for (k, seg) in crate::plot::segments(&m.content).into_iter().enumerate() {
                 match seg {
                     crate::plot::Segment::Markdown(md) => {
-                        egui_commonmark::CommonMarkViewer::new().default_width(Some(CONTENT_WIDTH as usize)).show(ui, &mut self.md, md);
+                        egui_commonmark::CommonMarkViewer::new().default_width(Some(ui.available_width().max(1.0) as usize)).show(ui, &mut self.md, md);
                     }
                     crate::plot::Segment::Plot(src) => self.plot_block(ui, &m.id, k, src),
                 }
@@ -537,7 +542,10 @@ impl AisCraftApp {
                 if let Some(u) = m.usage
                     && u.output_tokens > 0
                 {
-                    ui.label(small_muted(&t, format!("{} ➡ {} Tokens", u.input_tokens, u.output_tokens)));
+                    // A frameless button, not a label: in a wrapping row a label is split mid-text, a button moves whole.
+                    ui.add(
+                        egui::Button::new(small_muted(&t, format!("{} ➡ {} Tokens", u.input_tokens, u.output_tokens))).frame(false).sense(egui::Sense::hover()),
+                    );
                 }
             });
         }
@@ -908,56 +916,9 @@ impl AisCraftApp {
                     self.composer.push_str(text.trim());
                     self.focus_composer = true;
                 }
+                // Send button first, on the right; the rest wraps into what is left, so a narrow window never
+                // pushes the composer (and the chat column) past its edge.
                 ui.horizontal(|ui| {
-                    if self.state.recording {
-                        let level = self.engine.mic_level();
-                        let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 10.0), egui::Sense::hover());
-                        ui.painter().rect_filled(rect, CornerRadius::same(4), t.surface_hi);
-                        let mut fill = rect;
-                        fill.set_width((rect.width() * (level * 3.0).clamp(0.05, 1.0)).max(2.0));
-                        ui.painter().rect_filled(fill, CornerRadius::same(4), t.danger);
-                        if ui.add(egui::Button::new(RichText::new("■ Diktat beenden").color(t.danger))).clicked() {
-                            let engine = self.engine.clone();
-                            let out = self.dictated.clone();
-                            std::thread::spawn(move || match engine.call("voice.record_stop", json!({})) {
-                                Ok(v) => {
-                                    if let (Some(t), Ok(mut slot)) = (v.get("text").and_then(|x| x.as_str()), out.lock()) {
-                                        *slot = Some(t.to_string());
-                                    }
-                                }
-                                Err(e) => {
-                                    engine.ctx().notice(aiscraft_engine::NoticeLevel::Error, e.message);
-                                }
-                            });
-                        }
-                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
-                    } else if icon_button(ui, &t, "🎤", "Diktieren").clicked() {
-                        self.run("voice.record_start", json!({}));
-                    }
-                    if !image_mode
-                        && icon_button(ui, &t, "📎", "Dateien anhängen (oder hineinziehen)").clicked()
-                        && let Some(files) = rfd::FileDialog::new().pick_files()
-                    {
-                        self.pending_files.extend(files);
-                    }
-                    if !image_mode && self.link_input.is_none() && icon_button(ui, &t, "🔗", "Webseite anhängen (bis zu 5 Links)").clicked() {
-                        self.link_input = Some(String::new());
-                    }
-                    self.model_picker(ui);
-                    if image_mode {
-                        let cur = self.state.selection.aspect_ratio.clone();
-                        let label = aiscraft_core::ASPECT_RATIOS.iter().find(|(k, _)| *k == cur).map(|(_, l)| *l).unwrap_or("Quadratisch");
-                        ui.menu_button(RichText::new(format!("{label}  ⏷")).color(t.muted), |ui| {
-                            for (k, l) in aiscraft_core::ASPECT_RATIOS {
-                                if ui.add(egui::Button::selectable(k == cur || (cur.is_empty() && k == "quadratic"), l)).clicked() {
-                                    self.run("chat.set_aspect", json!({"ratio": k}));
-                                    ui.close();
-                                }
-                            }
-                        });
-                    } else {
-                        self.sources_menu(ui);
-                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if generating {
                             if accent_button(ui, &t, "■").on_hover_text("Anhalten (Esc)").clicked() {
@@ -973,6 +934,57 @@ impl AisCraftApp {
                                 send = true;
                             }
                         }
+                        ui.with_layout(Layout::left_to_right(Align::Center).with_main_wrap(true), |ui| {
+                            if self.state.recording {
+                                let level = self.engine.mic_level();
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 10.0), egui::Sense::hover());
+                                ui.painter().rect_filled(rect, CornerRadius::same(4), t.surface_hi);
+                                let mut fill = rect;
+                                fill.set_width((rect.width() * (level * 3.0).clamp(0.05, 1.0)).max(2.0));
+                                ui.painter().rect_filled(fill, CornerRadius::same(4), t.danger);
+                                if ui.add(egui::Button::new(RichText::new("■ Diktat beenden").color(t.danger))).clicked() {
+                                    let engine = self.engine.clone();
+                                    let out = self.dictated.clone();
+                                    std::thread::spawn(move || match engine.call("voice.record_stop", json!({})) {
+                                        Ok(v) => {
+                                            if let (Some(t), Ok(mut slot)) = (v.get("text").and_then(|x| x.as_str()), out.lock()) {
+                                                *slot = Some(t.to_string());
+                                            }
+                                        }
+                                        Err(e) => {
+                                            engine.ctx().notice(aiscraft_engine::NoticeLevel::Error, e.message);
+                                        }
+                                    });
+                                }
+                                ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
+                            } else if icon_button(ui, &t, "🎤", "Diktieren").clicked() {
+                                self.run("voice.record_start", json!({}));
+                            }
+                            if !image_mode
+                                && icon_button(ui, &t, "📎", "Dateien anhängen (oder hineinziehen)").clicked()
+                                && let Some(files) = rfd::FileDialog::new().pick_files()
+                            {
+                                self.pending_files.extend(files);
+                            }
+                            if !image_mode && self.link_input.is_none() && icon_button(ui, &t, "🔗", "Webseite anhängen (bis zu 5 Links)").clicked() {
+                                self.link_input = Some(String::new());
+                            }
+                            self.model_picker(ui);
+                            if image_mode {
+                                let cur = self.state.selection.aspect_ratio.clone();
+                                let label = aiscraft_core::ASPECT_RATIOS.iter().find(|(k, _)| *k == cur).map(|(_, l)| *l).unwrap_or("Quadratisch");
+                                ui.menu_button(RichText::new(format!("{label}  ⏷")).color(t.muted), |ui| {
+                                    for (k, l) in aiscraft_core::ASPECT_RATIOS {
+                                        if ui.add(egui::Button::selectable(k == cur || (cur.is_empty() && k == "quadratic"), l)).clicked() {
+                                            self.run("chat.set_aspect", json!({"ratio": k}));
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            } else {
+                                self.sources_menu(ui);
+                            }
+                        });
                     });
                 });
             });
