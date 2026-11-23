@@ -82,6 +82,10 @@ pub struct SearchHit {
 struct ConvExtra {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     persona: Option<aiscraft_core::Persona>,
+    #[serde(default)]
+    kind: aiscraft_core::ConversationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    remote_id: Option<String>,
 }
 
 pub struct Store {
@@ -116,7 +120,7 @@ impl Store {
         if !has_sources {
             db.execute_batch("ALTER TABLE conversations ADD COLUMN sources TEXT NOT NULL DEFAULT '{}'").map_err(db_err)?;
         }
-        // 2 → 3: a JSON column for later fields (first: the persona a chat talks to).
+        // 2 → 3: persona (assistant, character, learning scenario), kind and server id.
         let has_extra: bool = db.prepare("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'extra'").and_then(|mut st| st.exists([])).map_err(db_err)?;
         if !has_extra {
             db.execute_batch("ALTER TABLE conversations ADD COLUMN extra TEXT NOT NULL DEFAULT '{}'").map_err(db_err)?;
@@ -171,6 +175,8 @@ impl Store {
             pinned: r.get::<_, i64>(7)? != 0,
             sources: r.get::<_, String>(8).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
             persona: extra.persona,
+            kind: extra.kind,
+            remote_id: extra.remote_id,
         })
     }
 
@@ -207,7 +213,7 @@ impl Store {
                     c.updated_at,
                     c.pinned as i64,
                     serde_json::to_string(&c.sources)?,
-                    serde_json::to_string(&ConvExtra { persona: c.persona.clone() })?
+                    serde_json::to_string(&ConvExtra { persona: c.persona.clone(), kind: c.kind, remote_id: c.remote_id.clone() })?
                 ],
             )
             .map_err(db_err)?;
@@ -583,6 +589,8 @@ mod tests {
             pinned: false,
             sources: Default::default(),
             persona: None,
+            kind: Default::default(),
+            remote_id: None,
         }
     }
 

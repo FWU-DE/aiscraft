@@ -2,7 +2,7 @@
 //! (the menu it sits in), an optional shortcut and a params description. The egui shell, the
 //! CLI and the control channel dispatch commands by id; `app.commands` lists them for agents.
 
-use aiscraft_core::{BackendConfig, BackendKind, Conversation, Error, ErrorKind, MemoryArea, MemoryNote, Message, Project, Result, Role};
+use aiscraft_core::{BackendConfig, BackendKind, Conversation, ConversationKind, Error, ErrorKind, MemoryArea, MemoryNote, Message, Project, Result, Role};
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
 
@@ -37,10 +37,13 @@ pub fn find(id: &str) -> Option<&'static CommandSpec> {
 }
 
 static COMMANDS: &[CommandSpec] = &[
-    cmd!("chat.new", "Neuer Chat", "Chat", Some("Ctrl+N"), "backend?: string, model?: string, project?: string", true, |c, p| Box::pin(chat_new(c, p))),
+    cmd!("chat.new", "Neuer Chat", "Chat", Some("Ctrl+N"), "backend?: string, model?: string, project?: string, kind?: chat|image", true, |c, p| Box::pin(chat_new(c, p))),
     cmd!("chat.open", "Chat öffnen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_open(c, p))),
-    cmd!("chat.send", "Senden", "Chat", Some("Enter"), "text: string, files?: [path], artifact?: string (as context), force?: bool (past the monthly limit)", false, |c, p| Box::pin(async move {
+    cmd!("chat.send", "Senden", "Chat", Some("Enter"), "text: string, files?: [path], artifact?: string (as context), force?: bool (past the monthly limit), aspect_ratio?: quadratic|landscape|portrait (image chats)", false, |c, p| Box::pin(async move {
         let text = opt_str(&p, "text").unwrap_or_default();
+        if let Some(r) = opt_str(&p, "aspect_ratio") {
+            set_aspect(&c, &r)?;
+        }
         let files: Vec<String> = p.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
         chat::send_with(c, text, files, opt_str(&p, "artifact"), p.get("force").and_then(Value::as_bool).unwrap_or(false)).await
     })),
@@ -79,6 +82,18 @@ static COMMANDS: &[CommandSpec] = &[
     })),
     cmd!("chat.delete", "Chat löschen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_delete(c, p))),
     cmd!("chat.export", "Chat exportieren", "Chat", Some("Ctrl+Shift+E"), "id?: string, format?: markdown|json, path?: string", true, |c, p| Box::pin(chat_export(c, p))),
+    cmd!("chat.new_image", "Neuer Bild-Chat", "Chat", None, "backend?: string, model?: string", true, |c, p| Box::pin(async move {
+        let mut p = if p.is_object() { p } else { json!({}) };
+        if let Some(o) = p.as_object_mut() {
+            o.insert("kind".into(), json!("image"));
+        }
+        chat_new(c, p).await
+    })),
+    cmd!("chat.set_aspect", "Bildformat wählen", "Chat", None, "ratio: quadratic|landscape|portrait", false, |c, p| Box::pin(async move {
+        set_aspect(&c, &req_str(&p, "ratio")?)?;
+        Ok(json!({}))
+    })),
+    cmd!("chat.save_image", "Bild speichern", "Chat", None, "message_id: string, index?: number, path: string", false, |c, p| Box::pin(save_image(c, p))),
     cmd!("chat.save_document", "Erzeugtes Dokument speichern", "Chat", None, "message_id: string, step: number, path: string", false, |c, p| Box::pin(save_document(c, p))),
     cmd!("search", "Alle Chats durchsuchen", "Suche", Some("Ctrl+Shift+F"), "query: string", true, |c, p| Box::pin(async move {
         let query = opt_str(&p, "query").unwrap_or_default();
@@ -325,12 +340,15 @@ pub(crate) async fn refresh_backend(c: &Ctx, id: &str) -> Result<()> {
             }
         });
     }
+    // No image models is fine (most backends, or switched off by the state).
+    let image_models = backend.image_models().await.unwrap_or_default();
     let default = backend.config().default_model.clone();
     c.update(|s| {
         if let Some(b) = s.backends.iter_mut().find(|b| b.config.id == id) {
             b.models = models.clone();
+            b.image_models = image_models.clone();
         }
-        if s.selection.backend_id == id && !models.iter().any(|m| m.id == s.selection.model_id) {
+        if s.selection.backend_id == id && s.selection.kind == ConversationKind::Chat && !models.iter().any(|m| m.id == s.selection.model_id) {
             s.selection.model_id = default.filter(|d| models.iter().any(|m| &m.id == d)).or_else(|| models.first().map(|m| m.id.clone())).unwrap_or_default();
         }
     });
@@ -385,10 +403,30 @@ async fn chat_new(c: Ctx, p: Value) -> Result<Value> {
         Some(Value::Null) => None,
         _ => state.selection.project_id.clone(),
     };
+    let kind = match opt_str(&p, "kind") {
+        Some(k) => ConversationKind::parse(&k).ok_or_else(|| Error::invalid("kind muss chat oder image sein"))?,
+        None => ConversationKind::Chat,
+    };
+    let model_id = if kind == ConversationKind::Image {
+        let wanted = opt_str(&p, "model");
+        if view.image_models.is_empty() {
+            return Err(Error::unsupported(format!("{} bietet keine Bildmodelle an (oder die Bilderzeugung ist für dich ausgeschaltet).", view.config.name)));
+        }
+        match wanted {
+            Some(m) if view.image_models.iter().any(|x| x.id == m) => m,
+            Some(m) => return Err(Error::not_found(format!("Kein Bildmodell {m}"))),
+            None => view.image_models.first().map(|m| m.id.clone()).unwrap_or_default(),
+        }
+    } else if view.image_models.iter().any(|m| m.id == model_id) {
+        view.config.default_model.clone().or_else(|| view.models.first().map(|m| m.id.clone())).unwrap_or_default()
+    } else {
+        model_id
+    };
+    let aspect_ratio = state.selection.aspect_ratio.clone();
     c.update(|s| {
         s.current = None;
         s.messages.clear();
-        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: None };
+        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: None, kind, aspect_ratio };
     });
     persist_selection(&c);
     Ok(json!({}))
@@ -408,6 +446,8 @@ async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
             project_id: conv.project_id.clone(),
             sources: conv.sources.clone(),
             persona: conv.persona.clone(),
+            kind: conv.kind,
+            aspect_ratio: s.selection.aspect_ratio.clone(),
         };
     });
     Ok(json!({"messages": n}))
@@ -416,10 +456,26 @@ async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
 async fn select_model(c: Ctx, p: Value) -> Result<Value> {
     let backend = req_str(&p, "backend")?;
     let model = req_str(&p, "model")?;
-    if c.state().backend(&backend).is_none() {
+    let state = c.state();
+    let Some(view) = state.backend(&backend) else {
         return Err(Error::not_found(format!("Kein Backend {backend}")));
+    };
+    // Image models draw, text models write: each stays in its own kind of chat.
+    let image_model = view.image_models.iter().any(|m| m.id == model);
+    let kind = state.current.as_ref().and_then(|id| state.conversation(id)).map(|c| c.kind).unwrap_or(state.selection.kind);
+    if image_model && kind == ConversationKind::Chat {
+        if state.current.is_some() {
+            return Err(Error::invalid("Bildmodelle gibt es in Bild-Chats. Starte einen neuen Bild-Chat."));
+        }
+        return chat_new(c, json!({"backend": backend, "model": model, "kind": "image"})).await;
     }
-    let current = c.state().current.clone();
+    if !image_model && kind == ConversationKind::Image {
+        if state.current.is_some() {
+            return Err(Error::invalid("In einem Bild-Chat zeichnet ein Bildmodell. Für Text starte einen neuen Chat."));
+        }
+        return chat_new(c, json!({"backend": backend, "model": model})).await;
+    }
+    let current = state.current.clone();
     c.update(|s| {
         s.selection.backend_id = backend.clone();
         s.selection.model_id = model.clone();
@@ -526,6 +582,33 @@ async fn save_document(c: Ctx, p: Value) -> Result<Value> {
     Ok(json!({"path": path}))
 }
 
+fn set_aspect(c: &Ctx, ratio: &str) -> Result<()> {
+    if !aiscraft_core::ASPECT_RATIOS.iter().any(|(k, _)| *k == ratio) {
+        return Err(Error::invalid("Bildformat muss quadratic, landscape oder portrait sein"));
+    }
+    let r = ratio.to_string();
+    c.update(|s| s.selection.aspect_ratio = r);
+    persist_selection(c);
+    Ok(())
+}
+
+async fn save_image(c: Ctx, p: Value) -> Result<Value> {
+    let mid = req_str(&p, "message_id")?;
+    let index = p.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let path = req_str(&p, "path")?;
+    let src = c
+        .state()
+        .messages
+        .iter()
+        .find(|m| m.id == mid)
+        .and_then(|m| m.attachments.iter().filter(|a| a.mime.starts_with("image/")).nth(index))
+        .and_then(|a| a.local_path.clone())
+        .ok_or_else(|| Error::not_found("Bild nicht gefunden"))?;
+    std::fs::copy(&src, &path).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+    c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
+    Ok(json!({"path": path}))
+}
+
 async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
     let backend_id = req_str(&p, "backend")?;
     let id = req_str(&p, "id")?;
@@ -546,7 +629,8 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
         }
         p
     });
-    let conv = Conversation { id: id.clone(), title, backend_id, model_id, project_id: None, created_at: now, updated_at: now, pinned: false, sources: Default::default(), persona };
+    let kind = state.remote.get(&backend_id).and_then(|l| l.iter().find(|r| r.id == id)).map(|r| r.kind).unwrap_or_default();
+    let conv = Conversation { id: id.clone(), title, backend_id, model_id, project_id: None, created_at: now, updated_at: now, pinned: false, sources: Default::default(), persona, kind, remote_id: None };
     c.store(|st| {
         st.save_conversation(&conv)?;
         for (i, (mid, role, content)) in msgs.iter().enumerate() {
@@ -621,7 +705,7 @@ async fn persona_start(c: Ctx, p: Value) -> Result<Value> {
     c.update(|s| {
         s.current = None;
         s.messages.clear();
-        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: Some(info.persona()) };
+        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: Some(info.persona()), kind: ConversationKind::Chat, aspect_ratio: s.selection.aspect_ratio.clone() };
     });
     persist_selection(&c);
     Ok(serde_json::to_value(&info)?)

@@ -324,7 +324,8 @@ impl Ctx {
             let models = s.backend(&config.id).map(|b| b.models.clone()).unwrap_or_default();
             let quota = s.backend(&config.id).and_then(|b| b.quota);
             let personas = s.backend(&config.id).and_then(|b| b.personas.clone());
-            let view = BackendView { config: config.clone(), capabilities: caps, has_secret, status: BackendStatus::Unknown, models, quota, personas, personas_error: None };
+            let image_models = s.backend(&config.id).map(|b| b.image_models.clone()).unwrap_or_default();
+            let view = BackendView { config: config.clone(), capabilities: caps, has_secret, status: BackendStatus::Unknown, models, quota, personas, personas_error: None, image_models };
             match s.backends.iter_mut().find(|b| b.config.id == config.id) {
                 Some(b) => *b = view,
                 None => s.backends.push(view),

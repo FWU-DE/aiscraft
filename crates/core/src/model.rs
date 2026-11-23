@@ -158,6 +158,35 @@ pub struct Conversation {
     /// The assistant, character or learning scenario this chat talks to (AIS.chat).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<Persona>,
+    /// A text chat or an image chat.
+    #[serde(default, skip_serializing_if = "ConversationKind::is_chat")]
+    pub kind: ConversationKind,
+    /// The server's id for this chat when it differs from the local id (AIS.chat image chats,
+    /// whose id the server picks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationKind {
+    #[default]
+    Chat,
+    /// Every message is a prompt for an image model (AIS.chat `generateImageAction`).
+    Image,
+}
+
+impl ConversationKind {
+    pub fn is_chat(&self) -> bool {
+        *self == ConversationKind::Chat
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "chat" | "text" => Some(ConversationKind::Chat),
+            "image" | "image-generation" | "bild" => Some(ConversationKind::Image),
+            _ => None,
+        }
+    }
 }
 
 /// What kind of configured partner a chat can talk to on AIS.chat.
@@ -474,6 +503,8 @@ pub struct RemoteConversation {
     /// The assistant, character or learning scenario it was held with (name may be empty).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<Persona>,
+    #[serde(default, skip_serializing_if = "ConversationKind::is_chat")]
+    pub kind: ConversationKind,
 }
 
 /// What a backend can do beyond plain chat.
@@ -514,6 +545,34 @@ pub struct ToolBridge {
     pub url: String,
     pub token: String,
 }
+
+/// A prompt for an image model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageRequest {
+    pub prompt: String,
+    pub model: String,
+    /// `quadratic`, `landscape` or `portrait` (AIS.chat's presets).
+    pub aspect_ratio: String,
+    /// The server's image chat to continue, if there is one already.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+}
+
+/// A generated image.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ImageResult {
+    #[serde(skip)]
+    pub bytes: Vec<u8>,
+    pub mime: String,
+    /// The server's image chat it belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+}
+
+/// The aspect ratios AIS.chat offers for images.
+pub const ASPECT_RATIOS: [(&str, &str); 3] = [("quadratic", "Quadratisch"), ("landscape", "Querformat"), ("portrait", "Hochformat")];
 
 /// One piece of a streamed answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -11,7 +11,8 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
 
 use aiscraft_core::{
-    AccountInfo, ActivityLink, ActivityStep, BackendConfig, Capabilities, ChatRequest, Error, GeneratedDocument, ModelInfo, Persona, PersonaInfo, PersonaKind, RemoteConversation, Result, Role, StreamEvent,
+    AccountInfo, ActivityLink, ActivityStep, BackendConfig, Capabilities, ChatRequest, ConversationKind, Error, GeneratedDocument, ImageRequest, ImageResult,
+    ModelInfo, Persona, PersonaInfo, PersonaKind, RemoteConversation, Result, Role, StreamEvent,
 };
 use aiscraft_rsc::flight::{ActionDecoder, ActionEvent};
 use aiscraft_rsc::{encode_action_args, scrape};
@@ -94,6 +95,7 @@ fn action_pages(name: &str) -> &'static [&'static str] {
         "getAssistantsByFilterAction" => &["/assistants"],
         "getCharactersByFilterAction" => &["/characters"],
         "getLearningScenariosByFilterAction" => &["/learning-scenarios"],
+        "generateImageAction" => &["/image-generation"],
         _ => &["/"],
     }
 }
@@ -105,10 +107,12 @@ fn action_label(name: &str) -> &'static str {
         "getAssistantsByFilterAction" => "Die Liste der Assistenten",
         "getCharactersByFilterAction" => "Die Liste der Figuren",
         "getLearningScenariosByFilterAction" => "Die Liste der Lernszenarien",
+        "generateImageAction" => "Die Bilderzeugung",
         _ => "Diese Funktion",
     }
 }
 
+const IMAGE_CAP: usize = 25 * 1024 * 1024;
 
 impl AisChat {
     pub fn new(config: BackendConfig, base: String, secret: Option<String>, on_secret: SecretSink) -> Result<Self> {
@@ -268,6 +272,34 @@ impl AisChat {
         v.pointer("/user/id").and_then(Value::as_str).map(str::to_string)
     }
 
+    /// Fetch a generated image: a path on AIS.chat (with the session), a signed storage URL
+    /// (without it), or a `data:` URL.
+    async fn fetch_image(&self, url: &str) -> Result<(Vec<u8>, String)> {
+        use base64::Engine as _;
+        if let Some(rest) = url.strip_prefix("data:") {
+            let (meta, data) = rest.split_once(',').ok_or_else(|| Error::protocol("Bild: ungültige data-URL"))?;
+            let mime = meta.split(';').next().filter(|m| m.starts_with("image/")).unwrap_or("image/png").to_string();
+            let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| Error::protocol("Bild: ungültige Base64-Daten"))?;
+            if bytes.len() > IMAGE_CAP {
+                return Err(Error::protocol("Das Bild ist größer als 25 MB"));
+            }
+            return Ok((bytes, mime));
+        }
+        let rb = if url.starts_with('/') && !url.starts_with("//") {
+            self.request(Method::GET, url)?
+        } else if url.starts_with("https://") || url.starts_with("http://") {
+            if url.starts_with(&format!("{}/", self.base)) { self.http.get(url).header("Cookie", self.cookie()?) } else { self.http.get(url) }
+        } else {
+            return Err(Error::protocol("AIS.chat hat keine gültige Bildadresse geliefert"));
+        };
+        let resp = rb.send().await.map_err(net_err)?;
+        if !resp.status().is_success() {
+            return Err(status_error(resp, "Bild laden").await);
+        }
+        let mime = resp.headers().get("content-type").and_then(|c| c.to_str().ok()).map(|c| c.split(';').next().unwrap_or("").trim().to_string()).filter(|c| c.starts_with("image/")).unwrap_or_else(|| "image/png".into());
+        let bytes = crate::http::read_bytes_capped(resp, IMAGE_CAP, "Das Bild").await?;
+        Ok((bytes, mime))
+    }
 }
 
 /// The value of a plain (non-streaming) server action response.
@@ -630,6 +662,7 @@ impl Backend for AisChat {
                                 title: s("name").or_else(|| s("title")).unwrap_or_else(|| "Ohne Titel".into()),
                                 updated_at: s("updatedAt").or_else(|| s("createdAt")),
                                 persona,
+                                kind: s("type").and_then(|t| ConversationKind::parse(&t)).unwrap_or_default(),
                             })
                         })
                         .collect()
@@ -688,6 +721,43 @@ impl Backend for AisChat {
                 return Err(e);
             }
             Ok(out)
+        })
+    }
+
+    fn image_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>>> {
+        Box::pin(async move {
+            // The page redirects to "/" when the state has image generation switched off.
+            let html = match self.page_at("/image-generation").await {
+                Ok(h) => h,
+                Err(e) if e.kind == aiscraft_core::ErrorKind::Auth => return Err(e),
+                Err(_) => return Ok(Vec::new()),
+            };
+            Ok(scrape::page_models(&scrape::rsc_payload(&html))
+                .into_iter()
+                .filter(|m| m.kind == "image")
+                .map(|m| ModelInfo { id: m.id, name: m.display_name, description: (!m.description.is_empty()).then_some(m.description), vision: m.vision, context_window: None })
+                .collect())
+        })
+    }
+
+    fn generate_image(&self, req: ImageRequest) -> BoxFuture<'_, Result<ImageResult>> {
+        Box::pin(async move {
+            if req.prompt.trim().is_empty() {
+                return Err(Error::invalid("Beschreibe, was das Bild zeigen soll"));
+            }
+            let aspect = if aiscraft_core::ASPECT_RATIOS.iter().any(|(k, _)| *k == req.aspect_ratio) { req.aspect_ratio.as_str() } else { "quadratic" };
+            let mut arg = json!({"prompt": req.prompt.trim(), "modelId": req.model, "options": {"aspectRatio": aspect}, "inputFileIds": []});
+            if let (Some(id), Some(o)) = (&req.conversation_id, arg.as_object_mut()) {
+                o.insert("conversationId".into(), json!(id));
+            }
+            let v = server_result(self.call_action("generateImageAction", &self.pages_for("generateImageAction"), &[arg]).await?)?;
+            let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
+            let url = s("imageUrl").filter(|u| !u.is_empty()).ok_or_else(|| Error::protocol("AIS.chat hat kein Bild geliefert"))?;
+            let (bytes, mime) = self.fetch_image(&url).await?;
+            if bytes.is_empty() {
+                return Err(Error::protocol("AIS.chat hat ein leeres Bild geliefert"));
+            }
+            Ok(ImageResult { bytes, mime, conversation_id: s("conversationId"), message_id: s("assistantMessageId") })
         })
     }
 
@@ -1001,5 +1071,15 @@ mod tests {
         assert_eq!(text, "Gern.");
         let last = posted.lock().unwrap().last().cloned().unwrap();
         assert!(last.contains(r#""characterId":"c1""#) && last.contains("Seid gegrüßt!"), "{last}");
+    }
+
+    #[tokio::test]
+    async fn image_addresses_are_checked() {
+        let ais = AisChat::new(ais_config("http://127.0.0.1:9".into()), "http://127.0.0.1:9".into(), Some("tok".into()), std::sync::Arc::new(|_, _| {})).unwrap();
+        let (bytes, mime) = ais.fetch_image("data:image/webp;base64,AAEC").await.unwrap();
+        assert_eq!((bytes, mime.as_str()), (vec![0, 1, 2], "image/webp"));
+        assert!(ais.fetch_image("data:image/png;base64,***").await.is_err());
+        assert!(ais.fetch_image("file:///etc/passwd").await.is_err(), "only http(s), paths and data URLs");
+        assert!(ais.fetch_image("//evil.example/x.png").await.is_err());
     }
 }

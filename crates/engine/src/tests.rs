@@ -670,6 +670,12 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                         ("200 OK", "application/json", r#"{"conversations":[{"id":"r2","name":"Mit Goethe","characterId":"c1","type":"chat"}]}"#.to_string())
                     } else if req.starts_with("GET /d/r2") || req.starts_with("GET /characters/d/c1/r2") {
                         ("200 OK", "text/html", page("none", r#"5:{"messages":[{"id":"u9","role":"user","content":"Hallo Goethe"},{"id":"a9","role":"assistant","content":"Seid gegrüßt!"}]}"#))
+                    } else if req.starts_with("GET /image-generation ") {
+                        ("200 OK", "text/html", page("images", r#"4:{"models":[{"id":"m-img","name":"img","displayName":"Bildmodell","priceMetadata":{"type":"image"}}]}"#))
+                    } else if req.starts_with("GET /_next/static/chunks/images.js") {
+                        ("200 OK", "application/javascript", reference(0x44, "generateImageAction"))
+                    } else if req.starts_with("GET /files/bild.png") {
+                        ("200 OK", "image/png", "\u{89}PNG-bytes".to_string())
                     } else if req.starts_with("GET /assistants ") {
                         ("200 OK", "text/html", page("assistants", "1:{}"))
                     } else if req.starts_with("GET /characters ") {
@@ -694,6 +700,12 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                             flight(r#"[{"id":"c1","name":"Goethe","userId":"x","description":"Dichter aus Weimar","initialMessage":"Seid gegrüßt!","modelId":"m-other"}]"#)
                         } else if action == id(0x33) {
                             flight(r#"[{"id":"l1","name":"Photosynthese erforschen","userId":"me","studentExercise":"Finde heraus, was Pflanzen brauchen."}]"#)
+                        } else if action == id(0x44) {
+                            if req.contains("Fehler bitte") {
+                                flight(r#"{"success":false,"error":{"name":"TokenPointsExceededError","message":"leer"}}"#)
+                            } else {
+                                flight(r#"{"success":true,"value":{"imageUrl":"/files/bild.png","conversationId":"srv-img","fileId":"file_1","assistantMessageId":"am1","userMessageId":"um1"}}"#)
+                            }
                         } else if action == id(0x7f) {
                             static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                             let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -773,6 +785,64 @@ fn ais_chat_personas() {
     // Backends without personas say so.
     let (other, id) = engine_with_backend();
     assert_eq!(other.call("persona.refresh", json!({"backend": id})).unwrap_err().kind, aiscraft_core::ErrorKind::Unsupported);
+}
+
+/// Image chats: the AIS.chat image models appear, a prompt becomes an image attachment that can
+/// be saved, the next prompt continues the server's image chat, errors land on the answer.
+#[test]
+fn ais_chat_image_generation() {
+    let (engine, posted) = ais_engine();
+    let s = engine.state();
+    let b = s.backend("ais-chat").unwrap();
+    assert_eq!(b.image_models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["m-img"]);
+    assert!(!b.models.iter().any(|m| m.id == "m-img"), "image models are not text models");
+
+    engine.call("chat.new_image", json!({})).unwrap();
+    assert_eq!(engine.state().selection.kind, aiscraft_core::ConversationKind::Image);
+    assert_eq!(engine.state().selection.model_id, "m-img");
+    assert!(engine.call("chat.set_aspect", json!({"ratio": "rund"})).is_err());
+    engine.call("chat.set_aspect", json!({"ratio": "landscape"})).unwrap();
+    let out = engine.call("chat.send", json!({"text": "Ein Fuchs im Schnee"})).unwrap();
+    assert_eq!(out["images"], 1);
+    let s = engine.state();
+    let conv = s.conversation(s.current.as_deref().unwrap()).unwrap().clone();
+    assert_eq!(conv.kind, aiscraft_core::ConversationKind::Image);
+    assert_eq!(conv.remote_id.as_deref(), Some("srv-img"), "the server picked its own id");
+    let answer = s.messages.last().unwrap();
+    let img = &answer.attachments[0];
+    assert_eq!(img.mime, "image/png");
+    assert_eq!(std::fs::read(img.local_path.as_ref().unwrap()).unwrap(), "\u{89}PNG-bytes".as_bytes());
+    let first = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(first.contains(r#""aspectRatio":"landscape""#) && first.contains(r#""modelId":"m-img""#) && !first.contains("conversationId"), "{first}");
+
+    let target = std::env::temp_dir().join(format!("aiscraft-bild-{}.png", std::process::id()));
+    engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string()})).unwrap();
+    assert_eq!(std::fs::read(&target).unwrap().len(), img.size as usize);
+    let _ = std::fs::remove_file(&target);
+    assert!(engine.call("chat.save_image", json!({"message_id": answer.id, "index": 3, "path": "/tmp/x.png"})).is_err());
+
+    // The next prompt continues the server's image chat; regenerate draws again.
+    engine.call("chat.send", json!({"text": "jetzt mit Mond", "aspect_ratio": "portrait"})).unwrap();
+    let second = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(second.contains(r#""conversationId":"srv-img""#) && second.contains("portrait"), "{second}");
+    engine.call("chat.regenerate", json!({})).unwrap();
+    assert_eq!(engine.state().messages.len(), 4);
+    assert!(engine.call("chat.send", json!({"text": "x", "files": ["/etc/hostname"]})).is_err(), "no input images yet");
+
+    // A refusal from the server is shown on the answer.
+    assert!(engine.call("chat.send", json!({"text": "Fehler bitte"})).is_err());
+    assert!(engine.state().messages.last().unwrap().error.as_deref().unwrap_or("").contains("Kontingent"));
+
+    // Text models stay out of image chats and the other way round.
+    assert!(engine.call("chat.select_model", json!({"backend": "ais-chat", "model": "m-uuid"})).is_err());
+    engine.call("chat.new", json!({})).unwrap();
+    assert_eq!(engine.state().selection.kind, aiscraft_core::ConversationKind::Chat);
+    engine.call("chat.select_model", json!({"backend": "ais-chat", "model": "m-img"})).unwrap();
+    assert_eq!(engine.state().selection.kind, aiscraft_core::ConversationKind::Image, "picking an image model in a new chat makes it an image chat");
+    // Backends without image models refuse image chats.
+    let (other, id) = engine_with_backend();
+    assert_eq!(other.call("chat.new_image", json!({"backend": id})).unwrap_err().kind, aiscraft_core::ErrorKind::Unsupported);
+    assert!(other.call("chat.new", json!({"kind": "video"})).is_err());
 }
 
 /// Rule: every command has a functional test (beyond the panic hunt). A new command without one

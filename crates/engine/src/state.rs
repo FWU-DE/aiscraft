@@ -104,6 +104,12 @@ pub struct Selection {
     /// The assistant, character or learning scenario of the open (or next) chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<aiscraft_core::Persona>,
+    /// A text chat or an image chat.
+    #[serde(default, skip_serializing_if = "aiscraft_core::ConversationKind::is_chat")]
+    pub kind: aiscraft_core::ConversationKind,
+    /// Aspect ratio for the next image (`quadratic`, `landscape`, `portrait`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub aspect_ratio: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +125,9 @@ pub struct BackendView {
     /// Assistants, characters and learning scenarios (AIS.chat), once loaded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personas: Option<Vec<aiscraft_core::PersonaInfo>>,
+    /// Models that draw images (AIS.chat image generation), if the backend has any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub image_models: Vec<ModelInfo>,
     /// Why the last attempt to load them failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personas_error: Option<String>,
@@ -225,6 +234,9 @@ impl State {
         self.backend(backend)?.personas.as_ref()?.iter().find(|x| x.kind == p.kind && x.id == p.id)
     }
     pub fn model_name(&self, backend: &str, model: &str) -> String {
-        self.backend(backend).and_then(|b| b.models.iter().find(|m| m.id == model)).map(|m| m.name.clone()).unwrap_or_else(|| model.to_string())
+        self.backend(backend)
+            .and_then(|b| b.models.iter().chain(&b.image_models).find(|m| m.id == model))
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| model.to_string())
     }
 }

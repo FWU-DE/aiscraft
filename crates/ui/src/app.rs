@@ -49,6 +49,8 @@ pub struct AisCraftApp {
     pub(crate) manual: Option<crate::manual::ManualView>,
     /// Text from a finished dictation, picked up by the composer.
     pub(crate) dictated: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// Generated images by file, decoded once (`None`: could not be read).
+    pub(crate) images: std::collections::HashMap<String, Option<egui::TextureHandle>>,
 }
 
 pub(crate) const CONTENT_WIDTH: f32 = 760.0;
@@ -89,7 +91,32 @@ impl AisCraftApp {
             attach_artifact: false,
             dictated: Default::default(),
             manual: None,
+            images: Default::default(),
         }
+    }
+
+    /// The texture of an image file (at most 25 MB, 8192 px a side), loaded on first use.
+    pub(crate) fn image_texture(&mut self, ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
+        if let Some(t) = self.images.get(path) {
+            return t.clone();
+        }
+        let tex = std::fs::metadata(path)
+            .ok()
+            .filter(|m| m.len() <= 25 * 1024 * 1024)
+            .and_then(|_| std::fs::read(path).ok())
+            .and_then(|bytes| image::load_from_memory(&bytes).ok())
+            .filter(|img| img.width() <= 8192 && img.height() <= 8192)
+            .map(|img| {
+                let rgba = img.to_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                ctx.load_texture(path, egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()), egui::TextureOptions::LINEAR)
+            });
+        // Keep the cache small: generated images are few, but never let it grow without bound.
+        if self.images.len() > 64 {
+            self.images.clear();
+        }
+        self.images.insert(path.to_string(), tex.clone());
+        tex
     }
 
     pub(crate) fn run(&self, cmd: &str, params: Value) {

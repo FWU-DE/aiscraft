@@ -7,7 +7,7 @@
 //!
 //! `--demo` starts a local OpenAI-compatible server that streams a Markdown answer, adds it as a
 //! backend and fills projects, notes and a few chats. `--demo-ais` adds a local stand-in for
-//! AIS.chat (assistants, characters, learning scenarios). `--theme light|dark|omarchy`.
+//! AIS.chat (assistants, characters, learning scenarios, image generation). `--theme light|dark|omarchy`.
 //! The engine runs in memory; nothing touches your real data.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
@@ -68,12 +68,30 @@ fn demo_server(engine: &Engine) -> String {
 /// learning scenarios and answers chats. Nothing goes to the real app.
 fn demo_ais(engine: &Engine) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // A drawn "generated image": sky, sun, hills.
+    let png: std::sync::Arc<Vec<u8>> = {
+        let img = image::RgbImage::from_fn(768, 512, |x, y| {
+            let (fx, fy) = (x as f32, y as f32);
+            let hill = 360.0 + 40.0 * (fx / 90.0).sin();
+            if (fx - 560.0).hypot(fy - 130.0) < 60.0 {
+                image::Rgb([255, 214, 90])
+            } else if fy > hill {
+                image::Rgb([60, (140.0 + (fy - hill) * 0.3) as u8, 70])
+            } else {
+                image::Rgb([(120.0 + fy * 0.15) as u8, (170.0 + fy * 0.1) as u8, 235])
+            }
+        });
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        std::sync::Arc::new(out.into_inner())
+    };
     let base = engine.block_on(async {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else { return };
+                let png = png.clone();
                 tokio::spawn(async move {
                     let mut buf = Vec::new();
                     let mut chunk = [0u8; 8192];
@@ -92,6 +110,11 @@ fn demo_ais(engine: &Engine) {
                         }
                     }
                     let req = String::from_utf8_lossy(&buf).to_string();
+                    if req.starts_with("GET /files/demo.png") {
+                        let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: image/png\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", png.len()).as_bytes()).await;
+                        let _ = sock.write_all(&png).await;
+                        return;
+                    }
                     let id = |n: u8| format!("{n:02x}").repeat(21);
                     let page = |chunk: &str, row: &str| format!(r#"<script src="/_next/static/chunks/{chunk}.js"></script><script>self.__next_f.push([1,{}])</script>"#, serde_json::to_string(&format!("{row}\n")).unwrap());
                     let reference = |n: u8, name: &str| format!(r#"(0,a.createServerReference)("{}",a.callServer,void 0,a.findSourceMapURL,"{name}");"#, id(n));
@@ -102,6 +125,12 @@ fn demo_ais(engine: &Engine) {
                         ("application/json", r#"{"user":{"id":"me","firstName":"Ada","lastName":"Lehrerin","school":{"name":"Gesamtschule Nord"}},"expires":"2030-01-01"}"#.to_string())
                     } else if req.starts_with("GET /api/conversations") {
                         ("application/json", r#"{"conversations":[]}"#.to_string())
+                    } else if req.starts_with("GET /image-generation ") {
+                        ("text/html", page("images", models))
+                    } else if req.starts_with("GET /_next/static/chunks/images.js") {
+                        ("application/javascript", reference(0x44, "generateImageAction"))
+                    } else if req.starts_with("POST / ") && action == id(0x44) {
+                        ("text/x-component", flight(r#"{"success":true,"value":{"imageUrl":"/files/demo.png","conversationId":"srv-img","fileId":"file_1","assistantMessageId":"am1","userMessageId":"um1"}}"#))
                     } else if req.starts_with("GET /assistants ") {
                         ("text/html", page("assistants", "1:{}"))
                     } else if req.starts_with("GET /characters ") {
