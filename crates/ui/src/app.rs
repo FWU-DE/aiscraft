@@ -40,10 +40,16 @@ pub struct AisCraftApp {
     pub(crate) focus_composer: bool,
     pub(crate) focus_search: bool,
     pub(crate) remote_open: bool,
-    /// The personas section asked for its list already (while open).
-    pub(crate) personas_open: bool,
-    /// Open the personas section on the next frame (control channel `ui.show personas`).
-    pub(crate) show_personas: bool,
+    /// Backends whose assistants, characters and scenarios were asked for already.
+    pub(crate) personas_requested: std::collections::HashSet<String>,
+    /// The "Entdecken" page, when open (replaces the chat column).
+    pub(crate) explore: Option<crate::explore::ExploreView>,
+    /// Persona pictures asked for already, by picture key.
+    pub(crate) pictures_requested: std::collections::HashSet<String>,
+    /// Small persona textures by file (`None`: could not be read).
+    pub(crate) persona_textures: std::collections::HashMap<String, Option<egui::TextureHandle>>,
+    /// Pictures still to decode this frame, so a full grid never stalls one frame.
+    pub(crate) decode_budget: usize,
     last_current: Option<String>,
     pub(crate) artifact: Option<crate::artifact_panel::ArtifactView>,
     /// Send the open artifact as context with the next message.
@@ -89,8 +95,11 @@ impl AisCraftApp {
             focus_composer: true,
             focus_search: false,
             remote_open: false,
-            personas_open: false,
-            show_personas: false,
+            personas_requested: Default::default(),
+            explore: None,
+            pictures_requested: Default::default(),
+            persona_textures: Default::default(),
+            decode_budget: 0,
             last_current: None,
             artifact: None,
             attach_artifact: false,
@@ -160,6 +169,9 @@ impl AisCraftApp {
         if modal_open {
             return;
         }
+        if self.explore_keys(ctx) {
+            return;
+        }
         if pressed(sc(Modifiers::COMMAND, Key::N)) {
             self.new_chat();
         }
@@ -186,6 +198,7 @@ impl AisCraftApp {
     }
 
     pub(crate) fn new_chat(&mut self) {
+        self.explore = None;
         self.run("chat.new", json!({}));
         self.composer.clear();
         self.pending_files.clear();
@@ -321,8 +334,31 @@ impl AisCraftApp {
                             true
                         }
                         "personas" => {
-                            self.show_personas = true;
+                            self.open_explore();
                             true
+                        }
+                        // "persona:<kind>:<id>": the page with one entry's details.
+                        w if w.starts_with("persona:") => {
+                            let mut parts = w.splitn(3, ':').skip(1);
+                            let kind = parts.next().and_then(aiscraft_core::PersonaKind::parse);
+                            let id = parts.next().unwrap_or("").to_string();
+                            let backend = self
+                                .state
+                                .backends
+                                .iter()
+                                .find(|b| b.personas.as_ref().is_some_and(|l| l.iter().any(|p| Some(p.kind) == kind && p.id == id)))
+                                .map(|b| b.config.id.clone());
+                            match (kind, backend) {
+                                (Some(kind), Some(backend)) => {
+                                    self.open_explore();
+                                    if let Some(v) = self.explore.as_mut() {
+                                        v.focus_search = false;
+                                        v.detail = Some(crate::explore::Pick { backend, kind, id });
+                                    }
+                                    true
+                                }
+                                _ => false,
+                            }
                         }
                         "none" => {
                             self.dialog = None;
@@ -354,6 +390,7 @@ impl eframe::App for AisCraftApp {
             self.last_current = self.state.current.clone();
             self.editing = None;
             self.focus_composer = true;
+            self.explore = None;
         }
         self.control_requests(&ctx);
         self.sync_theme(&ctx);
@@ -388,7 +425,13 @@ impl eframe::App for AisCraftApp {
             self.attach_artifact = false;
         }
 
-        egui::CentralPanel::default().frame(Frame::new().fill(t.bg)).show(ui, |ui| self.conversation(ui));
+        egui::CentralPanel::default().frame(Frame::new().fill(t.bg)).show(ui, |ui| {
+            if self.explore.is_some() {
+                self.explore_page(ui);
+            } else {
+                self.conversation(ui);
+            }
+        });
 
         self.toasts(&ctx);
         self.manual_ui(&ctx);

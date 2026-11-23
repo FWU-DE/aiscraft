@@ -8,7 +8,9 @@
 //! `--demo` starts a local OpenAI-compatible server that streams a Markdown answer, adds it as a
 //! backend and fills projects, notes and a few chats. `--demo-ais` adds a local stand-in for
 //! AIS.chat (assistants, characters, learning scenarios, image generation, a plot answer for
-//! prompts with "Parabel"). `--theme light|dark|omarchy`.
+//! prompts with "Parabel"), with a catalogue of placeholder portraits for the "Entdecken" page
+//! (`["ui.show", {"what": "personas"}]`, `{"what": "persona:character:c1"}` for one entry;
+//! `["ui.wait", {"ms": 1500}]` lets the pictures arrive). `--theme light|dark|omarchy`.
 //! The engine runs in memory; nothing touches your real data.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
@@ -67,6 +69,140 @@ fn demo_server(engine: &Engine) -> String {
     })
 }
 
+/// A placeholder portrait for the demo: a soft gradient with a head-and-shoulders silhouette.
+fn demo_avatar(seed: u32) -> Vec<u8> {
+    let hue = (seed.wrapping_mul(47) % 360) as f32;
+    let rgb = |h: f32, s: f32, v: f32| -> [u8; 3] {
+        let c = v * s;
+        let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+        let (r, g, b) = match (h / 60.0) as u32 {
+            0 => (c, x, 0.0),
+            1 => (x, c, 0.0),
+            2 => (0.0, c, x),
+            3 => (0.0, x, c),
+            4 => (x, 0.0, c),
+            _ => (c, 0.0, x),
+        };
+        let m = v - c;
+        [((r + m) * 255.0) as u8, ((g + m) * 255.0) as u8, ((b + m) * 255.0) as u8]
+    };
+    let img = image::RgbImage::from_fn(320, 320, |x, y| {
+        let (fx, fy) = (x as f32, y as f32);
+        let head = (fx - 160.0).hypot((fy - 130.0) * 0.9) < 62.0;
+        let body = fy > 215.0 && ((fx - 160.0) / 120.0).powi(2) + ((fy - 330.0) / 120.0).powi(2) < 1.0;
+        if head || body {
+            image::Rgb(rgb((hue + 20.0) % 360.0, 0.35, 0.35 + 0.1 * (seed % 3) as f32))
+        } else {
+            image::Rgb(rgb(hue, 0.35 + fy / 1600.0, 0.95 - fy / 1100.0))
+        }
+    });
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+/// The demo catalogue: (kind, id, name, description, own, favourite, with picture, extra fields).
+fn demo_personas() -> [Value; 3] {
+    let entry = |id: &str, name: &str, desc: &str, own: bool, fav: bool, pic: bool, extra: Value| {
+        let mut v = json!({"id": id, "name": name, "description": desc, "userId": if own { "me" } else { "x" }, "isFavorite": fav});
+        if pic {
+            v["maybeSignedPictureUrl"] = json!(format!("https://bilder.demo.invalid/avatars/{id}.png?X-Amz-Signature=demo"));
+        }
+        if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+            o.extend(e.clone());
+        }
+        v
+    };
+    [
+        json!([
+            entry(
+                "a1",
+                "Mathe-Coach",
+                "Übt Bruchrechnung Schritt für Schritt, gibt Tipps statt Lösungen und passt das Tempo an.",
+                true,
+                true,
+                true,
+                json!({"isWebSearchEnabled": false, "promptSuggestions": ["Erkläre 3/4 + 1/8", "Gib mir eine Übungsaufgabe", "Prüfe meinen Lösungsweg"]})
+            ),
+            entry(
+                "a2",
+                "Elternbrief-Helfer",
+                "Formuliert freundliche, klare Elternbriefe in einfacher Sprache und auf Wunsch mehrsprachig.",
+                false,
+                false,
+                true,
+                json!({})
+            ),
+            entry(
+                "a3",
+                "Korrekturhilfe Deutsch",
+                "Gibt Rückmeldung zu Aufsätzen nach dem Bewertungsraster der Fachschaft: Inhalt, Aufbau, Sprache.",
+                false,
+                true,
+                true,
+                json!({})
+            ),
+            entry(
+                "a4",
+                "Arbeitsblatt-Generator",
+                "Erstellt differenzierte Arbeitsblätter in drei Niveaustufen zu einem Thema deiner Wahl.",
+                false,
+                false,
+                false,
+                json!({})
+            ),
+            entry("a5", "Inklusions-Berater", "Hilft beim Anpassen von Material für Lernende mit Förderbedarf.", false, false, true, json!({})),
+            entry("a6", "Stundenplaner", "Plant Unterrichtsstunden mit Einstieg, Erarbeitung und Sicherung.", true, false, false, json!({}))
+        ]),
+        json!([
+            entry(
+                "c1",
+                "Johann Wolfgang von Goethe",
+                "Dichter und Naturforscher aus Weimar. Erzählt von Faust, seiner Farbenlehre und der Reise nach Italien.",
+                false,
+                true,
+                true,
+                json!({"isWebSearchEnabled": true, "initialMessage": "Seid gegrüßt! Was möchtet Ihr über mein Leben und Werk erfahren?", "promptSuggestions": ["Wie entstand der Faust?", "Was hat Sie in Italien beeindruckt?"]})
+            ),
+            entry(
+                "c2",
+                "Marie Curie",
+                "Physikerin und Chemikerin, zweifache Nobelpreisträgerin. Spricht über Radioaktivität und ihren Weg in die Wissenschaft.",
+                true,
+                false,
+                true,
+                json!({"initialMessage": "Bonjour! Fragt mich nach Polonium, Radium oder dem Labor in Paris."})
+            ),
+            entry("c3", "Alexander von Humboldt", "Forschungsreisender, vermaß die Anden und den Orinoco.", false, false, true, json!({})),
+            entry("c4", "Sophie Scholl", "Studentin und Widerstandskämpferin der Weißen Rose.", false, false, false, json!({})),
+            entry("c5", "Albert Einstein", "Erklärt Relativität mit Zügen, Uhren und Lichtstrahlen.", false, false, true, json!({})),
+            entry("c6", "Hildegard von Bingen", "Äbtissin, Komponistin und Heilkundige des Mittelalters.", false, false, false, json!({}))
+        ]),
+        json!([
+            entry(
+                "l1",
+                "Photosynthese erforschen",
+                "Klasse 7, Biologie. Die Lernenden finden im Gespräch heraus, was Pflanzen zum Wachsen brauchen.",
+                true,
+                true,
+                true,
+                json!({"studentExercise": "Finde heraus, was eine Pflanze zum Wachsen braucht, und erkläre es in drei Sätzen."})
+            ),
+            entry(
+                "l2",
+                "Bewerbungsgespräch üben",
+                "Klasse 9, Berufsorientierung: ein Gespräch mit einer Personalerin, danach Rückmeldung.",
+                false,
+                false,
+                true,
+                json!({"studentExercise": "Stell dich vor und beantworte drei Fragen zu deinem Praktikumswunsch."})
+            ),
+            entry("l3", "Debatte: Tempolimit", "Pro und Contra mit Argumenten aus Umwelt, Sicherheit und Freiheit.", false, false, false, json!({})),
+            entry("l4", "Römisches Alltagsleben", "Klasse 6, Geschichte: Ein Tag in Pompeji, erzählt von einer Händlerin.", false, false, true, json!({}))
+        ]),
+    ]
+}
+
 /// A local stand-in for AIS.chat (`--demo-ais`): signs in, lists assistants, characters and
 /// learning scenarios and answers chats. Nothing goes to the real app.
 fn demo_ais(engine: &Engine) {
@@ -88,6 +224,7 @@ fn demo_ais(engine: &Engine) {
         img.write_to(&mut out, image::ImageFormat::Png).unwrap();
         std::sync::Arc::new(out.into_inner())
     };
+    let [assistants, characters, scenarios] = demo_personas().map(|v| std::sync::Arc::new(v.to_string()));
     let base = engine.block_on(async {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -95,6 +232,7 @@ fn demo_ais(engine: &Engine) {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else { return };
                 let png = png.clone();
+                let (assistants, characters, scenarios) = (assistants.clone(), characters.clone(), scenarios.clone());
                 tokio::spawn(async move {
                     let mut buf = Vec::new();
                     let mut chunk = [0u8; 8192];
@@ -116,6 +254,13 @@ fn demo_ais(engine: &Engine) {
                     if req.starts_with("GET /files/demo.png") {
                         let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: image/png\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", png.len()).as_bytes()).await;
                         let _ = sock.write_all(&png).await;
+                        return;
+                    }
+                    if let Some(rest) = req.strip_prefix("GET /avatars/") {
+                        let seed = rest.bytes().take_while(|b| *b != b'.').fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+                        let pic = demo_avatar(seed);
+                        let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: image/png\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", pic.len()).as_bytes()).await;
+                        let _ = sock.write_all(&pic).await;
                         return;
                     }
                     let id = |n: u8| format!("{n:02x}").repeat(21);
@@ -151,11 +296,11 @@ fn demo_ais(engine: &Engine) {
                     } else if req.starts_with("GET /_next/static/chunks/scenarios.js") {
                         ("application/javascript", reference(0x33, "getLearningScenariosByFilterAction"))
                     } else if req.starts_with("POST / ") && action == id(0x11) {
-                        ("text/x-component", flight(r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung Schritt für Schritt","promptSuggestions":["Erkläre 3/4 + 1/8","Gib mir eine Übungsaufgabe"]},{"id":"a2","name":"Elternbrief-Helfer","userId":"x","description":"Formuliert freundliche Elternbriefe"}]"#))
+                        ("text/x-component", flight(&assistants))
                     } else if req.starts_with("POST / ") && action == id(0x22) {
-                        ("text/x-component", flight(r#"[{"id":"c1","name":"Johann Wolfgang von Goethe","userId":"x","description":"Dichter und Naturforscher aus Weimar","initialMessage":"Seid gegrüßt! Was möchtet Ihr über mein Leben und Werk erfahren?"},{"id":"c2","name":"Marie Curie","userId":"me","description":"Physikerin und Chemikerin"}]"#))
+                        ("text/x-component", flight(&characters))
                     } else if req.starts_with("POST / ") && action == id(0x33) {
-                        ("text/x-component", flight(r#"[{"id":"l1","name":"Photosynthese erforschen","userId":"me","description":"Klasse 7, Biologie","studentExercise":"Finde heraus, was eine Pflanze zum Wachsen braucht, und erkläre es in drei Sätzen."}]"#))
+                        ("text/x-component", flight(&scenarios))
                     } else if req.starts_with("POST / ") && action == id(0x7f) && req.contains("Parabel") {
                         // A create_plot answer, as AIS.chat streams it: activity, then text with the spec.
                         let activity = serde_json::to_string(&format!("\u{1e}{}", json!({"type": "ai_activity", "steps": [
@@ -179,6 +324,7 @@ fn demo_ais(engine: &Engine) {
         format!("http://{addr}")
     });
     engine.call("backend.update", json!({"id": "ais-chat", "base_url": base})).unwrap();
+    engine.set_picture_origin(Some(&base)).unwrap();
     engine.call("backend.login", json!({"id": "ais-chat", "secret": "demo"})).unwrap();
     engine.call("chat.select_model", json!({"backend": "ais-chat", "model": "m-gpt"})).unwrap();
     engine.call("chat.new", json!({})).unwrap();
@@ -242,6 +388,13 @@ fn main() {
             harness.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
             harness.step();
             harness.event(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+        } else if cmd == "ui.wait" {
+            // Let background work (pictures, lists) land: {"ms": 1500}.
+            let ms = params["ms"].as_u64().unwrap_or(1000).min(30_000);
+            for _ in 0..ms / 50 {
+                harness.step();
+                std::thread::sleep(Duration::from_millis(50));
+            }
         } else if cmd == "ui.type" {
             harness.event(egui::Event::Text(params["text"].as_str().unwrap_or("").into()));
         } else if let Some(c) = cmd.strip_prefix("dispatch:") {

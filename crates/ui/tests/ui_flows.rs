@@ -68,3 +68,22 @@ fn handbook_opens_closes_and_follows_settings_links() {
     assert!(h.query_by_label("Erste Schritte").is_some(), "settings link opens the handbook");
     assert!(h.query_by_label_contains("Im Browser anmelden").is_some(), "at the sign-in chapter");
 }
+
+/// The "Entdecken" page opens from the palette, says what is missing when nobody is signed in to
+/// AIS.chat, and Esc brings the chat back.
+#[test]
+fn explore_page_opens_and_esc_returns() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let mut h = harness(&engine);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::K);
+    h.run_steps(4);
+    h.event(egui::Event::Text("entdecken".into()));
+    h.run_steps(4);
+    h.get_by_label("Assistenten, Figuren & Lernszenarien entdecken").click();
+    h.run_steps(6);
+    assert!(h.query_by_label("Nicht bei AIS.chat angemeldet").is_some(), "the page explains the missing sign-in");
+    assert!(h.query_by_label_contains("Zurück zum Chat").is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(6);
+    assert!(h.query_by_label("Nicht bei AIS.chat angemeldet").is_none(), "Esc closes the page");
+}

@@ -39,6 +39,15 @@ pub struct State {
     pub recording: bool,
     /// Vault entries, without their secrets.
     pub vault: Vec<crate::vault::EntryInfo>,
+    /// Pictures of assistants, characters and scenarios fetched so far, by
+    /// `backend/kind/id`: the cached file, or `None` when there is none (or it failed).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub persona_pictures: BTreeMap<String, Option<String>>,
+}
+
+/// The key of a persona's picture in [`State::persona_pictures`].
+pub fn picture_key(backend: &str, kind: aiscraft_core::PersonaKind, id: &str) -> String {
+    format!("{backend}/{}/{id}", kind.as_str())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

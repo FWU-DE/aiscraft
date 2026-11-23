@@ -7,6 +7,7 @@ mod bridge;
 mod chat;
 mod commands;
 mod files;
+mod pictures;
 mod proactive;
 mod schedules;
 mod secrets;
@@ -100,6 +101,12 @@ pub(crate) struct Inner {
     /// May this engine start a browser? Only the real app (with a data folder) does; engines in
     /// memory (tests, scripts) never open windows or start browsers.
     pub(crate) browser_allowed: bool,
+    /// Cached pictures of assistants, characters and scenarios (`<data>/personas`).
+    pub(crate) pictures_dir: PathBuf,
+    /// Engines in memory fetch pictures only from this local server (tests, the demo).
+    pub(crate) picture_origin: Mutex<Option<String>>,
+    /// Only the real app (with a data folder) fetches pictures from the network.
+    pub(crate) pictures_online: bool,
 }
 
 /// What commands and tasks hold. It never owns the runtime, so it can be dropped anywhere.
@@ -165,6 +172,13 @@ impl Engine {
                 .clone()
                 .map(|d| d.join("browser-profile"))
                 .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-browser-{}", std::process::id()))),
+            picture_origin: Mutex::new(None),
+            pictures_online: opts.data_dir.is_some(),
+            pictures_dir: opts
+                .data_dir
+                .clone()
+                .map(|d| d.join("personas"))
+                .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-personas-{}", std::process::id()))),
             attachments_dir: opts
                 .data_dir
                 .clone()
@@ -225,6 +239,34 @@ impl Engine {
                 ctx.notice(NoticeLevel::Error, e.message);
             }
         });
+    }
+
+    /// Run a command in the background without a notice on failure (pictures, prefetches).
+    pub fn dispatch_quiet(&self, id: &str, params: Value) {
+        let fut = self.ctx.run(id, params);
+        let id = id.to_string();
+        self.ctx.0.handle.spawn(async move {
+            if let Err(e) = fut.await {
+                log::debug!("{id}: {e}");
+            }
+        });
+    }
+
+    /// Fetch persona pictures from a local server instead of their own hosts, keeping path and
+    /// query (tests and the offscreen demo). Only `http://127.0.0.1:…` and `http://localhost:…`.
+    pub fn set_picture_origin(&self, origin: Option<&str>) -> Result<()> {
+        let origin = match origin {
+            Some(o) if o.starts_with("http://127.0.0.1:") || o.starts_with("http://localhost:") => Some(o.trim_end_matches('/').to_string()),
+            Some(_) => return Err(Error::invalid("Nur ein lokaler Server (http://127.0.0.1:…) ist erlaubt")),
+            None => None,
+        };
+        *self.ctx.0.picture_origin.lock().unwrap_or_else(PoisonError::into_inner) = origin;
+        Ok(())
+    }
+
+    /// Where persona pictures are cached.
+    pub fn pictures_dir(&self) -> PathBuf {
+        self.ctx.0.pictures_dir.clone()
     }
 
     /// Call `f` after every state change (the UI asks egui to repaint).

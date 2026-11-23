@@ -281,6 +281,15 @@ pub struct PersonaInfo {
     /// The model it was made for, if it says so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    /// Its picture: a signed, short-lived https URL (AIS.chat `maybeSignedPictureUrl`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture_url: Option<String>,
+    /// Marked as a favourite by the signed-in person.
+    #[serde(default)]
+    pub favorite: bool,
+    /// Web search as set in AIS.chat for this entity (`isWebSearchEnabled`), if it says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_search: Option<bool>,
 }
 
 /// A chat's path in AIS.chat's web app (`getConversationPath`).

@@ -7,6 +7,7 @@ pub mod browser_login;
 mod claude_cli;
 mod http;
 mod openai;
+pub mod picture;
 mod sse;
 
 use std::sync::Arc;
