@@ -102,6 +102,15 @@ fn send_streams_saves_searches_and_regenerates() {
 
     let md = engine.call("chat.export", json!({})).unwrap();
     assert!(md["text"].as_str().unwrap().contains("## Antwort\n\nHallo Welt"));
+    // To a file: replaced atomically (craft-atomic), no staging file left behind.
+    let dir = std::env::temp_dir().join(format!("aiscraft-export-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("chat.md");
+    std::fs::write(&out, "alt").unwrap();
+    engine.call("chat.export", json!({"path": out.display().to_string()})).unwrap();
+    assert!(std::fs::read_to_string(&out).unwrap().contains("Hallo Welt"));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
 
     // Reopen from the store.
     let conv = engine.state().current.clone().unwrap();

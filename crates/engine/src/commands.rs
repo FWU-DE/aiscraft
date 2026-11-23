@@ -699,7 +699,7 @@ async fn chat_export(c: Ctx, p: Value) -> Result<Value> {
         other => return Err(Error::invalid(format!("Unbekanntes Format {other}"))),
     };
     if let Some(path) = opt_str(&p, "path") {
-        std::fs::write(&path, &text).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+        craft_atomic::atomic_write(std::path::Path::new(&path), text.as_bytes()).map_err(|e| Error::storage(format!("{path}: {e}")))?;
         c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
         return Ok(json!({"path": path}));
     }
@@ -725,7 +725,7 @@ async fn save_document(c: Ctx, p: Value) -> Result<Value> {
     } else {
         doc.content.into_bytes()
     };
-    std::fs::write(&path, bytes).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+    craft_atomic::atomic_write(std::path::Path::new(&path), &bytes).map_err(|e| Error::storage(format!("{path}: {e}")))?;
     c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
     Ok(json!({"path": path}))
 }

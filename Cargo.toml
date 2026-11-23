@@ -16,6 +16,10 @@ aiscraft-backends = { path = "crates/backends" }
 aiscraft-engine = { path = "crates/engine" }
 aiscraft-ui = { path = "crates/ui" }
 
+# Shared Craft libraries (storytold/craft-libs, docs/craft-libs.md). One pin for all of them:
+# craft-libs has no release tag yet, so this is a full commit of main. Update every entry together.
+craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a" }
+
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -99,18 +99,13 @@ fn read_file(p: &PathBuf) -> Result<BTreeMap<String, String>> {
     }
 }
 
-fn write_file(p: &PathBuf, all: &BTreeMap<String, String>) -> Result<()> {
+fn write_file(p: &std::path::Path, all: &BTreeMap<String, String>) -> Result<()> {
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| Error::storage(e.to_string()))?;
     }
-    let tmp = p.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(all)?).map_err(|e| Error::storage(e.to_string()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)).map_err(|e| Error::storage(e.to_string()))?;
-    }
-    std::fs::rename(&tmp, p).map_err(|e| Error::storage(e.to_string()))
+    // Crash-safe replacement, staged with mode 0600 before any byte is written.
+    let private = craft_atomic::WriteOptions::default().with_new_file_permissions(craft_atomic::NewFilePermissions::Private);
+    private.atomic_write(p, &serde_json::to_vec_pretty(all)?).map_err(|e| Error::storage(format!("{}: {e}", p.display())))
 }
 
 #[cfg(test)]

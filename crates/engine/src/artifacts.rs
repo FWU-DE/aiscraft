@@ -272,7 +272,7 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
         }
     };
     if let Some(path) = opt_str(&p, "path") {
-        std::fs::write(&path, &out).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+        craft_atomic::atomic_write(std::path::Path::new(&path), out.as_bytes()).map_err(|e| Error::storage(format!("{path}: {e}")))?;
         c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
         return Ok(json!({"path": path}));
     }

@@ -75,12 +75,9 @@ fn start_control(engine: Engine, ui: mpsc::Sender<UiRequest>, port: u16, data_di
     std::fs::create_dir_all(&dir)?;
     let token = uuid::Uuid::new_v4().simple().to_string();
     let token_path = dir.join("control-token");
-    std::fs::write(&token_path, &token)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    // Mode 0600 from the first byte, replaced atomically: a reader never sees half a token.
+    let private = craft_atomic::WriteOptions::default().with_new_file_permissions(craft_atomic::NewFilePermissions::Private);
+    private.atomic_write(&token_path, token.as_bytes())?;
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     std::thread::Builder::new().name("aiscraft-control".into()).spawn(move || {
         for stream in listener.incoming().flatten() {
