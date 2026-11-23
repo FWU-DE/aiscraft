@@ -8,6 +8,8 @@ pub enum Role {
     System,
     User,
     Assistant,
+    /// The result of a tool call, answering an assistant message's `tool_calls`.
+    Tool,
 }
 
 impl Role {
@@ -16,6 +18,7 @@ impl Role {
             Role::System => "system",
             Role::User => "user",
             Role::Assistant => "assistant",
+            Role::Tool => "tool",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -23,6 +26,7 @@ impl Role {
             "system" => Some(Role::System),
             "user" => Some(Role::User),
             "assistant" => Some(Role::Assistant),
+            "tool" => Some(Role::Tool),
             _ => None,
         }
     }
@@ -96,6 +100,38 @@ pub struct Message {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    /// Tools the assistant asked to call in this message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<ToolCall>,
+    /// For `Role::Tool`: which call this answers and whether it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_result: Option<ToolResultInfo>,
+}
+
+/// A tool the model may call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+    /// What happened: "ok", "error", "denied" (set once it ran).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolResultInfo {
+    pub call_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub is_error: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -283,6 +319,8 @@ pub struct Capabilities {
     pub uploads: bool,
     pub system_prompt: bool,
     pub vision: bool,
+    /// The backend runs tools the client defines (tool calling).
+    pub tools: bool,
 }
 
 /// Everything a backend needs to answer the next turn.
@@ -293,6 +331,8 @@ pub struct ChatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
     pub messages: Vec<Message>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolSpec>,
 }
 
 /// One piece of a streamed answer.
@@ -305,6 +345,8 @@ pub enum StreamEvent {
     /// The full list of activity steps so far (replaces the previous list).
     Activity { steps: Vec<ActivityStep> },
     Usage { usage: Usage },
+    /// The model wants this tool called (arguments complete).
+    ToolCall { call: ToolCall },
     Done,
 }
 

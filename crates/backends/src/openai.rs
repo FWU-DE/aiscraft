@@ -37,8 +37,24 @@ pub fn body(req: &ChatRequest) -> Value {
         messages.push(json!({"role": "system", "content": s}));
     }
     for m in &req.messages {
-        if m.role == Role::Assistant && m.content.is_empty() {
-            continue;
+        match m.role {
+            Role::Tool => {
+                let id = m.tool_result.as_ref().map(|r| r.call_id.clone()).unwrap_or_default();
+                messages.push(json!({"role": "tool", "tool_call_id": id, "content": m.content}));
+                continue;
+            }
+            Role::Assistant if !m.tool_calls.is_empty() => {
+                let calls: Vec<Value> = m
+                    .tool_calls
+                    .iter()
+                    .map(|c| json!({"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments.to_string()}}))
+                    .collect();
+                let content = if m.content.is_empty() { Value::Null } else { json!(m.content) };
+                messages.push(json!({"role": "assistant", "content": content, "tool_calls": calls}));
+                continue;
+            }
+            Role::Assistant if m.content.is_empty() => continue,
+            _ => {}
         }
         let images: Vec<_> = m.attachments.iter().filter_map(|a| a.data_base64.as_ref().map(|d| (a, d))).collect();
         let text = crate::anthropic::text_with_files(m);
@@ -52,13 +68,43 @@ pub fn body(req: &ChatRequest) -> Value {
             messages.push(json!({"role": m.role.as_str(), "content": parts}));
         }
     }
-    json!({"model": req.model, "messages": messages, "stream": true, "stream_options": {"include_usage": true}})
+    let mut b = json!({"model": req.model, "messages": messages, "stream": true, "stream_options": {"include_usage": true}});
+    if !req.tools.is_empty()
+        && let Some(o) = b.as_object_mut()
+    {
+        let tools: Vec<Value> = req.tools.iter().map(|t| json!({"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.input_schema}})).collect();
+        o.insert("tools".into(), Value::Array(tools));
+    }
+    b
 }
 
-/// Map one streamed chunk to events.
+/// Tool calls being streamed, by index: (id, name, arguments so far).
+#[derive(Default)]
+pub struct ToolAcc {
+    calls: std::collections::BTreeMap<u64, (String, String, String)>,
+}
+
+impl ToolAcc {
+    fn take(&mut self) -> Vec<StreamEvent> {
+        std::mem::take(&mut self.calls)
+            .into_values()
+            .filter(|(_, name, _)| !name.is_empty())
+            .map(|(id, name, args)| StreamEvent::ToolCall { call: crate::tool_call(id, name, &args) })
+            .collect()
+    }
+}
+
+/// Map one streamed chunk to events (without tool-call state; for tests).
+#[cfg(test)]
 pub fn chunk_events(data: &str) -> Result<Vec<StreamEvent>> {
+    chunk_events_with(data, &mut ToolAcc::default())
+}
+
+pub fn chunk_events_with(data: &str, acc: &mut ToolAcc) -> Result<Vec<StreamEvent>> {
     if data.trim() == "[DONE]" {
-        return Ok(vec![StreamEvent::Done]);
+        let mut out = acc.take();
+        out.push(StreamEvent::Done);
+        return Ok(out);
     }
     let v: Value = serde_json::from_str(data).map_err(|e| Error::protocol(format!("Antwort nicht lesbar: {e}")))?;
     if let Some(err) = v.get("error") {
@@ -70,8 +116,26 @@ pub fn chunk_events(data: &str) -> Result<Vec<StreamEvent>> {
         if let Some(t) = choice.pointer("/delta/content").and_then(Value::as_str).filter(|t| !t.is_empty()) {
             out.push(StreamEvent::Delta { text: t.to_string() });
         }
-        if choice.get("finish_reason").and_then(Value::as_str) == Some("content_filter") {
-            out.push(StreamEvent::Delta { text: "\n\n_(Vom Inhaltsfilter des Servers beendet.)_".into() });
+        for tc in choice.pointer("/delta/tool_calls").and_then(Value::as_array).into_iter().flatten() {
+            let idx = tc.get("index").and_then(Value::as_u64).unwrap_or(0);
+            let entry = acc.calls.entry(idx).or_default();
+            if let Some(id) = tc.get("id").and_then(Value::as_str) {
+                entry.0 = id.to_string();
+            }
+            if let Some(n) = tc.pointer("/function/name").and_then(Value::as_str) {
+                entry.1.push_str(n);
+            }
+            if let Some(a) = tc.pointer("/function/arguments").and_then(Value::as_str) {
+                if entry.2.len() + a.len() > crate::MAX_TOOL_ARGS {
+                    return Err(Error::protocol("Werkzeugaufruf zu groß"));
+                }
+                entry.2.push_str(a);
+            }
+        }
+        match choice.get("finish_reason").and_then(Value::as_str) {
+            Some("content_filter") => out.push(StreamEvent::Delta { text: "\n\n_(Vom Inhaltsfilter des Servers beendet.)_".into() }),
+            Some("tool_calls") => out.extend(acc.take()),
+            _ => {}
         }
     }
     if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
@@ -87,7 +151,7 @@ impl Backend for OpenAi {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true }
+        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: true }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
@@ -128,7 +192,8 @@ impl Backend for OpenAi {
             if !resp.status().is_success() {
                 return Err(status_error(resp, "Chat").await);
             }
-            Ok(event_stream(resp, |ev| chunk_events(&ev.data)))
+            let mut acc = ToolAcc::default();
+            Ok(event_stream(resp, move |ev| chunk_events_with(&ev.data, &mut acc)))
         })
     }
 }
@@ -149,7 +214,7 @@ mod tests {
             attachments: vec![],
             activity: vec![],
             error: None,
-            usage: None,
+            usage: None, tool_calls: vec![], tool_result: None,
         }
     }
 
@@ -157,11 +222,23 @@ mod tests {
     fn body_has_system_and_images() {
         let mut u = msg(Role::User, "Was ist das?");
         u.attachments.push(Attachment { name: "a.png".into(), mime: "image/png".into(), data_base64: Some("QUJD".into()), ..Default::default() });
-        let req = ChatRequest { conversation_id: "c".into(), model: "gpt".into(), system: Some("Sei kurz".into()), messages: vec![u, msg(Role::Assistant, "")] };
+        let req = ChatRequest { conversation_id: "c".into(), model: "gpt".into(), system: Some("Sei kurz".into()), messages: vec![u, msg(Role::Assistant, "")], tools: vec![] };
         let b = body(&req);
         assert_eq!(b["messages"][0]["role"], "system");
         assert_eq!(b["messages"][1]["content"][1]["image_url"]["url"], "data:image/png;base64,QUJD");
         assert_eq!(b["messages"].as_array().unwrap().len(), 2, "empty assistant placeholder is dropped");
+    }
+
+    #[test]
+    fn streamed_tool_calls() {
+        let mut acc = ToolAcc::default();
+        let a = chunk_events_with(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"history_search","arguments":"{\"qu"}}]}}]}"#, &mut acc).unwrap();
+        assert!(a.is_empty());
+        chunk_events_with(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ery\":\"bio\"}"}}]}}]}"#, &mut acc).unwrap();
+        let done = chunk_events_with(r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#, &mut acc).unwrap();
+        let StreamEvent::ToolCall { call } = &done[0] else { panic!() };
+        assert_eq!(call.name, "history_search");
+        assert_eq!(call.arguments["query"], "bio");
     }
 
     #[test]

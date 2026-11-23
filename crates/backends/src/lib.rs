@@ -19,6 +19,21 @@ pub use anthropic::DEFAULT_MODEL as ANTHROPIC_DEFAULT_MODEL;
 
 pub type EventStream = BoxStream<'static, Result<StreamEvent>>;
 
+/// Upper bound for one tool call's streamed arguments.
+pub(crate) const MAX_TOOL_ARGS: usize = 2 * 1024 * 1024;
+
+/// A finished tool call. Arguments that are not a JSON object become `{"_invalid_json": raw}`, so
+/// the engine can answer the model with an error instead of running anything.
+pub(crate) fn tool_call(id: String, name: String, raw: &str) -> aiscraft_core::ToolCall {
+    let raw = if raw.trim().is_empty() { "{}" } else { raw };
+    let arguments = match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(v) if v.is_object() => v,
+        _ => serde_json::json!({ "_invalid_json": raw.chars().take(2000).collect::<String>() }),
+    };
+    let id = if id.is_empty() { format!("call_{}", name) } else { id };
+    aiscraft_core::ToolCall { id, name, arguments, outcome: None }
+}
+
 /// Called when a backend's secret changes on its own (AIS.chat renews the session cookie).
 pub type SecretSink = Arc<dyn Fn(&str, String) + Send + Sync>;
 

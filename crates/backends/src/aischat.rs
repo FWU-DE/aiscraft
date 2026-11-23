@@ -183,7 +183,7 @@ pub fn action_payload(req: &ChatRequest) -> Value {
     let messages: Vec<Value> = req
         .messages
         .iter()
-        .filter(|m| m.role != Role::System && !(m.role == Role::Assistant && m.content.is_empty()))
+        .filter(|m| m.role == Role::User || (m.role == Role::Assistant && !m.content.is_empty()))
         .map(|m| json!({"id": m.id, "role": m.role.as_str(), "content": m.content}))
         .collect();
     let file_ids: Vec<&str> =
@@ -343,7 +343,7 @@ impl Backend for AisChat {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: true, uploads: true, system_prompt: false, vision: true }
+        Capabilities { remote_history: true, uploads: true, system_prompt: false, vision: true, tools: false }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
@@ -518,11 +518,11 @@ mod tests {
             attachments: vec![Attachment { remote_id: Some("f1".into()), ..Default::default() }],
             activity: vec![],
             error: None,
-            usage: None,
+            usage: None, tool_calls: vec![], tool_result: None,
         };
         let a = Message { id: "a0".into(), role: Role::Assistant, content: String::new(), attachments: vec![], ..u.clone() };
         u.id = "u1".into();
-        let req = ChatRequest { conversation_id: "c1".into(), model: "uuid-m".into(), system: Some("ignored".into()), messages: vec![u, a] };
+        let req = ChatRequest { conversation_id: "c1".into(), model: "uuid-m".into(), system: Some("ignored".into()), messages: vec![u, a], tools: vec![] };
         let body = encode_action_args(&[action_payload(&req)]);
         assert_eq!(body, r#"[{"conversationId":"c1","fileIds":["f1"],"messages":[{"content":"$$5?","id":"u1","role":"user"}],"modelId":"uuid-m"}]"#);
     }
@@ -595,9 +595,9 @@ mod tests {
             attachments: vec![],
             activity: vec![],
             error: None,
-            usage: None,
+            usage: None, tool_calls: vec![], tool_result: None,
         };
-        let mut s = backend.chat(ChatRequest { conversation_id: "c".into(), model: "m".into(), system: None, messages: vec![msg] }).await.unwrap();
+        let mut s = backend.chat(ChatRequest { conversation_id: "c".into(), model: "m".into(), system: None, messages: vec![msg], tools: vec![] }).await.unwrap();
         let mut evs = Vec::new();
         while let Some(e) = s.next().await {
             evs.push(e.unwrap());

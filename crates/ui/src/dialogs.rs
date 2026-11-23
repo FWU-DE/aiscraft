@@ -9,6 +9,7 @@ use crate::widgets::{accent_button, card, muted, small_muted, status_dot};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     Backends,
+    Connectors,
     Memory,
     Appearance,
     About,
@@ -20,6 +21,7 @@ pub enum Dialog {
     Login { backend_id: String, secret: String, sent: bool },
     AddBackend { preset: usize, name: String, base_url: String, secret: String },
     Settings { tab: SettingsTab, new_note: String },
+    AddConnector { name: String, command: String, env: String, url: String, headers: String, http: bool },
     Project { id: Option<String>, name: String, instructions: String },
     Rename { id: String, title: String },
     RenameArtifact { id: String, title: String },
@@ -206,6 +208,52 @@ impl AisCraftApp {
                 });
                 keep
             }
+            Dialog::AddConnector { name, command, env, url, headers, http } => {
+                ui.heading("Konnektor hinzufügen");
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.selectable_value(http, false, "Programm (lokal)");
+                    ui.selectable_value(http, true, "Adresse (entfernt)");
+                });
+                egui::Grid::new("add-conn").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+                    ui.label("Name");
+                    ui.add(egui::TextEdit::singleline(name).hint_text("z. B. Dateien").desired_width(320.0));
+                    ui.end_row();
+                    if *http {
+                        ui.label("URL");
+                        ui.add(egui::TextEdit::singleline(url).hint_text("https://…/mcp").desired_width(320.0));
+                        ui.end_row();
+                        ui.label("Header");
+                        ui.add(egui::TextEdit::multiline(headers).hint_text("Authorization: Bearer …").desired_rows(2).desired_width(320.0));
+                        ui.end_row();
+                    } else {
+                        ui.label("Befehl");
+                        ui.add(egui::TextEdit::singleline(command).hint_text("npx -y @modelcontextprotocol/server-filesystem ~/Dokumente").desired_width(320.0));
+                        ui.end_row();
+                        ui.label("Umgebung");
+                        ui.add(egui::TextEdit::multiline(env).hint_text("SCHLÜSSEL=Wert (eine pro Zeile)").desired_rows(2).desired_width(320.0));
+                        ui.end_row();
+                    }
+                });
+                ui.label(small_muted(&t, "Beispiele: Dateien (server-filesystem), Abrufen (mcp-server-fetch), AISCraft selbst (aiscraft-cli mcp). Zugangsdaten liegen im Schlüsselbund."));
+                ui.add_space(8.0);
+                let mut keep = true;
+                ui.horizontal(|ui| {
+                    let ok = !name.trim().is_empty() && if *http { !url.trim().is_empty() } else { !command.trim().is_empty() };
+                    if ui.add_enabled(ok, egui::Button::new("Verbinden")).clicked() {
+                        if *http {
+                            self.run("connector.add", json!({"name": name, "url": url, "headers": headers}));
+                        } else {
+                            self.run("connector.add", json!({"name": name, "command": command, "env": env}));
+                        }
+                        keep = false;
+                    }
+                    if ui.button("Abbrechen").clicked() {
+                        keep = false;
+                    }
+                });
+                keep
+            }
             Dialog::RenameArtifact { id, title } => {
                 ui.heading("Umbenennen");
                 let r = ui.add(egui::TextEdit::singleline(title).desired_width(f32::INFINITY));
@@ -320,7 +368,7 @@ impl AisCraftApp {
             });
         });
         ui.horizontal(|ui| {
-            for (k, label) in [(SettingsTab::Backends, "Backends"), (SettingsTab::Memory, "Gedächtnis"), (SettingsTab::Appearance, "Darstellung"), (SettingsTab::About, "Über")] {
+            for (k, label) in [(SettingsTab::Backends, "Backends"), (SettingsTab::Connectors, "Konnektoren"), (SettingsTab::Memory, "Gedächtnis"), (SettingsTab::Appearance, "Darstellung"), (SettingsTab::About, "Über")] {
                 ui.selectable_value(tab, k, label);
             }
         });
@@ -378,6 +426,69 @@ impl AisCraftApp {
                 }
                 if ui.button("+ Backend hinzufügen").clicked() {
                     self.dialog = Some(Dialog::add_backend());
+                }
+            }
+            SettingsTab::Connectors => {
+                ui.label(muted(&t, "Konnektoren sind MCP-Server. Ihre Werkzeuge können Modelle aufrufen, die das unterstützen (OpenAI-kompatibel, Claude über API). AIS.chat über die Anmeldung und das Claude-Abo nutzen keine eigenen Werkzeuge."));
+                ui.add_space(6.0);
+                let st = self.state.settings.clone();
+                let mut tools = st.tools;
+                if ui.checkbox(&mut tools, "Werkzeuge anbieten (Verlauf durchsuchen, Dokumente, Konnektoren)").changed() {
+                    self.run("settings.set", json!({"key": "tools", "value": tools}));
+                }
+                let mut trust = st.trust_check;
+                if ui.checkbox(&mut trust, "Vertrauensprüfung: vor jeder Frage prüfen, ob deine Worte die Aktion decken").changed() {
+                    self.run("settings.set", json!({"key": "trust_check", "value": trust}));
+                }
+                let mut auto = st.auto_allow_covered;
+                if ui.add_enabled(trust, egui::Checkbox::new(&mut auto, "Ohne Nachfrage ausführen, wenn deine Worte sie wörtlich decken (nie bei löschenden Werkzeugen)")).changed() {
+                    self.run("settings.set", json!({"key": "auto_allow_covered", "value": auto}));
+                }
+                ui.add_space(8.0);
+                for k in self.state.connectors.clone() {
+                    card(&t).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let color = match k.status.as_str() {
+                                "connected" => t.success,
+                                "connecting" => t.warning,
+                                "error" => t.danger,
+                                _ => t.muted,
+                            };
+                            status_dot(ui, color);
+                            ui.label(RichText::new(&k.name).strong());
+                            ui.label(small_muted(&t, format!("{} Werkzeuge", k.tools.len())));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button("Entfernen").clicked() {
+                                    self.dialog = Some(Dialog::Confirm { text: format!("Konnektor {} entfernen?", k.name), command: "connector.remove".into(), params: json!({"id": k.id}) });
+                                }
+                                if ui.small_button("Neu verbinden").clicked() {
+                                    self.run("connector.refresh", json!({"id": k.id}));
+                                }
+                                let mut en = k.enabled;
+                                if ui.checkbox(&mut en, "aktiv").changed() {
+                                    self.run("connector.toggle", json!({"id": k.id, "enabled": en}));
+                                }
+                            });
+                        });
+                        ui.label(small_muted(&t, &k.target));
+                        if let Some(e) = &k.error {
+                            ui.label(RichText::new(e).small().color(t.danger));
+                        }
+                        if !k.tools.is_empty() {
+                            egui::CollapsingHeader::new(small_muted(&t, "Werkzeuge")).id_salt(("ktools", &k.id)).show(ui, |ui| {
+                                for tool in &k.tools {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(RichText::new(&tool.name).monospace().small());
+                                        ui.label(small_muted(&t, if tool.read_only { "nur lesen" } else { "fragt vorher" }));
+                                    });
+                                }
+                            });
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
+                if ui.button("+ Konnektor hinzufügen").clicked() {
+                    self.dialog = Some(Dialog::AddConnector { name: String::new(), command: String::new(), env: String::new(), url: String::new(), headers: String::new(), http: false });
                 }
             }
             SettingsTab::Memory => {

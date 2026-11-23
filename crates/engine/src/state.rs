@@ -30,6 +30,60 @@ pub struct State {
     pub open_artifact: Option<String>,
     /// Increases when any artifact's content changes, so open views reload.
     pub artifact_rev: u64,
+    pub connectors: Vec<ConnectorView>,
+    /// Tool calls waiting for the owner's yes or no.
+    pub approvals: Vec<Approval>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectorView {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    /// "Befehl …" or the URL, without secrets.
+    pub target: String,
+    /// "off", "connecting", "connected", "error".
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub tools: Vec<ConnectorTool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectorTool {
+    /// The name the model sees (unique across connectors).
+    pub llm_name: String,
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub read_only: bool,
+    pub destructive: bool,
+    #[serde(skip)]
+    pub input_schema: serde_json::Value,
+}
+
+/// A tool call the model wants to make and the owner has to allow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Approval {
+    pub id: String,
+    pub conversation_id: String,
+    pub tool: String,
+    /// Connector and tool title, for people.
+    pub label: String,
+    pub arguments: serde_json::Value,
+    pub destructive: bool,
+    /// The trust check's verdict, when it ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust: Option<TrustVerdict>,
+}
+
+/// Whether the owner's own words cover an action (Nod's trust check).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrustVerdict {
+    pub covered: bool,
+    /// The owner's words that allow it, verbatim (checked against what they actually wrote).
+    pub quote: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -109,11 +163,17 @@ pub struct Settings {
     pub zoom: f32,
     /// Send with Enter (Shift+Enter for a new line); otherwise Ctrl+Enter.
     pub enter_sends: bool,
+    /// Offer tools (connectors, history search, documents) to backends that can call them.
+    pub tools: bool,
+    /// Before asking, check with a model whether the owner's words cover a tool call.
+    pub trust_check: bool,
+    /// Run a tool call without asking when the trust check found the owner's words cover it.
+    pub auto_allow_covered: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { theme: "system".into(), memory: true, zoom: 1.0, enter_sends: true }
+        Self { theme: "system".into(), memory: true, zoom: 1.0, enter_sends: true, tools: true, trust_check: true, auto_allow_covered: false }
     }
 }
 

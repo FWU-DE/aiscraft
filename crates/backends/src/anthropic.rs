@@ -51,26 +51,55 @@ fn takes_fallback(model: &str) -> bool {
 pub fn body(req: &ChatRequest) -> Value {
     let mut messages: Vec<Value> = Vec::new();
     for m in &req.messages {
-        if m.role == Role::System || (m.role == Role::Assistant && m.content.is_empty()) {
-            continue;
-        }
-        let mut blocks = Vec::new();
-        for a in &m.attachments {
-            if let Some(d) = &a.data_base64 {
-                let kind = if a.mime == "application/pdf" { "document" } else { "image" };
-                blocks.push(json!({"type": kind, "source": {"type": "base64", "media_type": a.mime, "data": d}}));
+        let (role, blocks): (&str, Vec<Value>) = match m.role {
+            Role::System => continue,
+            Role::Tool => {
+                let r = m.tool_result.as_ref();
+                let block = json!({
+                    "type": "tool_result",
+                    "tool_use_id": r.map(|r| r.call_id.clone()).unwrap_or_default(),
+                    "content": if m.content.is_empty() { "(leer)".to_string() } else { m.content.clone() },
+                    "is_error": r.is_some_and(|r| r.is_error),
+                });
+                ("user", vec![block])
             }
-        }
-        blocks.push(json!({"type": "text", "text": text_with_files(m)}));
+            Role::Assistant => {
+                let mut blocks = Vec::new();
+                if !m.content.trim().is_empty() {
+                    blocks.push(json!({"type": "text", "text": m.content}));
+                }
+                for c in &m.tool_calls {
+                    blocks.push(json!({"type": "tool_use", "id": c.id, "name": c.name, "input": c.arguments}));
+                }
+                if blocks.is_empty() {
+                    continue;
+                }
+                ("assistant", blocks)
+            }
+            Role::User => {
+                let mut blocks = Vec::new();
+                for a in &m.attachments {
+                    if let Some(d) = &a.data_base64 {
+                        let kind = if a.mime == "application/pdf" { "document" } else { "image" };
+                        blocks.push(json!({"type": kind, "source": {"type": "base64", "media_type": a.mime, "data": d}}));
+                    }
+                }
+                let text = text_with_files(m);
+                if !text.trim().is_empty() || blocks.is_empty() {
+                    blocks.push(json!({"type": "text", "text": if text.trim().is_empty() { "…".to_string() } else { text }}));
+                }
+                ("user", blocks)
+            }
+        };
         // The API wants strictly alternating roles; merge consecutive messages of one role.
         if let Some(last) = messages.last_mut()
-            && last.get("role").and_then(Value::as_str) == Some(m.role.as_str())
+            && last.get("role").and_then(Value::as_str) == Some(role)
             && let Some(arr) = last.get_mut("content").and_then(Value::as_array_mut)
         {
             arr.extend(blocks);
             continue;
         }
-        messages.push(json!({"role": m.role.as_str(), "content": blocks}));
+        messages.push(json!({"role": role, "content": blocks}));
     }
     let mut b = json!({"model": req.model, "max_tokens": MAX_TOKENS, "stream": true, "messages": messages});
     if let Some(o) = b.as_object_mut() {
@@ -80,8 +109,52 @@ pub fn body(req: &ChatRequest) -> Value {
         if takes_fallback(&req.model) {
             o.insert("fallbacks".into(), json!("default"));
         }
+        if !req.tools.is_empty() {
+            let tools: Vec<Value> =
+                req.tools.iter().map(|t| json!({"name": t.name, "description": t.description, "input_schema": t.input_schema, "eager_input_streaming": true})).collect();
+            o.insert("tools".into(), Value::Array(tools));
+        }
     }
     b
+}
+
+/// tool_use blocks being streamed, by content block index: (id, name, input JSON so far).
+#[derive(Default)]
+pub struct ToolAcc {
+    blocks: std::collections::BTreeMap<u64, (String, String, String)>,
+}
+
+pub fn sse_events_with(event: Option<&str>, data: &str, acc: &mut ToolAcc) -> Result<Vec<StreamEvent>> {
+    if data.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    let v: Value = serde_json::from_str(data).map_err(|e| Error::protocol(format!("Antwort nicht lesbar: {e}")))?;
+    let ty = v.get("type").and_then(Value::as_str).or(event).unwrap_or("");
+    let idx = v.get("index").and_then(Value::as_u64).unwrap_or(0);
+    match ty {
+        "content_block_start" if v.pointer("/content_block/type").and_then(Value::as_str) == Some("tool_use") => {
+            let s = |p: &str| v.pointer(p).and_then(Value::as_str).unwrap_or("").to_string();
+            acc.blocks.insert(idx, (s("/content_block/id"), s("/content_block/name"), String::new()));
+            Ok(vec![])
+        }
+        "content_block_delta" if v.pointer("/delta/type").and_then(Value::as_str) == Some("input_json_delta") => {
+            if let Some(b) = acc.blocks.get_mut(&idx) {
+                let part = v.pointer("/delta/partial_json").and_then(Value::as_str).unwrap_or("");
+                if b.2.len() + part.len() > crate::MAX_TOOL_ARGS {
+                    return Err(Error::protocol("Werkzeugaufruf zu groß"));
+                }
+                b.2.push_str(part);
+            }
+            Ok(vec![])
+        }
+        "content_block_stop" => Ok(acc.blocks.remove(&idx).map(|(id, name, args)| vec![StreamEvent::ToolCall { call: crate::tool_call(id, name, &args) }]).unwrap_or_default()),
+        "message_delta" if v.pointer("/delta/stop_reason").and_then(Value::as_str) == Some("max_tokens") && !acc.blocks.is_empty() => {
+            // A tool call cut off mid-arguments must not run.
+            acc.blocks.clear();
+            sse_events(event, data)
+        }
+        _ => sse_events(event, data),
+    }
 }
 
 pub fn sse_events(event: Option<&str>, data: &str) -> Result<Vec<StreamEvent>> {
@@ -122,7 +195,7 @@ impl Backend for Anthropic {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true }
+        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: true }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
@@ -164,7 +237,8 @@ impl Backend for Anthropic {
             if !resp.status().is_success() {
                 return Err(status_error(resp, "Chat").await);
             }
-            Ok(event_stream(resp, |ev| sse_events(ev.event.as_deref(), &ev.data)))
+            let mut acc = ToolAcc::default();
+            Ok(event_stream(resp, move |ev| sse_events_with(ev.event.as_deref(), &ev.data, &mut acc)))
         })
     }
 }
@@ -183,6 +257,23 @@ mod tests {
     }
 
     #[test]
+    fn streamed_tool_use() {
+        let mut acc = ToolAcc::default();
+        assert!(sse_events_with(None, r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tu1","name":"document_create","input":{}}}"#, &mut acc).unwrap().is_empty());
+        sse_events_with(None, r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"title\": \"A"}}"#, &mut acc).unwrap();
+        sse_events_with(None, r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"}"}}"#, &mut acc).unwrap();
+        let ev = sse_events_with(None, r#"{"type":"content_block_stop","index":1}"#, &mut acc).unwrap();
+        let StreamEvent::ToolCall { call } = &ev[0] else { panic!() };
+        assert_eq!(call.arguments["title"], "A");
+        // Broken JSON never becomes arguments.
+        sse_events_with(None, r#"{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"tu2","name":"x"}}"#, &mut acc).unwrap();
+        sse_events_with(None, r#"{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"a\": "}}"#, &mut acc).unwrap();
+        let ev = sse_events_with(None, r#"{"type":"content_block_stop","index":2}"#, &mut acc).unwrap();
+        let StreamEvent::ToolCall { call } = &ev[0] else { panic!() };
+        assert!(call.arguments.get("_invalid_json").is_some());
+    }
+
+    #[test]
     fn body_merges_roles_and_sets_fallback() {
         let m = |role, c: &str| Message {
             id: "x".into(),
@@ -194,9 +285,9 @@ mod tests {
             attachments: vec![],
             activity: vec![],
             error: None,
-            usage: None,
+            usage: None, tool_calls: vec![], tool_result: None,
         };
-        let req = ChatRequest { conversation_id: "c".into(), model: DEFAULT_MODEL.into(), system: None, messages: vec![m(Role::User, "a"), m(Role::User, "b")] };
+        let req = ChatRequest { conversation_id: "c".into(), model: DEFAULT_MODEL.into(), system: None, messages: vec![m(Role::User, "a"), m(Role::User, "b")], tools: vec![] };
         let b = body(&req);
         assert_eq!(b["messages"].as_array().unwrap().len(), 1);
         assert_eq!(b["fallbacks"], "default");

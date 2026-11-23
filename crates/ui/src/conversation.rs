@@ -26,10 +26,13 @@ impl AisCraftApp {
                 for (i, m) in msgs.iter().enumerate() {
                     match m.role {
                         Role::User => self.user_message(ui, m),
+                        // Tool results are shown as chips on the call, not as messages.
+                        Role::Tool => continue,
                         _ => self.assistant_message(ui, m, Some(i) == last_assistant),
                     }
                     ui.add_space(14.0);
                 }
+                self.approval_cards(ui);
                 ui.add_space(20.0);
             });
         });
@@ -274,6 +277,30 @@ impl AisCraftApp {
                 }
             });
         }
+        if !m.tool_calls.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                for tc in &m.tool_calls {
+                    let (mark, color) = match tc.outcome.as_deref() {
+                        Some("ok") => ("✔", t.success),
+                        Some("denied") => ("×", t.warning),
+                        Some(_) => ("×", t.danger),
+                        None => ("…", t.muted),
+                    };
+                    let label = self.tool_label(&tc.name);
+                    egui::Frame::new().fill(t.surface_hi).corner_radius(egui::CornerRadius::same(6)).inner_margin(Margin::symmetric(8, 3)).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(mark).color(color));
+                            ui.label(RichText::new(label).small());
+                        });
+                    })
+                    .response
+                    .on_hover_text(serde_json::to_string_pretty(&tc.arguments).unwrap_or_default());
+                }
+            });
+        }
+        if m.content.is_empty() && !m.tool_calls.is_empty() {
+            return;
+        }
         if m.content.is_empty() && generating {
             ui.horizontal(|ui| {
                 ui.add(egui::Spinner::new().color(t.accent));
@@ -319,6 +346,62 @@ impl AisCraftApp {
                     ui.label(small_muted(&t, format!("{} ➡ {} Tokens", u.input_tokens, u.output_tokens)));
                 }
             });
+        }
+    }
+
+    /// A readable name for a tool the model called.
+    fn tool_label(&self, name: &str) -> String {
+        match name {
+            "history_search" => "Verlauf durchsucht".into(),
+            "document_create" => "Dokument angelegt".into(),
+            "document_update" => "Dokument geändert".into(),
+            "board_create" => "Whiteboard angelegt".into(),
+            other => self
+                .state
+                .connectors
+                .iter()
+                .find_map(|c| c.tools.iter().find(|t| t.llm_name == other).map(|t| format!("{} · {}", c.name, if t.title.is_empty() { &t.name } else { &t.title })))
+                .unwrap_or_else(|| other.to_string()),
+        }
+    }
+
+    /// Questions from the tool rule: allow this exact call once, or not.
+    fn approval_cards(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        let Some(conv) = self.state.current.clone() else { return };
+        for a in self.state.approvals.iter().filter(|a| a.conversation_id == conv).cloned().collect::<Vec<_>>() {
+            Frame::new()
+                .fill(t.surface)
+                .stroke(Stroke::new(1.5, if a.destructive { t.danger } else { t.accent }))
+                .corner_radius(CornerRadius::same(t.radius))
+                .inner_margin(Margin::same(14))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(format!("Darf ich das ausführen? {}", a.label)).strong());
+                    if a.destructive {
+                        ui.label(RichText::new("Der Konnektor kennzeichnet das als verändernd oder löschend.").color(t.danger).small());
+                    }
+                    let args = serde_json::to_string_pretty(&a.arguments).unwrap_or_default();
+                    Frame::new().fill(t.code_bg).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(8)).show(ui, |ui| {
+                        ui.add(egui::Label::new(RichText::new(args.chars().take(4000).collect::<String>()).monospace().small()).wrap());
+                    });
+                    if let Some(tr) = &a.trust {
+                        if tr.covered {
+                            ui.label(RichText::new(format!("Deine Worte decken das: „{}“", tr.quote)).color(t.success).small());
+                        } else {
+                            ui.label(RichText::new(format!("Nicht von deinen Worten gedeckt: {}", tr.reason)).color(t.warning).small());
+                        }
+                    }
+                    ui.horizontal(|ui| {
+                        if accent_button(ui, &t, "Einmal erlauben").clicked() {
+                            self.run("tool.answer", json!({"id": a.id, "allow": true}));
+                        }
+                        if ui.button("Ablehnen").clicked() {
+                            self.run("tool.answer", json!({"id": a.id, "allow": false}));
+                        }
+                        ui.label(small_muted(&t, "Gilt nur für genau diese Angaben."));
+                    });
+                });
+            ui.add_space(8.0);
         }
     }
 

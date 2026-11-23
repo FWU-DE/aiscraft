@@ -52,6 +52,10 @@ struct Extra {
     error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     usage: Option<aiscraft_core::Usage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<aiscraft_core::ToolCall>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_result: Option<aiscraft_core::ToolResultInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -201,6 +205,8 @@ impl Store {
                 activity: extra.activity,
                 error: extra.error,
                 usage: extra.usage,
+                tool_calls: extra.tool_calls,
+                tool_result: extra.tool_result,
             });
         }
         Ok(out)
@@ -214,6 +220,8 @@ impl Store {
             activity: m.activity.clone(),
             error: m.error.clone(),
             usage: m.usage,
+            tool_calls: m.tool_calls.clone(),
+            tool_result: m.tool_result.clone(),
         };
         let tx = self.db.unchecked_transaction().map_err(db_err)?;
         let seq: i64 = tx
@@ -480,7 +488,7 @@ mod tests {
             attachments: vec![],
             activity: vec![],
             error: None,
-            usage: None,
+            usage: None, tool_calls: vec![], tool_result: None,
         }
     }
 

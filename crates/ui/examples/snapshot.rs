@@ -42,6 +42,15 @@ fn demo_server(engine: &Engine) -> String {
                         return;
                     }
                     let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
+                    // "Kollegium" + a connector tool named *__notify: ask to call it (approval demo).
+                    if req.contains("Kollegium") && !req.contains("\"role\":\"tool\"") {
+                        if let Some(name) = req.split('"').find(|p| p.ends_with("__notify")) {
+                            let c1 = json!({"choices":[{"delta":{"content":"Ich schicke die Einladung ans Kollegium.","tool_calls":[{"index":0,"id":"c1","function":{"name":name,"arguments":"{\"an\":\"kollegium@schule.de\",\"betreff\":\"Konferenz am 4. Dezember\"}"}}]}}]});
+                            let c2 = json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]});
+                            let _ = sock.write_all(format!("data: {c1}\n\ndata: {c2}\n\ndata: [DONE]\n\n").as_bytes()).await;
+                            return;
+                        }
+                    }
                     for chunk in ANSWER.split_inclusive(' ') {
                         let c = json!({"choices":[{"delta":{"content":chunk}}]});
                         let _ = sock.write_all(format!("data: {c}\n\n").as_bytes()).await;
@@ -109,6 +118,9 @@ fn main() {
             harness.event(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
         } else if cmd == "ui.type" {
             harness.event(egui::Event::Text(params["text"].as_str().unwrap_or("").into()));
+        } else if let Some(c) = cmd.strip_prefix("dispatch:") {
+            engine.dispatch(c, params.clone());
+            std::thread::sleep(Duration::from_millis(800));
         } else if let Err(e) = engine.call(&cmd, params.clone()) {
             eprintln!("{cmd}: {e}");
         }

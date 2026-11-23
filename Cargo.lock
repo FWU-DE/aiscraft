@@ -218,6 +218,7 @@ dependencies = [
  "aiscraft-backends",
  "aiscraft-board",
  "aiscraft-core",
+ "aiscraft-mcp",
  "aiscraft-store",
  "base64 0.22.1",
  "directories",

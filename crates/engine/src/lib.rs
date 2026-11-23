@@ -8,6 +8,7 @@ mod commands;
 mod files;
 mod secrets;
 mod state;
+mod tools;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -46,6 +47,7 @@ pub(crate) struct Inner {
     /// Per-conversation cancel signals of running generations.
     cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
     next_notice: std::sync::atomic::AtomicU64,
+    tools: tools::ToolRuntime,
 }
 
 /// What commands and tasks hold. It never owns the runtime, so it can be dropped anywhere.
@@ -102,6 +104,7 @@ impl Engine {
             revision: tx,
             cancels: Mutex::new(HashMap::new()),
             next_notice: std::sync::atomic::AtomicU64::new(1),
+            tools: Default::default(),
         }));
         ctx.load()?;
         if let Some(n) = secret_notice {
@@ -109,6 +112,10 @@ impl Engine {
         }
         let engine = Self { ctx, _rt: Arc::new(rt) };
         engine.ctx.spawn_startup_checks();
+        {
+            let _guard = engine._rt.enter();
+            tools::load(&engine.ctx);
+        }
         Ok(engine)
     }
 

@@ -193,7 +193,7 @@ static COMMANDS: &[CommandSpec] = &[
         Ok(out)
     })),
     cmd!("remote.import", "Chat vom Server übernehmen", "Backends", None, "backend: string, id: string, title?: string", false, |c, p| Box::pin(remote_import(c, p))),
-    cmd!("settings.set", "Einstellung ändern", "Einstellungen", None, "key: theme|memory|zoom|enter_sends, value: any", false, |c, p| Box::pin(async move {
+    cmd!("settings.set", "Einstellung ändern", "Einstellungen", None, "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered, value: any", false, |c, p| Box::pin(async move {
         let key = req_str(&p, "key")?;
         let value = p.get("value").cloned().unwrap_or(Value::Null);
         let mut settings = serde_json::to_value(&c.state().settings)?;
@@ -243,6 +243,12 @@ static COMMANDS: &[CommandSpec] = &[
         Ok(())
     }))),
     cmd!("artifact.delete", "Artefakt löschen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::delete(c, p))),
+    cmd!("connector.add", "Konnektor hinzufügen", "Konnektoren", None, "name: string, command?: string (Befehlszeile), args?: [string], env?: {KEY: value} | \"KEY=value\\n…\", url?: string, headers?: {Name: value}", false, |c, p| Box::pin(crate::tools::add(c, p))),
+    cmd!("connector.remove", "Konnektor entfernen", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::remove(c, p))),
+    cmd!("connector.toggle", "Konnektor ein/aus", "Konnektoren", None, "id: string, enabled: bool", false, |c, p| Box::pin(crate::tools::toggle(c, p))),
+    cmd!("connector.refresh", "Konnektor neu verbinden", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::refresh(c, p))),
+    cmd!("tool.answer", "Werkzeugaufruf erlauben oder ablehnen", "Konnektoren", None, "id: string, allow: bool", false, |c, p| Box::pin(crate::tools::answer(c, p))),
+    cmd!("tools.list", "Werkzeuge auflisten", "Konnektoren", None, "", false, |c, _| Box::pin(async move { Ok(serde_json::to_value(crate::tools::specs(&c))?) })),
     cmd!("app.state", "Zustand lesen", "App", None, "", false, |c, _| Box::pin(async move { Ok(serde_json::to_value(&*c.state())?) })),
     cmd!("app.commands", "Befehle auflisten", "App", None, "", false, |_, _| Box::pin(async move {
         Ok(Value::Array(
@@ -413,6 +419,7 @@ pub(crate) fn markdown_export(title: &str, messages: &[Message]) -> String {
             Role::User => "Du",
             Role::Assistant => "Antwort",
             Role::System => "System",
+            Role::Tool => continue,
         };
         out.push_str(&format!("## {who}\n\n{}\n\n", m.content.trim()));
         for a in &m.attachments {
@@ -486,7 +493,7 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
                 attachments: vec![],
                 activity: vec![],
                 error: None,
-                usage: None,
+                usage: None, tool_calls: vec![], tool_result: None,
             })?;
         }
         Ok(())
