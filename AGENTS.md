@@ -8,7 +8,7 @@ tests are the gate. Product name in user-facing text: **AIS.ChatCraft** (AIS and
 different things; never shorten to "AIS"). Machine names stay `aiscraft-*`. User-facing text is
 German.
 
-Repo: `FWU-DE/aiscraft` (private). Backlog: GitHub issues. AutoCraft (storytold/autocraft) is set up
+Repo: `FWU-DE/aiscraft` (public since 2026-11-23; never commit code from the `ais-schule` org or secrets). Backlog: GitHub issues. AutoCraft (storytold/autocraft) is set up
 to triage and implement issues; see `deploy/autocraft/`.
 
 ## 1. Workspace map (layers: a crate may only depend on lower ones)
