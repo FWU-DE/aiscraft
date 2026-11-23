@@ -452,7 +452,7 @@ impl AisCraftApp {
             }
         });
         ui.separator();
-        egui::ScrollArea::vertical().max_height(460.0).show(ui, |ui| match tab {
+        egui::ScrollArea::vertical().max_height((ui.ctx().content_rect().height() * 0.8 - 140.0).max(300.0)).show(ui, |ui| match tab {
             SettingsTab::Backends => {
                 for b in self.state.backends.clone() {
                     card(&t).show(ui, |ui| {
