@@ -51,6 +51,19 @@ pub struct Attachment {
     pub data_base64: Option<String>,
 }
 
+/// The type of an attachment that is a web link (its name is the URL).
+pub const LINK_MIME: &str = "text/uri-list";
+
+impl Attachment {
+    /// A web link attached to a message. Backends without uploads read it as text.
+    pub fn link(url: &str) -> Self {
+        Attachment { name: url.to_string(), mime: LINK_MIME.into(), size: 0, text: Some(format!("Link: {url}")), ..Default::default() }
+    }
+    pub fn is_link(&self) -> bool {
+        self.mime == LINK_MIME
+    }
+}
+
 /// One step of server-side agent work (AIS.chat shows "Websuche", "Datei lesen"…).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ActivityStep {
@@ -73,6 +86,9 @@ pub struct ActivityStep {
 pub struct ActivityLink {
     pub title: String,
     pub url: String,
+    /// The server could not read this page.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub failed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -155,6 +171,137 @@ pub struct Conversation {
     /// What this chat may use besides the conversation itself.
     #[serde(default)]
     pub sources: Sources,
+    /// The assistant, character or learning scenario this chat talks to (AIS.chat).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<Persona>,
+    /// A text chat or an image chat.
+    #[serde(default, skip_serializing_if = "ConversationKind::is_chat")]
+    pub kind: ConversationKind,
+    /// The server's id for this chat when it differs from the local id (AIS.chat image chats,
+    /// whose id the server picks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationKind {
+    #[default]
+    Chat,
+    /// Every message is a prompt for an image model (AIS.chat `generateImageAction`).
+    Image,
+}
+
+impl ConversationKind {
+    pub fn is_chat(&self) -> bool {
+        *self == ConversationKind::Chat
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "chat" | "text" => Some(ConversationKind::Chat),
+            "image" | "image-generation" | "bild" => Some(ConversationKind::Image),
+            _ => None,
+        }
+    }
+}
+
+/// What kind of configured partner a chat can talk to on AIS.chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonaKind {
+    /// A custom assistant ("Assistent", `assistantId`).
+    Assistant,
+    /// A character, e.g. a historical figure ("Figur", `characterId`).
+    Character,
+    /// A learning scenario ("Lernszenario", `learningScenarioId`).
+    LearningScenario,
+}
+
+impl PersonaKind {
+    pub const ALL: [PersonaKind; 3] = [PersonaKind::Assistant, PersonaKind::Character, PersonaKind::LearningScenario];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PersonaKind::Assistant => "assistant",
+            PersonaKind::Character => "character",
+            PersonaKind::LearningScenario => "learning_scenario",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "assistant" | "assistent" | "custom_gpt" => Some(PersonaKind::Assistant),
+            "character" | "figur" => Some(PersonaKind::Character),
+            "learning_scenario" | "learning-scenario" | "lernszenario" | "scenario" => Some(PersonaKind::LearningScenario),
+            _ => None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            PersonaKind::Assistant => "Assistent",
+            PersonaKind::Character => "Figur",
+            PersonaKind::LearningScenario => "Lernszenario",
+        }
+    }
+    pub fn plural(self) -> &'static str {
+        match self {
+            PersonaKind::Assistant => "Assistenten",
+            PersonaKind::Character => "Figuren",
+            PersonaKind::LearningScenario => "Lernszenarien",
+        }
+    }
+}
+
+/// The partner a conversation remembers: enough to send to the right one again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Persona {
+    pub kind: PersonaKind,
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+/// An assistant, character or learning scenario as the backend lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PersonaInfo {
+    pub kind: PersonaKind,
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Made by the signed-in person (otherwise shared with them).
+    #[serde(default)]
+    pub own: bool,
+    /// The character's first line, shown before the person writes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_message: Option<String>,
+    /// The task a learning scenario sets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exercise: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompt_suggestions: Vec<String>,
+    /// The model it was made for, if it says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+}
+
+/// A chat's path in AIS.chat's web app (`getConversationPath`).
+pub fn ais_conversation_path(persona: Option<&Persona>, conversation_id: &str) -> String {
+    match persona {
+        Some(p) => {
+            let base = match p.kind {
+                PersonaKind::Assistant => "assistants",
+                PersonaKind::Character => "characters",
+                PersonaKind::LearningScenario => "learning-scenarios",
+            };
+            format!("/{base}/d/{}/{conversation_id}", p.id)
+        }
+        None => format!("/d/{conversation_id}"),
+    }
+}
+
+impl PersonaInfo {
+    pub fn persona(&self) -> Persona {
+        Persona { kind: self.kind, id: self.id.clone(), name: self.name.clone() }
+    }
 }
 
 /// The sources a chat draws on. All on by default; each can be switched off per chat.
@@ -369,6 +516,11 @@ pub struct RemoteConversation {
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    /// The assistant, character or learning scenario it was held with (name may be empty).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<Persona>,
+    #[serde(default, skip_serializing_if = "ConversationKind::is_chat")]
+    pub kind: ConversationKind,
 }
 
 /// What a backend can do beyond plain chat.
@@ -399,6 +551,9 @@ pub struct ChatRequest {
     /// tool bridge listens and the token for this answer.
     #[serde(skip)]
     pub tool_bridge: Option<ToolBridge>,
+    /// The assistant, character or learning scenario to answer as (AIS.chat).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<Persona>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -406,6 +561,34 @@ pub struct ToolBridge {
     pub url: String,
     pub token: String,
 }
+
+/// A prompt for an image model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageRequest {
+    pub prompt: String,
+    pub model: String,
+    /// `quadratic`, `landscape` or `portrait` (AIS.chat's presets).
+    pub aspect_ratio: String,
+    /// The server's image chat to continue, if there is one already.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+}
+
+/// A generated image.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ImageResult {
+    #[serde(skip)]
+    pub bytes: Vec<u8>,
+    pub mime: String,
+    /// The server's image chat it belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+}
+
+/// The aspect ratios AIS.chat offers for images.
+pub const ASPECT_RATIOS: [(&str, &str); 3] = [("quadratic", "Quadratisch"), ("landscape", "Querformat"), ("portrait", "Hochformat")];
 
 /// One piece of a streamed answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use aiscraft_core::{ChatRequest, Conversation, Error, ErrorKind, MemoryNote, Message, Result, Role, StreamEvent, ToolCall, extract_explicit_memory, memory_prompt, title_from};
+use aiscraft_core::{ChatRequest, Conversation, ConversationKind, Error, ErrorKind, MemoryNote, Message, Result, Role, StreamEvent, ToolCall, extract_explicit_memory, memory_prompt, title_from};
 use futures::StreamExt;
 use serde_json::{Value, json};
 
@@ -56,20 +56,42 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
         updated_at: now,
         pinned: false,
         sources: sel.sources.clone(),
+        persona: sel.persona.clone(),
+        kind: sel.kind,
+        remote_id: None,
     };
+    // A character opens with its greeting, as in AIS.chat; it goes along as the first answer.
+    let greeting = conv.persona.as_ref().and_then(|p| state.persona_info(&sel.backend_id, p)).and_then(|i| i.initial_message.clone()).map(|text| Message {
+        id: new_id(),
+        conversation_id: conv.id.clone(),
+        role: Role::Assistant,
+        content: text,
+        created_at: now,
+        model: None,
+        attachments: vec![],
+        activity: vec![],
+        error: None,
+        usage: None,
+        tool_calls: vec![],
+        tool_result: None,
+    });
     c.store(|st| st.save_conversation(&conv))?;
+    if let Some(g) = &greeting {
+        c.store(|st| st.save_message(g))?;
+    }
     let id = conv.id.clone();
     c.update(|s| {
         let pos = s.conversations.iter().position(|x| !x.pinned).unwrap_or(s.conversations.len());
         s.conversations.insert(pos, conv);
         s.current = Some(id.clone());
         s.messages.clear();
+        s.messages.extend(greeting);
     });
     Ok(id)
 }
 
 pub(crate) async fn send(c: Ctx, text: String, paths: Vec<String>) -> Result<Value> {
-    send_with(c, text, paths, None, false).await
+    send_with(c, text, paths, vec![], None, false).await
 }
 
 /// One model call outside any conversation, with the selected backend and model: for revising
@@ -97,7 +119,7 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
         error: None,
         usage: None, tool_calls: vec![], tool_result: None,
     };
-    let req = ChatRequest { conversation_id: new_id(), model: sel.model_id, system: if takes_system { system.map(str::to_string) } else { None }, messages: vec![msg], tools: vec![], tool_bridge: None };
+    let req = ChatRequest { conversation_id: new_id(), model: sel.model_id, system: if takes_system { system.map(str::to_string) } else { None }, messages: vec![msg], tools: vec![], tool_bridge: None, persona: None };
     let mut stream = backend.chat(req).await?;
     let mut out = String::new();
     while let Some(ev) = stream.next().await {
@@ -110,11 +132,28 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
     Ok(out)
 }
 
-pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact: Option<String>, force: bool) -> Result<Value> {
+/// At most this many links per message (AIS.chat's web scraper reads five at a time).
+const MAX_LINKS: usize = 5;
+
+/// A web address a person attached: http(s), no spaces, not too long.
+pub(crate) fn check_url(url: &str) -> Result<String> {
+    let u = url.trim();
+    let ok = (u.starts_with("https://") || u.starts_with("http://")) && u.len() <= 2000 && !u.chars().any(char::is_whitespace) && u.split("://").nth(1).is_some_and(|h| !h.is_empty() && !h.starts_with('/'));
+    if !ok {
+        return Err(Error::invalid(format!("Das ist keine Webadresse: {}", u.chars().take(80).collect::<String>())));
+    }
+    Ok(u.to_string())
+}
+
+pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: Vec<String>, artifact: Option<String>, force: bool) -> Result<Value> {
     let text = text.trim().to_string();
-    if text.is_empty() && paths.is_empty() {
+    if text.is_empty() && paths.is_empty() && links.is_empty() {
         return Err(Error::invalid("Nachricht ist leer"));
     }
+    if links.len() > MAX_LINKS {
+        return Err(Error::invalid(format!("Höchstens {MAX_LINKS} Links pro Nachricht")));
+    }
+    let links = links.iter().map(|l| check_url(l)).collect::<Result<Vec<_>>>()?;
     let state = c.state();
     let backend = c.backend(&state.selection.backend_id)?;
     if state.selection.model_id.is_empty() {
@@ -124,6 +163,20 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact
         && state.is_generating(cur)
     {
         return Err(Error::invalid("Die vorige Antwort läuft noch"));
+    }
+    let kind = state.current.as_ref().and_then(|id| state.conversation(id)).map(|c| c.kind).unwrap_or(state.selection.kind);
+    if kind == ConversationKind::Image {
+        if !paths.is_empty() || !links.is_empty() {
+            return Err(Error::unsupported("Vorlagenbilder für die Bilderzeugung kann AIS.ChatCraft noch nicht mitschicken."));
+        }
+        if text.is_empty() {
+            return Err(Error::invalid("Beschreibe, was das Bild zeigen soll"));
+        }
+        let conv = ensure_conversation(&c, &text)?;
+        let user = plain_message(&conv, Role::User, &text);
+        c.store(|st| st.save_message(&user))?;
+        put_message(&c, &conv, &user);
+        return image_answer(c, conv, text).await;
     }
     let caps = backend.capabilities();
     if !force {
@@ -144,8 +197,13 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, artifact
         }
         attachments.push(a);
     }
+    // Links: the server reads the page first where it can, so a page it cannot read fails here.
+    for url in &links {
+        backend.check_link(url.clone()).await?;
+        attachments.push(aiscraft_core::Attachment::link(url));
+    }
 
-    let conv = ensure_conversation(&c, if text.is_empty() { paths.first().map(String::as_str).unwrap_or("Datei") } else { &text })?;
+    let conv = ensure_conversation(&c, if text.is_empty() { paths.first().or(links.first()).map(String::as_str).unwrap_or("Datei") } else { &text })?;
     let user = Message {
         id: new_id(),
         conversation_id: conv.clone(),
@@ -237,6 +295,7 @@ pub(crate) async fn regenerate(c: Ctx) -> Result<Value> {
     if state.is_generating(&conv) {
         return Err(Error::invalid("Die Antwort läuft noch"));
     }
+    let image_chat = state.conversation(&conv).is_some_and(|x| x.kind == ConversationKind::Image);
     // Drop everything after the last user message (answers and tool rounds).
     if let Some(pos) = state.messages.iter().rposition(|m| m.role == Role::User)
         && let Some(first) = state.messages.get(pos + 1)
@@ -245,8 +304,11 @@ pub(crate) async fn regenerate(c: Ctx) -> Result<Value> {
         c.store(|st| st.truncate_from(&conv, &id))?;
         c.update(|s| s.messages.truncate(pos + 1));
     }
-    if !state.messages.iter().any(|m| m.role == Role::User) {
+    let Some(prompt) = state.messages.iter().rev().find(|m| m.role == Role::User).map(|m| m.content.clone()) else {
         return Err(Error::invalid("Nichts zum neu Erzeugen"));
+    };
+    if image_chat {
+        return image_answer(c, conv, prompt).await;
     }
     generate(c, conv).await
 }
@@ -452,6 +514,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
             messages: history,
             tools: round_tools,
             tool_bridge: bridge.as_ref().map(|(b, _)| b.clone()),
+            persona: conv.persona.clone(),
         };
         match stream_round(&c, &backend, req, &mut answer, &conv_id, &mut cancel_rx).await {
             Ok(calls) if calls.is_empty() => break,
@@ -560,6 +623,109 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     }
 
     result.map(|()| json!({"conversation_id": conv_id, "message_id": answer.id, "text": answer.content}))
+}
+
+fn plain_message(conv: &str, role: Role, text: &str) -> Message {
+    Message {
+        id: new_id(),
+        conversation_id: conv.to_string(),
+        role,
+        content: text.to_string(),
+        created_at: now_ms(),
+        model: None,
+        attachments: vec![],
+        activity: vec![],
+        error: None,
+        usage: None,
+        tool_calls: vec![],
+        tool_result: None,
+    }
+}
+
+fn image_ext(mime: &str) -> &'static str {
+    match mime {
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        _ => "png",
+    }
+}
+
+/// Draw an image for `prompt` in an image chat. The answer carries the image as an attachment;
+/// the bytes go to the attachments folder, not into the database.
+async fn image_answer(c: Ctx, conv_id: String, prompt: String) -> Result<Value> {
+    let conv = c.state().conversation(&conv_id).cloned().ok_or_else(|| Error::not_found("Chat nicht gefunden"))?;
+    let backend = c.backend(&conv.backend_id)?;
+    let aspect = Some(c.state().selection.aspect_ratio.clone()).filter(|a| !a.is_empty()).unwrap_or_else(|| "quadratic".into());
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    c.0.cancels.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(conv_id.clone(), cancel_tx);
+    c.update(|s| s.generating.push(conv_id.clone()));
+    let mut answer = new_answer(&conv_id, &c.state().model_name(&conv.backend_id, &conv.model_id));
+    put_message(&c, &conv_id, &answer);
+    let req = aiscraft_core::ImageRequest { prompt, model: conv.model_id.clone(), aspect_ratio: aspect, conversation_id: conv.remote_id.clone() };
+    let result = tokio::select! {
+        r = backend.generate_image(req) => r,
+        _ = cancel_rx.changed() => Err(Error::cancelled()),
+    };
+    let mut remote_id = conv.remote_id.clone();
+    let outcome = match result {
+        Ok(img) => {
+            let ext = image_ext(&img.mime);
+            let saved = files::keep_copy(&c.0.attachments_dir, Path::new(&format!("bild.{ext}")), &img.bytes);
+            match saved {
+                Ok(path) => {
+                    let n = c.state().messages.iter().filter(|m| m.attachments.iter().any(|a| a.mime.starts_with("image/"))).count() + 1;
+                    answer.attachments.push(aiscraft_core::Attachment {
+                        name: format!("bild-{n}.{ext}"),
+                        mime: img.mime.clone(),
+                        size: img.bytes.len() as u64,
+                        local_path: Some(path.display().to_string()),
+                        ..Default::default()
+                    });
+                    if let Some(id) = img.conversation_id.filter(|id| *id != conv_id) {
+                        remote_id = Some(id);
+                    }
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
+        }
+        Err(e) if e.kind == ErrorKind::Cancelled => {
+            answer.content = "_(angehalten)_".into();
+            Ok(())
+        }
+        Err(e) => Err(e),
+    };
+    if let Err(e) = &outcome {
+        answer.error = Some(e.message.clone());
+    }
+    put_message(&c, &conv_id, &answer);
+    c.0.cancels.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&conv_id);
+    let mut updated = conv.clone();
+    updated.updated_at = now_ms();
+    updated.remote_id = remote_id;
+    let _ = c.store(|st| st.save_conversation(&updated));
+    c.update(|s| {
+        s.generating.retain(|g| g != &conv_id);
+        if let Some(x) = s.conversations.iter_mut().find(|x| x.id == conv_id) {
+            *x = updated.clone();
+        }
+        s.conversations.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.updated_at.cmp(&a.updated_at)));
+    });
+    if backend.capabilities().remote_history {
+        let ctx = c.clone();
+        let bid = conv.backend_id.clone();
+        c.spawn(async move {
+            if let Ok(q) = backend.quota().await {
+                ctx.update(|s| {
+                    if let Some(v) = s.backends.iter_mut().find(|v| v.config.id == bid) {
+                        v.quota = q;
+                    }
+                });
+            }
+        });
+    }
+    outcome.map(|()| json!({"conversation_id": conv_id, "message_id": answer.id, "images": answer.attachments.len()}))
 }
 
 #[cfg(test)]

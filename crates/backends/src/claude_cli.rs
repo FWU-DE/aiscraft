@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn transcript_and_last_message() {
-        let req = ChatRequest { conversation_id: "c".into(), model: "claude-haiku-5-5".into(), system: None, messages: vec![m(Role::User, "Hallo"), m(Role::Assistant, "Hi!"), m(Role::User, "Und jetzt?")], tools: vec![], tool_bridge: None };
+        let req = ChatRequest { conversation_id: "c".into(), model: "claude-haiku-5-5".into(), system: None, messages: vec![m(Role::User, "Hallo"), m(Role::Assistant, "Hi!"), m(Role::User, "Und jetzt?")], tools: vec![], tool_bridge: None, persona: None };
         let v = input_message(&req);
         let text = v.pointer("/message/content/0/text").and_then(Value::as_str).unwrap();
         assert!(text.contains("<Person>\nHallo\n</Person>"));
@@ -313,7 +313,7 @@ mod tests {
         let cfg = BackendConfig { id: "cc".into(), name: "Claude".into(), kind: aiscraft_core::BackendKind::ClaudeCli, base_url: "claude".into(), default_model: None, send_context: true };
         let b = ClaudeCli::new(cfg, "claude".into()).unwrap();
         b.check().await.unwrap();
-        let req = ChatRequest { conversation_id: "c".into(), model: "claude-haiku-5-5".into(), system: Some("Antworte mit genau einem Wort.".into()), messages: vec![m(Role::User, "Sag Hallo")], tools: vec![], tool_bridge: None };
+        let req = ChatRequest { conversation_id: "c".into(), model: "claude-haiku-5-5".into(), system: Some("Antworte mit genau einem Wort.".into()), messages: vec![m(Role::User, "Sag Hallo")], tools: vec![], tool_bridge: None, persona: None };
         let mut s = b.chat(req).await.unwrap();
         let mut text = String::new();
         while let Some(e) = s.next().await {

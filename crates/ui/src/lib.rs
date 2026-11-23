@@ -8,6 +8,7 @@ mod conversation;
 pub mod manual;
 mod dialogs;
 mod palette;
+pub mod plot;
 mod sidebar;
 pub mod theme;
 mod widgets;

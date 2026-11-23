@@ -57,16 +57,26 @@ impl AisCraftApp {
                 if let Some(p) = self.state.selection.project_id.as_ref().and_then(|pid| self.state.projects.iter().find(|p| &p.id == pid)) {
                     ui.label(small_muted(&t, format!("▣ {}", p.name)));
                 }
+                if let Some(p) = self.state.selection.persona.as_ref().filter(|_| self.state.current.is_some()) {
+                    ui.label(small_muted(&t, format!("{}: {}", p.kind.label(), p.name)));
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if self.state.current.is_some() {
-                        self.context_meter(ui);
+                        if self.state.selection.kind == aiscraft_core::ConversationKind::Chat {
+                            self.context_meter(ui);
+                        }
                         if icon_button(ui, &t, "⬇", "Exportieren (Strg+Umschalt+E)").clicked() {
                             self.export_dialog();
                         }
                         if let Some(url) = self.state.current.as_ref().and_then(|id| {
                             let c = self.state.conversation(id)?;
                             let b = self.state.backend(&c.backend_id).filter(|b| b.config.kind == BackendKind::AisChat)?;
-                            Some(format!("{}/d/{}", b.config.base_url.trim_end_matches('/'), c.id))
+                            let path = if c.kind == aiscraft_core::ConversationKind::Image {
+                                format!("/image-generation/d/{}", c.remote_id.as_deref().unwrap_or(&c.id))
+                            } else {
+                                aiscraft_core::ais_conversation_path(c.persona.as_ref(), &c.id)
+                            };
+                            Some(format!("{}{path}", b.config.base_url.trim_end_matches('/')))
                         }) && icon_button(ui, &t, "↗", "In AIS.chat öffnen").clicked()
                         {
                             ui.ctx().open_url(egui::OpenUrl::new_tab(url));
@@ -96,7 +106,7 @@ impl AisCraftApp {
                     }
                     BackendStatus::Ready { .. } => {
                         for m in &b.models {
-                            let active = sel.backend_id == b.config.id && sel.model_id == m.id;
+                            let active = sel.backend_id == b.config.id && sel.model_id == m.id && sel.kind == aiscraft_core::ConversationKind::Chat;
                             let r = ui.add(egui::Button::selectable(active, &m.name));
                             let r = match &m.description {
                                 Some(d) => r.on_hover_text(d),
@@ -105,6 +115,17 @@ impl AisCraftApp {
                             if r.clicked() {
                                 self.run("chat.select_model", json!({"backend": b.config.id, "model": m.id}));
                                 ui.close();
+                            }
+                        }
+                        if !b.image_models.is_empty() {
+                            ui.label(small_muted(&t, "Bild erzeugen"));
+                            for m in &b.image_models {
+                                let active = sel.backend_id == b.config.id && sel.model_id == m.id && sel.kind == aiscraft_core::ConversationKind::Image;
+                                let r = ui.add(egui::Button::selectable(active, m.name.as_str())).on_hover_text("Neuer Bild-Chat mit diesem Modell");
+                                if r.clicked() {
+                                    self.run("chat.new_image", json!({"backend": b.config.id, "model": m.id}));
+                                    ui.close();
+                                }
                             }
                         }
                     }
@@ -131,8 +152,56 @@ impl AisCraftApp {
         });
     }
 
+    /// A new chat with an assistant, character or learning scenario: who it is, the task, the
+    /// greeting and its suggestions.
+    fn persona_empty_state(&mut self, ui: &mut Ui, p: aiscraft_core::Persona) {
+        let t = self.tokens.clone();
+        let info = self.state.persona_info(&self.state.selection.backend_id, &p).cloned();
+        ui.add_space((ui.available_height() * 0.16).max(20.0));
+        centered(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.label(small_muted(&t, p.kind.label().to_uppercase()));
+                ui.label(RichText::new(&p.name).size(26.0));
+                if let Some(d) = info.as_ref().and_then(|i| i.description.clone()) {
+                    ui.add(egui::Label::new(muted(&t, d)).wrap());
+                }
+            });
+            ui.add_space(12.0);
+            if let Some(ex) = info.as_ref().and_then(|i| i.exercise.clone()) {
+                card(&t).show(ui, |ui| {
+                    ui.label(RichText::new("Aufgabe").strong());
+                    ui.add(egui::Label::new(ex).wrap());
+                });
+                ui.add_space(8.0);
+            }
+            if let Some(g) = info.as_ref().and_then(|i| i.initial_message.clone()) {
+                Frame::new().fill(t.surface_hi).corner_radius(CornerRadius::same(t.radius)).inner_margin(Margin::symmetric(14, 10)).show(ui, |ui| {
+                    ui.add(egui::Label::new(g).wrap());
+                });
+                ui.add_space(8.0);
+            }
+            self.composer(ui);
+            ui.add_space(12.0);
+            ui.horizontal_wrapped(|ui| {
+                for s in info.as_ref().map(|i| i.prompt_suggestions.clone()).unwrap_or_default() {
+                    if ui.add(egui::Button::new(small_muted(&t, &s)).corner_radius(CornerRadius::same(t.radius))).clicked() {
+                        self.composer = s;
+                        self.focus_composer = true;
+                    }
+                }
+                if ui.add(egui::Button::new(small_muted(&t, format!("Ohne {} chatten", p.kind.label()))).frame(false)).clicked() {
+                    self.new_chat();
+                }
+            });
+        });
+    }
+
     fn empty_state(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
+        if let Some(p) = self.state.selection.persona.clone() {
+            self.persona_empty_state(ui, p);
+            return;
+        }
         // A name from a sign-in (AIS.chat via VIDIS), else the person logged in to this computer.
         let sso = self.state.backends.iter().filter(|b| b.config.kind == BackendKind::AisChat).find_map(|b| match &b.status {
             BackendStatus::Ready { account } => account.display_name.clone().filter(|n| !n.contains('@')),
@@ -149,7 +218,9 @@ impl AisCraftApp {
             ui.vertical_centered(|ui| {
                 crate::widgets::ais_logo(ui, 46.0, t.accent);
                 ui.add_space(6.0);
+                let image_mode = self.state.selection.kind == aiscraft_core::ConversationKind::Image;
                 let greeting = match first {
+                    _ if image_mode => "Was soll das Bild zeigen?".to_string(),
                     Some(n) => format!("Hallo, {n}. Woran arbeiten wir?"),
                     None => "Woran arbeiten wir?".into(),
                 };
@@ -180,7 +251,12 @@ impl AisCraftApp {
             self.composer(ui);
             ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
-                for s in ["Stundenentwurf für Klasse 7 zum Thema Photosynthese", "Erkläre Bruchrechnung mit Pizzastücken", "Formuliere eine freundliche Elternmail", "Erstelle ein Quiz mit 5 Fragen"] {
+                let ideas: &[&str] = if self.state.selection.kind == aiscraft_core::ConversationKind::Image {
+                    &["Ein Fuchs im verschneiten Wald, Aquarell", "Schaubild einer Pflanzenzelle für Klasse 7", "Comic: drei Kinder bauen ein Hochbeet"]
+                } else {
+                    &["Stundenentwurf für Klasse 7 zum Thema Photosynthese", "Erkläre Bruchrechnung mit Pizzastücken", "Formuliere eine freundliche Elternmail", "Erstelle ein Quiz mit 5 Fragen"]
+                };
+                for s in ideas.iter().copied() {
                     if ui.add(egui::Button::new(small_muted(&t, s)).corner_radius(CornerRadius::same(t.radius))).clicked() {
                         self.composer = s.to_string();
                         self.focus_composer = true;
@@ -224,7 +300,11 @@ impl AisCraftApp {
                 if !m.attachments.is_empty() {
                     ui.horizontal_wrapped(|ui| {
                         for a in &m.attachments {
-                            ui.label(small_muted(&t, format!("📎 {}", a.name)));
+                            if a.is_link() {
+                                ui.hyperlink_to(RichText::new(format!("🔗 {}", short_url(&a.name))).small(), &a.name);
+                            } else {
+                                ui.label(small_muted(&t, format!("📎 {}", a.name)));
+                            }
                         }
                     });
                 }
@@ -272,7 +352,14 @@ impl AisCraftApp {
                         }
                     });
                     for l in &s.links {
-                        ui.hyperlink_to(RichText::new(format!("   ↗ {}", l.title)).small(), &l.url);
+                        if l.failed {
+                            ui.horizontal(|ui| {
+                                ui.hyperlink_to(RichText::new(format!("   ↗ {}", l.title)).small().color(t.muted).strikethrough(), &l.url);
+                                ui.label(RichText::new("nicht lesbar").small().color(t.danger));
+                            });
+                        } else {
+                            ui.hyperlink_to(RichText::new(format!("   ↗ {}", l.title)).small(), &l.url);
+                        }
                     }
                     if let Some(doc) = &s.document
                         && ui.button(format!("💾  {} speichern", doc.file_name)).clicked()
@@ -307,13 +394,47 @@ impl AisCraftApp {
         if m.content.is_empty() && !m.tool_calls.is_empty() {
             return;
         }
+        let images: Vec<(usize, aiscraft_core::Attachment)> = m.attachments.iter().filter(|a| a.mime.starts_with("image/")).cloned().enumerate().collect();
+        for (i, a) in &images {
+            let tex = a.local_path.as_deref().and_then(|p| self.image_texture(ui.ctx(), p));
+            match tex {
+                Some(tex) => {
+                    let size = tex.size_vec2();
+                    let w = size.x.min(ui.available_width()).min(512.0);
+                    let h = if size.x > 0.0 { w * size.y / size.x } else { w };
+                    ui.add(egui::Image::new(&tex).fit_to_exact_size(egui::vec2(w, h)).corner_radius(CornerRadius::same(t.radius)));
+                }
+                None => {
+                    ui.label(small_muted(&t, format!("Bild {} lässt sich nicht anzeigen", a.name)));
+                }
+            }
+            ui.horizontal(|ui| {
+                if ui.add(egui::Button::new(small_muted(&t, "Bild speichern …")).frame(false)).clicked()
+                    && let Some(path) = rfd::FileDialog::new().set_file_name(&a.name).save_file()
+                {
+                    self.run("chat.save_image", json!({"message_id": m.id, "index": i, "path": path.display().to_string()}));
+                }
+                if is_last && icon_button(ui, &t, "⟳", "Neu erzeugen (Strg+R)").clicked() {
+                    self.run("chat.regenerate", json!({}));
+                }
+            });
+        }
         if m.content.is_empty() && generating {
+            let image_chat = self.state.current.as_ref().and_then(|c| self.state.conversation(c)).is_some_and(|c| c.kind == aiscraft_core::ConversationKind::Image);
             ui.horizontal(|ui| {
                 ui.add(egui::Spinner::new().color(t.accent));
-                ui.label(muted(&t, "Denkt nach …"));
+                ui.label(muted(&t, if image_chat { "Bild wird gezeichnet …" } else { "Denkt nach …" }));
             });
-        } else {
-            egui_commonmark::CommonMarkViewer::new().default_width(Some(CONTENT_WIDTH as usize)).show(ui, &mut self.md, &m.content);
+        } else if !m.content.is_empty() || images.is_empty() {
+            // Diagrams from AIS.chat's create_plot tool come as ```jsxgraph-json blocks.
+            for (k, seg) in crate::plot::segments(&m.content).into_iter().enumerate() {
+                match seg {
+                    crate::plot::Segment::Markdown(md) => {
+                        egui_commonmark::CommonMarkViewer::new().default_width(Some(CONTENT_WIDTH as usize)).show(ui, &mut self.md, md);
+                    }
+                    crate::plot::Segment::Plot(src) => self.plot_block(ui, &m.id, k, src),
+                }
+            }
         }
         if let Some(err) = &m.error {
             Frame::new().fill(t.danger.gamma_multiply(0.12)).stroke(Stroke::new(1.0, t.danger.gamma_multiply(0.5))).corner_radius(CornerRadius::same(t.radius)).inner_margin(Margin::same(10)).show(ui, |ui| {
@@ -381,6 +502,34 @@ impl AisCraftApp {
                 }
             });
         }
+    }
+
+    /// A diagram from a ```jsxgraph-json block: drawn where possible, the data one click away.
+    fn plot_block(&mut self, ui: &mut Ui, message_id: &str, k: usize, src: &str) {
+        let t = self.tokens.clone();
+        Frame::new().stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(t.radius)).inner_margin(Margin::same(10)).show(ui, |ui| {
+            match crate::plot::parse_plot(src) {
+                Ok(p) => {
+                    crate::plot::show(ui, &p, t.text, t.muted, t.code_bg);
+                    if !p.sliders.is_empty() {
+                        let s: Vec<String> = p.sliders.iter().map(|(n, v)| format!("{n} = {}", format!("{v}").replace('.', ","))).collect();
+                        ui.label(small_muted(&t, format!("Schieberegler (Startwert): {}", s.join(", "))));
+                    }
+                    if !p.skipped.is_empty() {
+                        ui.label(small_muted(&t, format!("Nicht dargestellt: {} (in AIS.chat interaktiv)", p.skipped.join(", "))));
+                    }
+                }
+                Err(e) => {
+                    ui.label(RichText::new(format!("Diagramm: {e}")).color(t.warning).small());
+                }
+            }
+            egui::CollapsingHeader::new(small_muted(&t, "Diagrammdaten")).id_salt(("plot", message_id, k)).default_open(false).show(ui, |ui| {
+                ui.add(egui::Label::new(RichText::new(src.chars().take(6000).collect::<String>()).monospace().small()).wrap());
+                if ui.small_button("Kopieren").clicked() {
+                    ui.ctx().copy_text(src.to_string());
+                }
+            });
+        });
     }
 
     /// How full the model's context window is: counted by the server where it reports usage,
@@ -589,6 +738,7 @@ impl AisCraftApp {
         let t = self.tokens.clone();
         let generating = self.state.current.as_ref().is_some_and(|c| self.state.is_generating(c));
         let enter_sends = self.state.settings.enter_sends;
+        let image_mode = self.state.current.as_ref().and_then(|c| self.state.conversation(c)).map(|c| c.kind).unwrap_or(self.state.selection.kind) == aiscraft_core::ConversationKind::Image;
         let mut send = false;
         Frame::new()
             .fill(t.surface)
@@ -616,6 +766,54 @@ impl AisCraftApp {
                         self.pending_files.remove(i);
                     }
                 }
+                if !self.pending_links.is_empty() {
+                    let mut remove = None;
+                    ui.horizontal_wrapped(|ui| {
+                        for (i, l) in self.pending_links.iter().enumerate() {
+                            Frame::new().fill(t.surface_hi).corner_radius(CornerRadius::same(6)).inner_margin(Margin::symmetric(8, 3)).show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(format!("🔗 {}", short_url(l))).small()).on_hover_text(l);
+                                    if icon_button(ui, &t, "×", "Entfernen").clicked() {
+                                        remove = Some(i);
+                                    }
+                                });
+                            });
+                        }
+                    });
+                    if let Some(i) = remove {
+                        self.pending_links.remove(i);
+                    }
+                }
+                if let Some(input) = self.link_input.as_mut() {
+                    let mut done = false;
+                    let mut cancel = false;
+                    ui.horizontal(|ui| {
+                        let r = ui.add(egui::TextEdit::singleline(input).hint_text("https://… (Enter fügt hinzu)").desired_width(ui.available_width() - 90.0));
+                        if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                            done = true;
+                        }
+                        if !r.has_focus() && input.is_empty() && !r.gained_focus() {
+                            r.request_focus();
+                        }
+                        if ui.small_button("Abbrechen").clicked() {
+                            cancel = true;
+                        }
+                    });
+                    if done {
+                        let url = input.trim().to_string();
+                        if url.starts_with("http://") || url.starts_with("https://") {
+                            if !self.pending_links.contains(&url) && self.pending_links.len() < 5 {
+                                self.pending_links.push(url);
+                            }
+                            self.link_input = None;
+                            self.focus_composer = true;
+                        } else if !url.is_empty() {
+                            self.engine.ctx().notice(aiscraft_engine::NoticeLevel::Warning, "Bitte eine Webadresse mit https:// eingeben.");
+                        }
+                    } else if cancel {
+                        self.link_input = None;
+                    }
+                }
                 if self.attach_artifact
                     && let Some(a) = self.state.open_artifact.as_ref().and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id))
                 {
@@ -631,7 +829,13 @@ impl AisCraftApp {
                 let newline = if enter_sends { KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter) } else { KeyboardShortcut::new(Modifiers::NONE, Key::Enter) };
                 let edit = egui::TextEdit::multiline(&mut self.composer)
                     .id(egui::Id::unique("composer"))
-                    .hint_text(if enter_sends { "Schreib eine Nachricht … (Umschalt+Enter für neue Zeile)" } else { "Schreib eine Nachricht … (Strg+Enter sendet)" })
+                    .hint_text(if image_mode {
+                        "Beschreibe das Bild, das entstehen soll …"
+                    } else if enter_sends {
+                        "Schreib eine Nachricht … (Umschalt+Enter für neue Zeile)"
+                    } else {
+                        "Schreib eine Nachricht … (Strg+Enter sendet)"
+                    })
                     .desired_rows(2)
                     .desired_width(f32::INFINITY)
                     .frame(Frame::NONE)
@@ -674,20 +878,37 @@ impl AisCraftApp {
                     } else if icon_button(ui, &t, "🎤", "Diktieren").clicked() {
                         self.run("voice.record_start", json!({}));
                     }
-                    if icon_button(ui, &t, "📎", "Dateien anhängen (oder hineinziehen)").clicked()
+                    if !image_mode
+                        && icon_button(ui, &t, "📎", "Dateien anhängen (oder hineinziehen)").clicked()
                         && let Some(files) = rfd::FileDialog::new().pick_files()
                     {
                         self.pending_files.extend(files);
                     }
+                    if !image_mode && self.link_input.is_none() && icon_button(ui, &t, "🔗", "Webseite anhängen (bis zu 5 Links)").clicked() {
+                        self.link_input = Some(String::new());
+                    }
                     self.model_picker(ui);
-                    self.sources_menu(ui);
+                    if image_mode {
+                        let cur = self.state.selection.aspect_ratio.clone();
+                        let label = aiscraft_core::ASPECT_RATIOS.iter().find(|(k, _)| *k == cur).map(|(_, l)| *l).unwrap_or("Quadratisch");
+                        ui.menu_button(RichText::new(format!("{label}  ⏷")).color(t.muted), |ui| {
+                            for (k, l) in aiscraft_core::ASPECT_RATIOS {
+                                if ui.add(egui::Button::selectable(k == cur || (cur.is_empty() && k == "quadratic"), l)).clicked() {
+                                    self.run("chat.set_aspect", json!({"ratio": k}));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    } else {
+                        self.sources_menu(ui);
+                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if generating {
                             if accent_button(ui, &t, "■").on_hover_text("Anhalten (Esc)").clicked() {
                                 self.run("chat.stop", json!({}));
                             }
                         } else {
-                            let ok = !self.composer.trim().is_empty() || !self.pending_files.is_empty();
+                            let ok = !self.composer.trim().is_empty() || !self.pending_files.is_empty() || !self.pending_links.is_empty();
                             let b = ui.add_enabled(ok, egui::Button::new(RichText::new("⬆").strong().color(t.on_accent)).fill(t.accent).corner_radius(CornerRadius::same(t.radius)));
                             if b.on_hover_text("Senden").clicked() {
                                 send = true;
@@ -700,10 +921,12 @@ impl AisCraftApp {
         if send && !generating {
             let text = std::mem::take(&mut self.composer);
             let files: Vec<String> = self.pending_files.drain(..).map(|p| p.display().to_string()).collect();
-            if !text.trim().is_empty() || !files.is_empty() {
+            let links = std::mem::take(&mut self.pending_links);
+            self.link_input = None;
+            if !text.trim().is_empty() || !files.is_empty() || !links.is_empty() {
                 self.save_if_dirty();
                 let artifact = if self.attach_artifact { self.state.open_artifact.clone() } else { None };
-                self.run("chat.send", json!({"text": text, "files": files, "artifact": artifact}));
+                self.run("chat.send", json!({"text": text, "files": files, "links": links, "artifact": artifact}));
             }
             self.focus_composer = true;
         }
@@ -741,4 +964,10 @@ pub(crate) fn centered<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
     })
     .inner
+}
+
+/// A link as people read it: host and path, without the scheme, shortened.
+fn short_url(url: &str) -> String {
+    let s = url.split_once("://").map(|(_, r)| r).unwrap_or(url).trim_end_matches('/');
+    if s.chars().count() > 48 { format!("{}…", s.chars().take(47).collect::<String>()) } else { s.to_string() }
 }

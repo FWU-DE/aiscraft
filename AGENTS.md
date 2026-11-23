@@ -97,11 +97,16 @@ What to check, in this order (paths in `FWU-DE/ais-chat`):
 | Uploads, speech | `src/app/api/v1/files`, `src/app/api/v1/speech/*` | `AisChat::upload`, `voice` crate (`speak_ais`) |
 | Errors (`TokenPointsExceededError`, `ResponsibleAIError`, …) | `packages/ai-core/src/errors*` | `ais_error` |
 
+Adopted since: assistants, characters, learning scenarios (lists via `get…ByFilterAction`, chats
+via `sendChatMessageAction` with the id; `aischat.rs` `personas`), image generation
+(`generateImageAction`, `generate_image`), links on messages (`ingestWebContentAction` where the
+action is reachable, `check_link`) and `create_plot` diagrams (```` ```jsxgraph-json ```` blocks,
+drawn by `ui/src/plot.rs`).
+
 **Features AIS.chat has that AIS.ChatCraft does not (yet)** — check whether to adopt them:
-assistants, characters, learning scenarios, custom chats (`(chat-bot)/assistants`, `characters`,
-`custom`, `learning-scenarios`, each with its own `send…Action`), image generation
-(`generateImageAction`), sharing with learners, top-up, web content ingest
-(`ingestWebContentAction`), new server-side tools in `src/app/api/chat/tools/`. Open an issue per
+creating and editing assistants, characters and scenarios, custom chats (`(chat-bot)/custom`),
+image styles and input images, sharing with learners, top-up, new server-side tools in
+`src/app/api/chat/tools/`. Open an issue per
 feature worth adopting (label `ais-chat-parity`), with the AIS.chat paths and the user-visible goal.
 
 When a protocol detail changes: update the scripted servers in `backends/src/aischat.rs` tests and

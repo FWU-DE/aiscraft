@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS backends (id TEXT PRIMARY KEY, position INTEGER NOT NULL, config TEXT NOT NULL);
@@ -77,6 +77,17 @@ pub struct SearchHit {
     pub snippet: String,
 }
 
+/// Conversation fields that live in one JSON column (added in schema 3).
+#[derive(Default, Serialize, Deserialize)]
+struct ConvExtra {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    persona: Option<aiscraft_core::Persona>,
+    #[serde(default)]
+    kind: aiscraft_core::ConversationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    remote_id: Option<String>,
+}
+
 pub struct Store {
     db: Connection,
 }
@@ -108,6 +119,11 @@ impl Store {
         let has_sources: bool = db.prepare("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'sources'").and_then(|mut st| st.exists([])).map_err(db_err)?;
         if !has_sources {
             db.execute_batch("ALTER TABLE conversations ADD COLUMN sources TEXT NOT NULL DEFAULT '{}'").map_err(db_err)?;
+        }
+        // 2 → 3: persona (assistant, character, learning scenario), kind and server id.
+        let has_extra: bool = db.prepare("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'extra'").and_then(|mut st| st.exists([])).map_err(db_err)?;
+        if !has_extra {
+            db.execute_batch("ALTER TABLE conversations ADD COLUMN extra TEXT NOT NULL DEFAULT '{}'").map_err(db_err)?;
         }
         db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}")).map_err(db_err)?;
         Ok(Self { db })
@@ -147,6 +163,7 @@ impl Store {
     // ---- conversations --------------------------------------------------------------------
 
     fn conv_row(r: &rusqlite::Row) -> rusqlite::Result<Conversation> {
+        let extra: ConvExtra = r.get::<_, String>(9).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
         Ok(Conversation {
             id: r.get(0)?,
             title: r.get(1)?,
@@ -157,10 +174,13 @@ impl Store {
             updated_at: r.get(6)?,
             pinned: r.get::<_, i64>(7)? != 0,
             sources: r.get::<_, String>(8).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default(),
+            persona: extra.persona,
+            kind: extra.kind,
+            remote_id: extra.remote_id,
         })
     }
 
-    const CONV_COLS: &'static str = "id, title, backend_id, model_id, project_id, created_at, updated_at, pinned, sources";
+    const CONV_COLS: &'static str = "id, title, backend_id, model_id, project_id, created_at, updated_at, pinned, sources, extra";
 
     /// Pinned first, then most recently updated.
     pub fn conversations(&self, limit: usize) -> Result<Vec<Conversation>> {
@@ -178,11 +198,23 @@ impl Store {
     pub fn save_conversation(&self, c: &Conversation) -> Result<()> {
         self.db
             .execute(
-                "INSERT INTO conversations (id, title, backend_id, model_id, project_id, created_at, updated_at, pinned, sources)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                "INSERT INTO conversations (id, title, backend_id, model_id, project_id, created_at, updated_at, pinned, sources, extra)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(id) DO UPDATE SET title = excluded.title, backend_id = excluded.backend_id, model_id = excluded.model_id,
-                   project_id = excluded.project_id, updated_at = excluded.updated_at, pinned = excluded.pinned, sources = excluded.sources",
-                params![c.id, c.title, c.backend_id, c.model_id, c.project_id, c.created_at, c.updated_at, c.pinned as i64, serde_json::to_string(&c.sources)?],
+                   project_id = excluded.project_id, updated_at = excluded.updated_at, pinned = excluded.pinned, sources = excluded.sources,
+                   extra = excluded.extra",
+                params![
+                    c.id,
+                    c.title,
+                    c.backend_id,
+                    c.model_id,
+                    c.project_id,
+                    c.created_at,
+                    c.updated_at,
+                    c.pinned as i64,
+                    serde_json::to_string(&c.sources)?,
+                    serde_json::to_string(&ConvExtra { persona: c.persona.clone(), kind: c.kind, remote_id: c.remote_id.clone() })?
+                ],
             )
             .map_err(db_err)?;
         Ok(())
@@ -556,6 +588,9 @@ mod tests {
             updated_at: updated,
             pinned: false,
             sources: Default::default(),
+            persona: None,
+            kind: Default::default(),
+            remote_id: None,
         }
     }
 
@@ -572,6 +607,28 @@ mod tests {
             error: None,
             usage: None, tool_calls: vec![], tool_result: None,
         }
+    }
+
+    /// A database from schema 2 (no `extra` column) opens, keeps its chats and stores personas.
+    #[test]
+    fn migrates_schema_2_and_keeps_the_persona() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, backend_id TEXT NOT NULL, model_id TEXT NOT NULL,
+               project_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, pinned INTEGER NOT NULL DEFAULT 0, sources TEXT NOT NULL DEFAULT '{}');
+             INSERT INTO conversations VALUES ('old', 'Alt', 'b', 'm', NULL, 0, 5, 0, '{}');
+             PRAGMA user_version = 2;",
+        )
+        .unwrap();
+        let s = Store::init(db).unwrap();
+        let old = s.conversation("old").unwrap().unwrap();
+        assert_eq!((old.title.as_str(), old.persona.clone()), ("Alt", None));
+        let mut c = conv("p", 9);
+        c.persona = Some(aiscraft_core::Persona { kind: aiscraft_core::PersonaKind::Character, id: "c1".into(), name: "Goethe".into() });
+        s.save_conversation(&c).unwrap();
+        assert_eq!(s.conversation("p").unwrap().unwrap().persona, c.persona);
+        let v: i64 = s.db.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
     }
 
     #[test]

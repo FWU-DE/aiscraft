@@ -11,7 +11,9 @@ mod sse;
 
 use std::sync::Arc;
 
-use aiscraft_core::{AccountInfo, BackendConfig, BackendKind, Capabilities, ChatRequest, Error, ModelInfo, RemoteConversation, Result, StreamEvent};
+use aiscraft_core::{
+    AccountInfo, BackendConfig, BackendKind, Capabilities, ChatRequest, Error, ImageRequest, ImageResult, ModelInfo, PersonaInfo, RemoteConversation, Result, StreamEvent,
+};
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 
@@ -59,6 +61,22 @@ pub trait Backend: Send + Sync {
     /// The messages of a server-side conversation, oldest first: `(id, role, content)`.
     fn remote_messages(&self, _id: String) -> BoxFuture<'_, Result<Vec<(String, aiscraft_core::Role, String)>>> {
         Box::pin(async { Err(Error::unsupported("Dieses Backend hat keinen Verlauf auf dem Server")) })
+    }
+    /// Assistants, characters and learning scenarios the person may chat with (own and shared).
+    fn personas(&self) -> BoxFuture<'_, Result<Vec<PersonaInfo>>> {
+        Box::pin(async { Err(Error::unsupported("Dieses Backend kennt keine Assistenten, Figuren oder Lernszenarien")) })
+    }
+    /// Models that draw images instead of writing text.
+    fn image_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn generate_image(&self, _req: ImageRequest) -> BoxFuture<'_, Result<ImageResult>> {
+        Box::pin(async { Err(Error::unsupported("Dieses Backend erzeugt keine Bilder")) })
+    }
+    /// Let the server read a web page a message refers to. `Ok(false)`: not checked (the backend
+    /// cannot), `Ok(true)`: the server read it, `Err`: it cannot.
+    fn check_link(&self, _url: String) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async { Ok(false) })
     }
     /// The conversation in the backend's own web app, if it has one.
     fn web_url(&self, _conversation_id: &str) -> Option<String> {

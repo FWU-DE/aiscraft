@@ -28,6 +28,9 @@ pub struct AisCraftApp {
     pub(crate) md: egui_commonmark::CommonMarkCache,
     pub(crate) composer: String,
     pub(crate) pending_files: Vec<PathBuf>,
+    /// Web links for the next message, and the address being typed (`Some` while the field is open).
+    pub(crate) pending_links: Vec<String>,
+    pub(crate) link_input: Option<String>,
     pub(crate) sidebar_open: bool,
     pub(crate) search_text: String,
     pub(crate) project_filter: Option<String>,
@@ -37,6 +40,10 @@ pub struct AisCraftApp {
     pub(crate) focus_composer: bool,
     pub(crate) focus_search: bool,
     pub(crate) remote_open: bool,
+    /// The personas section asked for its list already (while open).
+    pub(crate) personas_open: bool,
+    /// Open the personas section on the next frame (control channel `ui.show personas`).
+    pub(crate) show_personas: bool,
     last_current: Option<String>,
     pub(crate) artifact: Option<crate::artifact_panel::ArtifactView>,
     /// Send the open artifact as context with the next message.
@@ -45,6 +52,8 @@ pub struct AisCraftApp {
     pub(crate) manual: Option<crate::manual::ManualView>,
     /// Text from a finished dictation, picked up by the composer.
     pub(crate) dictated: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// Generated images by file, decoded once (`None`: could not be read).
+    pub(crate) images: std::collections::HashMap<String, Option<egui::TextureHandle>>,
 }
 
 pub(crate) const CONTENT_WIDTH: f32 = 760.0;
@@ -69,6 +78,8 @@ impl AisCraftApp {
             md: Default::default(),
             composer: String::new(),
             pending_files: Vec::new(),
+            pending_links: Vec::new(),
+            link_input: None,
             sidebar_open: true,
             search_text: String::new(),
             project_filter: None,
@@ -78,12 +89,39 @@ impl AisCraftApp {
             focus_composer: true,
             focus_search: false,
             remote_open: false,
+            personas_open: false,
+            show_personas: false,
             last_current: None,
             artifact: None,
             attach_artifact: false,
             dictated: Default::default(),
             manual: None,
+            images: Default::default(),
         }
+    }
+
+    /// The texture of an image file (at most 25 MB, 8192 px a side), loaded on first use.
+    pub(crate) fn image_texture(&mut self, ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
+        if let Some(t) = self.images.get(path) {
+            return t.clone();
+        }
+        let tex = std::fs::metadata(path)
+            .ok()
+            .filter(|m| m.len() <= 25 * 1024 * 1024)
+            .and_then(|_| std::fs::read(path).ok())
+            .and_then(|bytes| image::load_from_memory(&bytes).ok())
+            .filter(|img| img.width() <= 8192 && img.height() <= 8192)
+            .map(|img| {
+                let rgba = img.to_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                ctx.load_texture(path, egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()), egui::TextureOptions::LINEAR)
+            });
+        // Keep the cache small: generated images are few, but never let it grow without bound.
+        if self.images.len() > 64 {
+            self.images.clear();
+        }
+        self.images.insert(path.to_string(), tex.clone());
+        tex
     }
 
     pub(crate) fn run(&self, cmd: &str, params: Value) {
@@ -146,6 +184,8 @@ impl AisCraftApp {
         self.run("chat.new", json!({}));
         self.composer.clear();
         self.pending_files.clear();
+        self.pending_links.clear();
+        self.link_input = None;
         self.editing = None;
         self.focus_composer = true;
     }
@@ -270,6 +310,10 @@ impl AisCraftApp {
                         }
                         "palette" => {
                             self.palette = Some(Palette::default());
+                            true
+                        }
+                        "personas" => {
+                            self.show_personas = true;
                             true
                         }
                         "none" => {

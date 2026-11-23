@@ -616,6 +616,280 @@ fn ais_chat_login_history_and_import() {
     assert_eq!(s.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(), ["Hallo AIS", "Hallo zurück"]);
 }
 
+/// Read one HTTP request, head and body (by content-length).
+async fn read_http(sock: &mut tokio::net::TcpStream) -> String {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = sock.read(&mut chunk).await.unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        let s = String::from_utf8_lossy(&buf);
+        if let Some(head_end) = s.find("\r\n\r\n") {
+            let len = s[..head_end].lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+            if buf.len() >= head_end + 4 + len {
+                break;
+            }
+        }
+    }
+    String::from_utf8_lossy(&buf).to_string()
+}
+
+/// A scripted AIS.chat for assistants, characters and scenarios (and later features): pages
+/// ship their own JS chunks with server action ids; POSTs to "/" are answered by action id.
+/// Every POST is recorded.
+fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let posted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let rec = posted.clone();
+    let base = engine.block_on(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let rec = rec.clone();
+                tokio::spawn(async move {
+                    let req = read_http(&mut sock).await;
+                    let id = |n: u8| format!("{n:02x}").repeat(21);
+                    let page = |chunk: &str, row: &str| {
+                        let payload = serde_json::to_string(&format!("{row}\n")).unwrap();
+                        format!(r#"<script src="/_next/static/chunks/{chunk}.js"></script><script>self.__next_f.push([1,{payload}])</script>"#)
+                    };
+                    let reference = |n: u8, name: &str| format!(r#"(0,a.createServerReference)("{}",a.callServer,void 0,a.findSourceMapURL,"{name}");"#, id(n));
+                    let flight = |value: &str| format!("0:{{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}}\n1:{value}\n");
+                    let action = req.lines().find_map(|l| l.strip_prefix("next-action: ")).unwrap_or("").to_string();
+                    // Static chunks need no session, everything else does.
+                    let authed = req.contains("ais-chat-app.authjs.session-token=good") || req.starts_with("GET /_next/");
+                    let (status, ctype, body) = if !authed {
+                        ("307 Temporary Redirect\r\nlocation: /login", "text/plain", String::new())
+                    } else if req.starts_with("GET /api/auth/session") {
+                        ("200 OK", "application/json", r#"{"user":{"id":"me","firstName":"Ada","lastName":"Lehrerin"},"expires":"2030-01-01"}"#.to_string())
+                    } else if req.starts_with("GET /api/conversations") {
+                        ("200 OK", "application/json", r#"{"conversations":[{"id":"r2","name":"Mit Goethe","characterId":"c1","type":"chat"}]}"#.to_string())
+                    } else if req.starts_with("GET /d/r2") || req.starts_with("GET /characters/d/c1/r2") {
+                        ("200 OK", "text/html", page("none", r#"5:{"messages":[{"id":"u9","role":"user","content":"Hallo Goethe"},{"id":"a9","role":"assistant","content":"Seid gegrüßt!"}]}"#))
+                    } else if req.starts_with("GET /assistants/editor/a1 ") {
+                        ("200 OK", "text/html", page("editor", "1:{}"))
+                    } else if req.starts_with("GET /_next/static/chunks/editor.js") {
+                        ("200 OK", "application/javascript", reference(0x55, "ingestWebContentAction"))
+                    } else if req.starts_with("GET /image-generation ") {
+                        ("200 OK", "text/html", page("images", r#"4:{"models":[{"id":"m-img","name":"img","displayName":"Bildmodell","priceMetadata":{"type":"image"}}]}"#))
+                    } else if req.starts_with("GET /_next/static/chunks/images.js") {
+                        ("200 OK", "application/javascript", reference(0x44, "generateImageAction"))
+                    } else if req.starts_with("GET /files/bild.png") {
+                        ("200 OK", "image/png", "\u{89}PNG-bytes".to_string())
+                    } else if req.starts_with("GET /assistants ") {
+                        ("200 OK", "text/html", page("assistants", "1:{}"))
+                    } else if req.starts_with("GET /characters ") {
+                        ("200 OK", "text/html", page("characters", "1:{}"))
+                    } else if req.starts_with("GET /learning-scenarios ") {
+                        ("200 OK", "text/html", page("scenarios", "1:{}"))
+                    } else if req.starts_with("GET / ") {
+                        ("200 OK", "text/html", page("app", r#"3:{"usedBudget":10,"maxBudget":100,"models":[{"id":"m-uuid","name":"gpt","displayName":"GPT","priceMetadata":{"type":"text"}},{"id":"m-other","name":"other","displayName":"Anderes","priceMetadata":{"type":"text"}}]}"#))
+                    } else if req.starts_with("GET /_next/static/chunks/app.js") {
+                        ("200 OK", "application/javascript", reference(0x7f, "sendChatMessageAction"))
+                    } else if req.starts_with("GET /_next/static/chunks/assistants.js") {
+                        ("200 OK", "application/javascript", reference(0x11, "getAssistantsByFilterAction"))
+                    } else if req.starts_with("GET /_next/static/chunks/characters.js") {
+                        ("200 OK", "application/javascript", reference(0x22, "getCharactersByFilterAction"))
+                    } else if req.starts_with("GET /_next/static/chunks/scenarios.js") {
+                        ("200 OK", "application/javascript", reference(0x33, "getLearningScenariosByFilterAction"))
+                    } else if req.starts_with("POST / ") {
+                        rec.lock().unwrap().push(req.clone());
+                        let body = if action == id(0x11) {
+                            flight(r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung","promptSuggestions":["Erkläre 3/4"]}]"#)
+                        } else if action == id(0x22) {
+                            flight(r#"[{"id":"c1","name":"Goethe","userId":"x","description":"Dichter aus Weimar","initialMessage":"Seid gegrüßt!","modelId":"m-other"}]"#)
+                        } else if action == id(0x33) {
+                            flight(r#"[{"id":"l1","name":"Photosynthese erforschen","userId":"me","studentExercise":"Finde heraus, was Pflanzen brauchen."}]"#)
+                        } else if action == id(0x55) {
+                            if req.contains("kaputt") {
+                                flight(r#"{"success":true,"value":{"processedUrls":[],"errorUrls":["https://kaputt.example/"]}}"#)
+                            } else {
+                                flight(r#"{"success":true,"value":{"processedUrls":["https://schule.example/plan"],"errorUrls":[]}}"#)
+                            }
+                        } else if action == id(0x44) {
+                            if req.contains("Fehler bitte") {
+                                flight(r#"{"success":false,"error":{"name":"TokenPointsExceededError","message":"leer"}}"#)
+                            } else {
+                                flight(r#"{"success":true,"value":{"imageUrl":"/files/bild.png","conversationId":"srv-img","fileId":"file_1","assistantMessageId":"am1","userMessageId":"um1"}}"#)
+                            }
+                        } else if action == id(0x7f) {
+                            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            format!("0:{{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}}\n1:{{\"stream\":\"$2\",\"messageId\":\"srv-{n}\"}}\n2:R\n2:\"Ich bin Goethe.\"\n2:C\n")
+                        } else {
+                            String::new()
+                        };
+                        if body.is_empty() { ("404 Not Found", "text/plain", body) } else { ("200 OK", "text/x-component", body) }
+                    } else {
+                        ("404 Not Found", "text/plain", String::new())
+                    };
+                    let _ = sock.write_all(format!("HTTP/1.1 {status}\r\ncontent-type: {ctype}\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    });
+    (base, posted)
+}
+
+fn ais_engine() -> (Engine, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let (base, posted) = scripted_ais(&engine);
+    engine.call("backend.update", json!({"id": "ais-chat", "base_url": base})).ok();
+    engine.call("backend.login", json!({"id": "ais-chat", "secret": "good"})).unwrap();
+    engine.call("chat.select_model", json!({"backend": "ais-chat", "model": "m-uuid"})).unwrap();
+    (engine, posted)
+}
+
+/// Assistants, characters and learning scenarios: list, start a chat with one (the greeting
+/// comes first, the send names it), reopen it, import one from the server history.
+#[test]
+fn ais_chat_personas() {
+    let (engine, posted) = ais_engine();
+    let list = engine.call("persona.refresh", json!({"backend": "ais-chat"})).unwrap();
+    let names: Vec<_> = list.as_array().unwrap().iter().map(|p| (p["kind"].as_str().unwrap().to_string(), p["name"].as_str().unwrap().to_string())).collect();
+    assert_eq!(names.len(), 3, "{names:?}");
+    assert!(names.contains(&("learning_scenario".into(), "Photosynthese erforschen".into())));
+    assert_eq!(engine.state().backend("ais-chat").unwrap().personas.as_ref().unwrap().len(), 3);
+
+    let info = engine.call("persona.start", json!({"kind": "character", "id": "c1"})).unwrap();
+    assert_eq!(info["initial_message"], "Seid gegrüßt!");
+    let s = engine.state();
+    assert_eq!(s.selection.persona.as_ref().map(|p| p.name.as_str()), Some("Goethe"));
+    assert_eq!(s.selection.model_id, "m-other", "the character's own model");
+    assert!(s.current.is_none());
+
+    engine.call("chat.send", json!({"text": "Wer bist du?"})).unwrap();
+    let s = engine.state();
+    let conv = s.conversation(s.current.as_deref().unwrap()).unwrap().clone();
+    assert_eq!(conv.persona.as_ref().map(|p| p.id.as_str()), Some("c1"));
+    assert_eq!(s.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(), ["Seid gegrüßt!", "Wer bist du?", "Ich bin Goethe."]);
+    let sent = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(sent.contains(r#""characterId":"c1""#), "{sent}");
+    assert!(!sent.contains("assistantId"), "{sent}");
+
+    // A plain new chat forgets the persona; reopening the chat brings it back.
+    engine.call("chat.new", json!({})).unwrap();
+    assert!(engine.state().selection.persona.is_none());
+    engine.call("chat.open", json!({"id": conv.id})).unwrap();
+    assert_eq!(engine.state().selection.persona, conv.persona);
+
+    // An assistant chat sends assistantId.
+    engine.call("persona.start", json!({"kind": "assistant", "id": "a1"})).unwrap();
+    engine.call("chat.send", json!({"text": "3/4?"})).unwrap();
+    assert!(posted.lock().unwrap().last().unwrap().contains(r#""assistantId":"a1""#));
+
+    // From the server history: the character chat keeps its character.
+    engine.call("remote.refresh", json!({"backend": "ais-chat"})).unwrap();
+    engine.call("remote.import", json!({"backend": "ais-chat", "id": "r2"})).unwrap();
+    let p = engine.state().conversation("r2").unwrap().persona.clone().unwrap();
+    assert_eq!((p.kind, p.id.as_str(), p.name.as_str()), (aiscraft_core::PersonaKind::Character, "c1", "Goethe"));
+
+    let err = engine.call("persona.start", json!({"kind": "character", "id": "weg"})).unwrap_err();
+    assert_eq!(err.kind, aiscraft_core::ErrorKind::NotFound);
+    assert!(engine.call("persona.start", json!({"kind": "robot", "id": "c1"})).is_err());
+    // Backends without personas say so.
+    let (other, id) = engine_with_backend();
+    assert_eq!(other.call("persona.refresh", json!({"backend": id})).unwrap_err().kind, aiscraft_core::ErrorKind::Unsupported);
+}
+
+/// Image chats: the AIS.chat image models appear, a prompt becomes an image attachment that can
+/// be saved, the next prompt continues the server's image chat, errors land on the answer.
+#[test]
+fn ais_chat_image_generation() {
+    let (engine, posted) = ais_engine();
+    let s = engine.state();
+    let b = s.backend("ais-chat").unwrap();
+    assert_eq!(b.image_models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["m-img"]);
+    assert!(!b.models.iter().any(|m| m.id == "m-img"), "image models are not text models");
+
+    engine.call("chat.new_image", json!({})).unwrap();
+    assert_eq!(engine.state().selection.kind, aiscraft_core::ConversationKind::Image);
+    assert_eq!(engine.state().selection.model_id, "m-img");
+    assert!(engine.call("chat.set_aspect", json!({"ratio": "rund"})).is_err());
+    engine.call("chat.set_aspect", json!({"ratio": "landscape"})).unwrap();
+    let out = engine.call("chat.send", json!({"text": "Ein Fuchs im Schnee"})).unwrap();
+    assert_eq!(out["images"], 1);
+    let s = engine.state();
+    let conv = s.conversation(s.current.as_deref().unwrap()).unwrap().clone();
+    assert_eq!(conv.kind, aiscraft_core::ConversationKind::Image);
+    assert_eq!(conv.remote_id.as_deref(), Some("srv-img"), "the server picked its own id");
+    let answer = s.messages.last().unwrap();
+    let img = &answer.attachments[0];
+    assert_eq!(img.mime, "image/png");
+    assert_eq!(std::fs::read(img.local_path.as_ref().unwrap()).unwrap(), "\u{89}PNG-bytes".as_bytes());
+    let first = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(first.contains(r#""aspectRatio":"landscape""#) && first.contains(r#""modelId":"m-img""#) && !first.contains("conversationId"), "{first}");
+
+    let target = std::env::temp_dir().join(format!("aiscraft-bild-{}.png", std::process::id()));
+    engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string()})).unwrap();
+    assert_eq!(std::fs::read(&target).unwrap().len(), img.size as usize);
+    let _ = std::fs::remove_file(&target);
+    assert!(engine.call("chat.save_image", json!({"message_id": answer.id, "index": 3, "path": "/tmp/x.png"})).is_err());
+
+    // The next prompt continues the server's image chat; regenerate draws again.
+    engine.call("chat.send", json!({"text": "jetzt mit Mond", "aspect_ratio": "portrait"})).unwrap();
+    let second = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(second.contains(r#""conversationId":"srv-img""#) && second.contains("portrait"), "{second}");
+    engine.call("chat.regenerate", json!({})).unwrap();
+    assert_eq!(engine.state().messages.len(), 4);
+    assert!(engine.call("chat.send", json!({"text": "x", "files": ["/etc/hostname"]})).is_err(), "no input images yet");
+
+    // A refusal from the server is shown on the answer.
+    assert!(engine.call("chat.send", json!({"text": "Fehler bitte"})).is_err());
+    assert!(engine.state().messages.last().unwrap().error.as_deref().unwrap_or("").contains("Kontingent"));
+
+    // Text models stay out of image chats and the other way round.
+    assert!(engine.call("chat.select_model", json!({"backend": "ais-chat", "model": "m-uuid"})).is_err());
+    engine.call("chat.new", json!({})).unwrap();
+    assert_eq!(engine.state().selection.kind, aiscraft_core::ConversationKind::Chat);
+    engine.call("chat.select_model", json!({"backend": "ais-chat", "model": "m-img"})).unwrap();
+    assert_eq!(engine.state().selection.kind, aiscraft_core::ConversationKind::Image, "picking an image model in a new chat makes it an image chat");
+    // Backends without image models refuse image chats.
+    let (other, id) = engine_with_backend();
+    assert_eq!(other.call("chat.new_image", json!({"backend": id})).unwrap_err().kind, aiscraft_core::ErrorKind::Unsupported);
+    assert!(other.call("chat.new", json!({"kind": "video"})).is_err());
+}
+
+/// Web links on a message: AIS.chat reads the page first where it can (ingestWebContentAction,
+/// shipped with the editor pages of the person's own assistants), the link goes along in the
+/// text for its web scraper; other backends get it as text too.
+#[test]
+fn links_on_messages() {
+    let (engine, posted) = ais_engine();
+    // Not checkable yet (no own assistant known): the link goes along unchecked.
+    engine.call("chat.send", json!({"text": "Fasse zusammen", "links": ["https://schule.example/plan"]})).unwrap();
+    let sent = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(sent.contains(r#""content":"Fasse zusammen\n\nhttps://schule.example/plan""#), "{sent}");
+    let user = engine.state().messages.iter().find(|m| m.role == aiscraft_core::Role::User).cloned().unwrap();
+    assert!(user.attachments[0].is_link() && user.attachments[0].name == "https://schule.example/plan");
+
+    // With an own assistant, the editor page carries the ingest action: a page AIS.chat cannot
+    // read is refused before anything is sent.
+    engine.call("persona.refresh", json!({})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    let before = posted.lock().unwrap().len();
+    let err = engine.call("chat.send", json!({"text": "Lies das", "links": ["https://kaputt.example/"]})).unwrap_err();
+    assert!(err.message.contains("nicht lesen"), "{}", err.message);
+    assert!(engine.state().current.is_none(), "nothing was saved");
+    engine.call("chat.send", json!({"text": "Lies das", "links": ["https://schule.example/plan"]})).unwrap();
+    let posts = posted.lock().unwrap()[before..].to_vec();
+    assert!(posts.iter().any(|p| p.contains(r#"[{"url":"https://schule.example/plan"}]"#)), "ingest was asked: {posts:?}");
+
+    for bad in [json!(["ftp://x.example"]), json!(["https://"]), json!(["https://a b"]), json!(vec!["https://x.example"; 6])] {
+        assert_eq!(engine.call("chat.send", json!({"text": "x", "links": bad})).unwrap_err().kind, aiscraft_core::ErrorKind::Invalid, "{bad}");
+    }
+
+    // Other backends read the address in the text.
+    let (other, seen) = engine_with_recording("Ok.");
+    other.call("chat.send", json!({"text": "", "links": ["https://schule.example/plan"]})).unwrap();
+    assert!(seen.lock().unwrap().iter().any(|r| r.contains("Link: https://schule.example/plan")));
+}
+
 /// Rule: every command has a functional test (beyond the panic hunt). A new command without one
 /// fails here.
 #[test]

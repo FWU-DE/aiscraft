@@ -36,7 +36,9 @@ impl Anthropic {
 pub fn text_with_files(m: &Message) -> String {
     let mut text = m.content.clone();
     for a in &m.attachments {
-        if let Some(t) = &a.text {
+        if a.is_link() {
+            text.push_str(&format!("\n\nLink: {}", a.name));
+        } else if let Some(t) = &a.text {
             text.push_str(&format!("\n\n<datei name=\"{}\">\n{t}\n</datei>", a.name.replace('"', "'")));
         }
     }
@@ -287,7 +289,7 @@ mod tests {
             error: None,
             usage: None, tool_calls: vec![], tool_result: None,
         };
-        let req = ChatRequest { conversation_id: "c".into(), model: DEFAULT_MODEL.into(), system: None, messages: vec![m(Role::User, "a"), m(Role::User, "b")], tools: vec![], tool_bridge: None };
+        let req = ChatRequest { conversation_id: "c".into(), model: DEFAULT_MODEL.into(), system: None, messages: vec![m(Role::User, "a"), m(Role::User, "b")], tools: vec![], tool_bridge: None, persona: None };
         let b = body(&req);
         assert_eq!(b["messages"].as_array().unwrap().len(), 1);
         assert_eq!(b["fallbacks"], "default");

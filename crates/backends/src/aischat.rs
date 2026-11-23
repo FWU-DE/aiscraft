@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, PoisonError};
 
 use aiscraft_core::{
-    AccountInfo, ActivityLink, ActivityStep, BackendConfig, Capabilities, ChatRequest, Error, GeneratedDocument, ModelInfo, RemoteConversation, Result,
-    Role, StreamEvent,
+    AccountInfo, ActivityLink, ActivityStep, BackendConfig, Capabilities, ChatRequest, ConversationKind, Error, GeneratedDocument, ImageRequest, ImageResult,
+    ModelInfo, Persona, PersonaInfo, PersonaKind, RemoteConversation, Result, Role, StreamEvent,
 };
 use aiscraft_rsc::flight::{ActionDecoder, ActionEvent};
 use aiscraft_rsc::{encode_action_args, scrape};
@@ -84,13 +84,53 @@ pub struct AisChat {
     http: reqwest::Client,
     jar: Mutex<BTreeMap<String, String>>,
     on_secret: SecretSink,
-    action_id: tokio::sync::Mutex<Option<String>>,
+    /// Server action ids by name, as far as found in the shipped JS so far.
+    actions: tokio::sync::Mutex<BTreeMap<String, String>>,
+    /// Editor pages of the person's own assistants, characters and scenarios: the only pages
+    /// whose JS carries `ingestWebContentAction`.
+    editor_pages: Mutex<Vec<String>>,
 }
+
+/// Pages whose JS carries an action, in the order to look. Every page also loads the shared
+/// chunks, so the start page comes first for actions used everywhere.
+fn action_pages(name: &str) -> &'static [&'static str] {
+    match name {
+        "getAssistantsByFilterAction" => &["/assistants"],
+        "getCharactersByFilterAction" => &["/characters"],
+        "getLearningScenariosByFilterAction" => &["/learning-scenarios"],
+        "generateImageAction" => &["/image-generation"],
+        _ => &["/"],
+    }
+}
+
+/// A person-readable name for a missing action, for the error message.
+fn action_label(name: &str) -> &'static str {
+    match name {
+        SEND_ACTION => "Die Chat-Funktion",
+        "getAssistantsByFilterAction" => "Die Liste der Assistenten",
+        "getCharactersByFilterAction" => "Die Liste der Figuren",
+        "getLearningScenariosByFilterAction" => "Die Liste der Lernszenarien",
+        "generateImageAction" => "Die Bilderzeugung",
+        INGEST_ACTION => "Das Einlesen von Webseiten",
+        _ => "Diese Funktion",
+    }
+}
+
+const INGEST_ACTION: &str = "ingestWebContentAction";
+const IMAGE_CAP: usize = 25 * 1024 * 1024;
 
 impl AisChat {
     pub fn new(config: BackendConfig, base: String, secret: Option<String>, on_secret: SecretSink) -> Result<Self> {
         let jar = secret.as_deref().and_then(normalize_session_cookie).map(|c| parse_cookie_pairs(&c)).unwrap_or_default();
-        Ok(Self { config, base, http: client(false)?, jar: Mutex::new(jar), on_secret, action_id: tokio::sync::Mutex::new(None) })
+        Ok(Self {
+            config,
+            base,
+            http: client(false)?,
+            jar: Mutex::new(jar),
+            on_secret,
+            actions: tokio::sync::Mutex::new(BTreeMap::new()),
+            editor_pages: Mutex::new(Vec::new()),
+        })
     }
 
     fn cookie(&self) -> Result<String> {
@@ -125,44 +165,67 @@ impl AisChat {
         Ok(resp)
     }
 
-    async fn page(&self) -> Result<String> {
-        let resp = self.send(self.request(Method::GET, "/")?.header("Accept", "text/html")).await?;
+    async fn page_at(&self, path: &str) -> Result<String> {
+        let resp = self.send(self.request(Method::GET, path)?.header("Accept", "text/html")).await?;
         if !resp.status().is_success() {
-            return Err(status_error(resp, "AIS.chat-Startseite").await);
+            return Err(status_error(resp, "AIS.chat-Seite").await);
         }
         read_capped(resp, PAGE_CAP).await
     }
 
-    async fn discover_action(&self) -> Result<String> {
-        let html = self.page().await?;
-        let paths = scrape::chunk_paths(&html);
-        let fetched: Vec<Option<String>> = stream::iter(paths.into_iter().take(MAX_CHUNKS))
-            .map(|p| async move {
-                let resp = self.http.get(format!("{}{p}", self.base)).send().await.ok()?;
-                if !resp.status().is_success() {
-                    return None;
-                }
-                read_capped(resp, PAGE_CAP).await.ok()
-            })
-            .buffer_unordered(8)
-            .collect()
-            .await;
-        for js in fetched.into_iter().flatten() {
-            if let Some(id) = scrape::action_ids(&js).remove(SEND_ACTION) {
-                return Ok(id);
-            }
-        }
-        Err(Error::protocol("Die Chat-Funktion von AIS.chat wurde in der Web-App nicht gefunden. Vermutlich hat sich AIS.chat geändert."))
+    async fn page(&self) -> Result<String> {
+        self.page_at("/").await
     }
 
-    async fn action_id(&self, refresh: bool) -> Result<String> {
-        let mut guard = self.action_id.lock().await;
-        if !refresh && let Some(id) = guard.as_ref() {
+    /// Read the JS chunks of `pages` until the action `name` turns up; keeps every id found.
+    async fn discover_action(&self, name: &str, pages: &[String], found: &mut BTreeMap<String, String>) -> Result<String> {
+        let mut first_err = None;
+        let mut loaded_any = false;
+        for page in pages {
+            let html = match self.page_at(page).await {
+                Ok(h) => {
+                    loaded_any = true;
+                    h
+                }
+                Err(e) if e.kind == aiscraft_core::ErrorKind::Auth => return Err(e),
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                    continue;
+                }
+            };
+            let paths = scrape::chunk_paths(&html);
+            let fetched: Vec<Option<String>> = stream::iter(paths.into_iter().take(MAX_CHUNKS))
+                .map(|p| async move {
+                    let resp = self.http.get(format!("{}{p}", self.base)).send().await.ok()?;
+                    if !resp.status().is_success() {
+                        return None;
+                    }
+                    read_capped(resp, PAGE_CAP).await.ok()
+                })
+                .buffer_unordered(8)
+                .collect()
+                .await;
+            for js in fetched.into_iter().flatten() {
+                found.extend(scrape::action_ids(&js));
+            }
+            if let Some(id) = found.get(name) {
+                return Ok(id.clone());
+            }
+        }
+        match first_err {
+            Some(e) if !loaded_any => Err(e),
+            _ => Err(Error::protocol(format!("{} von AIS.chat wurde in der Web-App nicht gefunden. Vermutlich hat sich AIS.chat geändert.", action_label(name)))),
+        }
+    }
+
+    async fn action_id_for(&self, name: &str, pages: &[String], refresh: bool) -> Result<String> {
+        let mut guard = self.actions.lock().await;
+        if refresh {
+            guard.clear();
+        } else if let Some(id) = guard.get(name) {
             return Ok(id.clone());
         }
-        let id = self.discover_action().await?;
-        *guard = Some(id.clone());
-        Ok(id)
+        self.discover_action(name, pages, &mut guard).await
     }
 
     async fn post_action(&self, id: &str, body: String) -> Result<Response> {
@@ -176,6 +239,143 @@ impl AisChat {
             .body(body);
         self.send(rb).await
     }
+
+    /// Post a server action, finding its id first (and again once, when the deploy changed it).
+    /// The response must be a React Flight answer.
+    async fn post_named(&self, name: &str, pages: &[String], args: &[Value]) -> Result<Response> {
+        let body = encode_action_args(args);
+        let mut id = self.action_id_for(name, pages, false).await?;
+        let mut resp = self.post_action(&id, body.clone()).await?;
+        let stale = resp.status() == StatusCode::NOT_FOUND || resp.headers().contains_key("x-nextjs-action-not-found");
+        if stale {
+            id = self.action_id_for(name, pages, true).await?;
+            resp = self.post_action(&id, body).await?;
+        }
+        if !resp.status().is_success() {
+            return Err(status_error(resp, "AIS.chat").await);
+        }
+        let ctype = resp.headers().get("content-type").and_then(|c| c.to_str().ok()).unwrap_or("").to_string();
+        if !ctype.contains("text/x-component") {
+            return Err(Error::protocol(format!("AIS.chat hat nicht wie erwartet geantwortet (Inhaltstyp {ctype:?}).")));
+        }
+        Ok(resp)
+    }
+
+    /// Call a server action that returns a plain value (no stream) and return that value.
+    async fn call_action(&self, name: &str, pages: &[String], args: &[Value]) -> Result<Value> {
+        let resp = self.post_named(name, pages, args).await?;
+        let body = crate::http::read_bytes_capped(resp, PAGE_CAP, "Die Antwort von AIS.chat").await?;
+        decode_action_value(&body)
+    }
+
+    fn pages_for(&self, name: &str) -> Vec<String> {
+        let mut pages: Vec<String> = action_pages(name).iter().map(|p| p.to_string()).collect();
+        if name == INGEST_ACTION {
+            pages.extend(self.editor_pages.lock().unwrap_or_else(PoisonError::into_inner).iter().cloned());
+        }
+        pages
+    }
+
+    async fn session_user_id(&self) -> Option<String> {
+        let resp = self.send(self.request(Method::GET, "/api/auth/session").ok()?).await.ok()?;
+        let v = read_json(resp, "Sitzung").await.ok()?;
+        v.pointer("/user/id").and_then(Value::as_str).map(str::to_string)
+    }
+
+    /// Fetch a generated image: a path on AIS.chat (with the session), a signed storage URL
+    /// (without it), or a `data:` URL.
+    async fn fetch_image(&self, url: &str) -> Result<(Vec<u8>, String)> {
+        use base64::Engine as _;
+        if let Some(rest) = url.strip_prefix("data:") {
+            let (meta, data) = rest.split_once(',').ok_or_else(|| Error::protocol("Bild: ungültige data-URL"))?;
+            let mime = meta.split(';').next().filter(|m| m.starts_with("image/")).unwrap_or("image/png").to_string();
+            let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| Error::protocol("Bild: ungültige Base64-Daten"))?;
+            if bytes.len() > IMAGE_CAP {
+                return Err(Error::protocol("Das Bild ist größer als 25 MB"));
+            }
+            return Ok((bytes, mime));
+        }
+        let rb = if url.starts_with('/') && !url.starts_with("//") {
+            self.request(Method::GET, url)?
+        } else if url.starts_with("https://") || url.starts_with("http://") {
+            if url.starts_with(&format!("{}/", self.base)) { self.http.get(url).header("Cookie", self.cookie()?) } else { self.http.get(url) }
+        } else {
+            return Err(Error::protocol("AIS.chat hat keine gültige Bildadresse geliefert"));
+        };
+        let resp = rb.send().await.map_err(net_err)?;
+        if !resp.status().is_success() {
+            return Err(status_error(resp, "Bild laden").await);
+        }
+        let mime = resp.headers().get("content-type").and_then(|c| c.to_str().ok()).map(|c| c.split(';').next().unwrap_or("").trim().to_string()).filter(|c| c.starts_with("image/")).unwrap_or_else(|| "image/png".into());
+        let bytes = crate::http::read_bytes_capped(resp, IMAGE_CAP, "Das Bild").await?;
+        Ok((bytes, mime))
+    }
+}
+
+/// The value of a plain (non-streaming) server action response.
+pub fn decode_action_value(body: &[u8]) -> Result<Value> {
+    let mut d = ActionDecoder::new("stream");
+    let mut evs = d.feed(body).map_err(|e| Error::protocol(format!("AIS.chat-Antwort nicht lesbar: {}", e.0)))?;
+    evs.extend(d.finish());
+    for ev in evs {
+        match ev {
+            ActionEvent::Result(v) => return Ok(v),
+            ActionEvent::Error(msg) => return Err(ais_error("", &msg)),
+            _ => {}
+        }
+    }
+    Err(Error::protocol("AIS.chat hat kein Ergebnis geliefert"))
+}
+
+/// Unwrap AIS.chat's `runServerAction` result `{success, value | error}`; other values pass.
+pub fn server_result(v: Value) -> Result<Value> {
+    match v.get("success").and_then(Value::as_bool) {
+        Some(true) => Ok(v.get("value").cloned().unwrap_or(Value::Null)),
+        Some(false) => {
+            let err = v.get("error");
+            let name = err.and_then(|e| e.get("name")).and_then(Value::as_str).unwrap_or("");
+            let message = err.and_then(|e| e.get("message")).and_then(Value::as_str).unwrap_or("");
+            Err(ais_error(name, if message.is_empty() && name.is_empty() { "Unerwarteter Fehler auf dem Server" } else { message }))
+        }
+        None => Ok(v),
+    }
+}
+
+/// Entities from `get…ByFilterAction`: own ones first, then by name. Unnamed or deleted ones are
+/// left out, at most 500.
+pub fn parse_personas(kind: PersonaKind, v: &Value, me: Option<&str>) -> Vec<PersonaInfo> {
+    let list = v.as_array().or_else(|| v.get("value").and_then(Value::as_array));
+    let Some(list) = list else { return Vec::new() };
+    let s = |o: &Value, k: &str| o.get(k).and_then(Value::as_str).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
+    let mut out: Vec<PersonaInfo> = list
+        .iter()
+        .filter(|o| o.get("isDeleted").and_then(Value::as_bool) != Some(true) && o.get("suspended").and_then(Value::as_bool) != Some(true))
+        .filter_map(|o| {
+            let id = s(o, "id")?;
+            if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') || id.len() > 64 {
+                return None;
+            }
+            Some(PersonaInfo {
+                kind,
+                id,
+                name: s(o, "name")?.chars().take(200).collect(),
+                description: s(o, "description").map(|d| d.chars().take(2000).collect()),
+                own: me.is_some_and(|me| o.get("userId").and_then(Value::as_str) == Some(me)),
+                initial_message: s(o, "initialMessage"),
+                exercise: s(o, "studentExercise"),
+                prompt_suggestions: o
+                    .get("promptSuggestions")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_str).map(str::trim).filter(|x| !x.is_empty()).take(8).map(|x| x.chars().take(500).collect()).collect())
+                    .unwrap_or_default(),
+                model_id: s(o, "modelId"),
+            })
+        })
+        .take(500)
+        .collect();
+    out.sort_by(|a, b| b.own.cmp(&a.own).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    out.dedup_by(|a, b| a.id == b.id);
+    out
 }
 
 /// The action's single argument.
@@ -184,15 +384,28 @@ pub fn action_payload(req: &ChatRequest) -> Value {
         .messages
         .iter()
         .filter(|m| m.role == Role::User || (m.role == Role::Assistant && !m.content.is_empty()))
-        .map(|m| json!({"id": m.id, "role": m.role.as_str(), "content": m.content}))
+        .map(|m| {
+            // Links go along as text: AIS.chat's web scraper reads the pages a message names.
+            let links: Vec<&str> = m.attachments.iter().filter(|a| a.is_link()).map(|a| a.name.as_str()).collect();
+            let content = if links.is_empty() { m.content.clone() } else { format!("{}\n\n{}", m.content, links.join("\n")).trim().to_string() };
+            json!({"id": m.id, "role": m.role.as_str(), "content": content})
+        })
         .collect();
     let file_ids: Vec<&str> =
         req.messages.iter().rev().find(|m| m.role == Role::User).map(|m| m.attachments.iter().filter_map(|a| a.remote_id.as_deref()).collect()).unwrap_or_default();
     let mut p = json!({"conversationId": req.conversation_id, "messages": messages, "modelId": req.model});
-    if !file_ids.is_empty()
-        && let Some(o) = p.as_object_mut()
-    {
-        o.insert("fileIds".into(), json!(file_ids));
+    if let Some(o) = p.as_object_mut() {
+        if !file_ids.is_empty() {
+            o.insert("fileIds".into(), json!(file_ids));
+        }
+        if let Some(persona) = &req.persona {
+            let key = match persona.kind {
+                PersonaKind::Assistant => "assistantId",
+                PersonaKind::Character => "characterId",
+                PersonaKind::LearningScenario => "learningScenarioId",
+            };
+            o.insert(key.into(), json!(persona.id));
+        }
     }
     p
 }
@@ -236,6 +449,8 @@ fn tool_label(tool: &str) -> &'static str {
         "Websuche"
     } else if t.contains("scrap") {
         "Webseite lesen"
+    } else if t.contains("entire") {
+        "Datei lesen"
     } else if t.contains("chunk") || t.contains("file") {
         "Datei durchsuchen"
     } else if t.contains("mundo") {
@@ -243,7 +458,7 @@ fn tool_label(tool: &str) -> &'static str {
     } else if t.contains("math") || t.contains("calc") {
         "Rechnen"
     } else if t.contains("plot") || t.contains("graph") {
-        "Diagramm"
+        "Diagramm erstellen"
     } else if t.contains("document") {
         "Dokument erstellen"
     } else {
@@ -271,7 +486,15 @@ pub fn activity_steps(v: &Value) -> Vec<ActivityStep> {
                     links: st
                         .get("links")
                         .and_then(Value::as_array)
-                        .map(|a| a.iter().filter_map(|l| Some(ActivityLink { title: s(l, "title")?, url: s(l, "url")? })).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|l| {
+                                    let url = s(l, "url")?;
+                                    let title = s(l, "title").filter(|t| !t.trim().is_empty()).unwrap_or_else(|| url.clone());
+                                    Some(ActivityLink { title, url, failed: l.get("failed").and_then(Value::as_bool).unwrap_or(false) })
+                                })
+                                .collect()
+                        })
                         .unwrap_or_default(),
                     document: st.get("document").and_then(|d| {
                         Some(GeneratedDocument { file_name: s(d, "fileName")?, format: s(d, "format").unwrap_or_default(), content: s(d, "content")? })
@@ -423,21 +646,7 @@ impl Backend for AisChat {
 
     fn chat(&self, req: ChatRequest) -> BoxFuture<'_, Result<EventStream>> {
         Box::pin(async move {
-            let body = encode_action_args(&[action_payload(&req)]);
-            let mut id = self.action_id(false).await?;
-            let mut resp = self.post_action(&id, body.clone()).await?;
-            let stale = resp.status() == StatusCode::NOT_FOUND || resp.headers().contains_key("x-nextjs-action-not-found");
-            if stale {
-                id = self.action_id(true).await?;
-                resp = self.post_action(&id, body).await?;
-            }
-            if !resp.status().is_success() {
-                return Err(status_error(resp, "AIS.chat").await);
-            }
-            let ctype = resp.headers().get("content-type").and_then(|c| c.to_str().ok()).unwrap_or("").to_string();
-            if !ctype.contains("text/x-component") {
-                return Err(Error::protocol(format!("AIS.chat hat nicht als Chat geantwortet (Inhaltstyp {ctype:?}).")));
-            }
+            let resp = self.post_named(SEND_ACTION, &self.pages_for(SEND_ACTION), &[action_payload(&req)]).await?;
             Ok(action_stream(resp))
         })
     }
@@ -470,10 +679,15 @@ impl Backend for AisChat {
                     a.iter()
                         .filter_map(|c| {
                             let s = |k: &str| c.get(k).and_then(Value::as_str).map(str::to_string);
+                            let persona = [("assistantId", PersonaKind::Assistant), ("characterId", PersonaKind::Character), ("learningScenarioId", PersonaKind::LearningScenario)]
+                                .into_iter()
+                                .find_map(|(k, kind)| s(k).filter(|v| !v.is_empty()).map(|id| Persona { kind, id, name: String::new() }));
                             Some(RemoteConversation {
                                 id: s("id")?,
                                 title: s("name").or_else(|| s("title")).unwrap_or_else(|| "Ohne Titel".into()),
                                 updated_at: s("updatedAt").or_else(|| s("createdAt")),
+                                persona,
+                                kind: s("type").and_then(|t| ConversationKind::parse(&t)).unwrap_or_default(),
                             })
                         })
                         .collect()
@@ -504,6 +718,100 @@ impl Backend for AisChat {
                 return Err(Error::protocol("In diesem AIS.chat-Verlauf wurden keine Nachrichten gefunden"));
             }
             Ok(msgs)
+        })
+    }
+
+    fn personas(&self) -> BoxFuture<'_, Result<Vec<PersonaInfo>>> {
+        Box::pin(async move {
+            let me = self.session_user_id().await;
+            let mut out = Vec::new();
+            let mut errors = Vec::new();
+            for (kind, action) in [
+                (PersonaKind::Assistant, "getAssistantsByFilterAction"),
+                (PersonaKind::Character, "getCharactersByFilterAction"),
+                (PersonaKind::LearningScenario, "getLearningScenariosByFilterAction"),
+            ] {
+                // "all": own, school, community and official ones (`OverviewFilter`).
+                match self.call_action(action, &self.pages_for(action), &[json!("all")]).await.and_then(server_result) {
+                    Ok(v) => out.extend(parse_personas(kind, &v, me.as_deref())),
+                    Err(e) if e.kind == aiscraft_core::ErrorKind::Auth => return Err(e),
+                    // A kind the state switched off (its page redirects) is simply absent.
+                    Err(e) => errors.push(e),
+                }
+            }
+            if out.is_empty()
+                && errors.len() == 3
+                && let Some(e) = errors.into_iter().next()
+            {
+                return Err(e);
+            }
+            let pages: Vec<String> = PersonaKind::ALL
+                .iter()
+                .filter_map(|k| out.iter().find(|p| p.own && p.kind == *k))
+                .map(|p| {
+                    let base = match p.kind {
+                        PersonaKind::Assistant => "/assistants",
+                        PersonaKind::Character => "/characters",
+                        PersonaKind::LearningScenario => "/learning-scenarios",
+                    };
+                    format!("{base}/editor/{}", p.id)
+                })
+                .collect();
+            *self.editor_pages.lock().unwrap_or_else(PoisonError::into_inner) = pages;
+            Ok(out)
+        })
+    }
+
+    fn image_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>>> {
+        Box::pin(async move {
+            // The page redirects to "/" when the state has image generation switched off.
+            let html = match self.page_at("/image-generation").await {
+                Ok(h) => h,
+                Err(e) if e.kind == aiscraft_core::ErrorKind::Auth => return Err(e),
+                Err(_) => return Ok(Vec::new()),
+            };
+            Ok(scrape::page_models(&scrape::rsc_payload(&html))
+                .into_iter()
+                .filter(|m| m.kind == "image")
+                .map(|m| ModelInfo { id: m.id, name: m.display_name, description: (!m.description.is_empty()).then_some(m.description), vision: m.vision, context_window: None })
+                .collect())
+        })
+    }
+
+    fn generate_image(&self, req: ImageRequest) -> BoxFuture<'_, Result<ImageResult>> {
+        Box::pin(async move {
+            if req.prompt.trim().is_empty() {
+                return Err(Error::invalid("Beschreibe, was das Bild zeigen soll"));
+            }
+            let aspect = if aiscraft_core::ASPECT_RATIOS.iter().any(|(k, _)| *k == req.aspect_ratio) { req.aspect_ratio.as_str() } else { "quadratic" };
+            let mut arg = json!({"prompt": req.prompt.trim(), "modelId": req.model, "options": {"aspectRatio": aspect}, "inputFileIds": []});
+            if let (Some(id), Some(o)) = (&req.conversation_id, arg.as_object_mut()) {
+                o.insert("conversationId".into(), json!(id));
+            }
+            let v = server_result(self.call_action("generateImageAction", &self.pages_for("generateImageAction"), &[arg]).await?)?;
+            let s = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
+            let url = s("imageUrl").filter(|u| !u.is_empty()).ok_or_else(|| Error::protocol("AIS.chat hat kein Bild geliefert"))?;
+            let (bytes, mime) = self.fetch_image(&url).await?;
+            if bytes.is_empty() {
+                return Err(Error::protocol("AIS.chat hat ein leeres Bild geliefert"));
+            }
+            Ok(ImageResult { bytes, mime, conversation_id: s("conversationId"), message_id: s("assistantMessageId") })
+        })
+    }
+
+    fn check_link(&self, url: String) -> BoxFuture<'_, Result<bool>> {
+        Box::pin(async move {
+            let v = match self.call_action(INGEST_ACTION, &self.pages_for(INGEST_ACTION), &[json!({"url": url})]).await {
+                Ok(v) => server_result(v)?,
+                // The action ships only with editor pages; without one, the server cannot be asked.
+                Err(e) if e.kind == aiscraft_core::ErrorKind::Protocol && e.message.contains("nicht gefunden") => return Ok(false),
+                Err(e) => return Err(e),
+            };
+            let failed = v.get("errorUrls").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+            if failed {
+                return Err(Error::invalid(format!("AIS.chat kann die Seite {url} nicht lesen. Ist die Adresse richtig und öffentlich erreichbar?")));
+            }
+            Ok(true)
         })
     }
 
@@ -566,7 +874,7 @@ mod tests {
         };
         let a = Message { id: "a0".into(), role: Role::Assistant, content: String::new(), attachments: vec![], ..u.clone() };
         u.id = "u1".into();
-        let req = ChatRequest { conversation_id: "c1".into(), model: "uuid-m".into(), system: Some("ignored".into()), messages: vec![u, a], tools: vec![], tool_bridge: None };
+        let req = ChatRequest { conversation_id: "c1".into(), model: "uuid-m".into(), system: Some("ignored".into()), messages: vec![u, a], tools: vec![], tool_bridge: None, persona: None };
         let body = encode_action_args(&[action_payload(&req)]);
         assert_eq!(body, r#"[{"conversationId":"c1","fileIds":["f1"],"messages":[{"content":"$$5?","id":"u1","role":"user"}],"modelId":"uuid-m"}]"#);
     }
@@ -579,6 +887,12 @@ mod tests {
         assert_eq!(steps[0].label, "Websuche");
         assert_eq!(steps[0].links[0].url, "https://dwd.de");
         assert_eq!(steps[1].document.as_ref().unwrap().file_name, "a.docx");
+        // Tool names as AIS.chat sends them (TOOL_NAMES), a plot description, a page it could not read.
+        let ev = ActionEvent::Chunk("\u{1e}{\"type\":\"ai_activity\",\"steps\":[{\"kind\":\"tool\",\"id\":\"1\",\"tool\":\"create_plot\",\"detail\":\"Parabel y=x^2\",\"detailPlacement\":\"below\"},{\"kind\":\"tool\",\"id\":\"2\",\"tool\":\"web_scraper\",\"links\":[{\"title\":\"\",\"url\":\"https://a.example\",\"failed\":true}],\"failed\":true},{\"kind\":\"tool\",\"id\":\"3\",\"tool\":\"retrieve_entire_file\"}]}".into());
+        let StreamEvent::Activity { steps } = &map_action_event(ev).unwrap()[0] else { panic!() };
+        assert_eq!(steps.iter().map(|s| s.label.as_str()).collect::<Vec<_>>(), ["Diagramm erstellen", "Webseite lesen", "Datei lesen"]);
+        assert_eq!(steps[0].detail.as_deref(), Some("Parabel y=x^2"));
+        assert!(steps[1].failed && steps[1].links[0].failed && steps[1].links[0].title == "https://a.example");
         let err = map_action_event(ActionEvent::Result(json!({"stream":"$2","messageId":"m","error":{"name":"TokenPointsExceededError","message":"x"}}))).unwrap_err();
         assert_eq!(err.kind, aiscraft_core::ErrorKind::Refused);
         assert_eq!(map_action_event(ActionEvent::Result(json!({"messageId":"m9"}))).unwrap(), vec![StreamEvent::MessageId { id: "m9".into() }]);
@@ -641,7 +955,7 @@ mod tests {
             error: None,
             usage: None, tool_calls: vec![], tool_result: None,
         };
-        let mut s = backend.chat(ChatRequest { conversation_id: "c".into(), model: "m".into(), system: None, messages: vec![msg], tools: vec![], tool_bridge: None }).await.unwrap();
+        let mut s = backend.chat(ChatRequest { conversation_id: "c".into(), model: "m".into(), system: None, messages: vec![msg], tools: vec![], tool_bridge: None, persona: None }).await.unwrap();
         let mut evs = Vec::new();
         while let Some(e) = s.next().await {
             evs.push(e.unwrap());
@@ -656,5 +970,176 @@ mod tests {
             ]
         );
         assert_eq!(renewed.lock().unwrap().as_deref(), Some(format!("{SESSION_COOKIE}=renewed").as_str()));
+    }
+
+    #[test]
+    fn personas_from_filter_results() {
+        let v = json!([
+            {"id": "c2", "name": "Goethe", "description": "Dichter", "userId": "other", "initialMessage": "Seid gegrüßt!", "modelId": "m1"},
+            {"id": "c1", "name": "Ada Lovelace", "userId": "me", "promptSuggestions": ["Was ist ein Algorithmus?", "", 5]},
+            {"id": "c3", "name": "  ", "userId": "me"},
+            {"id": "bad id!", "name": "X"},
+            {"id": "c4", "name": "Weg", "isDeleted": true}
+        ]);
+        let list = parse_personas(PersonaKind::Character, &v, Some("me"));
+        assert_eq!(list.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Ada Lovelace", "Goethe"], "own first, unnamed/deleted/odd ids dropped");
+        assert!(list[0].own && !list[1].own);
+        assert_eq!(list[0].prompt_suggestions, ["Was ist ein Algorithmus?"]);
+        assert_eq!(list[1].initial_message.as_deref(), Some("Seid gegrüßt!"));
+        assert!(parse_personas(PersonaKind::Assistant, &json!({"success": false}), None).is_empty());
+        let err = server_result(json!({"success": false, "error": {"name": "NotFoundError", "message": "weg"}})).unwrap_err();
+        assert_eq!(err.kind, aiscraft_core::ErrorKind::NotFound);
+        assert_eq!(server_result(json!({"success": true, "value": [1]})).unwrap(), json!([1]));
+    }
+
+    #[test]
+    fn payload_names_the_persona() {
+        let msg = Message {
+            id: "u".into(),
+            conversation_id: "c".into(),
+            role: Role::User,
+            content: "Hi".into(),
+            created_at: 0,
+            model: None,
+            attachments: vec![],
+            activity: vec![],
+            error: None,
+            usage: None,
+            tool_calls: vec![],
+            tool_result: None,
+        };
+        for (kind, key) in [(PersonaKind::Assistant, "assistantId"), (PersonaKind::Character, "characterId"), (PersonaKind::LearningScenario, "learningScenarioId")] {
+            let req = ChatRequest {
+                conversation_id: "c".into(),
+                model: "m".into(),
+                system: None,
+                messages: vec![msg.clone()],
+                tools: vec![],
+                tool_bridge: None,
+                persona: Some(Persona { kind, id: "p-1".into(), name: "X".into() }),
+            };
+            let p = action_payload(&req);
+            assert_eq!(p[key], "p-1");
+            assert_eq!(p.as_object().unwrap().len(), 4, "only the one id field is added: {p}");
+        }
+    }
+
+    /// Reads one HTTP request (head and body, by content-length).
+    async fn read_request(sock: &mut tokio::net::TcpStream) -> String {
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            let n = sock.read(&mut chunk).await.unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            let s = String::from_utf8_lossy(&buf);
+            if let Some(head_end) = s.find("\r\n\r\n") {
+                let len = s[..head_end].lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+                if buf.len() >= head_end + 4 + len {
+                    break;
+                }
+            }
+        }
+        String::from_utf8_lossy(&buf).to_string()
+    }
+
+    /// A scripted AIS.chat: action ids live in page-specific chunks, as in the real app.
+    async fn scripted_ais(posted: std::sync::Arc<Mutex<Vec<String>>>) -> String {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let posted = posted.clone();
+                tokio::spawn(async move {
+                    let req = read_request(&mut sock).await;
+                    let id = |n: u8| format!("{:02x}", n).repeat(21);
+                    let chunk = |path: &str| format!(r#"<script src="/_next/static/chunks/{path}.js"></script>"#);
+                    let reference = |n: u8, name: &str| format!(r#"(0,a.createServerReference)("{}",a.callServer,void 0,a.findSourceMapURL,"{name}");"#, id(n));
+                    let flight = |value: &str| format!("0:{{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}}\n1:{value}\n");
+                    let action = req.lines().find_map(|l| l.strip_prefix("next-action: ")).unwrap_or("").to_string();
+                    let (ctype, body) = if req.starts_with("GET /api/auth/session") {
+                        ("application/json", r#"{"user":{"id":"me","firstName":"Ada"}}"#.to_string())
+                    } else if req.starts_with("GET /assistants ") {
+                        ("text/html", chunk("assistants"))
+                    } else if req.starts_with("GET /characters ") {
+                        ("text/html", chunk("characters"))
+                    } else if req.starts_with("GET /learning-scenarios ") {
+                        // Switched off for this person: the page redirects, the kind is absent.
+                        ("text/html", "<p>nichts</p>".to_string())
+                    } else if req.starts_with("GET / ") {
+                        ("text/html", chunk("app"))
+                    } else if req.starts_with("GET /_next/static/chunks/app.js") {
+                        ("application/javascript", reference(0x7f, "sendChatMessageAction"))
+                    } else if req.starts_with("GET /_next/static/chunks/assistants.js") {
+                        ("application/javascript", reference(0x11, "getAssistantsByFilterAction"))
+                    } else if req.starts_with("GET /_next/static/chunks/characters.js") {
+                        ("application/javascript", reference(0x22, "getCharactersByFilterAction"))
+                    } else if req.starts_with("POST / ") {
+                        posted.lock().unwrap().push(req.clone());
+                        if action == id(0x11) {
+                            assert!(req.ends_with(r#"["all"]"#), "{req}");
+                            ("text/x-component", flight(r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung","updatedAt":"$D2026-11-01T00:00:00.000Z"},{"id":"a2","name":"Schulassistent","userId":"x"}]"#))
+                        } else if action == id(0x22) {
+                            ("text/x-component", flight(r#"[{"id":"c1","name":"Goethe","userId":"x","initialMessage":"Seid gegrüßt!"}]"#))
+                        } else if action == id(0x7f) {
+                            ("text/x-component", "0:{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}\n1:{\"stream\":\"$2\",\"messageId\":\"srv-1\"}\n2:R\n2:\"Gern.\"\n2:C\n".to_string())
+                        } else {
+                            ("text/plain", "unbekannte Aktion".to_string())
+                        }
+                    } else {
+                        ("text/plain", "nope".to_string())
+                    };
+                    let resp = format!("HTTP/1.1 200 OK\r\ncontent-type: {ctype}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn ais_config(base: String) -> BackendConfig {
+        BackendConfig { id: "ais".into(), name: "AIS".into(), kind: aiscraft_core::BackendKind::AisChat, base_url: base, default_model: None, send_context: false }
+    }
+
+    /// Listing assistants and characters, then chatting as one, against a scripted server.
+    #[tokio::test]
+    async fn personas_and_persona_chat_against_scripted_server() {
+        let posted = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let base = scripted_ais(posted.clone()).await;
+        let backend = crate::build(ais_config(base), Some("tok".into()), std::sync::Arc::new(|_, _| {})).unwrap();
+        let list = backend.personas().await.unwrap();
+        let names: Vec<_> = list.iter().map(|p| (p.kind, p.name.as_str(), p.own)).collect();
+        assert_eq!(names, [(PersonaKind::Assistant, "Mathe-Coach", true), (PersonaKind::Assistant, "Schulassistent", false), (PersonaKind::Character, "Goethe", false)]);
+        let goethe = list.iter().find(|p| p.id == "c1").unwrap();
+        let msgs = vec![
+            Message { id: "g".into(), conversation_id: "c".into(), role: Role::Assistant, content: "Seid gegrüßt!".into(), created_at: 0, model: None, attachments: vec![], activity: vec![], error: None, usage: None, tool_calls: vec![], tool_result: None },
+            Message { id: "u".into(), conversation_id: "c".into(), role: Role::User, content: "Wer bist du?".into(), created_at: 1, model: None, attachments: vec![], activity: vec![], error: None, usage: None, tool_calls: vec![], tool_result: None },
+        ];
+        let req = ChatRequest { conversation_id: "c".into(), model: "m".into(), system: None, messages: msgs, tools: vec![], tool_bridge: None, persona: Some(goethe.persona()) };
+        let mut s = backend.chat(req).await.unwrap();
+        let mut text = String::new();
+        while let Some(e) = s.next().await {
+            if let StreamEvent::Delta { text: t } = e.unwrap() {
+                text.push_str(&t);
+            }
+        }
+        assert_eq!(text, "Gern.");
+        let last = posted.lock().unwrap().last().cloned().unwrap();
+        assert!(last.contains(r#""characterId":"c1""#) && last.contains("Seid gegrüßt!"), "{last}");
+    }
+
+    #[tokio::test]
+    async fn image_addresses_are_checked() {
+        let ais = AisChat::new(ais_config("http://127.0.0.1:9".into()), "http://127.0.0.1:9".into(), Some("tok".into()), std::sync::Arc::new(|_, _| {})).unwrap();
+        let (bytes, mime) = ais.fetch_image("data:image/webp;base64,AAEC").await.unwrap();
+        assert_eq!((bytes, mime.as_str()), (vec![0, 1, 2], "image/webp"));
+        assert!(ais.fetch_image("data:image/png;base64,***").await.is_err());
+        assert!(ais.fetch_image("file:///etc/passwd").await.is_err(), "only http(s), paths and data URLs");
+        assert!(ais.fetch_image("//evil.example/x.png").await.is_err());
     }
 }
