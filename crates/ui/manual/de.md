@@ -115,6 +115,20 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 **Datenschutz:** Eine Lern-App kann nichts aus dem Internet laden und nichts senden: AIS.ChatCraft gibt jeder geöffneten oder gespeicherten App eine strenge Sicherheitsregel (Content-Security-Policy) mit, die alle Verbindungen sperrt; das Vorschaufenster erlaubt außerdem keine Links nach außen und keine neuen Fenster. Lern-Apps und Arbeitsblätter liegen nur auf deinem Rechner, bis du sie speicherst oder teilst. Schreib keine Namen von Schülerinnen und Schülern in die Anfrage.
 
+## H5P
+
+**H5P** sind interaktive Übungen, die Lernplattformen wie Moodle, Mebis oder ByCS direkt abspielen. AIS.ChatCraft legt H5P-Inhalte als eigene Art neben Dokument, Whiteboard, Arbeitsblatt und Lern-App an und speichert sie als `.h5p`-Datei, die du in der Lernplattform hochlädst.
+
+**Erstellen:** Thema ins Eingabefeld schreiben und **Erstellen** › **H5P-Quiz** wählen. Mit AIS.chat kommt die Antwort als ```` ```aiscraft-h5p ````-Block mit einer Karte „Als H5P öffnen“; Modelle mit Werkzeugen legen den Inhalt direkt an. Aus einem Arbeitsblatt wird mit **Als H5P** oben (öffnet einen H5P-Inhalt) oder ⬇ › **Als H5P (.h5p)** (speichert gleich die Datei) ein H5P-Quiz.
+
+**Welche Aufgaben:** Multiple Choice (H5P.MultiChoice), Richtig oder falsch (H5P.TrueFalse), Lückentext zum Eintippen (H5P.Blanks) und Wörter in Lücken ziehen (H5P.DragText). Mehrere Aufgaben oder eine Einleitung werden ein Quiz (H5P.QuestionSet). Kurze Antworten und Zahlen aus Arbeitsblättern werden Lückentexte mit einer Lücke; Zahlen prüft H5P ohne Toleranz. Zuordnen, Reihenfolge, In Gruppen sortieren, freie Texte und Info-Texte hat H5P so nicht: AIS.ChatCraft nennt sie und lässt sie weg. Lösungen mit `/`, `:` oder `*` kann H5P nicht prüfen. Was beim Speichern verloren geht (Tipps, Toleranzen), steht unter den Aufgaben.
+
+**Bearbeiten und Ausprobieren:** Unter **Bearbeiten** änderst du Titel, Einleitung und Aufgaben wie beim Arbeitsblatt, ohne Punkte. **Ausprobieren** löst die Aufgaben in AIS.ChatCraft. Das sieht anders aus als in der Lernplattform: einen H5P-Player hat AIS.ChatCraft nicht.
+
+**H5P-Dateien öffnen:** Zieh eine `.h5p`-Datei ins Fenster oder wähle sie mit 📎. Sie wird geprüft (Größe bis 25 MB, Pfade, nur erlaubte Dateitypen) und im Daten-Ordner abgelegt. Quizze aus den vier Typen oben kannst du bearbeiten; Bilder und Bibliotheken im Paket bleiben beim Speichern erhalten, Bilder zeigt AIS.ChatCraft aber nicht. Andere Inhaltstypen (z. B. Interactive Video, Course Presentation) zeigt AIS.ChatCraft mit Namen und Bibliotheken an und speichert sie unverändert.
+
+**In der Lernplattform:** Die Datei bringt die H5P-Bibliotheken nicht mit. Die Lernplattform braucht die Inhaltstypen in diesen Versionen: H5P.QuestionSet 1.20, H5P.MultiChoice 1.16, H5P.TrueFalse 1.8, H5P.Blanks 1.14, H5P.DragText 1.10. Fehlt einer, lehnt sie die Datei ab; dann bitte die Administration, die Inhaltstypen über den H5P-Hub zu aktualisieren.
+
 ## Gemeinsam bearbeiten
 
 Dokumente und Whiteboards lassen sich live mit anderen bearbeiten. Dafür braucht es einen Server für die Zusammenarbeit (`aiscraft-collab-server`, z. B. von der Schule oder dem Träger betrieben). Ohne Server bleibt alles auf deinem Rechner.

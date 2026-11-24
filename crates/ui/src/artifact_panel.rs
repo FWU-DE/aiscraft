@@ -147,7 +147,7 @@ impl AisCraftApp {
     pub(crate) fn save_artifact_now(&mut self) {
         let Some(v) = self.artifact.as_mut() else { return };
         match v.kind {
-            ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet => match aiscraft_engine::doc_replace(&v.base, &v.doc) {
+            ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet | ArtifactKind::H5p => match aiscraft_engine::doc_replace(&v.base, &v.doc) {
                 Ok(state) => {
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&state);
                     v.base = state;
@@ -189,16 +189,27 @@ impl AisCraftApp {
                         let formats: &[(&str, &str)] = match meta.kind {
                             ArtifactKind::Board => &[("markdown", "md"), ("json", "json")],
                             ArtifactKind::App => &[("html", "html")],
-                            ArtifactKind::Worksheet => &[("pdf", "pdf"), ("docx", "docx"), ("json", "json")],
+                            ArtifactKind::Worksheet => &[("pdf", "pdf"), ("docx", "docx"), ("json", "json"), ("h5p", "h5p")],
+                            ArtifactKind::H5p => &[("h5p", "h5p"), ("json", "json")],
                             ArtifactKind::Document => &[("markdown", "md"), ("html", "html"), ("docx", "docx"), ("pdf", "pdf")],
                         };
                         for (f, ext) in formats {
-                            let label = if *ext == "docx" { "Als Word (DOCX)".to_string() } else { format!("Als {}", ext.to_uppercase()) };
+                            let label = match *ext {
+                                "docx" => "Als Word (DOCX)".to_string(),
+                                "h5p" => "Als H5P (.h5p)".to_string(),
+                                _ => format!("Als {}", ext.to_uppercase()),
+                            };
                             if ui.button(label).clicked() {
                                 let name: String = meta.title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
                                 if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.{ext}", name.trim())).save_file() {
                                     self.save_if_dirty();
-                                    self.run("artifact.export", json!({"id": meta.id, "format": f, "path": path.display().to_string()}));
+                                    let path = path.display().to_string();
+                                    match (meta.kind, *ext) {
+                                        // Names the tasks H5P cannot express.
+                                        (ArtifactKind::Worksheet, "h5p") => self.run("h5p.from_worksheet", json!({"id": meta.id, "path": path})),
+                                        (ArtifactKind::H5p, "h5p") => self.run("h5p.export", json!({"id": meta.id, "path": path})),
+                                        _ => self.run("artifact.export", json!({"id": meta.id, "format": f, "path": path})),
+                                    }
                                 }
                                 ui.close();
                             }
@@ -233,6 +244,12 @@ impl AisCraftApp {
                         self.save_if_dirty();
                         self.run("worksheet.from_document", json!({"id": meta.id}));
                     }
+                    if meta.kind == ArtifactKind::Worksheet
+                        && ui.button("Als H5P").on_hover_text("Die Aufgaben als H5P-Inhalt öffnen; was H5P nicht abbilden kann, wird genannt").clicked()
+                    {
+                        self.save_if_dirty();
+                        self.run("h5p.from_worksheet", json!({"id": meta.id}));
+                    }
                     let mut attach = self.attach_artifact;
                     if ui.toggle_value(&mut attach, "Im Chat").on_hover_text("Inhalt bei der nächsten Nachricht als Kontext mitschicken").changed() {
                         self.attach_artifact = attach;
@@ -254,6 +271,7 @@ impl AisCraftApp {
             ArtifactKind::Board => self.board_body(ui),
             ArtifactKind::App => self.app_body(ui),
             ArtifactKind::Worksheet => self.worksheet_body(ui),
+            ArtifactKind::H5p => self.h5p_body(ui),
         }
     }
 

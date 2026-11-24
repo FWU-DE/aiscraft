@@ -13,6 +13,7 @@ craft-docx.workspace = true
 craft-xlsx.workspace = true
 craft-pptx.workspace = true
 craft-opc.workspace = true
+craft-zip.workspace = true
 craft-xml.workspace = true
 craft-pdf = { workspace = true, features = ["raster"] }
 craft-update.workspace = true

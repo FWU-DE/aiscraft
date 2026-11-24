@@ -396,7 +396,8 @@ pub struct Project {
 }
 
 /// What kind of artifact: a Markdown document, a whiteboard, a learning app (one self-contained
-/// HTML file) or an interactive worksheet (`aiscraft-worksheet` JSON, see [`crate::worksheet`]).
+/// HTML file), an interactive worksheet (`aiscraft-worksheet` JSON, see [`crate::worksheet`]) or
+/// H5P content (`aiscraft-h5p` JSON, see [`crate::h5p`]).
 /// All are CRDTs (yrs) so they can be shared live without changing their format; documents,
 /// apps and worksheets are one text each ([`ArtifactKind::is_text`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -406,6 +407,8 @@ pub enum ArtifactKind {
     Board,
     App,
     Worksheet,
+    /// H5P content (`aiscraft-h5p` JSON, see [`crate::h5p`]); saved as a `.h5p` package.
+    H5p,
 }
 
 impl ArtifactKind {
@@ -415,6 +418,7 @@ impl ArtifactKind {
             ArtifactKind::Board => "board",
             ArtifactKind::App => "app",
             ArtifactKind::Worksheet => "worksheet",
+            ArtifactKind::H5p => "h5p",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -423,6 +427,7 @@ impl ArtifactKind {
             "board" | "whiteboard" => Some(ArtifactKind::Board),
             "app" | "learning_app" | "html" => Some(ArtifactKind::App),
             "worksheet" | "arbeitsblatt" => Some(ArtifactKind::Worksheet),
+            "h5p" => Some(ArtifactKind::H5p),
             _ => None,
         }
     }
@@ -432,9 +437,10 @@ impl ArtifactKind {
             ArtifactKind::Board => "Whiteboard",
             ArtifactKind::App => "Lern-App",
             ArtifactKind::Worksheet => "Arbeitsblatt",
+            ArtifactKind::H5p => "H5P",
         }
     }
-    /// Stored as one yrs text (documents, learning apps, worksheets), not as a board.
+    /// Stored as one yrs text (documents, learning apps, worksheets, H5P), not as a board.
     pub fn is_text(self) -> bool {
         self != ArtifactKind::Board
     }

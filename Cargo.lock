@@ -301,6 +301,7 @@ dependencies = [
  "craft-xls",
  "craft-xlsx",
  "craft-xml",
+ "craft-zip",
  "directories",
  "futures",
  "hmac 0.12.1",

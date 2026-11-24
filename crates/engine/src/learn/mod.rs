@@ -18,6 +18,7 @@
 //! like `document_create`.
 
 pub mod formats;
+pub mod h5p;
 pub mod print;
 
 use std::path::{Path, PathBuf};
@@ -618,43 +619,7 @@ pub(crate) fn save_worksheet(c: &Ctx, id: &str, base: &[u8], ws: &Worksheet, not
 async fn ws_update_task(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let (_, mut ws, state) = worksheet_of(&c, &id)?;
-    let index = p.get("index").and_then(Value::as_u64).map(|i| i as usize);
-    let note;
-    if p.get("remove").and_then(Value::as_bool).unwrap_or(false) {
-        let i = index.filter(|i| *i < ws.tasks.len()).ok_or_else(|| Error::invalid("index fehlt oder gibt es nicht"))?;
-        ws.tasks.remove(i);
-        note = format!("Aufgabe {} entfernt", i + 1);
-    } else if let Some(to) = p.get("move_to").and_then(Value::as_u64) {
-        let i = index.filter(|i| *i < ws.tasks.len()).ok_or_else(|| Error::invalid("index fehlt oder gibt es nicht"))?;
-        let to = (to as usize).min(ws.tasks.len().saturating_sub(1));
-        let t = ws.tasks.remove(i);
-        ws.tasks.insert(to, t);
-        note = format!("Aufgabe {} verschoben", i + 1);
-    } else {
-        let tv = p.get("task").ok_or_else(|| Error::invalid("task fehlt"))?;
-        let (one, _) = worksheet::from_value(&json!({"tasks": [tv]})).map_err(Error::invalid)?;
-        let mut task = one.tasks.into_iter().next().ok_or_else(|| Error::invalid("Die Aufgabe ließ sich nicht lesen"))?;
-        match index {
-            Some(i) if i < ws.tasks.len() => {
-                if let Some(slot) = ws.tasks.get_mut(i) {
-                    if tv.get("id").is_none() {
-                        task.id = slot.id.clone();
-                    }
-                    *slot = task;
-                }
-                note = format!("Aufgabe {} geändert", i + 1);
-            }
-            Some(_) => return Err(Error::invalid("index gibt es nicht")),
-            None => {
-                if ws.tasks.len() >= worksheet::MAX_TASKS {
-                    return Err(Error::invalid(format!("Höchstens {} Aufgaben", worksheet::MAX_TASKS)));
-                }
-                task.id = String::new();
-                ws.tasks.push(task);
-                note = "Aufgabe ergänzt".into();
-            }
-        }
-    }
+    let note = h5p::apply_task_edit(&mut ws.tasks, &p)?;
     worksheet::normalize_ids(&mut ws);
     save_worksheet(&c, &id, &state, &ws, &note)?;
     Ok(json!({"tasks": ws.tasks.len(), "problems": worksheet::validate(&ws)}))
@@ -724,9 +689,14 @@ pub(crate) fn export_for(c: &Ctx, a: &Artifact, p: &Value) -> Option<Result<Valu
             "html" => app_of(c, &a.id).map(|(_, h)| with_csp(&h).into_bytes()),
             other => Err(Error::invalid(format!("Format {other} gibt es für Lern-Apps nicht (html)"))),
         },
+        ArtifactKind::Worksheet if format.as_deref() == Some("h5p") => worksheet_of(c, &a.id).and_then(|(_, ws, _)| {
+            let (h, _) = aiscraft_core::h5p::from_worksheet(&ws);
+            h5p::package_bytes(c, &h).map(|(b, _)| b)
+        }),
         ArtifactKind::Worksheet => {
             worksheet_of(c, &a.id).and_then(|(_, ws, _)| worksheet_bytes(&ws, format.as_deref().unwrap_or("pdf"), variant(p)).map(|(b, _)| b))
         }
+        ArtifactKind::H5p => h5p::export_bytes(c, a, format.as_deref()),
         _ => return None,
     };
     Some(bytes.and_then(|bytes| {
@@ -759,11 +729,13 @@ pub(crate) async fn revise(c: &Ctx, a: &Artifact, instruction: &str) -> Result<V
             format!("Du überarbeitest ein Arbeitsblatt im JSON-Format aiscraft-worksheet nach der Anweisung der Person. Antworte nur mit dem vollständigen, überarbeiteten JSON in einem ```aiscraft-worksheet-Codeblock.\n\n{}", worksheet::prompt_schema()),
             format!("<arbeitsblatt>\n{current}\n</arbeitsblatt>\n\nAnweisung: {instruction}"),
         ),
+        ArtifactKind::H5p => (h5p::revise_system(), format!("<h5p>\n{current}\n</h5p>\n\nAnweisung: {instruction}")),
         _ => return Err(Error::unsupported("Überarbeiten geht hier nicht")),
     };
     let out = crate::chat::complete(c, Some(&system), &prompt).await?;
     let revised = match a.kind {
         ArtifactKind::App => app_html(&out).map_err(|_| Error::protocol("Das Modell hat keine vollständige HTML-Datei zurückgegeben"))?,
+        ArtifactKind::H5p => h5p::revised(c, &a.id, out).await?,
         _ => {
             let block = worksheet_blocks(&out).into_iter().next().map(str::to_string).unwrap_or(out);
             let (ws, _) = parse_or_repair(c, &block, true).await?;
@@ -786,6 +758,7 @@ pub(crate) fn change_note(kind: ArtifactKind) -> &'static str {
         ArtifactKind::Worksheet => {
             "\n\n(Wenn du dieses Arbeitsblatt ändern sollst, gib die vollständige neue Fassung im selben JSON-Format in einem ```aiscraft-worksheet-Codeblock aus.)"
         }
+        ArtifactKind::H5p => h5p::CHANGE_NOTE,
         _ => "",
     }
 }
@@ -793,7 +766,7 @@ pub(crate) fn change_note(kind: ArtifactKind) -> &'static str {
 // ---- model tools ----------------------------------------------------------------------------
 
 pub(crate) fn tool_specs() -> Vec<ToolSpec> {
-    vec![
+    let mut specs = vec![
         ToolSpec {
             name: "learning_app_create".into(),
             description: "Legt eine Lern-App an: eine eigenständige HTML-Datei mit eingebettetem CSS und JavaScript, die neben dem Chat geöffnet wird. Keine externen Skripte, CDNs, Schriften oder Bilder, kein Netzwerk (wird blockiert), Deutsch, barrierefrei, offline lauffähig.".into(),
@@ -822,11 +795,16 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
             description: "Ersetzt ein Arbeitsblatt durch eine neue, vollständige Fassung im selben Format (die alte bleibt als Version erhalten).".into(),
             input_schema: json!({"type": "object", "properties": {"id": {"type": "string"}, "worksheet": {"type": "object"}}, "required": ["id", "worksheet"], "additionalProperties": false}),
         },
-    ]
+    ];
+    specs.extend(h5p::tool_specs());
+    specs
 }
 
 /// Runs one of the tools above; `None` when `name` is none of them.
 pub(crate) fn run_tool(c: &Ctx, name: &str, a: &Value) -> Option<Result<String>> {
+    if let Some(r) = h5p::run_tool(c, name, a) {
+        return Some(r);
+    }
     let s = |k: &str| a.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     Some(match name {
         "learning_app_create" => create_app(c, &s("html"), Some(s("title")), None).map(|id| format!("Lern-App angelegt und geöffnet (ID {id}).")),

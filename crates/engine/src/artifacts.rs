@@ -96,7 +96,7 @@ fn title_of(text: &str, fallback: &str) -> String {
 /// The text of an artifact for a person or a model: a document's Markdown, a board's summary.
 pub fn artifact_text(kind: ArtifactKind, state: &[u8]) -> Result<String> {
     match kind {
-        ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet => doc_text(state),
+        ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet | ArtifactKind::H5p => doc_text(state),
         ArtifactKind::Board => Ok(Board::from_state(state).map_err(|e| Error::invalid(format!("Whiteboard beschädigt: {e}")))?.summary_text()),
     }
 }
@@ -165,6 +165,10 @@ pub(crate) async fn create(c: Ctx, p: Value) -> Result<Value> {
         ArtifactKind::Worksheet => {
             return crate::learn::ws_create_cmd(c, json!({"content": p.get("content"), "from_message": p.get("from_message"), "title": p.get("title")})).await;
         }
+        ArtifactKind::H5p => {
+            return crate::learn::h5p::create_cmd(c, json!({"content": p.get("content"), "from_message": p.get("from_message"), "title": p.get("title")}))
+                .await;
+        }
         _ => {}
     }
     let state = c.state();
@@ -176,7 +180,7 @@ pub(crate) async fn create(c: Ctx, p: Value) -> Result<Value> {
     let fallback = if kind == ArtifactKind::Board { "Whiteboard" } else { "Neues Dokument" };
     let title = opt_str(&p, "title").filter(|t| !t.trim().is_empty()).unwrap_or_else(|| title_of(&content, fallback));
     let bytes = match kind {
-        ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet => doc_new(&content)?,
+        ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet | ArtifactKind::H5p => doc_new(&content)?,
         ArtifactKind::Board => {
             let mut b = if content.trim().is_empty() { Board::new() } else { Board::from_outline(&content) };
             b.set_title(&title);
@@ -252,7 +256,7 @@ pub(crate) async fn revise(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let instruction = req_str(&p, "instruction")?;
     let a = get_artifact(&c, &id)?;
-    if matches!(a.kind, ArtifactKind::App | ArtifactKind::Worksheet) {
+    if matches!(a.kind, ArtifactKind::App | ArtifactKind::Worksheet | ArtifactKind::H5p) {
         return crate::learn::revise(&c, &a, &instruction).await;
     }
     if a.kind != ArtifactKind::Document {
@@ -338,7 +342,7 @@ pub(crate) async fn restore(c: Ctx, p: Value) -> Result<Value> {
     let current = state_of(&c, &id)?;
     // Restoring is itself an edit on top of the current state, so nothing is lost.
     let new_state = match a.kind {
-        ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet => doc_replace(&current, &doc_text(&old)?)?,
+        ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet | ArtifactKind::H5p => doc_replace(&current, &doc_text(&old)?)?,
         ArtifactKind::Board => old,
     };
     save_state(&c, &id, &new_state, Some(&format!("Version {v} wiederhergestellt")))?;
