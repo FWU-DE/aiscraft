@@ -275,6 +275,13 @@ fn worksheet_work_mode_checks_answers_and_app_panel_shows_source() {
     h.get_by_label("Zurücksetzen").click();
     h.run_steps(4);
     assert!(h.query_by_label("✔ Richtig").is_none());
+    // The print preview shows the rendered pages, for the worksheet and the solution sheet.
+    h.get_by_label("Druckvorschau").click();
+    h.run_steps(6);
+    assert!(h.query_by_label("Seite 1 von 1").is_some(), "preview page shown");
+    h.get_by_label("Lösungsblatt").click();
+    h.run_steps(6);
+    assert!(h.query_by_label("Seite 1 von 1").is_some(), "solution sheet preview");
 
     engine.call("learning_app.create", serde_json::json!({"html": "<!doctype html><html><head><title>Quiz</title></head><body>Hallo</body></html>"})).unwrap();
     h.run_steps(8);

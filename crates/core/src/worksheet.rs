@@ -30,9 +30,15 @@
 //! | `short_answer` | accepted [..], case_sensitive            | H5P.Blanks (one gap)              |
 //! | `numeric`      | answer, tolerance, unit                  | H5P.Blanks (one gap, no tolerance)|
 //! | `free_text`    | sample, rubric, lines                    | H5P.Essay (keywords from rubric)  |
+//! | `categorize`   | categories [{name, items}]               | H5P.DragQuestion (one zone each)  |
 //!
-//! Every task has `prompt`, `points`, `hint`, `feedback` (shown after checking) and an optional
-//! `image` (the name of an attachment).
+//! Every task has `prompt`, `points`, `hints`, `feedback` (shown after checking) and an
+//! optional `image` (the name of an attachment). `hints` is a list the pupil uncovers one at a
+//! time, so each one may give away a little more than the last. A choice option can carry its
+//! own `feedback`, shown when it was picked (for a wrong one: which mix-up leads there). A
+//! cloze text can show its answers as a `word_bank`, with extra wrong `distractors` mixed in.
+//!
+//! Sheets written before `hints` existed have a single `"hint": "…"`; it still reads.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -53,6 +59,11 @@ pub const MAX_GAPS: usize = 40;
 pub const MAX_ALTERNATIVES: usize = 10;
 pub const MAX_POINTS: f64 = 100.0;
 pub const MAX_LINES: u32 = 30;
+pub const MAX_HINTS: usize = 5;
+pub const MAX_CATEGORIES: usize = 6;
+/// Items of a categorize task, over all categories.
+pub const MAX_CATEGORY_ITEMS: usize = 30;
+pub const MAX_DISTRACTORS: usize = 10;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Worksheet {
@@ -90,8 +101,9 @@ pub struct Task {
     pub prompt: String,
     #[serde(default)]
     pub points: f64,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub hint: String,
+    /// Hints, uncovered one at a time; each may say a little more than the one before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hints: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub feedback: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,6 +117,27 @@ pub struct ChoiceOption {
     pub text: String,
     #[serde(default)]
     pub correct: bool,
+    /// Shown after checking when this option was picked: why it is right or what the
+    /// misconception behind it is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub feedback: String,
+}
+
+impl ChoiceOption {
+    pub fn new(text: impl Into<String>, correct: bool) -> ChoiceOption {
+        ChoiceOption { text: text.into(), correct, feedback: String::new() }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Category {
+    pub name: String,
+    #[serde(default)]
+    pub items: Vec<String>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -116,15 +149,48 @@ pub struct Pair {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TaskBody {
-    Info { text: String },
-    Choice { options: Vec<ChoiceOption>, multiple: bool },
-    TrueFalse { answer: bool },
-    Cloze { text: String },
-    Matching { pairs: Vec<Pair> },
-    Ordering { items: Vec<String> },
-    ShortAnswer { accepted: Vec<String>, case_sensitive: bool },
-    Numeric { answer: f64, tolerance: f64, unit: String },
-    FreeText { sample: String, rubric: String, lines: u32 },
+    Info {
+        text: String,
+    },
+    Choice {
+        options: Vec<ChoiceOption>,
+        multiple: bool,
+    },
+    TrueFalse {
+        answer: bool,
+    },
+    Cloze {
+        text: String,
+        /// Show the answers (and the distractors) as a word list.
+        #[serde(default, skip_serializing_if = "is_false")]
+        word_bank: bool,
+        /// Wrong words for the word list.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        distractors: Vec<String>,
+    },
+    Matching {
+        pairs: Vec<Pair>,
+    },
+    Ordering {
+        items: Vec<String>,
+    },
+    ShortAnswer {
+        accepted: Vec<String>,
+        case_sensitive: bool,
+    },
+    Numeric {
+        answer: f64,
+        tolerance: f64,
+        unit: String,
+    },
+    FreeText {
+        sample: String,
+        rubric: String,
+        lines: u32,
+    },
+    Categorize {
+        categories: Vec<Category>,
+    },
 }
 
 /// The task types: (`type`, German label), in the order the editor offers them.
@@ -135,6 +201,7 @@ pub const TASK_TYPES: &[(&str, &str)] = &[
     ("cloze", "Lückentext"),
     ("matching", "Zuordnen"),
     ("ordering", "Reihenfolge"),
+    ("categorize", "In Gruppen sortieren"),
     ("short_answer", "Kurze Antwort"),
     ("numeric", "Zahl"),
     ("free_text", "Freier Text"),
@@ -153,6 +220,7 @@ impl TaskBody {
             TaskBody::ShortAnswer { .. } => "short_answer",
             TaskBody::Numeric { .. } => "numeric",
             TaskBody::FreeText { .. } => "free_text",
+            TaskBody::Categorize { .. } => "categorize",
         }
     }
 
@@ -168,17 +236,18 @@ impl TaskBody {
             TaskBody::ShortAnswer { .. } => "Kurze Antwort",
             TaskBody::Numeric { .. } => "Zahl",
             TaskBody::FreeText { .. } => "Freier Text",
+            TaskBody::Categorize { .. } => "In Gruppen sortieren",
         }
     }
 
     /// An empty task of a type from [`TASK_TYPES`], ready to fill in.
     pub fn template(kind: &str) -> Option<TaskBody> {
-        let opt = |t: &str, c: bool| ChoiceOption { text: t.into(), correct: c };
+        let opt = ChoiceOption::new;
         Some(match kind {
             "choice" => TaskBody::Choice { options: vec![opt("Antwort A", true), opt("Antwort B", false), opt("Antwort C", false)], multiple: false },
             "choice_multi" => TaskBody::Choice { options: vec![opt("Antwort A", true), opt("Antwort B", true), opt("Antwort C", false)], multiple: true },
             "true_false" => TaskBody::TrueFalse { answer: true },
-            "cloze" => TaskBody::Cloze { text: "Ein Satz mit einer [[Lücke|Leerstelle]].".into() },
+            "cloze" => TaskBody::Cloze { text: "Ein Satz mit einer [[Lücke|Leerstelle]].".into(), word_bank: false, distractors: Vec::new() },
             "matching" => TaskBody::Matching {
                 pairs: vec![Pair { left: "Begriff 1".into(), right: "Erklärung 1".into() }, Pair { left: "Begriff 2".into(), right: "Erklärung 2".into() }],
             },
@@ -186,6 +255,12 @@ impl TaskBody {
             "short_answer" => TaskBody::ShortAnswer { accepted: vec!["Antwort".into()], case_sensitive: false },
             "numeric" => TaskBody::Numeric { answer: 0.0, tolerance: 0.0, unit: String::new() },
             "free_text" => TaskBody::FreeText { sample: String::new(), rubric: String::new(), lines: 5 },
+            "categorize" => TaskBody::Categorize {
+                categories: vec![
+                    Category { name: "Gruppe 1".into(), items: vec!["Element A".into(), "Element B".into()] },
+                    Category { name: "Gruppe 2".into(), items: vec!["Element C".into(), "Element D".into()] },
+                ],
+            },
             "info" => TaskBody::Info { text: "Lies den Text.".into() },
             _ => return None,
         })
@@ -200,7 +275,7 @@ impl TaskBody {
 impl Task {
     pub fn new(id: impl Into<String>, body: TaskBody) -> Task {
         let points = if body.auto_checked() || matches!(body, TaskBody::FreeText { .. }) { 1.0 } else { 0.0 };
-        Task { id: id.into(), prompt: String::new(), points, hint: String::new(), feedback: String::new(), image: None, body }
+        Task { id: id.into(), prompt: String::new(), points, hints: Vec::new(), feedback: String::new(), image: None, body }
     }
 }
 
@@ -259,25 +334,6 @@ fn list_of<'a>(v: &'a Value, names: &[&str]) -> Option<&'a Vec<Value>> {
     names.iter().find_map(|n| v.get(*n).and_then(Value::as_array))
 }
 
-/// A list of strings (strings, numbers, or objects with a `text`).
-fn strings_of(v: &Value, names: &[&str], max_items: usize) -> Vec<String> {
-    let Some(list) = list_of(v, names) else {
-        // A single string where a list belongs.
-        let one = text_of(v, names, MAX_SHORT);
-        return if one.is_empty() { Vec::new() } else { vec![one] };
-    };
-    list.iter()
-        .take(max_items)
-        .filter_map(|x| match x {
-            Value::String(s) => Some(cap(s, MAX_SHORT)),
-            Value::Number(n) => Some(n.to_string()),
-            Value::Object(_) => Some(text_of(x, &["text", "value", "label"], MAX_SHORT)),
-            _ => None,
-        })
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 /// A number as people write it: `3,5`, `3.5`, `1 000`, `-2`.
 pub fn parse_number(s: &str) -> Option<f64> {
     let t: String = s.trim().chars().filter(|c| !c.is_whitespace() && *c != '\u{a0}').collect();
@@ -288,6 +344,48 @@ pub fn parse_number(s: &str) -> Option<f64> {
     t.parse::<f64>().ok().filter(|f| f.is_finite())
 }
 
+/// A list of strings (strings, numbers, or objects with a `text`), each at most `max_len`.
+fn strings_of_len(v: &Value, names: &[&str], max_items: usize, max_len: usize) -> Vec<String> {
+    let Some(list) = list_of(v, names) else {
+        // A single string where a list belongs.
+        let one = text_of(v, names, max_len);
+        return if one.is_empty() { Vec::new() } else { vec![one] };
+    };
+    list.iter()
+        .take(max_items)
+        .filter_map(|x| match x {
+            Value::String(s) => Some(cap(s, max_len)),
+            Value::Number(n) => Some(n.to_string()),
+            Value::Object(_) => Some(text_of(x, &["text", "value", "label"], max_len)),
+            _ => None,
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn strings_of(v: &Value, names: &[&str], max_items: usize) -> Vec<String> {
+    strings_of_len(v, names, max_items, MAX_SHORT)
+}
+
+/// Hints in the order they are revealed: a `hints` list, and the single `hint` of older sheets
+/// in front of it.
+fn hints_of(v: &Value) -> Vec<String> {
+    let mut hints = match list_of(v, &["hints", "tipps"]) {
+        Some(_) => strings_of_len(v, &["hints", "tipps"], MAX_HINTS, MAX_TEXT),
+        None => Vec::new(),
+    };
+    let single = text_of(v, &["hint", "tipp", "hilfe"], MAX_TEXT);
+    if !single.is_empty() && !hints.contains(&single) {
+        hints.insert(0, single);
+    }
+    hints.truncate(MAX_HINTS);
+    hints
+}
+
+fn feedback_of(v: &Value) -> String {
+    text_of(v, &["feedback", "explanation", "erklaerung", "erklärung"], MAX_TEXT)
+}
+
 /// One task from hostile JSON. `Err` says what is wrong, in German.
 fn parse_task(v: &Value) -> Result<Task, String> {
     if !v.is_object() {
@@ -295,6 +393,7 @@ fn parse_task(v: &Value) -> Result<Task, String> {
     }
     let ty = text_of(v, &["type", "typ", "kind"], 40).to_lowercase().replace(['-', ' '], "_");
     let multiple_hint = bool_of(v, &["multiple", "multi", "mehrfach"]);
+    let has_groups = list_of(v, GROUP_KEYS).is_some();
     let body = match ty.as_str() {
         "info" | "text" | "text_block" | "information" | "hinweis" => TaskBody::Info { text: text_of(v, &["text", "content", "body"], MAX_TEXT) },
         "choice" | "multiple_choice" | "single_choice" | "mc" | "auswahl" | "multichoice" | "choice_multi" => {
@@ -309,11 +408,12 @@ fn parse_task(v: &Value) -> Result<Task, String> {
                 .take(MAX_OPTIONS)
                 .enumerate()
                 .filter_map(|(i, o)| match o {
-                    Value::String(s) => Some(ChoiceOption { text: cap(s, MAX_SHORT), correct: correct_idx.contains(&i) }),
-                    Value::Number(n) => Some(ChoiceOption { text: n.to_string(), correct: correct_idx.contains(&i) }),
+                    Value::String(s) => Some(ChoiceOption::new(cap(s, MAX_SHORT), correct_idx.contains(&i))),
+                    Value::Number(n) => Some(ChoiceOption::new(n.to_string(), correct_idx.contains(&i))),
                     Value::Object(_) => Some(ChoiceOption {
                         text: text_of(o, &["text", "label", "value"], MAX_SHORT),
                         correct: bool_of(o, &["correct", "richtig", "is_correct"]).unwrap_or(false) || correct_idx.contains(&i),
+                        feedback: feedback_of(o),
                     }),
                     _ => None,
                 })
@@ -335,7 +435,9 @@ fn parse_task(v: &Value) -> Result<Task, String> {
             if cloze_gaps(&text).is_empty() {
                 return Err("hat keine Lücken (so markieren: [[Lösung|Alternative]])".into());
             }
-            TaskBody::Cloze { text }
+            let distractors = strings_of(v, &["distractors", "extra_words"], MAX_DISTRACTORS);
+            let word_bank = bool_of(v, &["word_bank", "word_list"]).unwrap_or(false);
+            TaskBody::Cloze { text, word_bank, distractors }
         }
         "matching" | "match" | "pairs" | "zuordnen" | "zuordnung" => {
             let list = list_of(v, &["pairs", "paare", "items"]).ok_or("hat keine Paare (pairs)")?;
@@ -360,6 +462,9 @@ fn parse_task(v: &Value) -> Result<Task, String> {
             }
             TaskBody::Matching { pairs }
         }
+        "categorize" | "categorise" | "classify" | "group" | "groups" | "gruppieren" | "einordnen" => categorize_of(v)?,
+        // "Sort" with groups means sorting into groups, without them putting in order.
+        "sort" | "sortieren" if has_groups => categorize_of(v)?,
         "ordering" | "order" | "sequence" | "sort" | "reihenfolge" | "sortieren" => {
             let items = strings_of(v, &["items", "steps", "order", "elemente"], MAX_ITEMS);
             if items.len() < 2 {
@@ -394,11 +499,35 @@ fn parse_task(v: &Value) -> Result<Task, String> {
         id: text_of(v, &["id"], 40),
         prompt: text_of(v, &["prompt", "question", "frage", "title", "aufgabe", "instruction"], MAX_TEXT),
         points,
-        hint: text_of(v, &["hint", "tipp", "hilfe"], MAX_TEXT),
-        feedback: text_of(v, &["feedback", "explanation", "erklaerung", "erklärung"], MAX_TEXT),
+        hints: hints_of(v),
+        feedback: feedback_of(v),
         image,
         body,
     })
+}
+
+const GROUP_KEYS: &[&str] = &["categories", "groups", "gruppen"];
+
+fn categorize_of(v: &Value) -> Result<TaskBody, String> {
+    let list = list_of(v, GROUP_KEYS).ok_or("hat keine Gruppen (categories)")?;
+    let mut total = 0usize;
+    let mut categories = Vec::new();
+    for c in list.iter().take(MAX_CATEGORIES) {
+        let name = text_of(c, &["name", "title", "label"], MAX_SHORT);
+        let mut items = strings_of(c, &["items", "members"], MAX_ITEMS);
+        items.truncate(MAX_CATEGORY_ITEMS.saturating_sub(total));
+        total += items.len();
+        if !name.is_empty() {
+            categories.push(Category { name, items });
+        }
+    }
+    if categories.len() < 2 {
+        return Err("braucht mindestens zwei Gruppen".into());
+    }
+    if total < 2 {
+        return Err("braucht mindestens zwei Elemente zum Einsortieren".into());
+    }
+    Ok(TaskBody::Categorize { categories })
 }
 
 /// The JSON object inside `src`: a bare object, one inside a fence, or one between prose.
@@ -513,7 +642,16 @@ pub fn validate(ws: &Worksheet) -> Vec<String> {
                     out.push(format!("Aufgabe {n}: mehrere richtige Antworten, aber nur eine wählbar"));
                 }
             }
-            TaskBody::Cloze { text } if cloze_gaps(text).is_empty() => out.push(format!("Aufgabe {n}: der Lückentext hat keine Lücken")),
+            TaskBody::Cloze { text, .. } if cloze_gaps(text).is_empty() => out.push(format!("Aufgabe {n}: der Lückentext hat keine Lücken")),
+            TaskBody::Categorize { categories } => {
+                if categories.len() < 2 {
+                    out.push(format!("Aufgabe {n}: braucht mindestens zwei Gruppen"));
+                } else if categories.iter().any(|c| c.name.trim().is_empty()) {
+                    out.push(format!("Aufgabe {n}: eine Gruppe hat keinen Namen"));
+                } else if category_items(categories).len() < 2 {
+                    out.push(format!("Aufgabe {n}: braucht mindestens zwei Elemente zum Einsortieren"));
+                }
+            }
             TaskBody::Matching { pairs } if pairs.len() < 2 => out.push(format!("Aufgabe {n}: braucht mindestens zwei Paare")),
             TaskBody::Ordering { items } if items.len() < 2 => out.push(format!("Aufgabe {n}: braucht mindestens zwei Elemente")),
             TaskBody::ShortAnswer { accepted, .. } if accepted.iter().all(|a| a.trim().is_empty()) => {
@@ -574,6 +712,28 @@ pub fn cloze_parts(text: &str) -> Vec<ClozePart<'_>> {
     out
 }
 
+/// The word list of a cloze task: the first answer of every gap plus the distractors, each
+/// once, in a stable order that is not the order of the gaps.
+pub fn cloze_word_bank(text: &str, distractors: &[String], seed: &str) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    for w in cloze_gaps(text).into_iter().filter_map(|g| g.into_iter().next()).chain(distractors.iter().take(MAX_DISTRACTORS).map(|d| cap(d, MAX_SHORT))) {
+        if !w.is_empty() && !words.contains(&w) {
+            words.push(w);
+        }
+    }
+    display_order(words.len(), seed).into_iter().filter_map(|i| words.get(i).cloned()).collect()
+}
+
+/// The items of a categorize task in solution order, each with the index of its category.
+pub fn category_items(categories: &[Category]) -> Vec<(usize, &str)> {
+    categories
+        .iter()
+        .enumerate()
+        .flat_map(|(c, cat)| cat.items.iter().filter(|x| !x.trim().is_empty()).map(move |x| (c, x.as_str())))
+        .take(MAX_CATEGORY_ITEMS)
+        .collect()
+}
+
 /// The accepted answers of each gap.
 pub fn cloze_gaps(text: &str) -> Vec<Vec<String>> {
     cloze_parts(text)
@@ -602,13 +762,16 @@ pub enum Response {
     Matches(Vec<Option<usize>>),
     /// Item indices in the order the pupil put them (ordering).
     Order(Vec<usize>),
+    /// For each item (in [`category_items`] order), the category it was put in (categorize).
+    Assign(Vec<Option<usize>>),
     Text(String),
 }
 
 impl Response {
     /// An answer from JSON, read the way the task needs it: choice `[0, 2]` or `1`, true_false
     /// `true`, cloze `["…", "…"]`, matching `[2, 0, 1]` (right index per left item), ordering
-    /// `[2, 0, 1]` (item indices in the chosen order), others a string or number.
+    /// `[2, 0, 1]` (item indices in the chosen order), categorize `[0, 1, null]` (category per
+    /// item) or the category names `["Säugetiere", …]`, others a string or number.
     pub fn from_json(body: &TaskBody, v: &Value) -> Response {
         let idx = |x: &Value| x.as_u64().map(|i| i as usize).filter(|i| *i < 1000);
         match (body, v) {
@@ -625,6 +788,18 @@ impl Response {
             (TaskBody::Cloze { .. }, Value::String(s)) => Response::Gaps(vec![cap(s, MAX_SHORT)]),
             (TaskBody::Matching { .. }, Value::Array(a)) => Response::Matches(a.iter().take(MAX_PAIRS).map(idx).collect()),
             (TaskBody::Ordering { .. }, Value::Array(a)) => Response::Order(a.iter().take(MAX_ITEMS).filter_map(idx).collect()),
+            (TaskBody::Categorize { categories }, Value::Array(a)) => Response::Assign(
+                a.iter()
+                    .take(MAX_CATEGORY_ITEMS)
+                    .map(|x| match x {
+                        Value::String(name) => {
+                            let n = norm(name, false);
+                            categories.iter().position(|c| norm(&c.name, false) == n)
+                        }
+                        _ => idx(x),
+                    })
+                    .collect(),
+            ),
             (_, Value::String(s)) => Response::Text(cap(s, MAX_TEXT)),
             (_, Value::Number(n)) => Response::Text(n.to_string()),
             _ => Response::Empty,
@@ -690,7 +865,7 @@ pub fn score_task(task: &Task, r: &Response) -> TaskResult {
             }
         }
         (TaskBody::TrueFalse { answer }, Response::Bool(b)) => f64::from(u8::from(answer == b)),
-        (TaskBody::Cloze { text }, Response::Gaps(given)) => {
+        (TaskBody::Cloze { text, .. }, Response::Gaps(given)) => {
             let gaps = cloze_gaps(text);
             res.parts = gaps.iter().enumerate().map(|(i, acc)| given.get(i).is_some_and(|g| text_matches(g, acc, false))).collect();
             if gaps.is_empty() { 0.0 } else { res.parts.iter().filter(|x| **x).count() as f64 / gaps.len() as f64 }
@@ -701,6 +876,11 @@ pub fn score_task(task: &Task, r: &Response) -> TaskResult {
         }
         (TaskBody::Ordering { items }, Response::Order(order)) => {
             res.parts = (0..items.len()).map(|pos| order.get(pos) == Some(&pos)).collect();
+            if items.is_empty() { 0.0 } else { res.parts.iter().filter(|x| **x).count() as f64 / items.len() as f64 }
+        }
+        (TaskBody::Categorize { categories }, Response::Assign(given)) => {
+            let items = category_items(categories);
+            res.parts = items.iter().enumerate().map(|(i, (c, _))| given.get(i).copied().flatten() == Some(*c)).collect();
             if items.is_empty() { 0.0 } else { res.parts.iter().filter(|x| **x).count() as f64 / items.len() as f64 }
         }
         (TaskBody::ShortAnswer { accepted, case_sensitive }, Response::Text(t)) => f64::from(u8::from(text_matches(t, accepted, *case_sensitive))),
@@ -766,12 +946,13 @@ pub fn display_order(n: usize, seed: &str) -> Vec<usize> {
 pub fn prompt_schema() -> &'static str {
     r#"Format (JSON, ein Objekt):
 {"format":"aiscraft-worksheet","version":1,"title":"…","subject":"…","grade":"…","instructions":"…","tasks":[…]}
-Jede Aufgabe hat "type", "prompt" (Aufgabenstellung), "points", optional "hint" (Tipp) und "feedback" (Erklärung nach dem Prüfen). Typen:
-- {"type":"choice","prompt":"…","multiple":false,"options":[{"text":"…","correct":true},{"text":"…","correct":false}]}
+Jede Aufgabe hat "type", "prompt" (Aufgabenstellung), "points", optional "hints" (Liste von Tipps, die man einzeln aufdeckt; jeder wird etwas konkreter als der vorige) und "feedback" (Erklärung nach dem Prüfen). Typen:
+- {"type":"choice","prompt":"…","multiple":false,"options":[{"text":"…","correct":true},{"text":"…","correct":false,"feedback":"Warum diese Antwort nicht stimmt"}]}
 - {"type":"true_false","prompt":"Aussage …","answer":true}
-- {"type":"cloze","prompt":"Ergänze.","text":"Die Hauptstadt ist [[Berlin]]. Alternativen mit |: [[Fotosynthese|Photosynthese]]"}
+- {"type":"cloze","prompt":"Ergänze.","text":"Die Hauptstadt ist [[Berlin]]. Alternativen mit |: [[Fotosynthese|Photosynthese]]"} (für Jüngere mit Wortliste: "word_bank":true, "distractors":["falsches Wort"])
 - {"type":"matching","prompt":"Ordne zu.","pairs":[{"left":"…","right":"…"}]}
 - {"type":"ordering","prompt":"Bringe in die richtige Reihenfolge.","items":["erster","zweiter","dritter"]} (items in der richtigen Reihenfolge)
+- {"type":"categorize","prompt":"Sortiere in die Gruppen.","categories":[{"name":"Säugetiere","items":["Wal","Fledermaus"]},{"name":"Fische","items":["Hai","Forelle"]}]}
 - {"type":"short_answer","prompt":"…","accepted":["Antwort","Variante"]}
 - {"type":"numeric","prompt":"…","answer":3.5,"tolerance":0.1,"unit":"cm"}
 - {"type":"free_text","prompt":"…","sample":"Musterlösung","rubric":"Bewertungskriterien","lines":6}
@@ -885,6 +1066,80 @@ mod tests {
         assert_eq!(sheet.open, 1);
         assert!(matches!(Response::from_json(&t(2).body, &json!("richtig")), Response::Bool(true)));
         assert!(matches!(Response::from_json(&t(0).body, &json!(1)), Response::Chosen(v) if v == vec![1]));
+    }
+
+    #[test]
+    fn categorize_parses_scores_and_round_trips() {
+        let src = json!({"tasks": [{"type": "categorize", "prompt": "Sortiere", "points": 4,
+            "categories": [{"name": "Säugetiere", "items": ["Wal", "Fledermaus"]}, {"name": "Fische", "items": ["Hai", "Forelle"]}]}]});
+        let (ws, problems) = from_value(&src).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        let t = &ws.tasks[0];
+        let TaskBody::Categorize { categories } = &t.body else { panic!("{:?}", t.body) };
+        assert_eq!(category_items(categories), vec![(0, "Wal"), (0, "Fledermaus"), (1, "Hai"), (1, "Forelle")]);
+        assert_eq!(score_task(t, &Response::Assign(vec![Some(0), Some(0), Some(1), Some(1)])).correct, Some(true));
+        let r = score_task(t, &Response::Assign(vec![Some(0), Some(1), None]));
+        assert_eq!(r.parts, vec![true, false, false, false]);
+        assert_eq!(r.points, 1.0);
+        // Answers as category names (tool calls), case and spacing ignored; unknown names count as no answer.
+        assert!(
+            matches!(Response::from_json(&t.body, &json!(["säugetiere", "Säugetiere ", 1, "Vögel"])), Response::Assign(v) if v == vec![Some(0), Some(0), Some(1), None])
+        );
+        let (back, _) = parse_lenient(&to_json(&ws)).unwrap();
+        assert_eq!(back, ws);
+        // "sort" with groups is categorize, without them ordering.
+        let (ws, _) = from_value(&json!({"tasks": [
+            {"type": "sort", "prompt": "Ordne ein", "groups": [{"name": "A", "items": ["x"]}, {"name": "B", "items": ["y"]}]},
+            {"type": "sortieren", "prompt": "Ordne", "items": ["1", "2"]}]}))
+        .unwrap();
+        assert_eq!(ws.tasks[0].body.type_name(), "categorize");
+        assert_eq!(ws.tasks[1].body.type_name(), "ordering");
+        // Too few groups or items is reported; hostile sizes are capped.
+        for bad in [
+            json!({"type": "categorize", "categories": [{"name": "A", "items": ["x", "y"]}]}),
+            json!({"type": "categorize", "categories": [{"name": "A", "items": ["x"]}, {"name": "B"}]}),
+        ] {
+            assert!(from_value(&json!({"tasks": [bad]})).is_err());
+        }
+        let huge: Vec<Value> = (0..20).map(|i| json!({"name": format!("G{i}"), "items": vec!["x"; 50]})).collect();
+        let (ws, _) = from_value(&json!({"tasks": [{"type": "categorize", "prompt": "p", "categories": huge}]})).unwrap();
+        let TaskBody::Categorize { categories } = &ws.tasks[0].body else { panic!() };
+        assert_eq!(categories.len(), MAX_CATEGORIES);
+        assert_eq!(category_items(categories).len(), MAX_CATEGORY_ITEMS);
+    }
+
+    #[test]
+    fn staged_hints_option_feedback_and_word_bank() {
+        // An older sheet with one `hint` still reads, and a hint list is kept in order.
+        let (ws, _) = from_value(&json!({"tasks": [
+            {"type": "true_false", "prompt": "p", "answer": true, "hint": "Alter Tipp"},
+            {"type": "true_false", "prompt": "p", "answer": true, "hints": ["Erst", "Dann", "Fast die Lösung"]},
+            {"type": "true_false", "prompt": "p", "answer": true, "hints": (0..9).map(|i| i.to_string()).collect::<Vec<_>>()}]}))
+        .unwrap();
+        assert_eq!(ws.tasks[0].hints, vec!["Alter Tipp".to_string()]);
+        assert_eq!(ws.tasks[1].hints.len(), 3);
+        assert_eq!(ws.tasks[2].hints.len(), MAX_HINTS);
+        assert!(to_json(&ws).contains("\"hints\""));
+        // Feedback per option, next to the feedback of the task.
+        let (ws, _) = from_value(&json!({"tasks": [{"type": "choice", "prompt": "p", "feedback": "Gut.",
+            "options": [{"text": "a", "correct": true}, {"text": "b", "feedback": "b verwechselt Zähler und Nenner"}]}]}))
+        .unwrap();
+        let TaskBody::Choice { options, .. } = &ws.tasks[0].body else { panic!() };
+        assert_eq!(options[1].feedback, "b verwechselt Zähler und Nenner");
+        assert_eq!(ws.tasks[0].feedback, "Gut.");
+        assert!(options[0].feedback.is_empty());
+        // Word bank: each answer once plus the distractors, never in gap order.
+        let (ws, _) = from_value(&json!({"tasks": [{"type": "cloze", "prompt": "p", "text": "[[eins]] [[zwei|2]] [[drei]] [[eins]]", "word_bank": true, "distractors": ["vier", "zwei"]}]})).unwrap();
+        let TaskBody::Cloze { text, word_bank, distractors } = &ws.tasks[0].body else { panic!() };
+        assert!(*word_bank);
+        let bank = cloze_word_bank(text, distractors, &ws.tasks[0].id);
+        let mut sorted = bank.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec!["drei", "eins", "vier", "zwei"]);
+        assert_ne!(bank, vec!["eins", "zwei", "drei", "vier"]);
+        // Old cloze JSON without the new fields reads, and the new fields are not written when off.
+        let (ws, _) = parse_lenient(r#"{"tasks":[{"type":"cloze","prompt":"p","text":"[[a]]"}]}"#).unwrap();
+        assert!(!to_json(&ws).contains("word_bank") && !to_json(&ws).contains("distractors"));
     }
 
     #[test]
