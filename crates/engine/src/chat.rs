@@ -823,6 +823,9 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     sync_variants(&c, &conv_id);
     let mut result = Ok(());
     let mut read_pages: Vec<aiscraft_core::ActivityLink> = Vec::new();
+    // What the trust check may rely on: the owner's own messages as stored (no attached text,
+    // no tool results, no names swapped for placeholders), each with the answer it replied to.
+    let evidence = crate::trust::evidence(&c.store(|st| st.messages(&conv_id))?);
     for round in 0..MAX_TOOL_ROUNDS {
         let mut history = c.store(|st| st.messages(&conv_id))?;
         history.retain(|m| m.id != answer.id);
@@ -836,7 +839,6 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         {
             last.content = format!("{ctx_block}\n\n{}", last.content);
         }
-        let owner_words: String = history.iter().filter(|m| m.role == Role::User).map(|m| m.content.as_str()).collect::<Vec<_>>().join("\n");
         // The last round offers no tools, so the model has to answer.
         let round_tools = if round + 1 == MAX_TOOL_ROUNDS { vec![] } else { tools.clone() };
         let req = ChatRequest {
@@ -854,12 +856,12 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
             Ok(calls) => {
                 answer.tool_calls = calls.clone();
                 put_message(&c, &conv_id, &answer);
-                for call in calls {
-                    if *cancel_rx.borrow() {
-                        result = Err(Error::cancelled());
-                        break;
-                    }
-                    let (text, is_error, outcome) = crate::tools::run(&c, &conv_id, &call, &owner_words, interactive).await;
+                if *cancel_rx.borrow() {
+                    result = Err(Error::cancelled());
+                    break;
+                }
+                let outcomes = crate::tools::run_step(&c, &conv_id, &calls, &evidence, interactive).await;
+                for (call, (text, is_error, outcome)) in calls.into_iter().zip(outcomes) {
                     if let Some(link) = crate::tools::fetched_link(&call, &text).filter(|_| !is_error)
                         && !read_pages.iter().any(|l| l.url == link.url)
                     {
@@ -877,7 +879,8 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
                     tool_msg.tool_result = Some(aiscraft_core::ToolResultInfo { call_id: call.id.clone(), name: call.name.clone(), is_error });
                     put_message(&c, &conv_id, &tool_msg);
                 }
-                if result.is_err() {
+                if *cancel_rx.borrow() {
+                    result = Err(Error::cancelled());
                     break;
                 }
                 answer = new_answer(&conv_id, &model_name);
@@ -900,6 +903,8 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
             if answer.content.is_empty() && answer.tool_calls.is_empty() {
                 answer.content = "_(angehalten)_".into();
             }
+            // A stopped turn is never the owner's words for the trust check (#63).
+            answer.activity.push(aiscraft_core::ActivityStep { label: crate::trust::STOPPED.into(), done: true, ..Default::default() });
             result = Ok(());
         }
         Err(e) => answer.error = Some(e.message.clone()),

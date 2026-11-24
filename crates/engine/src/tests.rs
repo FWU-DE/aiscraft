@@ -292,11 +292,11 @@ fn connector_tools_need_approval_unless_read_only() {
     let call = |name: &str, args: serde_json::Value| aiscraft_core::ToolCall { id: "c".into(), name: name.into(), arguments: args, outcome: None };
 
     // Read-only: runs without asking.
-    let (text, err, outcome) = engine.block_on(crate::tools::run(&ctx, "conv", &call(&echo.llm_name, json!({"text": "hallo"})), "", true));
+    let (text, err, outcome) = engine.block_on(crate::tools::run(&ctx, "conv", &call(&echo.llm_name, json!({"text": "hallo"})), &Default::default(), true));
     assert!(!err && outcome == "ok" && text.contains("hallo") && text.contains("untrusted_tool_result"), "{text}");
 
     // Not read-only, nobody there: refused, no question asked.
-    let (_, err, outcome) = engine.block_on(crate::tools::run(&ctx, "conv", &call(&notify.llm_name, json!({})), "", false));
+    let (_, err, outcome) = engine.block_on(crate::tools::run(&ctx, "conv", &call(&notify.llm_name, json!({})), &Default::default(), false));
     assert!(err && outcome == "denied");
     assert!(engine.state().approvals.is_empty());
 
@@ -308,7 +308,7 @@ fn connector_tools_need_approval_unless_read_only() {
         std::thread::spawn({
             let engine = engine.clone();
             move || {
-                let r = engine.block_on(crate::tools::run(&ctx2, "conv", &c2, "", true));
+                let r = engine.block_on(crate::tools::run(&ctx2, "conv", &c2, &Default::default(), true));
                 let _ = tx.send(r);
             }
         });
@@ -341,7 +341,7 @@ fn connector_tools_need_approval_unless_read_only() {
     std::thread::spawn({
         let engine = engine.clone();
         move || {
-            let _ = tx.send(engine.block_on(crate::tools::run(&ctx2, "conv", &c3, "", true)));
+            let _ = tx.send(engine.block_on(crate::tools::run(&ctx2, "conv", &c3, &Default::default(), true)));
         }
     });
     assert!(engine.wait_for(Duration::from_secs(30), |s| !s.approvals.is_empty()), "a read-only tool still asks when a secret goes out");
@@ -351,7 +351,7 @@ fn connector_tools_need_approval_unless_read_only() {
     let (text, err, _) = rx.recv_timeout(Duration::from_secs(30)).unwrap();
     assert!(!err && !text.contains("geheim-123") && !text.contains("frau.ada") && text.contains("[Tresor]"), "{text}");
     let bad = call(&echo.llm_name, json!({"text": "{{vault:gibtsnicht.password}}"}));
-    let (t, err, _) = engine.block_on(crate::tools::run(&ctx, "conv", &bad, "", true));
+    let (t, err, _) = engine.block_on(crate::tools::run(&ctx, "conv", &bad, &Default::default(), true));
     assert!(err && t.contains("gibtsnicht"));
     let code = engine.call("vault.code", json!({"id": engine.state().vault[0].id})).unwrap();
     assert_eq!(code["code"].as_str().unwrap().len(), 6);
@@ -1074,7 +1074,13 @@ fn links_on_messages() {
 #[test]
 fn every_command_has_a_functional_test() {
     // The learning-app/worksheet tests and the attachment tests live in their own files.
-    let src = concat!(include_str!("tests.rs"), include_str!("learn_tests.rs"), include_str!("attach/tests.rs"), include_str!("privacy/tests.rs"));
+    let src = concat!(
+        include_str!("tests.rs"),
+        include_str!("learn_tests.rs"),
+        include_str!("attach/tests.rs"),
+        include_str!("privacy/tests.rs"),
+        include_str!("trust_tests.rs")
+    );
     // The panic hunt touches every command; count only calls outside it.
     let hunt_start = src.find("fn panic_hunt_every_command_with_hostile_params").unwrap_or(0);
     let hunt_end = src[hunt_start..].find("\n}\n").map(|e| hunt_start + e).unwrap_or(hunt_start);
@@ -1129,7 +1135,7 @@ fn check_in_tool_answers_in_the_same_chat() {
         arguments: json!({"title": "Nachfragen", "prompt": "Hat Frau Yilmaz geantwortet?", "at": "in 2 Tagen"}),
         outcome: None,
     };
-    let (text, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, "", true));
+    let (text, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, &Default::default(), true));
     assert!(!err && text.starts_with("Geplant für"), "{text}");
     let s = engine.state();
     assert_eq!(s.schedules[0].conversation_id.as_deref(), Some(conv.as_str()));
@@ -1181,7 +1187,7 @@ fn per_chat_sources() {
     assert!(!last.contains("\"tools\"") && !last.contains("PROJEKTREGEL") && last.contains("MERKNOTIZ"));
     // A model calling history_search anyway is refused.
     let call = aiscraft_core::ToolCall { id: "h".into(), name: "history_search".into(), arguments: json!({"query": "x"}), outcome: None };
-    let (_, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, "", true));
+    let (_, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, &Default::default(), true));
     assert!(err);
     // A new chat starts with everything on again; reopening brings the chat's own switches back.
     engine.call("chat.new", json!({})).unwrap();
@@ -1258,7 +1264,7 @@ fn background_task_reports_back() {
     assert_eq!(engine.ctx().store(|st| st.messages(&id)).unwrap().len(), 2);
     // No task inside a task.
     let call = aiscraft_core::ToolCall { id: "x".into(), name: "task_start".into(), arguments: json!({"title": "a", "instructions": "b"}), outcome: None };
-    let (_, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &id, &call, "", true));
+    let (_, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &id, &call, &Default::default(), true));
     assert!(err);
 }
 
@@ -1323,7 +1329,7 @@ fn board_tools_read_and_add() {
     assert!(engine.call("artifact.board_add", json!({"id": id, "outline": "  "})).is_err());
     // The tools use the open board when no id is given.
     let read = aiscraft_core::ToolCall { id: "r".into(), name: "board_read".into(), arguments: json!({}), outcome: None };
-    let (t, err, _) = engine.block_on(crate::tools::run(engine.ctx(), "c", &read, "", true));
+    let (t, err, _) = engine.block_on(crate::tools::run(engine.ctx(), "c", &read, &Default::default(), true));
     assert!(!err && t.contains("Fuchs"), "{t}");
 }
 
@@ -1783,7 +1789,7 @@ fn web_fetch_tool_reads_pages_and_lists_sources() {
     let offered: Vec<&str> = body["tools"].as_array().into_iter().flatten().filter_map(|t| t["function"]["name"].as_str()).collect();
     assert!(offered.contains(&"document_create") && !offered.contains(&"web_fetch"), "{offered:?}");
     let call = aiscraft_core::ToolCall { id: "w".into(), name: "web_fetch".into(), arguments: json!({"url": "https://example.org"}), outcome: None };
-    let (_, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, "", true));
+    let (_, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, &Default::default(), true));
     assert!(err);
 }
 

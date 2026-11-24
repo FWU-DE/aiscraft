@@ -947,7 +947,7 @@ impl AisCraftApp {
                     self.run("settings.set", json!({"key": "trust_check", "value": trust}));
                 }
                 let mut auto = st.auto_allow_covered;
-                if ui.add_enabled(trust, egui::Checkbox::new(&mut auto, "Ohne Nachfrage ausführen, wenn deine Worte sie wörtlich decken (nie bei löschenden Werkzeugen)")).changed() {
+                if ui.add_enabled(trust, egui::Checkbox::new(&mut auto, "Ohne Nachfrage ausführen, was deine Bitte deckt, auch über mehrere Schritte (nie bei löschenden Werkzeugen und Tresor-Einträgen)")).changed() {
                     self.run("settings.set", json!({"key": "auto_allow_covered", "value": auto}));
                 }
                 ui.add_space(8.0);

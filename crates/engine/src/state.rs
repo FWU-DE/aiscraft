@@ -183,9 +183,24 @@ pub struct Approval {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrustVerdict {
     pub covered: bool,
-    /// The owner's words that allow it, verbatim (checked against what they actually wrote).
+    /// The owner's words the permission rests on, taken by the app from the named source (never
+    /// copied from the checker's answer).
     pub quote: String,
     pub reason: String,
+    /// Where the permission comes from: `message:N` (one of the owner's messages).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// Each explicit term of the source next to the action's value (#63).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terms: Vec<TrustTerm>,
+}
+
+/// One explicit term of the owner's words (recipient, date, file, amount) and the action's value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrustTerm {
+    pub term: String,
+    pub value: String,
+    pub matches: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -337,7 +352,7 @@ impl Default for Settings {
             enter_sends: true,
             tools: true,
             trust_check: true,
-            auto_allow_covered: false,
+            auto_allow_covered: true,
             monthly_token_limit: 0,
             learn_skills: true,
             recall: true,

@@ -633,6 +633,8 @@ impl AisCraftApp {
                     let (mark, color) = match tc.outcome.as_deref() {
                         Some("ok") => ("✔", t.success),
                         Some("denied") => ("×", t.warning),
+                        // Not asked while another call of the step waited for a yes (#63).
+                        Some("skipped") => ("–", t.muted),
                         Some(_) => ("×", t.danger),
                         None => ("…", t.muted),
                     };

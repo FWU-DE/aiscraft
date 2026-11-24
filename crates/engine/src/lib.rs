@@ -24,6 +24,7 @@ mod skills;
 mod state;
 mod tasks;
 pub mod tools;
+mod trust;
 mod update;
 mod usage;
 mod vault;
@@ -642,6 +643,8 @@ impl Ctx {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod trust_tests;
 
 #[cfg(test)]
 pub(crate) fn chat_system_prompt_for_test(c: &Ctx, conv: &aiscraft_core::Conversation, send: bool, takes: bool) -> Option<String> {

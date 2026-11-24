@@ -69,8 +69,10 @@ itself; keep that block in step with craft-libs' root `Cargo.toml` when bumping 
    (`engine/src/secrets.rs`), never in the database or logs. Image bytes are not stored in the
    database; attachments are copied to `<data>/attachments` and read back per request.
 7. **Tools follow Nod's rule** (n8n Nod, Apache-2.0): read-only tools run; anything else needs the
-   owner's yes for exactly these arguments, once; the trust check must quote the owner's words and
-   the quote is verified; background work refuses; tool output is untrusted data.
+   owner's yes for exactly these arguments, once, or the owner's own request (one request covers
+   its steps); the trust check names the owner message it relies on (`message:N`) and lists each
+   explicit term next to the action's value, and code verifies source and terms (`trust.rs`);
+   background work refuses; tool output is untrusted data and never owner words.
 8. **Glyphs:** egui's bundled fonts lack ↑ → ⇩ ▾ ◧ ◨ ✓ ✕ ⧉ ＋ 🧠 and more. The kittest harness panics
    on missing glyphs; the app draws boxes (`MissingGlyphPolicy::Tofu`) and loads system fallback
    fonts. Check new UI symbols against the bundled fonts.
@@ -160,6 +162,7 @@ a slow path comes with such a gate.
 | Persona lists | The three lists and the session load in parallel | none yet (code review) |
 | Errors a person can fix are named | A full disk (`StorageFull`, `QuotaExceeded`, ENOSPC/EDQUOT, `SQLITE_FULL`) gives `aiscraft_core::DISK_FULL` with the details, classified from error codes, never from text; every engine file write goes through `engine/src/disk.rs`. A stopped local service (Ollama, LM Studio, Claude CLI, `aiscraft-preview`, a connector) is named with host:port or exit code and the next step | `every_engine_file_write_goes_through_disk`, `a_full_disk_while_saving_an_artifact_is_named_and_keeps_the_old_file` (engine), `a_store_that_cannot_grow_says_the_disk_is_full` (store), `a_stopped_local_server_is_named_with_host_and_port`, `claude_cli_that_ends_mid_answer_says_so` (backends) |
 | Names stay on the device („Namen schützen“, #55) | With protection on, no class-list name, e-mail, phone, IBAN or street address is in any request body the backend receives (message, attached text, memory, system prompt, later rounds, single calls); the mapping is not in the state agents read nor in the JSON export | `no_real_name_reaches_the_backend`, `single_calls_are_protected_and_translated_back` (engine, `privacy/tests.rs`) |
+| One request, one question at most (#63) | A batch of steps from one request asks nothing; a call nobody asked for asks once; one trust check per call that needs a yes, none for reads; the check's request holds the owner's messages with the answers they replied to and never a tool result | `one_request_covers_every_step` (engine, `trust_tests.rs`) |
 | Panels keep their size | An editor row never widens the artifact panel over the chat (buttons placed first, fields take the rest) | `artifact_panel_does_not_grow_frame_by_frame` (ui, 1333×889 at 150 %) |
 | Never crash on hostile input | Caps on every size, no panics | workspace lints, panic hunt |
 | Tests stay off the desktop | No windows, browser, mic or speakers | rule 2.4, `browser_allowed` |
