@@ -223,6 +223,41 @@ pub fn worksheet_pdf(ws: &Worksheet, v: Variant) -> Result<Vec<u8>> {
     crate::office::pdf::markdown_pdf(&format!("{} ({})", ws.title, v.label()), &worksheet_markdown(ws, v))
 }
 
+/// One page of the print preview: `width` × `height` RGBA8 pixels, opaque.
+#[derive(Debug, Clone)]
+pub struct PreviewPage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// Pages the print preview shows at most.
+pub const MAX_PREVIEW_PAGES: usize = 30;
+
+/// The sheet's pages as pictures `width` pixels wide, rendered from the very PDF that prints, so
+/// the preview shows exactly what comes out of the printer.
+pub fn worksheet_preview(ws: &Worksheet, v: Variant, width: u32) -> Result<Vec<PreviewPage>> {
+    use aiscraft_core::Error;
+    use craft_pdf::{interpret::InterpreterSettings, raster};
+    let pdf = worksheet_pdf(ws, v)?;
+    let doc = craft_pdf::open_slice(&pdf, None).map_err(|e| Error::invalid(format!("PDF für die Vorschau: {e}")))?;
+    let cache = raster::RenderCache::new();
+    let settings = InterpreterSettings::default();
+    let mut out = Vec::new();
+    for page in doc.pages().iter().take(MAX_PREVIEW_PAGES) {
+        let (w, _) = page.render_dimensions();
+        if !w.is_finite() || w <= 0.0 {
+            return Err(Error::invalid("PDF-Seite ohne Größe"));
+        }
+        let scale = width.clamp(100, 3000) as f32 / w;
+        // White, opaque paper: premultiplied pixels are then the same as straight ones.
+        let options = raster::Options { scale: [scale, scale], background: [255, 255, 255, 255], ..Default::default() };
+        let r = raster::render(page, &cache, &settings, &options).map_err(|e| Error::invalid(format!("Vorschau: {e}")))?;
+        out.push(PreviewPage { width: r.width, height: r.height, rgba: r.bytes().to_vec() });
+    }
+    Ok(out)
+}
+
 pub fn worksheet_docx(ws: &Worksheet, v: Variant) -> Result<Vec<u8>> {
     crate::office::markdown_docx(&format!("{} ({})", ws.title, v.label()), &worksheet_markdown(ws, v))
 }
@@ -262,6 +297,28 @@ mod tests {
         assert!(pdf.contains("/Count 1"));
         let docx = worksheet_docx(&ws, Variant::Solution).unwrap();
         assert!(docx.starts_with(b"PK"));
+    }
+
+    #[test]
+    fn preview_renders_every_printed_page() {
+        let ws = sheet(12);
+        let pdf = String::from_utf8_lossy(&worksheet_pdf(&ws, Variant::Sheet).unwrap()).into_owned();
+        let count: usize = pdf.split("/Count ").nth(1).and_then(|t| t.split(' ').next()).and_then(|n| n.parse().ok()).unwrap();
+        let pages = worksheet_preview(&ws, Variant::Sheet, 600).unwrap();
+        assert_eq!(pages.len(), count, "one picture per printed page");
+        let ink = |p: &PreviewPage| p.rgba.as_chunks::<4>().0.iter().filter(|px| px[0] < 128).count();
+        for p in &pages {
+            assert_eq!(p.width, 600);
+            assert!(p.height > p.width, "portrait paper");
+            assert_eq!(p.rgba.len(), (p.width * p.height * 4) as usize);
+            assert!(p.rgba.as_chunks::<4>().0.iter().all(|px| px[3] == 255), "opaque paper");
+        }
+        assert!(ink(&pages[0]) > 500, "text drawn on the first page");
+        // The solution sheet looks different from the worksheet.
+        let sol = worksheet_preview(&ws, Variant::Solution, 600).unwrap();
+        assert!(sol.first().map(|p| &p.rgba) != pages.first().map(|p| &p.rgba));
+        // Absurd widths are clamped, never a huge allocation.
+        assert_eq!(worksheet_preview(&ws, Variant::Sheet, u32::MAX).unwrap()[0].width, 3000);
     }
 
     #[test]

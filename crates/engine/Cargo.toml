@@ -14,7 +14,7 @@ craft-xlsx.workspace = true
 craft-pptx.workspace = true
 craft-opc.workspace = true
 craft-xml.workspace = true
-craft-pdf.workspace = true
+craft-pdf = { workspace = true, features = ["raster"] }
 craft-update.workspace = true
 craft-doc-binary.workspace = true
 craft-xls.workspace = true

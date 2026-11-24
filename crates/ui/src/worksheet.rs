@@ -10,6 +10,8 @@ use aiscraft_core::worksheet::{self, Category, ChoiceOption, ClozePart, Pair, Re
 use egui::{CornerRadius, Frame, Margin, RichText, ScrollArea, Stroke, Ui};
 use serde_json::json;
 
+use aiscraft_engine::learn::print::{self, Variant};
+
 use crate::app::AisCraftApp;
 use crate::theme::Tokens;
 use crate::widgets::{accent_button, icon_button, muted, small_muted};
@@ -21,6 +23,15 @@ pub enum Mode {
     #[default]
     Edit,
     Work,
+    /// The printed pages as pictures, rendered from the PDF that prints.
+    Preview,
+}
+
+/// Print preview: the rendered pages of one variant, for one text of the sheet.
+struct Preview {
+    /// Sheet text, variant and pixel width the pages were rendered for.
+    key: (String, bool, u32),
+    pages: Result<Vec<egui::TextureHandle>, String>,
 }
 
 /// A pupil's answer while working on the sheet.
@@ -80,6 +91,9 @@ pub struct SheetState {
     hints: HashMap<String, usize>,
     /// Tasks the pupil answered: an ordering left as shown is no answer.
     touched: HashSet<String>,
+    /// The preview shows the solution sheet instead of the worksheet.
+    preview_solution: bool,
+    preview: Option<Preview>,
 }
 
 impl SheetState {
@@ -158,6 +172,7 @@ impl AisCraftApp {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut mode, Mode::Edit, "Bearbeiten");
                 ui.selectable_value(&mut mode, Mode::Work, "Lösen");
+                ui.selectable_value(&mut mode, Mode::Preview, "Druckvorschau").on_hover_text("Die Seiten so, wie sie gedruckt werden");
                 ui.separator();
                 if mode == Mode::Work {
                     check = accent_button(ui, &t, "Prüfen").on_hover_text("Antworten prüfen und Punkte zählen").clicked();
@@ -238,6 +253,7 @@ impl AisCraftApp {
                             }
                         }
                         Mode::Work => work_sheet(ui, &t, sheet),
+                        Mode::Preview => preview_sheet(ui, &t, sheet),
                     }
                 });
             });
@@ -532,6 +548,66 @@ fn edit_body(ui: &mut Ui, t: &Tokens, body: &mut TaskBody) -> bool {
 }
 
 // ---- work mode -------------------------------------------------------------------------------
+
+// ---- print preview ---------------------------------------------------------------------------
+
+/// Pixel width the preview pages are rendered at: sharp on high-density screens, rounded so a
+/// slowly resized panel does not render again on every frame.
+fn preview_px(ui: &Ui) -> u32 {
+    let px = ui.available_width() * ui.ctx().pixels_per_point();
+    ((px / 200.0).ceil() * 200.0).clamp(400.0, 2400.0) as u32
+}
+
+fn preview_sheet(ui: &mut Ui, t: &Tokens, sheet: &mut SheetState) {
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut sheet.preview_solution, false, "Arbeitsblatt");
+        ui.selectable_value(&mut sheet.preview_solution, true, "Lösungsblatt");
+    });
+    ui.add_space(8.0);
+    let Some(ws) = &sheet.ws else { return };
+    let px = preview_px(ui);
+    let key = (sheet.src.clone(), sheet.preview_solution, px);
+    if sheet.preview.as_ref().is_none_or(|p| p.key != key) {
+        let variant = if sheet.preview_solution { Variant::Solution } else { Variant::Sheet };
+        let pages = print::worksheet_preview(ws, variant, px)
+            .map(|pages| {
+                pages
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| {
+                        let image = egui::ColorImage::from_rgba_unmultiplied([p.width as usize, p.height as usize], &p.rgba);
+                        ui.ctx().load_texture(format!("sheet-preview-{i}"), image, egui::TextureOptions::LINEAR)
+                    })
+                    .collect()
+            })
+            .map_err(|e| e.to_string());
+        sheet.preview = Some(Preview { key, pages });
+    }
+    let Some(preview) = &sheet.preview else { return };
+    match &preview.pages {
+        Err(e) => {
+            ui.label(RichText::new(format!("Die Vorschau lässt sich nicht zeichnen: {e}")).color(t.danger));
+        }
+        Ok(pages) => {
+            let w = ui.available_width();
+            for (i, tex) in pages.iter().enumerate() {
+                let [tw, th] = tex.size();
+                let h = w * th as f32 / tw.max(1) as f32;
+                Frame::new()
+                    .stroke(Stroke::new(1.0, t.border))
+                    .shadow(egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: egui::Color32::from_black_alpha(28) })
+                    .show(ui, |ui| {
+                        ui.add(egui::Image::new((tex.id(), egui::vec2(w - 2.0, h))));
+                    });
+                ui.label(small_muted(t, format!("Seite {} von {}", i + 1, pages.len())));
+                ui.add_space(12.0);
+            }
+            if pages.len() >= print::MAX_PREVIEW_PAGES {
+                ui.label(small_muted(t, format!("Die Vorschau zeigt die ersten {} Seiten.", print::MAX_PREVIEW_PAGES)));
+            }
+        }
+    }
+}
 
 fn work_sheet(ui: &mut Ui, t: &Tokens, sheet: &mut SheetState) {
     let Some(ws) = sheet.ws.clone() else { return };

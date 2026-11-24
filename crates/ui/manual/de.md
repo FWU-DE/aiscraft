@@ -109,6 +109,8 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 **Arbeitsblätter:** Unter **Bearbeiten** änderst du Titel, Aufgaben, Lösungen, Punkte, Tipps und Erklärungen, sortierst Aufgaben (⏶ ⏷) und fügst neue hinzu: Auswahl (eine oder mehrere richtig), richtig oder falsch, Lückentext (Lücken als `[[Lösung|Alternative]]`), Zuordnen, Reihenfolge, kurze Antwort, Zahl (mit Toleranz), freier Text (mit Musterlösung) und Info-Text. Unter **Lösen** füllst du es aus; **Prüfen** zeigt je Aufgabe richtig, teilweise richtig oder falsch und zählt die Punkte. Freie Texte bewertet die Lehrkraft. **Zurücksetzen** löscht alle Antworten.
 
+**Druckvorschau:** Der Reiter **Druckvorschau** zeigt die Seiten genau so, wie sie aus dem Drucker kommen; oben wechselst du zwischen Arbeitsblatt und Lösungsblatt.
+
 **Drucken:** **Drucken** › „Arbeitsblatt drucken“ oder „Lösungsblatt drucken“ öffnet ein PDF im PDF-Programm, dort druckst du. Das Arbeitsblatt hat Linien und Kästchen zum Ausfüllen, das Lösungsblatt die Lösungen. Als PDF oder Word speichern geht im selben Menü. PDFs nutzen die Standardschriften; Emojis und seltene Zeichen erscheinen als ?.
 
 **Datenschutz:** Eine Lern-App kann nichts aus dem Internet laden und nichts senden: AIS.ChatCraft gibt jeder geöffneten oder gespeicherten App eine strenge Sicherheitsregel (Content-Security-Policy) mit, die alle Verbindungen sperrt; das Vorschaufenster erlaubt außerdem keine Links nach außen und keine neuen Fenster. Lern-Apps und Arbeitsblätter liegen nur auf deinem Rechner, bis du sie speicherst oder teilst. Schreib keine Namen von Schülerinnen und Schülern in die Anfrage.
