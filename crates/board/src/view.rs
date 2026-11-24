@@ -2188,24 +2188,29 @@ fn context_bar(ui: &mut Ui, painter: &Painter, rect: Rect, base: Id, board: &mut
     }
 }
 
-/// Centred card on an empty board with the quickest ways to start.
+/// Empty state of a board (design review 2026-11): a symbol in a tonal circle, one sentence on
+/// the quickest start and where mind maps come from; the shortcut list stays behind F1.
 fn empty_hint(painter: &Painter, ui: &Ui, rect: Rect, style: &BoardStyle) {
     let lines = [
-        ("Leeres Whiteboard", 17.0, style.text),
-        ("Doppelklick: Notiz · N: Notiz · T: Text · R: Rechteck · A: Pfeil", 13.5, style.muted),
-        ("Mausrad: verschieben · Strg+Mausrad: zoomen · F1 oder ?: alle Tastenkürzel", 13.5, style.muted),
+        ("Noch leer", 19.0, style.text),
+        ("Doppelklick auf die Fläche legt eine Notiz an.\nOder unter einer Chat-Antwort „Als Whiteboard“ wählen: daraus wird eine Mindmap.", 14.0, style.muted),
+        ("Werkzeuge oben · F1 zeigt alle Tastenkürzel", 12.5, style.muted.gamma_multiply(0.85)),
     ];
-    let wrap = (rect.width() - 64.0).max(120.0);
+    let wrap = (rect.width() - 64.0).clamp(120.0, 420.0);
     let galleys: Vec<_> = lines.iter().map(|(t, size, color)| ui.fonts_mut(|f| f.layout_job(text_job(t, *size, *color, wrap, true)))).collect();
-    let h: f32 = galleys.iter().map(|g| g.size().y).sum::<f32>() + 10.0 * (galleys.len() as f32 - 1.0);
+    let icon = 56.0;
+    let h: f32 = icon + 16.0 + galleys.iter().map(|g| g.size().y).sum::<f32>() + 10.0 * (galleys.len() as f32 - 1.0);
     let w = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max);
-    let card = Rect::from_center_size(rect.center(), vec2(w + 40.0, h + 32.0));
-    painter.rect_filled(card, 14.0, style.surface.gamma_multiply(0.92));
-    painter.rect_stroke(card, 14.0, Stroke::new(1.0, style.border), StrokeKind::Inside);
-    let mut y = card.min.y + 16.0;
+    // A soft backdrop so the dot grid does not run through the text.
+    painter.rect_filled(Rect::from_center_size(rect.center(), vec2(w + 48.0, h + 40.0)), 20.0, style.bg.gamma_multiply(0.9));
+    let mut y = rect.center().y - h / 2.0;
+    let c = pos2(rect.center().x, y + icon / 2.0);
+    painter.circle_filled(c, icon / 2.0, style.accent.gamma_multiply(0.14));
+    paint_icon(painter, Icon::Tool(Tool::Note), c, style.accent, style.accent);
+    y += icon + 16.0;
     for g in galleys {
         let gh = g.size().y;
-        painter.galley(pos2(card.center().x, y), g, style.text);
+        painter.galley(pos2(rect.center().x, y), g, style.text);
         y += gh + 10.0;
     }
 }

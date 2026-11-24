@@ -10,7 +10,7 @@ use egui::{Align, Frame, Layout, Margin, RichText, ScrollArea, Ui};
 use serde_json::json;
 
 use crate::app::AisCraftApp;
-use crate::widgets::{accent_button, icon_button, muted};
+use crate::widgets::{Glyph, filter_chip, glyph_button, muted, segmented};
 
 pub(crate) const SAVE_AFTER: Duration = Duration::from_millis(700);
 
@@ -170,22 +170,59 @@ impl AisCraftApp {
     pub(crate) fn artifact_panel(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let Some(meta) = self.state.open_artifact.as_ref().and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id)).cloned() else { return };
-        // Header
-        Frame::new().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+        // Header, two rows (design review 2026-11): the title with the close button, then the
+        // actions. One row let the right-to-left buttons run over the title in a narrow panel.
+        Frame::new().inner_margin(Margin { left: 16, right: 8, top: 6, bottom: 4 }).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(crate::learn_panel::kind_icon(meta.kind)).color(t.accent)).on_hover_text(meta.kind.label());
-                let r = ui
-                    .add(egui::Label::new(RichText::new(&meta.title).strong()).truncate().sense(egui::Sense::click()))
-                    .on_hover_text("Doppelklick zum Umbenennen");
-                if r.double_clicked() {
-                    self.dialog = Some(crate::dialogs::Dialog::RenameArtifact { id: meta.id.clone(), title: meta.title.clone() });
-                }
+                ui.label(RichText::new(crate::learn_panel::kind_icon(meta.kind)).color(t.accent).size(18.0)).on_hover_text(meta.kind.label());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if icon_button(ui, &t, "×", "Schließen").clicked() {
+                    if glyph_button(ui, &t, Glyph::Close, "Schließen").clicked() {
                         self.save_if_dirty();
                         self.run("artifact.close", json!({}));
                     }
-                    ui.menu_button(RichText::new("⬇").color(t.muted), |ui| {
+                    if self.state.collab.available {
+                        self.share_menu(ui, &meta);
+                    }
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        let r = ui
+                            .add(egui::Label::new(crate::theme::semibold(&meta.title).size(18.0)).truncate().sense(egui::Sense::click()))
+                            .on_hover_text("Doppelklick zum Umbenennen");
+                        if r.double_clicked() {
+                            self.dialog = Some(crate::dialogs::Dialog::RenameArtifact { id: meta.id.clone(), title: meta.title.clone() });
+                        }
+                    });
+                });
+            });
+            ui.horizontal(|ui| {
+                if meta.kind == ArtifactKind::Document
+                    && let Some(v) = self.artifact.as_mut()
+                {
+                    segmented(ui, &t, &mut v.preview, [(false, "Bearbeiten"), (true, "Vorschau")]);
+                    ui.add_space(4.0);
+                }
+                let mut attach = self.attach_artifact;
+                if filter_chip(ui, &t, &mut attach, "Im Chat").on_hover_text("Inhalt bei der nächsten Nachricht als Kontext mitschicken").clicked() {
+                    self.attach_artifact = attach;
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // Rare actions go into the overflow menu, so the row fits a narrow panel.
+                    if meta.kind == ArtifactKind::Document {
+                        let more = glyph_button(ui, &t, Glyph::More, "Weitere Aktionen");
+                        egui::Popup::menu(&more).show(|ui| {
+                            ui.set_min_width(220.0);
+                            if ui
+                                .button("Als Arbeitsblatt")
+                                .on_hover_text("Daraus ein interaktives Arbeitsblatt machen lassen (eine Anfrage ans Modell)")
+                                .clicked()
+                            {
+                                self.save_if_dirty();
+                                self.run("worksheet.from_document", json!({"id": meta.id}));
+                                ui.close();
+                            }
+                        });
+                    }
+                    let export = glyph_button(ui, &t, Glyph::Download, "Exportieren");
+                    egui::Popup::menu(&export).show(|ui| {
                         let formats: &[(&str, &str)] = match meta.kind {
                             ArtifactKind::Board => &[("markdown", "md"), ("json", "json")],
                             ArtifactKind::App => &[("html", "html")],
@@ -203,10 +240,9 @@ impl AisCraftApp {
                                 ui.close();
                             }
                         }
-                    })
-                    .response
-                    .on_hover_text("Exportieren");
-                    ui.menu_button(RichText::new("⟳").color(t.muted), |ui| {
+                    });
+                    let versions = glyph_button(ui, &t, Glyph::History, "Versionen");
+                    egui::Popup::menu(&versions).show(|ui| {
                         ui.set_min_width(240.0);
                         match self.engine.call("artifact.versions", json!({"id": meta.id})) {
                             Ok(v) => {
@@ -224,22 +260,7 @@ impl AisCraftApp {
                                 ui.label(e.message);
                             }
                         }
-                    })
-                    .response
-                    .on_hover_text("Versionen");
-                    if meta.kind == ArtifactKind::Document
-                        && ui.button("Als Arbeitsblatt").on_hover_text("Daraus ein interaktives Arbeitsblatt machen lassen (eine Anfrage ans Modell)").clicked()
-                    {
-                        self.save_if_dirty();
-                        self.run("worksheet.from_document", json!({"id": meta.id}));
-                    }
-                    let mut attach = self.attach_artifact;
-                    if ui.toggle_value(&mut attach, "Im Chat").on_hover_text("Inhalt bei der nächsten Nachricht als Kontext mitschicken").changed() {
-                        self.attach_artifact = attach;
-                    }
-                    if self.state.collab.available {
-                        self.share_menu(ui, &meta);
-                    }
+                    });
                 });
             });
         });
@@ -266,53 +287,12 @@ impl AisCraftApp {
     fn document_body(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let Some(v) = self.artifact.as_mut() else { return };
-        // Revise with AI.
-        let mut do_revise = None;
-        Frame::new().inner_margin(Margin::symmetric(12, 4)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut v.preview, false, "Bearbeiten");
-                ui.selectable_value(&mut v.preview, true, "Vorschau");
-            });
-            ui.horizontal(|ui| {
-                let r = ui.add_enabled(
-                    !v.revising,
-                    egui::TextEdit::singleline(&mut v.revise)
-                        .hint_text("Mit KI überarbeiten, z. B. „Kürzer und für Klasse 5“")
-                        .desired_width(ui.available_width() - 90.0),
-                );
-                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if v.revising {
-                    ui.add(egui::Spinner::new().color(t.accent));
-                } else if (accent_button(ui, &t, "Los").clicked() || enter) && !v.revise.trim().is_empty() {
-                    do_revise = Some(v.revise.trim().to_string());
-                }
-            });
-        });
-        if let Some(instruction) = do_revise {
-            self.save_if_dirty();
-            if let Some(v) = self.artifact.as_mut() {
-                v.revising = true;
-                v.preview = true;
-                let id = v.id.clone();
-                let engine = self.engine.clone();
-                let done = v.revise_done.clone();
-                done.store(false, std::sync::atomic::Ordering::Relaxed);
-                // Runs in the background; the panel reloads when the engine saves the new version.
-                std::thread::spawn(move || {
-                    if let Err(e) = engine.call("artifact.revise", json!({"id": id, "instruction": instruction})) {
-                        engine.ctx().notice(aiscraft_engine::NoticeLevel::Error, e.message);
-                    }
-                    done.store(true, std::sync::atomic::Ordering::Relaxed);
-                });
-                v.revise.clear();
-            }
-        }
+        // Revise with AI: the bar sits under the document, like the chat composer.
+        let was_revising = v.revising;
+        self.revise_bar(ui, "Mit KI überarbeiten, z. B. „Kürzer und für Klasse 5“");
         let Some(v) = self.artifact.as_mut() else { return };
-        if v.revising && v.revise_done.load(std::sync::atomic::Ordering::Relaxed) {
-            v.revising = false;
-        }
-        if v.revising {
-            ui.ctx().request_repaint_after(Duration::from_millis(200));
+        if v.revising && !was_revising {
+            v.preview = true;
         }
         let mut board = None;
         ScrollArea::vertical().id_salt(("doc", v.id.clone())).auto_shrink([false, false]).show(ui, |ui| {

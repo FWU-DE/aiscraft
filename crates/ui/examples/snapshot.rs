@@ -172,7 +172,7 @@ fn demo_server(engine: &Engine) -> String {
                     let answer = if user_text.contains("Linkliste") {
                         links = format!("Zwei Seiten zum Thema:\n\n- [Ferientermine](http://{addr}/ferien)\n- [Arbeitsblätter Photosynthese](http://{addr}/weg/photosynthese)\n\nPrüfe die Links, bevor du sie weitergibst.");
                         links.as_str()
-                    } else if req.contains("Formel") {
+                    } else if user_text.contains("Formel") {
                         MATH_ANSWER
                     } else {
                         ANSWER

@@ -23,17 +23,38 @@ impl AisCraftApp {
         let t = self.tokens.clone();
         let Some(v) = self.artifact.as_mut() else { return };
         let mut go = None;
-        Frame::new().inner_margin(Margin::symmetric(12, 4)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let r = ui.add_enabled(!v.revising, egui::TextEdit::singleline(&mut v.revise).hint_text(hint).desired_width(ui.available_width() - 90.0));
-                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if v.revising {
-                    ui.add(egui::Spinner::new().color(t.accent));
-                } else if (accent_button(ui, &t, "Los").clicked() || enter) && !v.revise.trim().is_empty() {
-                    go = Some(v.revise.trim().to_string());
-                }
+        // Under the content, styled like the chat composer: a tonal pill (surface container)
+        // with a frameless field and the main action spelled out ("Überarbeiten", not "Los").
+        egui::Panel::bottom("artifact-revise-bar")
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(Frame::new().inner_margin(Margin { left: 12, right: 12, top: 6, bottom: 10 }))
+            .show(ui, |ui| {
+                Frame::new()
+                    .fill(t.surface_container)
+                    .corner_radius(egui::CornerRadius::same(22))
+                    .inner_margin(Margin { left: 16, right: 6, top: 4, bottom: 4 })
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let r = ui.add_enabled(
+                                !v.revising,
+                                egui::TextEdit::singleline(&mut v.revise)
+                                    .hint_text(hint)
+                                    .frame(Frame::NONE)
+                                    .margin(Margin::symmetric(0, 8))
+                                    .desired_width(ui.available_width() - 130.0),
+                            );
+                            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if v.revising {
+                                    ui.add(egui::Spinner::new().color(t.accent));
+                                } else if (accent_button(ui, &t, "Überarbeiten").clicked() || enter) && !v.revise.trim().is_empty() {
+                                    go = Some(v.revise.trim().to_string());
+                                }
+                            });
+                        });
+                    });
             });
-        });
         if v.revising && v.revise_done.load(std::sync::atomic::Ordering::Relaxed) {
             v.revising = false;
         }

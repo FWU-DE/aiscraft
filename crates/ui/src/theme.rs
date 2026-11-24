@@ -25,6 +25,14 @@ pub struct Tokens {
     pub warning: Color32,
     pub code_bg: Color32,
     pub radius: u8,
+    /// Material 3 roles (tonal palette from the ais.schule blue, see docs/design-review-2026-11.md).
+    pub primary_container: Color32,
+    pub on_primary_container: Color32,
+    pub tertiary_container: Color32,
+    pub on_tertiary_container: Color32,
+    /// surface-container-high / -highest: tonal elevation instead of borders.
+    pub surface_container: Color32,
+    pub surface_highest: Color32,
 }
 
 fn hex(s: &str) -> Option<Color32> {
@@ -36,7 +44,7 @@ fn hex(s: &str) -> Option<Color32> {
     Some(Color32::from_rgb(p(0)?, p(2)?, p(4)?))
 }
 
-fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round().clamp(0.0, 255.0) as u8;
     Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
 }
@@ -50,24 +58,34 @@ impl Tokens {
     /// WCAG AA on the tinted sidebar too), slate text; card radius 12 and control radius 8 as in
     /// AIS.chat (`packages/ui/src/styles/globals.css`: `--radius`, `--radius-enterprise-md`).
     pub fn light() -> Self {
+        // M3 roles from the tonal palette of #107fad (hue 250, tone 50): surface N98, drawer
+        // surface-container-low N96, cards surface-container-lowest, primary tone 45 (the AIS blue
+        // #0e74a0, 5.0:1 on surface), secondary-container S90 for selection, primary-container P93 for
+        // the own message.
         Self {
             dark: false,
-            bg: Color32::WHITE,
-            sidebar: Color32::from_rgb(0xee, 0xf5, 0xf8),
+            bg: Color32::from_rgb(0xf7, 0xfa, 0xfc),
+            sidebar: Color32::from_rgb(0xed, 0xf3, 0xf8),
             surface: Color32::WHITE,
-            surface_hi: Color32::from_rgb(0xe8, 0xf3, 0xf7),
-            border: Color32::from_rgb(0xd5, 0xe3, 0xeb),
-            text: Color32::from_rgb(0x1e, 0x29, 0x3b),
-            muted: Color32::from_rgb(0x5f, 0x6f, 0x82),
+            surface_hi: Color32::from_rgb(0xe7, 0xef, 0xf5),
+            border: Color32::from_rgb(0xd3, 0xdf, 0xe8),
+            text: Color32::from_rgb(0x17, 0x1c, 0x20),
+            muted: Color32::from_rgb(0x4a, 0x58, 0x63),
             accent: Color32::from_rgb(0x0e, 0x74, 0xa0),
             on_accent: Color32::WHITE,
-            selection: Color32::from_rgb(0xcf, 0xe6, 0xf1),
-            user_bubble: Color32::from_rgb(0xe7, 0xf2, 0xf7),
+            selection: Color32::from_rgb(0xcf, 0xe5, 0xf7),
+            user_bubble: Color32::from_rgb(0xd9, 0xee, 0xfe),
             danger: Color32::from_rgb(0xd6, 0x33, 0x29),
             success: Color32::from_rgb(0x1f, 0x8a, 0x5b),
             warning: Color32::from_rgb(0xb7, 0x79, 0x1f),
-            code_bg: Color32::from_rgb(0xf1, 0xf5, 0xf9),
+            code_bg: Color32::from_rgb(0xed, 0xf3, 0xf8),
             radius: 12,
+            primary_container: Color32::from_rgb(0xc7, 0xe7, 0xfe),
+            on_primary_container: Color32::from_rgb(0x00, 0x1e, 0x2d),
+            tertiary_container: Color32::from_rgb(0xee, 0xdc, 0xfe),
+            on_tertiary_container: Color32::from_rgb(0x22, 0x16, 0x31),
+            surface_container: Color32::from_rgb(0xe7, 0xef, 0xf5),
+            surface_highest: Color32::from_rgb(0xdc, 0xe3, 0xe9),
         }
     }
 
@@ -75,22 +93,29 @@ impl Tokens {
     pub fn dark() -> Self {
         Self {
             dark: true,
-            bg: Color32::from_rgb(0x0e, 0x16, 0x22),
-            sidebar: Color32::from_rgb(0x0a, 0x11, 0x1b),
-            surface: Color32::from_rgb(0x15, 0x20, 0x30),
-            surface_hi: Color32::from_rgb(0x1d, 0x2b, 0x3e),
-            border: Color32::from_rgb(0x26, 0x36, 0x4a),
-            text: Color32::from_rgb(0xe6, 0xed, 0xf5),
-            muted: Color32::from_rgb(0x94, 0xa3, 0xb8),
-            accent: Color32::from_rgb(0x2a, 0xa3, 0xd6),
-            on_accent: Color32::from_rgb(0x06, 0x12, 0x1c),
-            selection: Color32::from_rgb(0x15, 0x45, 0x62),
-            user_bubble: Color32::from_rgb(0x1a, 0x2a, 0x3c),
+            // M3 dark: surface N6, drawer N10, cards N12, primary P80 on P20.
+            bg: Color32::from_rgb(0x0e, 0x14, 0x18),
+            sidebar: Color32::from_rgb(0x17, 0x1c, 0x20),
+            surface: Color32::from_rgb(0x1b, 0x20, 0x25),
+            surface_hi: Color32::from_rgb(0x25, 0x2b, 0x2f),
+            border: Color32::from_rgb(0x3b, 0x48, 0x52),
+            text: Color32::from_rgb(0xdc, 0xe3, 0xe9),
+            muted: Color32::from_rgb(0xba, 0xc8, 0xd4),
+            accent: Color32::from_rgb(0x83, 0xcf, 0xfe),
+            on_accent: Color32::from_rgb(0x02, 0x34, 0x4a),
+            selection: Color32::from_rgb(0x35, 0x49, 0x57),
+            user_bubble: Color32::from_rgb(0x02, 0x4c, 0x6a),
             danger: Color32::from_rgb(0xf2, 0x44, 0x39),
             success: Color32::from_rgb(0x4c, 0xc0, 0x8a),
             warning: Color32::from_rgb(0xe8, 0xb0, 0x50),
-            code_bg: Color32::from_rgb(0x09, 0x0f, 0x18),
+            code_bg: Color32::from_rgb(0x07, 0x0f, 0x14),
             radius: 12,
+            primary_container: Color32::from_rgb(0x02, 0x4c, 0x6a),
+            on_primary_container: Color32::from_rgb(0xc7, 0xe7, 0xfe),
+            tertiary_container: Color32::from_rgb(0x50, 0x40, 0x5f),
+            on_tertiary_container: Color32::from_rgb(0xee, 0xdc, 0xfe),
+            surface_container: Color32::from_rgb(0x1b, 0x20, 0x25),
+            surface_highest: Color32::from_rgb(0x30, 0x36, 0x3a),
         }
     }
 
@@ -130,6 +155,12 @@ impl Tokens {
             warning: get("yellow").unwrap_or(base.warning),
             code_bg: get("darker_background").unwrap_or_else(|| mix(bg, Color32::BLACK, 0.2)),
             radius: 12,
+            primary_container: mix(bg, accent, 0.25),
+            on_primary_container: fg,
+            tertiary_container: mix(bg, get("magenta").unwrap_or(accent), 0.25),
+            on_tertiary_container: fg,
+            surface_container: mix(bg, fg, 0.06),
+            surface_highest: mix(bg, fg, 0.14),
         })
     }
 
@@ -158,13 +189,19 @@ impl Tokens {
         v.window_stroke = Stroke::new(1.0, self.border);
         v.window_corner_radius = CornerRadius::same(self.radius.saturating_add(4));
         v.menu_corner_radius = CornerRadius::same(self.control_radius());
+        // M3 elevation: level 2 for menus (AIS.chat's --shadow-dropdown), level 3 for dialogs.
+        let shade = if self.dark { Color32::from_black_alpha(90) } else { Color32::from_rgba_unmultiplied(0, 41, 102, 26) };
+        v.popup_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 12, spread: 0, color: shade };
+        v.window_shadow = egui::epaint::Shadow { offset: [0, 8], blur: 28, spread: 0, color: shade };
+        v.window_stroke = Stroke::NONE;
         v.error_fg_color = self.danger;
         v.warn_fg_color = self.warning;
         for (w, fill) in [
             (&mut v.widgets.noninteractive, self.bg),
             (&mut v.widgets.inactive, self.surface_hi),
+            // M3 state layers: hover 8 %, pressed 10 % of on-surface.
             (&mut v.widgets.hovered, mix(self.surface_hi, self.text, 0.08)),
-            (&mut v.widgets.active, mix(self.surface_hi, self.text, 0.14)),
+            (&mut v.widgets.active, mix(self.surface_hi, self.text, 0.10)),
             (&mut v.widgets.open, self.surface_hi),
         ] {
             w.corner_radius = CornerRadius::same(self.control_radius());
@@ -174,7 +211,10 @@ impl Tokens {
         }
         v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, self.border);
         v.widgets.inactive.bg_stroke = Stroke::NONE;
-        v.widgets.hovered.bg_stroke = Stroke::new(1.0, self.border);
+        v.widgets.hovered.bg_stroke = Stroke::NONE;
+        v.widgets.inactive.corner_radius = CornerRadius::same(10);
+        v.widgets.hovered.corner_radius = CornerRadius::same(10);
+        v.widgets.active.corner_radius = CornerRadius::same(10);
         v
     }
 
@@ -182,15 +222,20 @@ impl Tokens {
         ctx.set_visuals(self.visuals());
         ctx.global_style_mut(|s| {
             s.spacing.item_spacing = egui::vec2(8.0, 6.0);
-            s.spacing.button_padding = egui::vec2(10.0, 5.0);
-            s.spacing.menu_margin = Margin::same(6);
+            s.spacing.button_padding = egui::vec2(12.0, 6.0);
+            s.spacing.menu_margin = Margin::same(8);
             s.spacing.window_margin = Margin::same(16);
-            s.spacing.interact_size.y = 26.0;
+            s.spacing.interact_size.y = 30.0;
+            // M3 type scale on Barlow: body-large 16, label-large 14 medium, body-small 13,
+            // headline-small 24 semibold. Falls back to the proportional family without Barlow.
+            // install_fonts registers both families before the first apply.
+            let medium = FontFamily::Name(MEDIUM.into());
+            let semibold = FontFamily::Name(SEMIBOLD.into());
             s.text_styles = [
-                (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
-                (TextStyle::Body, FontId::new(15.0, FontFamily::Proportional)),
-                (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
-                (TextStyle::Heading, FontId::new(22.0, FontFamily::Proportional)),
+                (TextStyle::Small, FontId::new(13.0, FontFamily::Proportional)),
+                (TextStyle::Body, FontId::new(16.0, FontFamily::Proportional)),
+                (TextStyle::Button, FontId::new(14.5, medium)),
+                (TextStyle::Heading, FontId::new(24.0, semibold)),
                 (TextStyle::Monospace, FontId::new(13.5, FontFamily::Monospace)),
             ]
             .into();
@@ -265,6 +310,35 @@ impl Default for ThemeWatcher {
 /// as fallbacks (and for the icons), so everything works without them.
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
+    // Barlow (OFL, the font of AIS.chat and ais.schule) in four weights; every family falls back to
+    // the system UI font and egui's bundled fonts for symbols Barlow lacks (arrows, ✓, ⬆ …).
+    let fallback: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    for (name, bytes) in [
+        ("barlow", &include_bytes!("../assets/fonts/Barlow-Regular.ttf")[..]),
+        ("barlow-medium", &include_bytes!("../assets/fonts/Barlow-Medium.ttf")[..]),
+        ("barlow-semibold", &include_bytes!("../assets/fonts/Barlow-SemiBold.ttf")[..]),
+    ] {
+        fonts.font_data.insert(name.to_string(), std::sync::Arc::new(FontData::from_static(bytes)));
+    }
+    for (family, first) in [(MEDIUM, "barlow-medium"), (SEMIBOLD, "barlow-semibold")] {
+        let mut list = vec![first.to_string()];
+        list.extend(fallback.iter().cloned());
+        fonts.families.insert(FontFamily::Name(family.into()), list);
+    }
+    if let Some(list) = fonts.families.get_mut(&FontFamily::Proportional) {
+        list.insert(0, "barlow".to_string());
+    }
+    // The system UI font now only fills in glyphs Barlow lacks (₂, Greek, …), right after Barlow.
+    if let Some(path) = fc_match("Noto Sans:style=Regular")
+        && let Ok(bytes) = std::fs::read(&path)
+    {
+        fonts.font_data.insert("ui".to_string(), std::sync::Arc::new(FontData::from_owned(bytes)));
+        for fam in [FontFamily::Proportional, FontFamily::Name(MEDIUM.into()), FontFamily::Name(SEMIBOLD.into())] {
+            if let Some(list) = fonts.families.get_mut(&fam) {
+                list.insert(1.min(list.len()), "ui".to_string());
+            }
+        }
+    }
     let mut add = |name: &str, family: FontFamily, query: &str, first: bool| {
         let Some(path) = fc_match(query) else { return };
         let Ok(bytes) = std::fs::read(&path) else { return };
@@ -273,7 +347,6 @@ pub fn install_fonts(ctx: &egui::Context) {
             if first { list.insert(0, name.to_string()) } else { list.push(name.to_string()) }
         }
     };
-    add("ui", FontFamily::Proportional, "Noto Sans:style=Regular", true);
     add("mono", FontFamily::Monospace, "JetBrains Mono:style=Regular", true);
     // Broad symbol coverage (arrows, maths, box drawing) for whatever an answer contains.
     add("symbols", FontFamily::Proportional, "DejaVu Sans:style=Book", false);
@@ -282,6 +355,20 @@ pub fn install_fonts(ctx: &egui::Context) {
     // Answers can contain any character. A glyph no font has must become a box, never a panic
     // (the test harness defaults to panicking).
     ctx.set_missing_glyph_policy(egui::epaint::text::MissingGlyphPolicy::Tofu);
+}
+
+/// Font family names for heavier Barlow cuts (egui has no font weights, only families).
+pub const MEDIUM: &str = "medium";
+pub const SEMIBOLD: &str = "semibold";
+
+/// Text in the semibold cut (titles, names, the main button).
+pub fn semibold(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text).family(FontFamily::Name(SEMIBOLD.into()))
+}
+
+/// Text in the medium cut (labels, chips).
+pub fn medium(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text).family(FontFamily::Name(MEDIUM.into()))
 }
 
 fn fc_match(query: &str) -> Option<PathBuf> {

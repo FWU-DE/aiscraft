@@ -48,6 +48,102 @@ pub fn icon_button(ui: &mut Ui, t: &Tokens, icon: &str, tip: &str) -> Response {
     r.on_hover_text(tip)
 }
 
+/// Drawn header symbols (the font glyphs × ⬇ ⟳ come out tiny or missing, depending on the font).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Glyph {
+    Close,
+    Download,
+    History,
+    More,
+}
+
+/// A Material 3 "standard icon button": 40 px target, a round state layer on hover (8 %) and
+/// press (10 %), a drawn 20 px symbol and its name as accessible label and tooltip.
+pub fn glyph_button(ui: &mut Ui, t: &Tokens, glyph: Glyph, name: &str) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
+    let p = ui.painter();
+    let layer = if resp.is_pointer_button_down_on() {
+        0.10
+    } else if resp.hovered() || resp.has_focus() {
+        0.08
+    } else {
+        0.0
+    };
+    if layer > 0.0 {
+        p.circle_filled(rect.center(), 18.0, crate::theme::mix(ui.visuals().panel_fill, t.text, layer));
+    }
+    let color = if resp.hovered() { t.text } else { t.muted };
+    let s = Stroke::new(1.7, color);
+    let c = rect.center();
+    let v = egui::vec2;
+    match glyph {
+        Glyph::Close => {
+            p.line_segment([c + v(-5.5, -5.5), c + v(5.5, 5.5)], s);
+            p.line_segment([c + v(5.5, -5.5), c + v(-5.5, 5.5)], s);
+        }
+        Glyph::Download => {
+            p.line_segment([c + v(0.0, -7.0), c + v(0.0, 3.0)], s);
+            p.line_segment([c + v(-4.5, -1.5), c + v(0.0, 3.0)], s);
+            p.line_segment([c + v(4.5, -1.5), c + v(0.0, 3.0)], s);
+            p.line_segment([c + v(-7.0, 7.0), c + v(7.0, 7.0)], s);
+        }
+        Glyph::History => {
+            // A clock face with a return arrow on the left: "earlier versions".
+            let pts: Vec<egui::Pos2> = (0..=20)
+                .map(|i| -0.75 * std::f32::consts::PI + i as f32 / 20.0 * 1.6 * std::f32::consts::PI)
+                .map(|a| c + v(7.0 * a.cos(), 7.0 * a.sin()))
+                .collect();
+            p.add(egui::Shape::line(pts, s));
+            let tip = c + v(-7.0 * 0.707, -7.0 * 0.707);
+            p.line_segment([tip, tip + v(0.0, -4.0)], s);
+            p.line_segment([tip, tip + v(4.0, 0.0)], s);
+            p.line_segment([c, c + v(0.0, -4.0)], s);
+            p.line_segment([c, c + v(3.0, 2.0)], s);
+        }
+        Glyph::More => {
+            for dy in [-6.0, 0.0, 6.0] {
+                p.circle_filled(c + v(0.0, dy), 1.8, color);
+            }
+        }
+    }
+    resp.on_hover_text(name)
+}
+
+/// A Material 3 segmented button: one outlined pill, the chosen segment filled with the
+/// selection colour (secondary container). Each segment keeps its text as accessible label.
+pub fn segmented<T: PartialEq + Copy, const N: usize>(ui: &mut Ui, t: &Tokens, value: &mut T, options: [(T, &str); N]) {
+    Frame::new().stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(16)).inner_margin(Margin::same(2)).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.horizontal(|ui| {
+            for (option, label) in options {
+                let on = *value == option;
+                let text = if on { crate::theme::medium(label).color(t.text) } else { RichText::new(label).color(t.muted) };
+                let b = egui::Button::new(text)
+                    .selected(false)
+                    .fill(if on { t.selection } else { Color32::TRANSPARENT })
+                    .corner_radius(CornerRadius::same(14))
+                    .min_size(egui::vec2(0.0, 28.0));
+                if ui.add(b).clicked() {
+                    *value = option;
+                }
+            }
+        });
+    });
+}
+
+/// A Material 3 filter chip: outlined when off, filled with the selection colour when on.
+pub fn filter_chip(ui: &mut Ui, t: &Tokens, on: &mut bool, label: &str) -> Response {
+    let text = if *on { crate::theme::medium(label).color(t.text) } else { RichText::new(label).color(t.muted) };
+    let stroke = if *on { Stroke::NONE } else { Stroke::new(1.0, t.border) };
+    let fill = if *on { t.selection } else { Color32::TRANSPARENT };
+    let r = ui.add(egui::Button::new(text).fill(fill).stroke(stroke).corner_radius(CornerRadius::same(8)).min_size(egui::vec2(0.0, 32.0)));
+    if r.clicked() {
+        *on = !*on;
+    }
+    r
+}
+
 /// The notification bell, drawn (the emoji bell in the bundled font is small and tilted), with
 /// the unread count as a badge. Its accessible name is "Benachrichtigungen" plus the count.
 pub fn bell_button(ui: &mut Ui, t: &Tokens, unread: usize) -> Response {
