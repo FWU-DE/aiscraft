@@ -200,13 +200,7 @@ impl AisCraftApp {
         let scored = v.sheet.ws.as_ref().is_none_or(|ws| ws.points);
         Frame::new().inner_margin(Margin::symmetric(12, 4)).show(ui, |ui| {
             ui.horizontal(|ui| {
-                if t.designed() {
-                    crate::widgets::segmented(ui, &t, &mut mode, [(Mode::Edit, "Bearbeiten"), (Mode::Work, "Lösen"), (Mode::Preview, "Druckvorschau")]);
-                } else {
-                    ui.selectable_value(&mut mode, Mode::Edit, "Bearbeiten");
-                    ui.selectable_value(&mut mode, Mode::Work, "Lösen");
-                    ui.selectable_value(&mut mode, Mode::Preview, "Druckvorschau").on_hover_text("Die Seiten so, wie sie gedruckt werden");
-                }
+                crate::widgets::segmented(ui, &t, &mut mode, [(Mode::Edit, "Bearbeiten"), (Mode::Work, "Lösen"), (Mode::Preview, "Druckvorschau")]);
                 ui.separator();
                 if mode == Mode::Work {
                     let tip = if scored { "Antworten prüfen und Punkte zählen" } else { "Antworten prüfen und richtige Aufgaben zählen" };
@@ -317,19 +311,6 @@ fn text_area(ui: &mut Ui, s: &mut String, hint: &str, rows: usize) -> bool {
 }
 
 /// A list of strings with remove buttons and an add button. Returns changed.
-/// The rest of a row: `trailing` buttons laid out first from the right, then a text field filling
-/// what they leave. A fixed reserve for the buttons overflowed once the looks got wider spacing,
-/// and an overflowing row widened the artifact panel a little every frame until it covered the
-/// chat.
-fn field_then_buttons<R>(ui: &mut Ui, trailing: impl FnOnce(&mut Ui) -> R, field: impl FnOnce(&mut Ui, f32) -> bool) -> (bool, R) {
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let r = trailing(ui);
-        let w = ui.available_width().max(40.0);
-        (field(ui, w), r)
-    })
-    .inner
-}
-
 fn string_list(ui: &mut Ui, t: &Tokens, items: &mut Vec<String>, add_label: &str, placeholder: &str, max: usize, reorder: bool) -> bool {
     let mut changed = false;
     let mut action = None;
@@ -339,7 +320,7 @@ fn string_list(ui: &mut Ui, t: &Tokens, items: &mut Vec<String>, add_label: &str
             if reorder {
                 ui.label(muted(t, format!("{}.", i + 1)));
             }
-            let (edited, act) = field_then_buttons(
+            let (edited, act) = crate::widgets::field_then_buttons(
                 ui,
                 |ui| {
                     // Right to left: × first, then ⏷ and ⏶, so they read ⏶ ⏷ ×.
@@ -389,7 +370,8 @@ pub(crate) fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet, h5p: bool)
     changed |=
         ui.add(egui::TextEdit::singleline(&mut ws.title).font(egui::TextStyle::Heading).hint_text("Titel").desired_width(ui.available_width())).changed();
     if !h5p {
-        ui.horizontal(|ui| {
+        // Wraps in a narrow panel: one row must never widen it (layout gate).
+        ui.horizontal_wrapped(|ui| {
             let l = ui.label(muted(t, "Fach"));
             changed |= ui.add(egui::TextEdit::singleline(&mut ws.subject).hint_text("z. B. Mathematik").desired_width(180.0)).labelled_by(l.id).changed();
             let l = ui.label(muted(t, "Klasse"));
@@ -506,7 +488,7 @@ fn edit_body(ui: &mut Ui, t: &Tokens, body: &mut TaskBody, h5p: bool) -> bool {
                 ui.horizontal(|ui| {
                     let c = ui.checkbox(&mut o.correct, "richtig").on_hover_text("Richtige Antwort");
                     changed |= c.changed();
-                    let (edited, gone) = field_then_buttons(
+                    let (edited, gone) = crate::widgets::field_then_buttons(
                         ui,
                         |ui| icon_button(ui, t, "×", "Entfernen").clicked(),
                         |ui, w| ui.add(egui::TextEdit::singleline(&mut o.text).hint_text("Antwortmöglichkeit").desired_width(w)).changed(),
@@ -582,7 +564,7 @@ fn edit_body(ui: &mut Ui, t: &Tokens, body: &mut TaskBody, h5p: bool) -> bool {
             let n = categories.len();
             for (i, c) in categories.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    let (edited, gone) = field_then_buttons(
+                    let (edited, gone) = crate::widgets::field_then_buttons(
                         ui,
                         |ui| n > 2 && icon_button(ui, t, "×", "Gruppe entfernen").clicked(),
                         |ui, w| ui.add(egui::TextEdit::singleline(&mut c.name).hint_text("Gruppe").desired_width(w)).changed(),

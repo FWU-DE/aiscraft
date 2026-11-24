@@ -29,7 +29,6 @@ impl AisCraftApp {
     pub(crate) fn share_menu(&mut self, ui: &mut Ui, meta: &Artifact) {
         let t = self.tokens.clone();
         let share = self.state.share(&meta.id).cloned();
-        let label = if share.is_some() { RichText::new("Geteilt").color(t.accent) } else { RichText::new("Teilen").color(t.muted) };
         let body = |app: &mut Self, ui: &mut Ui| {
             ui.set_min_width(280.0);
             if let Some(v) = &share {
@@ -76,13 +75,9 @@ impl AisCraftApp {
             ui.separator();
             app.collab_join_row(ui);
         };
-        if t.designed() {
-            let text = if share.is_some() { "Geteilt" } else { "Teilen" };
-            let r = crate::kit::pill(ui, &t, crate::kit::Pill::Primary, Some(crate::icons::Icon::Share), text, 13.5, None);
-            egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| body(self, ui));
-        } else {
-            ui.menu_button(label, |ui| body(self, ui));
-        }
+        let text = if share.is_some() { "Geteilt" } else { "Teilen" };
+        let r = crate::kit::pill(ui, &t, crate::kit::Pill::Primary, Some(crate::icons::Icon::Share), text, 13.5, None);
+        egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| body(self, ui));
     }
 
     /// Code and connection under the header of a shared artifact.

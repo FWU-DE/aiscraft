@@ -163,11 +163,7 @@ pub(crate) fn community_notice(ui: &mut Ui, t: &crate::theme::Tokens) {
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal_top(|ui| {
-                if t.designed() {
-                    ui.label(crate::icons::Icon::Info.text(17.0).color(t.accent_ink));
-                } else {
-                    ui.label(RichText::new("i").strong().color(t.accent_ink));
-                }
+                ui.label(crate::icons::Icon::Info.text(17.0).color(t.accent_ink));
                 ui.vertical(|ui| {
                     ui.add(egui::Label::new(RichText::new(COMMUNITY_NOTICE).color(t.accent_ink)).wrap());
                     ui.hyperlink_to(RichText::new("Rückmeldung und Ideen auf GitHub").color(t.link), ISSUES_URL).on_hover_text(ISSUES_URL);
@@ -183,12 +179,11 @@ impl AisCraftApp {
     pub(crate) fn dialogs(&mut self, ctx: &egui::Context) {
         let Some(mut dialog) = self.dialog.take() else { return };
         let mut keep = true;
-        let designed_settings = self.tokens.designed() && matches!(dialog, Dialog::Settings { .. });
-        let frame = if designed_settings { dialog_frame(ctx, &self.tokens).inner_margin(egui::Margin::ZERO) } else { dialog_frame(ctx, &self.tokens) };
+        let settings = matches!(dialog, Dialog::Settings { .. });
+        let frame = if settings { dialog_frame(ctx, &self.tokens).inner_margin(egui::Margin::ZERO) } else { dialog_frame(ctx, &self.tokens) };
         let modal = egui::Modal::new(Id::unique("dialog")).frame(frame).backdrop_color(self.tokens.overlay).show(ctx, |ui| {
             ui.set_width(match dialog {
-                Dialog::Settings { .. } if designed_settings => (ctx.content_rect().width() - 48.0).clamp(600.0, 940.0),
-                Dialog::Settings { .. } => 820.0,
+                Dialog::Settings { .. } => (ctx.content_rect().width() - 48.0).clamp(600.0, 940.0),
                 Dialog::Welcome { .. } => 640.0,
                 Dialog::Login { .. } | Dialog::WelcomeSignIn => 520.0,
                 _ => 460.0,
@@ -220,7 +215,7 @@ impl AisCraftApp {
         match dialog {
             Dialog::Welcome { look_only } => {
                 let look_only = *look_only;
-                ui.label(crate::theme::title(&t, if look_only { "AIS.ChatCraft sieht jetzt neu aus" } else { "Willkommen bei AIS.ChatCraft" }).size(26.0));
+                ui.label(crate::theme::bold(if look_only { "AIS.ChatCraft sieht jetzt neu aus" } else { "Willkommen bei AIS.ChatCraft" }).size(26.0));
                 ui.add_space(4.0);
                 ui.label(muted(
                     &t,
@@ -265,7 +260,7 @@ impl AisCraftApp {
                 keep
             }
             Dialog::WelcomeSignIn => {
-                ui.label(crate::theme::title(&t, "Mit einem Dienst verbinden").size(24.0));
+                ui.label(crate::theme::bold("Mit einem Dienst verbinden").size(24.0));
                 ui.add_space(6.0);
                 ui.label(muted(&t, "Chatten mit AIS.chat und anderen KI-Diensten."));
                 ui.add_space(10.0);
@@ -695,9 +690,9 @@ impl AisCraftApp {
         keep
     }
 
-    /// Modern and Glas: a rail with icons on a recessed surface, the section's title in Bold with
+    /// A rail with icons on a recessed surface, the section's title in Bold with
     /// a line under it, and a round close button.
-    fn settings_body_designed(&mut self, ui: &mut Ui, tab: &mut SettingsTab, new_note: &mut String) -> bool {
+    fn settings_body(&mut self, ui: &mut Ui, tab: &mut SettingsTab, new_note: &mut String) -> bool {
         use crate::icons::Icon;
         let t = self.tokens.clone();
         let screen_h = ui.ctx().content_rect().height();
@@ -802,74 +797,6 @@ impl AisCraftApp {
                     self.settings_tab(ui, tab, new_note, max_h);
                 });
             });
-        });
-        keep
-    }
-
-    fn settings_body(&mut self, ui: &mut Ui, tab: &mut SettingsTab, new_note: &mut String) -> bool {
-        if self.tokens.designed() {
-            return self.settings_body_designed(ui, tab, new_note);
-        }
-        // egui hands a modal's content the rect of its previous frame, so a tab that got taller (or
-        // a first frame measured small) would stay clipped there: allow the screen's full height.
-        // Set before anything is drawn, since changing the max rect resets the cursor.
-        let frame = 2.0 * f32::from(crate::widgets::DIALOG_MARGIN) + 2.0 * DIALOG_SCREEN_GAP;
-        ui.set_max_height(ui.ctx().content_rect().height() - frame);
-        let mut keep = true;
-        let chapter = match tab {
-            SettingsTab::Backends => "Anmelden",
-            SettingsTab::Connectors => "Konnektoren und Freigaben",
-            SettingsTab::Schedules => "Zeitpläne und Aufgaben",
-            SettingsTab::Skills => "Fähigkeiten und Hinweise",
-            SettingsTab::Vault => "Tresor",
-            SettingsTab::Privacy => "Namen schützen",
-            SettingsTab::Usage => "Nutzung",
-            SettingsTab::Memory => "Gedächtnis",
-            SettingsTab::Appearance => "Erscheinungsbild",
-            SettingsTab::About => "Mitmachen",
-        };
-        ui.horizontal(|ui| {
-            ui.heading("Einstellungen");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Schließen").clicked() {
-                    keep = false;
-                }
-                ui.add_space(8.0);
-                if ui.link(format!("Handbuch: {chapter}")).on_hover_text("Das passende Kapitel im Handbuch (F1)").clicked() {
-                    self.open_manual(chapter);
-                }
-            });
-        });
-        ui.add_space(10.0);
-        // Scroll only when the tab is taller than the screen: what is left below the header, minus the
-        // modal frame's margins and a gap above and below the dialog.
-        // The header's height: from the top of the dialog's content to where the tab body starts.
-        // (`min_rect` would include the size the modal remembered from the last frame.)
-        let header = ui.cursor().top() - ui.max_rect().top();
-        let max_h = (ui.ctx().content_rect().height() - header - frame).max(200.0);
-        // The sections as a rail on the left: all nine fit without wrapping.
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(150.0);
-                for (k, label) in [
-                    (SettingsTab::Backends, "Dienste"),
-                    (SettingsTab::Connectors, "Konnektoren"),
-                    (SettingsTab::Schedules, "Zeitpläne"),
-                    (SettingsTab::Skills, "Fähigkeiten"),
-                    (SettingsTab::Vault, "Tresor"),
-                    (SettingsTab::Privacy, "Namen schützen"),
-                    (SettingsTab::Usage, "Nutzung"),
-                    (SettingsTab::Memory, "Gedächtnis"),
-                    (SettingsTab::Appearance, "Darstellung"),
-                    (SettingsTab::About, "Über"),
-                ] {
-                    if ui.add(egui::Button::selectable(*tab == k, label).min_size(egui::vec2(150.0, 30.0))).clicked() {
-                        *tab = k;
-                    }
-                }
-            });
-            ui.add_space(18.0);
-            ui.vertical(|ui| self.settings_tab(ui, tab, new_note, max_h));
         });
         keep
     }

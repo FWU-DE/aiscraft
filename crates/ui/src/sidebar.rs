@@ -6,34 +6,24 @@ use serde_json::json;
 use crate::app::AisCraftApp;
 use crate::dialogs::Dialog;
 use crate::icons::Icon;
-use crate::widgets::{age_group, icon_button, muted, small_muted, status_dot};
-
-/// A section heading in the sidebar, its text in line with the entries' text below it.
-fn section_heading(ui: &mut Ui, t: &crate::theme::Tokens, text: &str) {
-    ui.add_space(ui.spacing().button_padding.x);
-    ui.label(RichText::new(text).size(12.5).color(t.muted).strong());
-}
+use crate::widgets::{age_group, muted, small_muted};
 
 impl AisCraftApp {
     pub(crate) fn sidebar(&mut self, ui: &mut Ui) {
         // Inside the sidebar the sidebar's own colours apply (restored at the end).
         let outer = self.tokens.clone();
-        if outer.designed() {
-            self.tokens = outer.for_sidebar();
-            let v = ui.visuals_mut();
-            v.override_text_color = Some(outer.side_text2);
-            v.widgets.inactive.weak_bg_fill = outer.opaque(outer.side_search);
-            v.widgets.inactive.bg_fill = outer.opaque(outer.side_search);
-            v.widgets.hovered.weak_bg_fill = outer.opaque(outer.side_active);
-            v.widgets.hovered.bg_fill = outer.opaque(outer.side_active);
-            v.widgets.noninteractive.fg_stroke.color = outer.side_text2;
-            v.widgets.inactive.fg_stroke.color = outer.side_text2;
-            v.widgets.hovered.fg_stroke.color = outer.side_text;
-            v.hyperlink_color = outer.side_text;
-            self.sidebar_top_designed(ui, &outer);
-        } else {
-            self.sidebar_top_classic(ui);
-        }
+        self.tokens = outer.for_sidebar();
+        let v = ui.visuals_mut();
+        v.override_text_color = Some(outer.side_text2);
+        v.widgets.inactive.weak_bg_fill = outer.opaque(outer.side_search);
+        v.widgets.inactive.bg_fill = outer.opaque(outer.side_search);
+        v.widgets.hovered.weak_bg_fill = outer.opaque(outer.side_active);
+        v.widgets.hovered.bg_fill = outer.opaque(outer.side_active);
+        v.widgets.noninteractive.fg_stroke.color = outer.side_text2;
+        v.widgets.inactive.fg_stroke.color = outer.side_text2;
+        v.widgets.hovered.fg_stroke.color = outer.side_text;
+        v.hyperlink_color = outer.side_text;
+        self.sidebar_top(ui, &outer);
         ScrollArea::vertical().id_salt("sidebar-list").auto_shrink([false, false]).show(ui, |ui| {
             // Leave room for the scroll bar, so it never covers the "+" buttons on the right.
             ui.set_max_width((ui.available_width() - 12.0).max(80.0));
@@ -54,82 +44,17 @@ impl AisCraftApp {
 
     /// A section heading with an optional "+" (its tooltip); returns the plus button.
     fn heading(&self, ui: &mut Ui, label: &str, plus: Option<&str>) -> Option<egui::Response> {
-        let t = self.tokens.clone();
-        if t.designed() {
-            return crate::kit::section(ui, &t, label, plus);
-        }
-        ui.horizontal(|ui| {
-            section_heading(ui, &t, label);
-            let tip = plus?;
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| Some(icon_button(ui, &t, "+", tip))).inner
-        })
-        .inner
+        crate::kit::section(ui, &self.tokens, label, plus)
     }
 
-    /// One entry of a list: a selectable row (Klassisch, with `classic` as its text) or the
-    /// designed entry with its icon.
-    fn entry(&self, ui: &mut Ui, icon: Icon, classic: impl Into<egui::WidgetText>, label: &str, active: bool) -> egui::Response {
-        if self.tokens.designed() {
-            crate::kit::side_item(ui, &self.tokens, icon, label, active)
-        } else {
-            ui.add(egui::Button::selectable(active, classic).truncate().min_size(egui::vec2(ui.available_width(), 26.0)))
-        }
+    /// One entry of a list: its icon and label.
+    fn entry(&self, ui: &mut Ui, icon: Icon, label: &str, active: bool) -> egui::Response {
+        crate::kit::side_item(ui, &self.tokens, icon, label, active)
     }
 
-    fn sidebar_top_classic(&mut self, ui: &mut Ui) {
-        let t = self.tokens.clone();
-        egui::Panel::bottom("sidebar-account").frame(egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 2 })).show(ui, |ui| {
-            self.update_banner(ui);
-            self.account_row(ui);
-        });
-        ui.horizontal(|ui| {
-            // Logo and name lead to the start page, like × and Esc.
-            let logo = crate::widgets::ais_logo(ui, 18.0, t.accent);
-            let name = ui.add(egui::Label::new(RichText::new("AIS.ChatCraft").strong().size(17.0)).selectable(false));
-            let home = ui
-                .interact(logo.rect.union(name.rect), ui.scope_id().with("home"), egui::Sense::click())
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .on_hover_text("Startseite");
-            if home.clicked() && (self.state.current.is_some() || self.explore.is_some()) {
-                self.close_chat();
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if icon_button(ui, &t, "☰", "Seitenleiste ausblenden (Strg+B)").clicked() {
-                    self.sidebar_open = false;
-                }
-                if icon_button(ui, &t, "⌘", "Befehle (Strg+K)").clicked() {
-                    self.palette = Some(Default::default());
-                }
-            });
-        });
-        ui.add_space(8.0);
-
-        let new_btn = egui::Button::new(RichText::new("+  Neuer Chat").strong())
-            .min_size(egui::vec2(ui.available_width(), 32.0))
-            .corner_radius(CornerRadius::same(t.radius));
-        if ui.add(new_btn).on_hover_text("Strg+N").clicked() {
-            self.new_chat();
-        }
-        ui.add_space(6.0);
-
-        let search = ui.add(egui::TextEdit::singleline(&mut self.search_text).hint_text("🔍  Chats durchsuchen").desired_width(f32::INFINITY));
-        if self.focus_search {
-            search.request_focus();
-            self.focus_search = false;
-        }
-        if search.changed() {
-            if self.search_text.trim().is_empty() {
-                self.run("search.clear", json!({}));
-            } else {
-                self.run("search", json!({"query": self.search_text}));
-            }
-        }
-        ui.add_space(8.0);
-    }
-
-    /// Modern and Glas: logo tile and name, the "Neuer Chat" pill, the search pill; the account
+    /// Logo tile and name, the "Neuer Chat" pill, the search pill; the account
     /// at the bottom.
-    fn sidebar_top_designed(&mut self, ui: &mut Ui, t: &crate::theme::Tokens) {
+    fn sidebar_top(&mut self, ui: &mut Ui, t: &crate::theme::Tokens) {
         let t = t.clone();
         if let Some(g) = &t.glass {
             let full = ui.max_rect() + egui::Margin { left: 14, right: 14, top: 18, bottom: 14 };
@@ -144,7 +69,7 @@ impl AisCraftApp {
             .frame(egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 0, bottom: 0 }))
             .show(ui, |ui| {
                 self.update_banner(ui);
-                self.account_row_designed(ui);
+                self.account_row(ui);
             });
         ui.horizontal(|ui| {
             ui.add_space(4.0);
@@ -268,7 +193,7 @@ impl AisCraftApp {
         }
         for p in projects {
             let active = self.project_filter.as_deref() == Some(&p.id);
-            let r = self.entry(ui, Icon::Folder, p.name.as_str(), &p.name, active).on_hover_text(format!("Neuer Chat im Projekt {}", p.name));
+            let r = self.entry(ui, Icon::Folder, &p.name, active).on_hover_text(format!("Neuer Chat im Projekt {}", p.name));
             if r.clicked() {
                 if active {
                     self.project_filter = None;
@@ -324,8 +249,7 @@ impl AisCraftApp {
         }
         for a in items {
             let open = self.state.open_artifact.as_deref() == Some(&a.id);
-            let icon = crate::learn_panel::kind_icon(a.kind);
-            let r = self.entry(ui, crate::learn_panel::kind_lucide(a.kind), format!("{icon}  {}", a.title), &a.title, open).on_hover_text(&a.title);
+            let r = self.entry(ui, crate::learn_panel::kind_lucide(a.kind), &a.title, open).on_hover_text(&a.title);
             if r.clicked() {
                 if open {
                     self.save_if_dirty();
@@ -368,26 +292,9 @@ impl AisCraftApp {
             }
             let selected = self.state.current.as_deref() == Some(&c.id);
             let generating = self.state.is_generating(&c.id);
-            let w = ui.available_width();
-            let is_ais = self.state.backend(&c.backend_id).is_some_and(|b| b.config.kind == BackendKind::AisChat);
-            // AIS.chat chats get a small AIS.chat logo; the spaces make room for it.
-            let designed = t.designed();
             // „Namen schützen“: the title keeps placeholders, shown with the names (#55).
             let shown = self.engine.reveal(&c.id, &c.title);
-            let title = if is_ais && !designed { format!("      {shown}") } else { shown.clone() };
-            let resp = if designed {
-                crate::kit::side_item(ui, &t, Icon::Chat, &shown, selected)
-            } else {
-                ui.add(egui::Button::selectable(selected, RichText::new(title)).truncate().min_size(egui::vec2(w, 26.0)))
-            }
-            .on_hover_text(&shown);
-            if is_ais && !designed {
-                let r = resp.rect;
-                let h = 10.0;
-                let logo = egui::Rect::from_min_size(egui::pos2(r.left() + 8.0, r.center().y - h / 2.0), egui::vec2(h * 269.8 / 230.1, h));
-                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(logo));
-                crate::widgets::ais_logo(&mut child, h, if selected { t.on_accent } else { t.accent }).on_hover_text("AIS.chat");
-            }
+            let resp = crate::kit::side_item(ui, &t, Icon::Chat, &shown, selected).on_hover_text(&shown);
             if generating {
                 let r = resp.rect;
                 let center = egui::pos2(r.right() - 12.0, r.center().y);
@@ -454,16 +361,13 @@ impl AisCraftApp {
         let count: usize = ais.iter().filter_map(|b| b.personas.as_ref()).map(Vec::len).sum();
         let loaded = ais.iter().any(|b| b.personas.is_some());
         ui.add_space(4.0);
-        let r = if t.designed() {
-            crate::kit::side_item(ui, &t, Icon::Explore, &if loaded { format!("Entdecken ({count})") } else { "Entdecken".to_string() }, self.explore.is_some())
-        } else {
-            ui.add(
-                egui::Button::selectable(self.explore.is_some(), RichText::new(format!("{EXPLORE_ICON}  Entdecken")))
-                    .right_text(small_muted(&t, if loaded { count.to_string() } else { String::new() }))
-                    .truncate()
-                    .min_size(egui::vec2(ui.available_width(), 28.0)),
-            )
-        };
+        let r = crate::kit::side_item(
+            ui,
+            &t,
+            Icon::Explore,
+            &if loaded { format!("Entdecken ({count})") } else { "Entdecken".to_string() },
+            self.explore.is_some(),
+        );
         if r.on_hover_text("Assistenten, Dialogpartner und Lernszenarien aus AIS.chat").clicked() {
             if self.explore.is_some() {
                 self.explore = None;
@@ -475,7 +379,7 @@ impl AisCraftApp {
         // it off).
         if let Some(b) = ais.iter().find(|b| !b.image_models.is_empty()) {
             let active = self.explore.is_none() && self.state.current.is_none() && self.state.selection.kind == aiscraft_core::ConversationKind::Image;
-            let r = self.entry(ui, Icon::Image, RichText::new("🖼  Bild erzeugen"), "Bild erzeugen", active);
+            let r = self.entry(ui, Icon::Image, "Bild erzeugen", active);
             if r.on_hover_text("Neuer Bild-Chat: beschreibe, was das Bild zeigen soll").clicked() {
                 self.explore = None;
                 self.run("chat.new_image", json!({"backend": b.config.id}));
@@ -491,7 +395,7 @@ impl AisCraftApp {
             let active = self.explore.is_none()
                 && self.state.current.is_none()
                 && self.state.selection.persona.as_ref().is_some_and(|x| x.kind == p.kind && x.id == p.id);
-            let r = self.entry(ui, Icon::Star, RichText::new(format!("★  {}", p.name)), &p.name, active);
+            let r = self.entry(ui, Icon::Star, &p.name, active);
             let r = r.on_hover_text(format!("Neuer Chat: {} {}", p.kind.label(), p.name));
             if r.clicked() {
                 self.start_persona(&backend, p.kind, &p.id, None);
@@ -560,43 +464,6 @@ impl AisCraftApp {
         };
         (color, line1, line2, view)
     }
-
-    fn account_row(&mut self, ui: &mut Ui) {
-        let t = self.tokens.clone();
-        let (color, line1, line2, view) = self.account_status();
-        let r = ui
-            .horizontal(|ui| {
-                status_dot(ui, color);
-                ui.vertical(|ui| {
-                    ui.add(egui::Label::new(RichText::new(line1).strong()).truncate());
-                    if !line2.is_empty() {
-                        ui.add(egui::Label::new(small_muted(&t, line2)).truncate());
-                    }
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    if icon_button(ui, &t, "?", "Handbuch (F1)").clicked() {
-                        self.manual = Some(Default::default());
-                    }
-                    // Settings matter most here: a framed button, not only a symbol.
-                    let gear =
-                        egui::Button::new(RichText::new("⚙").size(15.0)).min_size(egui::vec2(30.0, 28.0)).corner_radius(CornerRadius::same(t.control_radius()));
-                    if ui.add(gear).on_hover_text("Einstellungen (Strg+,)").clicked() {
-                        self.dialog = Some(Dialog::settings());
-                    }
-                });
-            })
-            .response
-            .interact(Sense::click());
-        self.quota_bar(ui);
-        if r.clicked() {
-            if let Some(b) = view.filter(|b| !matches!(b.status, BackendStatus::Ready { .. })) {
-                self.dialog = Some(Dialog::login(&b.config.id));
-            } else {
-                self.dialog = Some(Dialog::settings());
-            }
-        }
-    }
 }
 
 impl AisCraftApp {
@@ -633,8 +500,8 @@ impl AisCraftApp {
         }
     }
 
-    /// Modern and Glas: avatar with initials, name, status, and the settings and handbook buttons.
-    fn account_row_designed(&mut self, ui: &mut Ui) {
+    /// Avatar with initials, name, status, and the settings and handbook buttons.
+    fn account_row(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let (color, line1, line2, view) = self.account_status();
         ui.add_space(4.0);
@@ -647,24 +514,27 @@ impl AisCraftApp {
                 let (av, _) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), Sense::hover());
                 crate::kit::avatar(ui.painter(), av.center(), 36.0, &crate::kit::initials(&line1));
                 ui.add_space(2.0);
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 1.0;
-                    ui.set_max_width((ui.available_width() - 40.0).max(40.0));
-                    ui.add(egui::Label::new(crate::theme::semibold(&line1).size(14.5).color(t.text)).truncate().selectable(false));
-                    if !line2.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 5.0;
-                            let (d, _) = ui.allocate_exact_size(egui::vec2(7.0, 14.0), Sense::hover());
-                            ui.painter().circle_filled(d.center(), 3.5, color);
-                            ui.add(egui::Label::new(RichText::new(&line2).size(12.5).color(t.muted)).truncate().selectable(false));
-                        });
-                    }
-                });
+                // The settings button first, from the right; name and status truncate into the rest.
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     if crate::kit::icon_button(ui, &t, Icon::Sliders, "Einstellungen (Strg+,)", t.text, 19.0, 34.0).clicked() {
                         self.dialog = Some(Dialog::settings());
                     }
+                    ui.add_space(8.0);
+                    let rest = egui::vec2(ui.available_width().max(40.0), 36.0);
+                    ui.allocate_ui_with_layout(rest, Layout::top_down(Align::Min), |ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        ui.set_width(rest.x);
+                        ui.add(egui::Label::new(crate::theme::semibold(&line1).size(14.5).color(t.text)).truncate().selectable(false));
+                        if !line2.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 5.0;
+                                let (d, _) = ui.allocate_exact_size(egui::vec2(7.0, 14.0), Sense::hover());
+                                ui.painter().circle_filled(d.center(), 3.5, color);
+                                ui.add(egui::Label::new(RichText::new(&line2).size(12.5).color(t.muted)).truncate().selectable(false));
+                            });
+                        }
+                    });
                 });
             })
             .response
@@ -680,9 +550,6 @@ impl AisCraftApp {
         }
     }
 }
-
-/// The symbol of the "Entdecken" entry (a glyph of the bundled icon font, like the others here).
-pub(crate) const EXPLORE_ICON: &str = "🔭";
 
 /// What an empty section says, with a little room above and the entries' indent.
 fn empty_hint(ui: &mut Ui, t: &crate::theme::Tokens, text: &str) {

@@ -10,7 +10,7 @@ use egui::{Align, Frame, Layout, Margin, RichText, ScrollArea, Ui};
 use serde_json::json;
 
 use crate::app::AisCraftApp;
-use crate::widgets::{Glyph, filter_chip, glyph_button, muted, segmented};
+use crate::widgets::muted;
 
 pub(crate) const SAVE_AFTER: Duration = Duration::from_millis(700);
 
@@ -170,11 +170,7 @@ impl AisCraftApp {
     pub(crate) fn artifact_panel(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let Some(meta) = self.state.open_artifact.as_ref().and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id)).cloned() else { return };
-        if t.designed() {
-            self.artifact_header_designed(ui, &meta);
-        } else {
-            self.artifact_header_classic(ui, &meta);
-        }
+        self.artifact_header(ui, &meta);
         self.share_strip(ui, &meta.id);
         if let Some(err) = self.artifact.as_ref().and_then(|v| v.error.clone()) {
             ui.label(RichText::new(err).color(t.danger));
@@ -252,9 +248,9 @@ impl AisCraftApp {
         }
     }
 
-    /// Modern and Glas: the kind as an accent tile, the title in Bold, "Teilen" and close; below
+    /// The kind as an accent tile, the title in Bold, "Teilen" and close; below
     /// "Bearbeiten | Vorschau", "Im Chat", the version chip, export and more.
-    fn artifact_header_designed(&mut self, ui: &mut Ui, meta: &aiscraft_core::Artifact) {
+    fn artifact_header(&mut self, ui: &mut Ui, meta: &aiscraft_core::Artifact) {
         let t = self.tokens.clone();
         use crate::icons::Icon;
         Frame::new().inner_margin(Margin { left: 20, right: 14, top: 16, bottom: 8 }).show(ui, |ui| {
@@ -284,160 +280,82 @@ impl AisCraftApp {
             });
         });
         Frame::new().inner_margin(Margin { left: 20, right: 14, top: 4, bottom: 12 }).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
+            // „Bearbeiten | Vorschau“ and „Im Chat“ on the left, the actions on the right. The
+            // actions are placed first; where the left group does not fit next to them (a narrow
+            // panel), it moves to a row of its own instead of lying on top of them.
+            let left = |app: &mut Self, ui: &mut Ui| {
                 if meta.kind == ArtifactKind::Document
-                    && let Some(v) = self.artifact.as_mut()
+                    && let Some(v) = app.artifact.as_mut()
                 {
                     crate::widgets::segmented_icons(ui, &t, &mut v.preview, [(false, Some(Icon::Pen), "Bearbeiten"), (true, Some(Icon::Eye), "Vorschau")]);
                 }
-                let kind = if self.attach_artifact { crate::kit::Pill::Soft } else { crate::kit::Pill::Ghost };
+                let kind = if app.attach_artifact { crate::kit::Pill::Soft } else { crate::kit::Pill::Ghost };
                 let icon = if meta.kind == ArtifactKind::Document { None } else { Some(Icon::Chat) };
                 if crate::kit::pill(ui, &t, kind, icon, "Im Chat", 13.0, None)
                     .on_hover_text("Inhalt bei der nächsten Nachricht als Kontext mitschicken")
                     .clicked()
                 {
-                    self.attach_artifact = !self.attach_artifact;
+                    app.attach_artifact = !app.attach_artifact;
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    if matches!(meta.kind, ArtifactKind::Document | ArtifactKind::Board) {
-                        let more = crate::kit::icon_button(ui, &t, Icon::More, "Weitere Aktionen", t.text2, 18.0, 32.0);
-                        if meta.kind != ArtifactKind::Board {
-                            egui::Popup::menu(&more).show(|ui| self.more_entries(ui, meta));
-                        } else {
-                            egui::Popup::menu(&more).show(|ui| {
-                                if ui.button("Umbenennen …").clicked() {
-                                    self.dialog = Some(crate::dialogs::Dialog::RenameArtifact { id: meta.id.clone(), title: meta.title.clone() });
-                                    ui.close();
-                                }
-                            });
-                        }
-                    }
-                    let export = crate::kit::icon_button(ui, &t, Icon::Download, "Exportieren", t.text2, 18.0, 32.0);
-                    egui::Popup::menu(&export).show(|ui| self.export_entries(ui, meta));
-                    let count = self.engine.call("artifact.versions", json!({"id": meta.id})).ok().and_then(|v| v.as_array().map(|a| a.len())).unwrap_or(0);
-                    let versions = if count > 0 {
-                        crate::kit::pill(ui, &t, crate::kit::Pill::Chip, Some(Icon::History), &format!("V{count}"), 13.0, None).on_hover_text("Versionen")
+            };
+            let need_id = ui.scope_id().with("toolbar-left-width");
+            let need = ui.ctx().data(|d| d.get_temp::<f32>(need_id)).unwrap_or(0.0);
+            let mut fits = true;
+            // One row as tall as the segmented control, so both groups centre on the same line.
+            let row = egui::vec2(ui.available_width(), 36.0);
+            ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if matches!(meta.kind, ArtifactKind::Document | ArtifactKind::Board) {
+                    let more = crate::kit::icon_button(ui, &t, Icon::More, "Weitere Aktionen", t.text2, 18.0, 32.0);
+                    if meta.kind != ArtifactKind::Board {
+                        egui::Popup::menu(&more).show(|ui| self.more_entries(ui, meta));
                     } else {
-                        crate::kit::icon_button(ui, &t, Icon::History, "Versionen", t.text2, 18.0, 32.0)
-                    };
-                    egui::Popup::menu(&versions).show(|ui| self.version_entries(ui, meta));
-                });
-            });
-        });
-        let r = ui.cursor();
-        ui.painter().line_segment([egui::pos2(ui.max_rect().left(), r.top()), egui::pos2(ui.max_rect().right(), r.top())], egui::Stroke::new(1.0, t.border));
-    }
-
-    fn artifact_header_classic(&mut self, ui: &mut Ui, meta: &aiscraft_core::Artifact) {
-        let t = self.tokens.clone();
-        let meta = meta.clone();
-        // Header, two rows (design review 2026-11): the title with the close button, then the
-        // actions. One row let the right-to-left buttons run over the title in a narrow panel.
-        Frame::new().inner_margin(Margin { left: 16, right: 8, top: 6, bottom: 4 }).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(crate::learn_panel::kind_icon(meta.kind)).color(t.accent).size(18.0)).on_hover_text(meta.kind.label());
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if glyph_button(ui, &t, Glyph::Close, "Schließen").clicked() {
-                        self.save_if_dirty();
-                        self.run("artifact.close", json!({}));
-                    }
-                    if self.state.collab.available {
-                        self.share_menu(ui, &meta);
-                    }
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        let r = ui
-                            .add(egui::Label::new(crate::theme::semibold(&meta.title).size(18.0)).truncate().sense(egui::Sense::click()))
-                            .on_hover_text("Doppelklick zum Umbenennen");
-                        if r.double_clicked() {
-                            self.dialog = Some(crate::dialogs::Dialog::RenameArtifact { id: meta.id.clone(), title: meta.title.clone() });
-                        }
-                    });
-                });
-            });
-            ui.horizontal(|ui| {
-                if meta.kind == ArtifactKind::Document
-                    && let Some(v) = self.artifact.as_mut()
-                {
-                    segmented(ui, &t, &mut v.preview, [(false, "Bearbeiten"), (true, "Vorschau")]);
-                    ui.add_space(4.0);
-                }
-                let mut attach = self.attach_artifact;
-                if filter_chip(ui, &t, &mut attach, "Im Chat").on_hover_text("Inhalt bei der nächsten Nachricht als Kontext mitschicken").clicked() {
-                    self.attach_artifact = attach;
-                }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    // Rare actions go into the overflow menu, so the row fits a narrow panel.
-                    if meta.kind == ArtifactKind::Document {
-                        let more = glyph_button(ui, &t, Glyph::More, "Weitere Aktionen");
                         egui::Popup::menu(&more).show(|ui| {
-                            ui.set_min_width(220.0);
-                            if meta.kind == ArtifactKind::Document
-                                && ui
-                                    .button("Als Arbeitsblatt")
-                                    .on_hover_text("Daraus ein interaktives Arbeitsblatt machen lassen (eine Anfrage ans Modell)")
-                                    .clicked()
-                            {
-                                self.save_if_dirty();
-                                self.run("worksheet.from_document", json!({"id": meta.id}));
+                            if ui.button("Umbenennen …").clicked() {
+                                self.dialog = Some(crate::dialogs::Dialog::RenameArtifact { id: meta.id.clone(), title: meta.title.clone() });
                                 ui.close();
                             }
                         });
                     }
-                    let export = glyph_button(ui, &t, Glyph::Download, "Exportieren");
-                    egui::Popup::menu(&export).show(|ui| {
-                        let formats: &[(&str, &str)] = match meta.kind {
-                            ArtifactKind::Board => &[("markdown", "md"), ("json", "json")],
-                            ArtifactKind::App => &[("html", "html")],
-                            ArtifactKind::Worksheet => &[("pdf", "pdf"), ("docx", "docx"), ("json", "json")],
-                            ArtifactKind::H5p => &[("h5p", "h5p"), ("json", "json")],
-                            ArtifactKind::Document => &[("markdown", "md"), ("html", "html"), ("docx", "docx"), ("pdf", "pdf")],
-                        };
-                        for (f, ext) in formats {
-                            let label = match *ext {
-                                "docx" => "Als Word (DOCX)".to_string(),
-                                "h5p" => "Als H5P (.h5p)".to_string(),
-                                _ => format!("Als {}", ext.to_uppercase()),
-                            };
-                            if ui.button(label).clicked() {
-                                let name: String = meta.title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-                                if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.{ext}", name.trim())).save_file() {
-                                    self.save_if_dirty();
-                                    let path = path.display().to_string();
-                                    match (meta.kind, *ext) {
-                                        (ArtifactKind::H5p, "h5p") => self.run("h5p.export", json!({"id": meta.id, "path": path})),
-                                        _ => self.run("artifact.export", json!({"id": meta.id, "format": f, "path": path})),
-                                    }
-                                }
-                                ui.close();
-                            }
-                        }
-                    });
-                    let versions = glyph_button(ui, &t, Glyph::History, "Versionen");
-                    egui::Popup::menu(&versions).show(|ui| {
-                        ui.set_min_width(240.0);
-                        match self.engine.call("artifact.versions", json!({"id": meta.id})) {
-                            Ok(v) => {
-                                for ver in v.as_array().cloned().unwrap_or_default().into_iter().take(30) {
-                                    let n = ver.get("version").and_then(|x| x.as_i64()).unwrap_or(0);
-                                    let note = ver.get("note").and_then(|x| x.as_str()).unwrap_or("");
-                                    if ui.button(format!("{n}. {note}")).on_hover_text("Diese Fassung wiederherstellen").clicked() {
-                                        self.save_if_dirty();
-                                        self.run("artifact.restore", json!({"id": meta.id, "version": n}));
-                                        ui.close();
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                ui.label(e.message);
-                            }
-                        }
-                    });
-                });
+                }
+                let export = crate::kit::icon_button(ui, &t, Icon::Download, "Exportieren", t.text2, 18.0, 32.0);
+                egui::Popup::menu(&export).show(|ui| self.export_entries(ui, meta));
+                let count = self.engine.call("artifact.versions", json!({"id": meta.id})).ok().and_then(|v| v.as_array().map(|a| a.len())).unwrap_or(0);
+                let versions = if count > 0 {
+                    crate::kit::pill(ui, &t, crate::kit::Pill::Chip, Some(Icon::History), &format!("V{count}"), 13.0, None).on_hover_text("Versionen")
+                } else {
+                    crate::kit::icon_button(ui, &t, Icon::History, "Versionen", t.text2, 18.0, 32.0)
+                };
+                egui::Popup::menu(&versions).show(|ui| self.version_entries(ui, meta));
+                ui.add_space(8.0);
+                fits = ui.available_width() >= need;
+                if fits {
+                    let w = ui
+                        .with_layout(Layout::left_to_right(Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            left(self, ui);
+                        })
+                        .response
+                        .rect
+                        .width();
+                    ui.ctx().data_mut(|d| d.insert_temp(need_id, w));
+                }
             });
+            if !fits {
+                ui.add_space(6.0);
+                let w = ui
+                    .horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        left(self, ui);
+                    })
+                    .response
+                    .rect
+                    .width();
+                ui.ctx().data_mut(|d| d.insert_temp(need_id, w));
+            }
         });
-        ui.separator();
+        let r = ui.cursor();
+        ui.painter().line_segment([egui::pos2(ui.max_rect().left(), r.top()), egui::pos2(ui.max_rect().right(), r.top())], egui::Stroke::new(1.0, t.border));
     }
 
     pub(crate) fn save_if_dirty(&mut self) {
@@ -457,26 +375,21 @@ impl AisCraftApp {
             v.preview = true;
         }
         let mut board = None;
-        let designed = t.designed();
-        // Modern and Glas: the document as a sheet on a recessed area.
-        let (area, page) = if designed {
-            let sheet = if t.dark { t.opaque(t.surface) } else { egui::Color32::WHITE };
-            (
-                Frame::new().fill(if t.glass.is_some() { egui::Color32::TRANSPARENT } else { t.sunken }).inner_margin(Margin {
-                    left: 18,
-                    right: 18,
-                    top: 18,
-                    bottom: 0,
-                }),
-                Frame::new()
-                    .fill(sheet)
-                    .corner_radius(egui::CornerRadius { nw: 14, ne: 14, sw: 0, se: 0 })
-                    .inner_margin(Margin { left: 28, right: 28, top: 26, bottom: 24 })
-                    .shadow(egui::epaint::Shadow { offset: [0, 2], blur: 10, spread: 0, color: egui::Color32::from_rgba_unmultiplied(0x0b, 0x2a, 0x45, 0x14) }),
-            )
-        } else {
-            (Frame::new(), Frame::new().inner_margin(Margin::symmetric(16, 8)))
-        };
+        // The document as a sheet on a recessed area.
+        let sheet = if t.dark { t.opaque(t.surface) } else { egui::Color32::WHITE };
+        let (area, page) = (
+            Frame::new().fill(if t.glass.is_some() { egui::Color32::TRANSPARENT } else { t.sunken }).inner_margin(Margin {
+                left: 18,
+                right: 18,
+                top: 18,
+                bottom: 0,
+            }),
+            Frame::new()
+                .fill(sheet)
+                .corner_radius(egui::CornerRadius { nw: 14, ne: 14, sw: 0, se: 0 })
+                .inner_margin(Margin { left: 28, right: 28, top: 26, bottom: 24 })
+                .shadow(egui::epaint::Shadow { offset: [0, 2], blur: 10, spread: 0, color: egui::Color32::from_rgba_unmultiplied(0x0b, 0x2a, 0x45, 0x14) }),
+        );
         area.show(ui, |ui| {
             ScrollArea::vertical().id_salt(("doc", v.id.clone())).auto_shrink([false, false]).show(ui, |ui| {
                 page.show(ui, |ui| {
@@ -518,27 +431,20 @@ impl AisCraftApp {
 
     fn board_body(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
-        let designed = t.designed();
         let style = BoardStyle {
             // Glas: the panel's own glass shows through the canvas.
-            bg: if t.glass.is_some() {
-                egui::Color32::TRANSPARENT
-            } else if designed {
-                t.opaque(t.panel)
-            } else {
-                t.bg
-            },
-            grid: if designed { t.opaque(t.border) } else { t.border },
+            bg: if t.glass.is_some() { egui::Color32::TRANSPARENT } else { t.opaque(t.panel) },
+            grid: t.opaque(t.border),
             text: t.text,
             muted: t.muted,
             accent: t.accent,
             selection: t.accent,
-            surface: if designed { t.opaque(t.composer) } else { t.surface },
-            border: if designed { t.opaque(t.border) } else { t.border },
+            surface: t.opaque(t.composer),
+            border: t.opaque(t.border),
             on_accent: t.on_accent,
             accent_soft: t.opaque(t.accent_soft),
-            rounded: designed,
-            title_family: designed.then(|| egui::FontFamily::Name(crate::theme::BOLD.into())),
+            rounded: true,
+            title_family: Some(egui::FontFamily::Name(crate::theme::BOLD.into())),
             ..if t.dark { BoardStyle::dark() } else { BoardStyle::light() }
         };
         let Some(v) = self.artifact.as_mut() else { return };

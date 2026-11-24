@@ -2,69 +2,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
+mod common;
+
 use aiscraft_engine::{Engine, Options};
 use aiscraft_ui::AisCraftApp;
+use common::{chosen, click_until, settled, step_until};
 use egui_kittest::kittest::Queryable;
-
-/// Whether the control with this label is the chosen one (selected or toggled on).
-fn chosen(h: &egui_kittest::Harness<'static, AisCraftApp>, label: &str) -> bool {
-    h.query_all(
-        egui_kittest::kittest::By::new().label(label).predicate(|n| n.is_selected() == Some(true) || n.toggled() == Some(egui::accesskit::Toggled::True)),
-    )
-    .next()
-    .is_some()
-}
-
-/// Draws frames until `done` holds (at most about 10 s). Engine commands run in the background,
-/// so under load a fixed number of frames is sometimes not enough.
-fn step_until(h: &mut egui_kittest::Harness<'static, AisCraftApp>, what: &str, done: impl Fn(&egui_kittest::Harness<'static, AisCraftApp>) -> bool) {
-    for _ in 0..500 {
-        if done(h) {
-            return;
-        }
-        h.step();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    panic!("timed out waiting for: {what}");
-}
-
-/// Draws frames until a widget with this label is there and has stopped moving, so a click hits
-/// it and not where it was a frame earlier.
-fn settled(h: &mut egui_kittest::Harness<'static, AisCraftApp>, label: &str) {
-    let mut last = None;
-    for _ in 0..500 {
-        let now = h.query_by_label(label).map(|n| n.rect());
-        if now.is_some() && now == last {
-            return;
-        }
-        last = now;
-        h.step();
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("„{label}“ did not settle");
-}
-
-/// Clicks `label` until `done` holds. Under heavy load (many test processes at once) a simulated
-/// click is now and then not taken; what the click must achieve is still checked.
-fn click_until(
-    h: &mut egui_kittest::Harness<'static, AisCraftApp>,
-    label: &str,
-    what: &str,
-    done: impl Fn(&egui_kittest::Harness<'static, AisCraftApp>) -> bool,
-) {
-    for _ in 0..5 {
-        settled(h, label);
-        h.get_by_label(label).click();
-        for _ in 0..100 {
-            h.step();
-            if done(h) {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-    }
-    panic!("clicking „{label}“ did not lead to: {what}");
-}
 
 fn harness(engine: &Engine) -> egui_kittest::Harness<'static, AisCraftApp> {
     let e = engine.clone();
@@ -514,43 +457,4 @@ fn omarchy_card_only_with_an_omarchy_theme() {
     assert!(h.query_by_label("Omarchy").is_none(), "no card without an Omarchy theme");
     aiscraft_ui::theme::set_omarchy_dir(None);
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// Quality gate (layout): an editor row whose buttons needed more room than reserved widened the
-/// artifact panel within a few frames until it covered the chat (Glas, choice task, 150 %). The
-/// panel keeps its default width and stays put, in every look.
-#[test]
-fn artifact_panel_does_not_grow_frame_by_frame() {
-    // Each look, and a sheet without points (its header row has the switch but no points fields).
-    for (theme, points) in [("glas-dark", true), ("modern-light", true), ("omarchy", true), ("modern-dark", false)] {
-        let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
-        engine.call("settings.set", serde_json::json!({"key": "theme", "value": theme})).unwrap();
-        let sheet = serde_json::json!({"title": "Photosynthese – So stellen Pflanzen Nahrung her", "points": points, "tasks": [
-            {"type": "choice", "prompt": "Welche Zellbestandteile führen die Photosynthese durch?", "options": [{"text": "Chloroplasten", "correct": true}, {"text": "Mitochondrien"}]},
-            {"type": "true_false", "prompt": "Pflanzen nehmen Sauerstoff auf.", "answer": false, "hints": ["Welches Gas geben Pflanzen ab?"]},
-            {"type": "categorize", "prompt": "Sortiere", "categories": [{"name": "Säugetiere", "items": ["Wal"]}, {"name": "Fische", "items": ["Hai"]}]}
-        ]});
-        engine.call("worksheet.create", serde_json::json!({"worksheet": sheet})).unwrap();
-        engine.call("settings.set", serde_json::json!({"key": "look_chosen", "value": true})).ok();
-        // A laptop at 150 %: the size and scale the overflow showed up at.
-        let e = engine.clone();
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(1333.0, 889.0))
-            .with_pixels_per_point(1.5)
-            .allow_missing_glyphs()
-            .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
-        h.run_steps(4);
-        if let Some(later) = h.query_by_label("Später") {
-            later.click();
-        }
-        h.run_steps(10);
-        let left = |h: &egui_kittest::Harness<'static, AisCraftApp>| h.get_by_label("Druckvorschau").rect().left();
-        let before = left(&h);
-        h.run_steps(40);
-        let after = left(&h);
-        assert!((before - after).abs() < 0.5, "{theme}: the panel grew from x={before} to x={after}");
-        // The panel keeps about its default width (46 % of the room right of the sidebar): its
-        // toolbar starts in the right third. An overflowing row pushed it to x≈790.
-        assert!(after > 1333.0 * 0.65, "{theme}: an editor row widened the panel (toolbar at x={after})");
-    }
 }

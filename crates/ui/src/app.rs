@@ -17,6 +17,37 @@ pub enum UiRequest {
     Show { what: String, reply: std::sync::mpsc::Sender<Result<Value, String>> },
 }
 
+/// Where the panels sat in the last frame and the widths they start with, in points. Read by the
+/// layout quality gate (`tests/layout_gate.rs`): a panel that grows from frame to frame or ends up
+/// wider than its default means a row inside it overflows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanelLayout {
+    pub window: egui::Rect,
+    /// None while the sidebar is collapsed.
+    pub sidebar: Option<egui::Rect>,
+    pub sidebar_default: f32,
+    /// None while no artifact is open.
+    pub artifact: Option<egui::Rect>,
+    pub artifact_default: f32,
+    pub main: egui::Rect,
+    /// A dialog, the handbook or the palette lies over the panels.
+    pub overlay: bool,
+}
+
+impl Default for PanelLayout {
+    fn default() -> Self {
+        Self {
+            window: egui::Rect::NOTHING,
+            sidebar: None,
+            sidebar_default: 0.0,
+            artifact: None,
+            artifact_default: 0.0,
+            main: egui::Rect::NOTHING,
+            overlay: false,
+        }
+    }
+}
+
 /// View state only; the engine owns the data.
 pub struct AisCraftApp {
     control: Option<std::sync::mpsc::Receiver<UiRequest>>,
@@ -29,6 +60,7 @@ pub struct AisCraftApp {
     pub(crate) composer: String,
     /// The next composer drawn is the start page's large one (Modern, Glas).
     pub(crate) composer_big: bool,
+    panel_layout: PanelLayout,
     /// Draw the next "Erstellen" menu as an icon (narrow composer).
     pub(crate) create_as_icon: bool,
     pub(crate) pending_files: Vec<PathBuf>,
@@ -86,8 +118,8 @@ const NARROW_WINDOW: f32 = 1000.0;
 
 pub(crate) const CONTENT_WIDTH: f32 = 760.0;
 
-/// The frames of sidebar, artifact panel and chat area for a look: flush panels (Klassisch,
-/// Modern) or floating glass surfaces 12 px apart with radius 24 (Glas).
+/// The frames of sidebar, artifact panel and chat area for a look: flush panels (Modern,
+/// Omarchy) or floating glass surfaces 12 px apart with radius 24 (Glas).
 struct PanelFrames {
     sidebar: Frame,
     sidebar_width: f32,
@@ -145,6 +177,11 @@ impl PanelFrames {
 }
 
 impl AisCraftApp {
+    /// The panels of the last frame (see [`PanelLayout`]).
+    pub fn panel_layout(&self) -> PanelLayout {
+        self.panel_layout
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>, engine: Engine, control: Option<std::sync::mpsc::Receiver<UiRequest>>) -> Self {
         theme::install_fonts(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
@@ -178,6 +215,7 @@ impl AisCraftApp {
             md: Default::default(),
             composer: String::new(),
             composer_big: false,
+            panel_layout: PanelLayout::default(),
             create_as_icon: false,
             pending_files: Vec::new(),
             pending_links: Vec::new(),
@@ -604,15 +642,17 @@ impl eframe::App for AisCraftApp {
             crate::backdrop::paint(&painter, ctx.content_rect(), g, 1.0);
         }
         let frames = PanelFrames::new(&t);
+        let mut layout = PanelLayout { window: ctx.content_rect(), sidebar_default: frames.sidebar_width, ..Default::default() };
         let before = self.sidebar_open;
         let mut sidebar_open = before;
-        egui::Panel::left("sidebar")
+        layout.sidebar = egui::Panel::left("sidebar")
             .resizable(true)
-            .show_separator_line(!t.designed())
+            .show_separator_line(false)
             .default_size(frames.sidebar_width)
             .size_range(200.0..=420.0)
             .frame(frames.sidebar)
-            .show_collapsible(ui, &mut sidebar_open, |ui| self.sidebar(ui));
+            .show_collapsible(ui, &mut sidebar_open, |ui| self.sidebar(ui))
+            .map(|r| r.response.rect);
         if self.sidebar_open == before {
             self.sidebar_open = sidebar_open;
         }
@@ -620,10 +660,11 @@ impl eframe::App for AisCraftApp {
         self.sync_artifact();
         if self.state.open_artifact.is_some() {
             let w = ui.available_width();
-            egui::Panel::right("artifact")
+            layout.artifact_default = (w * 0.46).clamp(380.0, 760.0);
+            let panel = egui::Panel::right("artifact")
                 .resizable(true)
-                .show_separator_line(!t.designed())
-                .default_size(if t.designed() { (w * 0.46).clamp(380.0, 760.0) } else { (w * 0.45).clamp(360.0, 760.0) })
+                .show_separator_line(false)
+                .default_size(layout.artifact_default)
                 .size_range(320.0..=(w - 360.0).max(340.0))
                 .frame(frames.panel)
                 .show(ui, |ui| {
@@ -642,25 +683,32 @@ impl eframe::App for AisCraftApp {
                     }
                     self.artifact_panel(ui)
                 });
+            layout.artifact = Some(panel.response.rect);
         } else {
             self.attach_artifact = false;
         }
 
-        egui::CentralPanel::default().frame(frames.main).show(ui, |ui| {
-            if let Some(g) = &t.glass {
-                crate::backdrop::glass_edge(ui.painter(), ui.max_rect(), f32::from(t.r_panel), g.edge);
-            }
-            if self.explore.is_some() {
-                self.explore_page(ui);
-            } else {
-                self.conversation(ui);
-            }
-        });
+        layout.main = egui::CentralPanel::default()
+            .frame(frames.main)
+            .show(ui, |ui| {
+                if let Some(g) = &t.glass {
+                    crate::backdrop::glass_edge(ui.painter(), ui.max_rect(), f32::from(t.r_panel), g.edge);
+                }
+                if self.explore.is_some() {
+                    self.explore_page(ui);
+                } else {
+                    self.conversation(ui);
+                }
+            })
+            .response
+            .rect;
 
         self.toasts(&ctx);
         self.manual_ui(&ctx);
         self.dialogs(&ctx);
         self.palette_ui(&ctx);
+        layout.overlay = self.dialog.is_some() || self.manual.is_some() || self.palette.is_some();
+        self.panel_layout = layout;
 
         // While an answer streams, the engine requests repaints; spinners need a steady tick too.
         if !self.state.generating.is_empty() {
