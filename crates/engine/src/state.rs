@@ -294,6 +294,8 @@ pub struct Settings {
     pub learn_skills: bool,
     /// Put fitting skills and excerpts from earlier chats into the context.
     pub recall: bool,
+    /// Check the links in every answer once it is complete (off: only on click).
+    pub check_links: bool,
     /// Hourly hints for concrete open needs (off by default).
     pub proactive: bool,
     /// No hints from this hour …
@@ -317,6 +319,7 @@ impl Default for Settings {
             monthly_token_limit: 0,
             learn_skills: true,
             recall: true,
+            check_links: false,
             proactive: false,
             quiet_start: 22,
             quiet_end: 7,

@@ -342,11 +342,25 @@ pub struct Sources {
     /// Fingerprint of the context last sent that way; it is sent again only when it changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inline_sent: Option<String>,
+    /// Skills and excerpts from earlier chats already sent that way (AIS.chat keeps them in its
+    /// history): each goes along once per chat. Newest last, capped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inline_recalled: Vec<String>,
 }
 
 impl Default for Sources {
     fn default() -> Self {
-        Self { tools: true, memory: true, project: true, history: true, web: true, connectors: None, inline: false, inline_sent: None }
+        Self {
+            tools: true,
+            memory: true,
+            project: true,
+            history: true,
+            web: true,
+            connectors: None,
+            inline: false,
+            inline_sent: None,
+            inline_recalled: Vec::new(),
+        }
     }
 }
 

@@ -761,6 +761,13 @@ impl AisCraftApp {
                     self.run("settings.set", json!({"key": "recall", "value": recall}));
                 }
                 ui.label(small_muted(&t, format!("Gelernte Vorgehen enthalten keine persönlichen Daten, sind nur Hinweise und nie eine Erlaubnis. Höchstens {} werden behalten; die am meisten genutzten bleiben.", 40)));
+                ui.label(small_muted(&t, "Bei AIS.chat stehen sie oben in deiner Nachricht, je Chat nur einmal; unter der Nachricht steht, was mitging."));
+                ui.add_space(6.0);
+                let mut links = st.check_links;
+                if ui.checkbox(&mut links, "Links in Antworten automatisch prüfen").changed() {
+                    self.run("settings.set", json!({"key": "check_links", "value": links}));
+                }
+                ui.label(small_muted(&t, "Fragt jede Adresse in einer Antwort einmal bei der fremden Seite an und streicht tote Links durch. Aus: nur mit „Links prüfen“ unter der Antwort."));
                 ui.add_space(6.0);
                 let mut pro = st.proactive;
                 if ui.checkbox(&mut pro, "Hinweise: stündlich auf offene Zusagen, Fristen und Erinnerungswünsche achten").changed() {

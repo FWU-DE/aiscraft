@@ -146,6 +146,15 @@ static COMMANDS: &[CommandSpec] = &[
         Ok(json!({}))
     })),
     cmd!("chat.save_image", "Bild speichern", "Chat", None, "message_id: string, index?: number, path: string", false, |c, p| Box::pin(save_image(c, p))),
+    cmd!(
+        "message.check_links",
+        "Links in einer Antwort prüfen",
+        "Chat",
+        None,
+        "message_id: string, timeout_ms?: number (pro Link, Standard 8000)",
+        false,
+        |c, p| Box::pin(crate::links::check_command(c, p))
+    ),
     cmd!("chat.save_document", "Erzeugtes Dokument speichern", "Chat", None, "message_id: string, step: number, path: string", false, |c, p| Box::pin(
         save_document(c, p)
     )),
@@ -325,7 +334,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Einstellung ändern",
         "Einstellungen",
         None,
-        "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|proactive|quiet_start|quiet_end|update_check, value: any",
+        "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|check_links|proactive|quiet_start|quiet_end|update_check, value: any",
         false,
         |c, p| Box::pin(async move {
             let key = req_str(&p, "key")?;
