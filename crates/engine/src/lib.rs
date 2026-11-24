@@ -41,7 +41,7 @@ use serde_json::Value;
 pub use aiscraft_backends::SESSION_COOKIE;
 pub use artifacts::{change_blocks, doc_replace, doc_text, markdown_html, merge_states};
 pub use attach::{AIS_ACCEPTS, AttachmentPreview, RangeKind};
-pub use chat::SENT_ALONG;
+pub use chat::{LEFT_OUT, SENT_ALONG};
 pub use commands::{CommandSpec, commands};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use inbox::InboxItem;

@@ -105,7 +105,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Quellen des Chats",
         "Chat",
         None,
-        "tools?: bool, memory?: bool, project?: bool, history?: bool, web?: bool (web search or the page reader), inline?: bool (memory and project at the top of a message, for backends without a system prompt), connectors?: [id] | null (alle)",
+        "tools?: bool, memory?: bool, project?: bool, history?: bool, web?: bool (web search or the page reader), inline?: bool (memory and project at the top of a message, for backends without a system prompt), other_services?: bool (recall may send excerpts from chats with other services to this one), connectors?: [id] | null (alle)",
         false,
         |c, p| Box::pin(set_sources(c, p))
     ),
@@ -743,6 +743,7 @@ async fn set_sources(c: Ctx, p: Value) -> Result<Value> {
     src.history = flag("history", src.history);
     src.web = flag("web", src.web);
     src.inline = flag("inline", src.inline);
+    src.other_services = flag("other_services", src.other_services);
     match p.get("connectors") {
         Some(Value::Null) => src.connectors = None,
         Some(Value::Array(a)) => src.connectors = Some(a.iter().filter_map(|v| v.as_str().map(str::to_string)).take(200).collect()),

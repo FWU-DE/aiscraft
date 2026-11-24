@@ -427,6 +427,9 @@ pub(crate) fn select_variant(c: &Ctx, message_id: &str, index: usize) -> Result<
 
 /// Label of the step on a user message that names what went along with it.
 pub const SENT_ALONG: &str = "Mitgeschickt";
+/// Label of the step on a user message that names fitting chats with another service that did not
+/// go along, because the person did not agree to that.
+pub const LEFT_OUT: &str = "Nicht mitgeschickt";
 
 /// Context to put in front of the next message for a backend without a system prompt.
 #[derive(Debug, Clone, PartialEq)]
@@ -438,6 +441,8 @@ pub(crate) struct InlineContext {
     pub recalled: Vec<String>,
     /// What went along, as people read it.
     pub labels: Vec<String>,
+    /// Fitting chats with another service left out (no consent), as people read them.
+    pub withheld: Vec<String>,
 }
 
 /// Recall keys a chat remembers as sent at most.
@@ -446,8 +451,9 @@ const MAX_RECALLED_KEYS: usize = 64;
 /// The context to put in front of the next message, for a backend without a system prompt
 /// (AIS.chat), which keeps it in its history: memory and project instructions when the person
 /// agreed (`inline`), once and again only after they change; fitting skills and excerpts from
-/// earlier chats for this `request` (setting "recall"), each once per chat. `None` when nothing
-/// (new) has to go along.
+/// earlier chats for this `request` (setting "recall"), each once per chat; chats with another
+/// service only when the person agreed (`other_services`). `None` when nothing (new) has to go
+/// along and nothing was left out; `block` is empty when only something was left out.
 pub(crate) fn inline_context(c: &Ctx, conv: &Conversation, takes_system: bool, request: &str) -> Option<InlineContext> {
     if takes_system {
         return None;
@@ -475,9 +481,11 @@ pub(crate) fn inline_context(c: &Ctx, conv: &Conversation, takes_system: bool, r
         }
     }
     let mut recalled = Vec::new();
+    let mut withheld = Vec::new();
     if state.settings.recall && !request.trim().is_empty() {
-        let fresh: Vec<_> =
-            crate::skills::recall(c, &conv.id, request, conv.sources.history).into_iter().filter(|r| !conv.sources.inline_recalled.contains(&r.key)).collect();
+        let found = crate::skills::recall(c, conv, request);
+        withheld = found.withheld;
+        let fresh: Vec<_> = found.items.into_iter().filter(|r| !conv.sources.inline_recalled.contains(&r.key)).collect();
         if let Some(block) = crate::skills::render(&fresh) {
             crate::skills::mark_used(c, &fresh);
             parts.push(block);
@@ -489,11 +497,15 @@ pub(crate) fn inline_context(c: &Ctx, conv: &Conversation, takes_system: bool, r
             }
         }
     }
-    if parts.is_empty() {
+    if parts.is_empty() && withheld.is_empty() {
         return None;
     }
-    let block = format!("[Hinweise der Person für diesen Chat, aus AIS.ChatCraft]\n{}\n[Ende der Hinweise]", parts.join("\n\n"));
-    Some(InlineContext { block, print, recalled, labels })
+    let block = if parts.is_empty() {
+        String::new()
+    } else {
+        format!("[Hinweise der Person für diesen Chat, aus AIS.ChatCraft]\n{}\n[Ende der Hinweise]", parts.join("\n\n"))
+    };
+    Some(InlineContext { block, print, recalled, labels, withheld })
 }
 
 /// Remember what went along inline (after the backend took the message).
@@ -543,7 +555,7 @@ fn system_prompt_for(c: &Ctx, conv: &Conversation, send_context: bool, takes_sys
     }
     if state.settings.recall
         && !request.trim().is_empty()
-        && let Some(r) = crate::skills::context_for(c, &conv.id, request, conv.sources.history)
+        && let Some(r) = crate::skills::context_for(c, conv, request)
     {
         parts.push(r);
     }
@@ -687,12 +699,17 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     // the message, once and again only after they change, when the person agreed to it; fitting
     // skills and earlier chats once per chat. The message says what went along.
     let inline = inline_context(&c, &conv, caps.system_prompt, &request);
+    // Fitting chats with another service left out are named there too.
     if let (Some(sent), Some(mut user)) = (&inline, last_user) {
-        user.activity.retain(|s| s.label != SENT_ALONG);
-        user.activity.push(aiscraft_core::ActivityStep { label: SENT_ALONG.into(), detail: Some(sent.labels.join(" · ")), done: true, ..Default::default() });
+        user.activity.retain(|s| s.label != SENT_ALONG && s.label != LEFT_OUT);
+        for (label, items) in [(SENT_ALONG, &sent.labels), (LEFT_OUT, &sent.withheld)] {
+            if !items.is_empty() {
+                user.activity.push(aiscraft_core::ActivityStep { label: label.into(), detail: Some(items.join(" · ")), done: true, ..Default::default() });
+            }
+        }
         put_message(&c, &conv_id, &user);
     }
-    let context = match (&inline, context) {
+    let context = match (inline.as_ref().filter(|s| !s.block.is_empty()), context) {
         (Some(sent), Some(ctx)) => Some(format!("{}\n\n{ctx}", sent.block)),
         (Some(sent), None) => Some(sent.block.clone()),
         (None, ctx) => ctx,

@@ -1403,6 +1403,57 @@ fn ais_chat_recall_goes_along_once() {
     assert!(!posted.lock().unwrap().last().unwrap().contains("Hinweise der Person"));
 }
 
+/// Recall stays within the chat's service (#49): excerpts from chats with another service (here an
+/// OpenAI-compatible server) reach AIS.chat only after the person agreed (`other_services`), and the
+/// message names what was left out. Chats with the same service go along as before, each once.
+#[test]
+fn recall_from_other_services_needs_consent() {
+    let (engine, posted) = ais_engine();
+    let (url, seen) = recording_openai(&engine, "ok");
+    let other = engine.call("backend.add", json!({"kind": "openai", "base_url": url})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": other})).unwrap();
+    // A chat with the other service, then one with AIS.chat, both about the same thing.
+    // (Choosing a model switches the open chat, so new chats get their service directly.)
+    engine.call("chat.new", json!({"backend": other, "model": "m"})).unwrap();
+    engine.call("chat.send", json!({"text": "Photosynthese Lückentext FREMDDIENST"})).unwrap();
+    engine.call("chat.new", json!({"backend": "ais-chat", "model": "m-uuid"})).unwrap();
+    engine.call("chat.send", json!({"text": "Photosynthese Lückentext EIGENERDIENST"})).unwrap();
+    assert!(!engine.state().selection.sources.other_services, "off by default");
+
+    // A related request with AIS.chat: the AIS.chat chat goes along, the other one does not.
+    engine.call("chat.new", json!({})).unwrap();
+    engine.call("chat.send", json!({"text": "Wie letztes Mal: Photosynthese Lückentext"})).unwrap();
+    let sent = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(sent.contains("EIGENERDIENST"), "same service goes along: {sent}");
+    assert!(!sent.contains("FREMDDIENST"), "other service left out: {sent}");
+    let user = || engine.state().messages.iter().rev().find(|m| m.role == aiscraft_core::Role::User).cloned().unwrap();
+    let step = |label: &str| user().activity.iter().find(|s| s.label == label).and_then(|s| s.detail.clone());
+    assert!(step(crate::SENT_ALONG).is_some_and(|d| d.contains("Chat „")));
+    assert!(step(crate::LEFT_OUT).is_some_and(|d| d.contains("Chat „")), "the message names what was left out: {:?}", user().activity);
+    let conv = || engine.state().conversation(engine.state().current.as_deref().unwrap()).cloned().unwrap();
+    let recalled = conv().sources.inline_recalled.len();
+    assert!(recalled > 0);
+
+    // Agreed: now the other service's chat goes along, once; the AIS.chat one is not sent twice.
+    engine.call("chat.set_sources", json!({"other_services": true})).unwrap();
+    assert!(conv().sources.other_services);
+    engine.call("chat.send", json!({"text": "Nochmal Photosynthese Lückentext"})).unwrap();
+    let sent = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(sent.contains("FREMDDIENST") && !sent.contains("EIGENERDIENST"), "only the new excerpt: {sent}");
+    assert!(step(crate::LEFT_OUT).is_none());
+    assert!(conv().sources.inline_recalled.len() > recalled);
+    engine.call("chat.send", json!({"text": "Und Photosynthese Lückentext mit Lösungen"})).unwrap();
+    let next = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(!next.contains("früheren Chats"), "nothing twice: {next}");
+
+    // The other way round too: a backend with a system prompt does not get AIS.chat chats unasked.
+    engine.call("chat.set_sources", json!({"other_services": false})).unwrap();
+    engine.call("chat.new", json!({"backend": other, "model": "m"})).unwrap();
+    engine.call("chat.send", json!({"text": "Photosynthese Lückentext bitte"})).unwrap();
+    let last = seen.lock().unwrap().last().cloned().unwrap();
+    assert!(last.contains("FREMDDIENST") && !last.contains("EIGENERDIENST"), "{last}");
+}
+
 /// A local site for the link check: alive, gone, redirect, HEAD refused, slow.
 fn scripted_links(engine: &Engine) -> String {
     engine.block_on(async move {

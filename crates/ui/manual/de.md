@@ -71,6 +71,7 @@ Chats von AIS.chat tragen in der Seitenleiste das AIS.chat-Zeichen. Über „AIS
 - **Projektanweisungen:** die Anweisungen des Projekts, in dem der Chat liegt.
 - **Werkzeuge:** Dokumente, Whiteboards, Zeitpläne, Aufgaben.
 - **Andere Chats durchsuchen.**
+- **Auch Chats mit anderen Diensten an … geben:** Ohne diesen Haken gehen nur Ausschnitte aus Chats mit demselben Dienst mit; Chats mit Claude erreichen AIS.chat also nicht ungefragt. Was deshalb wegblieb, steht als „Nicht mitgeschickt (anderer Dienst): …“ unter deiner Nachricht.
 - **Websuche:** Claude (API) sucht und liest selbst im Netz. Andere Dienste mit Werkzeugen lesen Webseiten unter einer Adresse, nur lesend und nicht im lokalen Netz. Die genutzten Seiten stehen als **Quellen** unter der Antwort.
 - **Einzelne Konnektoren.**
 
