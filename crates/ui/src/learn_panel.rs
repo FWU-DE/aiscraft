@@ -222,7 +222,12 @@ impl AisCraftApp {
                     Ok((ws, problems)) => (
                         "📝",
                         ws.title.clone(),
-                        format!("Arbeitsblatt · {} Aufgaben, {} Punkte", ws.tasks.len(), ws.tasks.iter().map(|x| x.points).sum::<f64>()),
+                        // Without points (the sheet's or the setting for new sheets): the number of tasks only.
+                        if ws.points && self.state.settings.worksheet_points {
+                            format!("Arbeitsblatt · {} Aufgaben, {} Punkte", ws.tasks.len(), ws.tasks.iter().map(|x| x.points).sum::<f64>())
+                        } else {
+                            format!("Arbeitsblatt · {} Aufgaben", ws.tasks.len())
+                        },
                         problems,
                     ),
                     Err(e) => ("📝", "Arbeitsblatt".to_string(), "lässt sich nicht lesen".to_string(), vec![e]),

@@ -318,6 +318,9 @@ pub struct Settings {
     pub quiet_end: u8,
     /// Look for a new version on GitHub once a day (one anonymous request).
     pub update_check: bool,
+    /// New worksheets count points (on by default); off: they count right tasks, and models
+    /// are told to leave points out. Each sheet has its own switch afterwards.
+    pub worksheet_points: bool,
 }
 
 /// Accepted values of the `theme` setting.
@@ -343,6 +346,7 @@ impl Default for Settings {
             quiet_start: 22,
             quiet_end: 7,
             update_check: true,
+            worksheet_points: true,
         }
     }
 }

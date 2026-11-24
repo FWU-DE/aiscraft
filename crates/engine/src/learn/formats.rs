@@ -23,14 +23,27 @@ pub struct OutputFormat {
     /// only the topic and folds the rest away as „Formatvorgabe“ (see [`split_request`]).
     pub request_intro: &'static str,
     /// What the model is told, with an example, when the format is asked for.
-    pub prompt_description: fn() -> String,
+    pub prompt_description: fn(&PromptOptions) -> String,
     /// The blocks of this format in an answer (whole, closed blocks only).
     pub find: fn(&str) -> Vec<&str>,
     /// Lenient check of one block: the problems found, or why it is unusable.
     pub check: fn(&str) -> Result<Vec<String>, String>,
 }
 
-fn app_description() -> String {
+/// Settings that change what a model is told about a format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromptOptions {
+    /// New worksheets count points (setting „Arbeitsblätter mit Punkten“).
+    pub worksheet_points: bool,
+}
+
+impl Default for PromptOptions {
+    fn default() -> Self {
+        PromptOptions { worksheet_points: true }
+    }
+}
+
+fn app_description(_: &PromptOptions) -> String {
     super::APP_RULES.to_string()
 }
 
@@ -38,15 +51,15 @@ fn app_check(src: &str) -> Result<Vec<String>, String> {
     if super::is_html_document(src) { Ok(Vec::new()) } else { Err("keine vollständige HTML-Datei (<!doctype html> bis </html>, höchstens 2 MB)".into()) }
 }
 
-fn worksheet_description() -> String {
-    worksheet::prompt_schema().to_string()
+pub(crate) fn worksheet_description(o: &PromptOptions) -> String {
+    worksheet::prompt_schema_for(o.worksheet_points)
 }
 
 fn worksheet_check(src: &str) -> Result<Vec<String>, String> {
     worksheet::parse_lenient(src).map(|(_, problems)| problems)
 }
 
-fn h5p_description() -> String {
+fn h5p_description(_: &PromptOptions) -> String {
     h5p::prompt_schema().to_string()
 }
 
@@ -163,8 +176,8 @@ mod tests {
         assert_eq!(found[1].0.kind, ArtifactKind::Worksheet);
         for (f, b) in found {
             assert!((f.check)(b).unwrap().is_empty());
-            assert!(!(f.prompt_description)().is_empty());
-            assert!(super::super::tool_specs().iter().any(|t| t.name == f.tool), "every format has its tool");
+            assert!(!(f.prompt_description)(&PromptOptions::default()).is_empty());
+            assert!(super::super::tool_specs(true).iter().any(|t| t.name == f.tool), "every format has its tool");
         }
         assert!((by_id("worksheet").unwrap().check)("{kaputt").is_err());
         assert!(by_id("board").is_none());

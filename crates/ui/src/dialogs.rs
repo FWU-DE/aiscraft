@@ -1055,6 +1055,12 @@ impl AisCraftApp {
                 }
                 ui.label(small_muted(&t, "Fragt jede Adresse in einer Antwort einmal bei der fremden Seite an und streicht tote Links durch. Aus: nur mit „Links prüfen“ unter der Antwort."));
                 ui.add_space(6.0);
+                let mut ws_points = st.worksheet_points;
+                if ui.checkbox(&mut ws_points, "Arbeitsblätter mit Punkten").changed() {
+                    self.run("settings.set", json!({"key": "worksheet_points", "value": ws_points}));
+                }
+                ui.label(small_muted(&t, "Gilt für neue Arbeitsblätter, auch die, die ein Modell erstellt. Aus: keine Punkte, „Prüfen“ zählt richtige Aufgaben. Jedes Arbeitsblatt hat beim Bearbeiten seinen eigenen Schalter „Punkte vergeben“."));
+                ui.add_space(6.0);
                 let mut pro = st.proactive;
                 if ui.checkbox(&mut pro, "Hinweise: stündlich auf offene Zusagen, Fristen und Erinnerungswünsche achten").changed() {
                     self.run("settings.set", json!({"key": "proactive", "value": pro}));

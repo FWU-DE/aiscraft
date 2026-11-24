@@ -3,7 +3,7 @@
 //! Only WinAnsi characters, so the PDF prints them: `( )` and `[ ]` instead of ballot boxes.
 
 use aiscraft_core::Result;
-use aiscraft_core::worksheet::{ClozePart, TaskBody, Worksheet, category_items, cloze_parts, cloze_word_bank, display_order};
+use aiscraft_core::worksheet::{ClozePart, TaskBody, Worksheet, category_items, cloze_parts, cloze_word_bank, display_order, points_text as points};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variant {
@@ -39,11 +39,6 @@ fn md(s: &str) -> String {
     out.replace('\n', "  \n")
 }
 
-fn points(p: f64) -> String {
-    let s = if (p - p.round()).abs() < 1e-9 { format!("{}", p.round() as i64) } else { format!("{p:.1}").replace('.', ",") };
-    if s == "1" { "1 Punkt".into() } else { format!("{s} Punkte") }
-}
-
 fn letter(i: usize) -> char {
     char::from(b'A' + (i % 26) as u8)
 }
@@ -77,7 +72,11 @@ pub fn worksheet_markdown(ws: &Worksheet, v: Variant) -> String {
         }
         n += 1;
         let prompt = if t.prompt.trim().is_empty() { t.body.label().to_string() } else { t.prompt.trim().to_string() };
-        o.push_str(&format!("**{n}. {}** ({})\n\n", md(&prompt), points(t.points)));
+        if ws.points {
+            o.push_str(&format!("**{n}. {}** ({})\n\n", md(&prompt), points(t.points)));
+        } else {
+            o.push_str(&format!("**{n}. {}**\n\n", md(&prompt)));
+        }
         if let Some(img) = &t.image {
             o.push_str(&format!("(Bild: {})\n\n", md(img)));
         }
@@ -213,7 +212,7 @@ pub fn worksheet_markdown(ws: &Worksheet, v: Variant) -> String {
             o.push_str(&format!("*Erklärung: {}*\n\n", md(&t.feedback)));
         }
     }
-    if n > 0 {
+    if n > 0 && ws.points {
         o.push_str(&format!("---\n\nGesamt: {} {}\n", if sol { "" } else { "      von" }, points(total)));
     }
     o
@@ -347,6 +346,35 @@ mod tests {
             assert!(pdf.contains("Saeugetiere"), "group names in the PDF");
             assert!(worksheet_docx(&ws, v).unwrap().starts_with(b"PK"));
         }
+    }
+
+    #[test]
+    fn sheets_without_points_print_no_points() {
+        let mut ws = sheet(0);
+        for v in [Variant::Sheet, Variant::Solution] {
+            let md = worksheet_markdown(&ws, v);
+            assert!(md.contains("(1 Punkt)") && md.contains("Gesamt:"), "with points: {md}");
+        }
+        ws.points = false;
+        for v in [Variant::Sheet, Variant::Solution] {
+            let md = worksheet_markdown(&ws, v);
+            assert!(!md.contains("Punkt") && !md.contains("Gesamt"), "{v:?}: {md}");
+            assert!(md.contains("**1. Welcher Bruch ist groesser?**"), "the task line stays");
+            // The PDF (which the print preview renders) and Word say no points either.
+            let pdf = String::from_utf8_lossy(&worksheet_pdf(&ws, v).unwrap()).into_owned();
+            assert!(pdf.contains("groesser") && !pdf.contains("Punkt") && !pdf.contains("Gesamt"));
+            let docx = worksheet_docx(&ws, v).unwrap();
+            assert!(docx.starts_with(b"PK"));
+            let mut zip = craft_zip::Archive::open(&docx, craft_zip::Limits { max_entries: 1000, max_total_bytes: 50 << 20 }).unwrap();
+            let xml = String::from_utf8(zip.read("word/document.xml", 8 << 20).unwrap().unwrap()).unwrap();
+            assert!(xml.contains("groesser") && !xml.contains("Punkt"), "{v:?}");
+        }
+        // The preview pages differ from the sheet with points (the lines are gone).
+        let mut with = ws.clone();
+        with.points = true;
+        let a = worksheet_preview(&ws, Variant::Sheet, 600).unwrap();
+        let b = worksheet_preview(&with, Variant::Sheet, 600).unwrap();
+        assert!(a.first().map(|p| &p.rgba) != b.first().map(|p| &p.rgba));
     }
 
     #[test]

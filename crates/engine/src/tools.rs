@@ -241,7 +241,7 @@ pub(crate) fn specs_for(c: &Ctx, sources: &aiscraft_core::Sources) -> Vec<ToolSp
     }
     let mut out: Vec<ToolSpec> = builtin_specs().into_iter().filter(|t| sources.history || t.name != "history_search").collect();
     out.extend(crate::office::tool_specs());
-    out.extend(crate::learn::tool_specs());
+    out.extend(crate::learn::tool_specs(c.state().settings.worksheet_points));
     // No tasks inside tasks.
     if c.state().current.as_deref().and_then(|id| c.state().conversation(id).map(|x| x.title.starts_with("▶ "))).unwrap_or(false) {
         out.retain(|t| t.name != "task_start");

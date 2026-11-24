@@ -175,25 +175,32 @@ pub fn app_prompt(topic: &str, tools: bool) -> String {
     format!("{}{topic}\n\n{APP_RULES}\n\n{deliver}", formats::APP_INTRO)
 }
 
-/// The request for a worksheet.
-pub fn worksheet_prompt(topic: &str, count: usize, tools: bool) -> String {
+/// The request for a worksheet; `points`: the sheet counts points (setting „Arbeitsblätter mit
+/// Punkten“).
+pub fn worksheet_prompt(topic: &str, count: usize, tools: bool, points: bool) -> String {
     let deliver = if tools {
         "Lege das Arbeitsblatt mit dem Werkzeug worksheet_create an und gib das JSON nicht zusätzlich im Chat aus."
     } else {
         "Antworte mit genau einem ```aiscraft-worksheet-Codeblock (gültiges JSON) und danach höchstens zwei Sätzen."
     };
     format!(
-        "{}{topic}\n\nEtwa {count} Aufgaben, verschiedene Aufgabentypen, vom Leichten zum Schweren. Jede Aufgabe mit Lösung und Punkten, wo es hilft mit Tipp (hint) und Erklärung (feedback). Deutsch, Du-Form.\n\n{}\n\n{deliver}",
+        "{}{topic}\n\nEtwa {count} Aufgaben, verschiedene Aufgabentypen, vom Leichten zum Schweren. Jede Aufgabe mit Lösung{}, wo es hilft mit Tipp (hint) und Erklärung (feedback). Deutsch, Du-Form.\n\n{}\n\n{deliver}",
         formats::WORKSHEET_INTRO,
-        worksheet::prompt_schema()
+        if points { " und Punkten" } else { " (ohne Punkte)" },
+        formats::worksheet_description(&formats::PromptOptions { worksheet_points: points })
     )
 }
 
-fn repair_system() -> String {
+fn repair_system(points: bool) -> String {
     format!(
         "Du reparierst ein Arbeitsblatt im JSON-Format aiscraft-worksheet. Behalte Inhalt und Aufgaben bei, behebe nur die genannten Probleme. Antworte nur mit dem korrigierten JSON in einem ```aiscraft-worksheet-Codeblock.\n\n{}",
-        worksheet::prompt_schema()
+        worksheet::prompt_schema_for(points)
     )
+}
+
+/// The setting „Arbeitsblätter mit Punkten“ for new sheets.
+fn points_default(c: &Ctx) -> bool {
+    c.state().settings.worksheet_points
 }
 
 // ---- creating artifacts ---------------------------------------------------------------------
@@ -248,8 +255,13 @@ pub(crate) fn create_app(c: &Ctx, html: &str, title: Option<String>, conversatio
     insert_artifact(c, ArtifactKind::App, &title, &html, conversation)
 }
 
+/// Every new worksheet comes through here: with the setting „Arbeitsblätter mit Punkten“ off,
+/// it has no points, whatever the model or the imported JSON said.
 pub(crate) fn create_worksheet(c: &Ctx, ws: &Worksheet, title: Option<String>, conversation: Option<String>) -> Result<String> {
     let mut ws = ws.clone();
+    if !points_default(c) {
+        ws.points = false;
+    }
     if let Some(t) = title.filter(|t| !t.trim().is_empty()) {
         ws.title = t.chars().take(200).collect();
     }
@@ -272,7 +284,11 @@ async fn parse_or_repair(c: &Ctx, src: &str, repair: bool) -> Result<(Worksheet,
     };
     let src_capped: String = src.chars().take(worksheet::MAX_JSON_BYTES).collect();
     let prompt = format!("Probleme:\n- {}\n\n<arbeitsblatt>\n{src_capped}\n</arbeitsblatt>", problems.join("\n- "));
-    match crate::chat::complete(c, Some(&repair_system()), &prompt).await {
+    let points = match &first {
+        Ok((ws, _)) => ws.points && points_default(c),
+        Err(_) => points_default(c),
+    };
+    match crate::chat::complete(c, Some(&repair_system(points)), &prompt).await {
         Ok(out) => {
             let block = worksheet_blocks(&out).into_iter().next().map(str::to_string).unwrap_or(out);
             match (worksheet::parse_lenient(&block), first) {
@@ -394,6 +410,15 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         params: "id: string, index?: number (ohne: neue Aufgabe am Ende), task?: object, remove?: bool, move_to?: number",
         palette: false,
         run: |c, p| Box::pin(ws_update_task(c, p)),
+    },
+    CommandSpec {
+        id: "worksheet.set_points",
+        label: "Punkte vergeben",
+        group: "Arbeitsblätter",
+        shortcut: None,
+        params: "id: string, points: bool (aus: zählt richtige Aufgaben; die Punkte der Aufgaben bleiben erhalten)",
+        palette: false,
+        run: |c, p| Box::pin(ws_set_points(c, p)),
     },
     CommandSpec {
         id: "worksheet.check",
@@ -608,7 +633,7 @@ async fn ws_request(c: Ctx, p: Value) -> Result<Value> {
     let count = p.get("count").and_then(Value::as_u64).unwrap_or(8).clamp(1, 30) as usize;
     let tools = tools_on(&c);
     let since = now_ms();
-    crate::chat::send_with(c.clone(), worksheet_prompt(&topic, count, tools), vec![], vec![], None, false).await?;
+    crate::chat::send_with(c.clone(), worksheet_prompt(&topic, count, tools, points_default(&c)), vec![], vec![], None, false).await?;
     if let Some(id) = made_by_tool(&c, ArtifactKind::Worksheet, since) {
         return Ok(json!({"id": id, "created": true}));
     }
@@ -630,8 +655,9 @@ async fn ws_from_document(c: Ctx, p: Value) -> Result<Value> {
     }
     let text: String = doc_text(&state_of(&c, &id)?)?.chars().take(200_000).collect();
     let system = format!(
-        "Du wandelst ein Dokument in ein interaktives Arbeitsblatt um: Aufgaben aus dem Dokument werden passende Aufgabentypen mit Lösungen und Punkten, Lesetexte werden info-Blöcke. Deutsch, Du-Form. Antworte nur mit einem ```aiscraft-worksheet-Codeblock (gültiges JSON).\n\n{}",
-        worksheet::prompt_schema()
+        "Du wandelst ein Dokument in ein interaktives Arbeitsblatt um: Aufgaben aus dem Dokument werden passende Aufgabentypen mit Lösungen{}, Lesetexte werden info-Blöcke. Deutsch, Du-Form. Antworte nur mit einem ```aiscraft-worksheet-Codeblock (gültiges JSON).\n\n{}",
+        if points_default(&c) { " und Punkten" } else { "" },
+        worksheet::prompt_schema_for(points_default(&c))
     );
     let out = crate::chat::complete(&c, Some(&system), &format!("<dokument titel=\"{}\">\n{text}\n</dokument>", a.title.replace('"', "'"))).await?;
     let block = worksheet_blocks(&out).into_iter().next().map(str::to_string).unwrap_or(out);
@@ -663,6 +689,17 @@ async fn ws_update_task(c: Ctx, p: Value) -> Result<Value> {
     worksheet::normalize_ids(&mut ws);
     save_worksheet(&c, &id, &state, &ws, &note)?;
     Ok(json!({"tasks": ws.tasks.len(), "problems": worksheet::validate(&ws)}))
+}
+
+async fn ws_set_points(c: Ctx, p: Value) -> Result<Value> {
+    let id = req_str(&p, "id")?;
+    let points = p.get("points").and_then(Value::as_bool).ok_or_else(|| Error::invalid("points fehlt (true oder false)"))?;
+    let (_, mut ws, state) = worksheet_of(&c, &id)?;
+    if ws.points != points {
+        ws.points = points;
+        save_worksheet(&c, &id, &state, &ws, if points { "Mit Punkten" } else { "Ohne Punkte" })?;
+    }
+    Ok(json!({"points": points}))
 }
 
 async fn ws_check(c: Ctx, p: Value) -> Result<Value> {
@@ -756,13 +793,21 @@ pub(crate) fn export_for(c: &Ctx, a: &Artifact, p: &Value) -> Option<Result<Valu
 pub(crate) async fn revise(c: &Ctx, a: &Artifact, instruction: &str) -> Result<Value> {
     let state = state_of(c, &a.id)?;
     let current = doc_text(&state)?;
+    // The points switch belongs to the teacher: a revision keeps it.
+    let sheet_points = match a.kind {
+        ArtifactKind::Worksheet => worksheet::parse_lenient(&current).map(|(ws, _)| ws.points).unwrap_or(true),
+        _ => true,
+    };
     let (system, prompt) = match a.kind {
         ArtifactKind::App => (
             "Du überarbeitest eine Lern-App, eine eigenständige HTML-Datei, nach der Anweisung der Person. Weiterhin keine externen Skripte, Schriften, Bilder oder Netzwerkzugriffe. Antworte nur mit der vollständigen, überarbeiteten Datei in einem ```html-Codeblock.".to_string(),
             format!("<lern-app>\n{current}\n</lern-app>\n\nAnweisung: {instruction}"),
         ),
         ArtifactKind::Worksheet => (
-            format!("Du überarbeitest ein Arbeitsblatt im JSON-Format aiscraft-worksheet nach der Anweisung der Person. Antworte nur mit dem vollständigen, überarbeiteten JSON in einem ```aiscraft-worksheet-Codeblock.\n\n{}", worksheet::prompt_schema()),
+            format!(
+                "Du überarbeitest ein Arbeitsblatt im JSON-Format aiscraft-worksheet nach der Anweisung der Person. Antworte nur mit dem vollständigen, überarbeiteten JSON in einem ```aiscraft-worksheet-Codeblock.\n\n{}",
+                worksheet::prompt_schema_for(sheet_points)
+            ),
             format!("<arbeitsblatt>\n{current}\n</arbeitsblatt>\n\nAnweisung: {instruction}"),
         ),
         ArtifactKind::H5p => (h5p::revise_system(), format!("<h5p>\n{current}\n</h5p>\n\nAnweisung: {instruction}")),
@@ -774,7 +819,8 @@ pub(crate) async fn revise(c: &Ctx, a: &Artifact, instruction: &str) -> Result<V
         ArtifactKind::H5p => h5p::revised(c, &a.id, out).await?,
         _ => {
             let block = worksheet_blocks(&out).into_iter().next().map(str::to_string).unwrap_or(out);
-            let (ws, _) = parse_or_repair(c, &block, true).await?;
+            let (mut ws, _) = parse_or_repair(c, &block, true).await?;
+            ws.points = sheet_points;
             worksheet::to_json(&ws)
         }
     };
@@ -801,7 +847,9 @@ pub(crate) fn change_note(kind: ArtifactKind) -> &'static str {
 
 // ---- model tools ----------------------------------------------------------------------------
 
-pub(crate) fn tool_specs() -> Vec<ToolSpec> {
+/// The tools; `worksheet_points`: the setting „Arbeitsblätter mit Punkten“, so new sheets from
+/// `worksheet_create` are described without points when it is off.
+pub(crate) fn tool_specs(worksheet_points: bool) -> Vec<ToolSpec> {
     let mut specs = vec![
         ToolSpec {
             name: "learning_app_create".into(),
@@ -820,7 +868,7 @@ pub(crate) fn tool_specs() -> Vec<ToolSpec> {
             name: "worksheet_create".into(),
             description: format!(
                 "Legt ein interaktives Arbeitsblatt an, das Lehrkräfte bearbeiten, Schülerinnen und Schüler am Rechner lösen und das als PDF (Arbeitsblatt und Lösungsblatt) gedruckt werden kann. Für Aufgaben zum Ausfüllen besser als document_create.\n{}",
-                worksheet::prompt_schema()
+                worksheet::prompt_schema_for(worksheet_points)
             ),
             input_schema: json!({"type": "object", "properties": {
                 "worksheet": {"type": "object", "description": "das Arbeitsblatt im Format aiscraft-worksheet (title, subject, grade, instructions, tasks)"}
@@ -870,13 +918,16 @@ pub(crate) fn run_tool(c: &Ctx, name: &str, a: &Value) -> Option<Result<String>>
         }
         "worksheet_update" => (|| {
             let id = s("id");
-            let (_, _, state) = worksheet_of(c, &id)?;
+            let (_, old, state) = worksheet_of(c, &id)?;
             let v = a.get("worksheet").cloned().unwrap_or(Value::Null);
             let (ws, problems) = match &v {
                 Value::String(src) => worksheet::parse_lenient(src),
                 _ => worksheet::from_value(&v),
             }
             .map_err(Error::invalid)?;
+            // The points switch belongs to the teacher: the model's new version keeps it.
+            let mut ws = ws;
+            ws.points = old.points;
             save_worksheet(c, &id, &state, &ws, "Vom Modell geändert")?;
             Ok(if problems.is_empty() {
                 "Arbeitsblatt aktualisiert.".to_string()
@@ -929,8 +980,14 @@ mod tests {
         let p = app_prompt("Brüche", false);
         assert!(p.contains("```html") && p.contains("keine externen Skripte") && p.contains("offline") && p.contains("Du-Form"));
         assert!(app_prompt("x", true).contains("learning_app_create"));
-        let w = worksheet_prompt("Brüche", 6, false);
+        let w = worksheet_prompt("Brüche", 6, false, true);
         assert!(w.contains("```aiscraft-worksheet") && w.contains("\"type\":\"cloze\""));
-        assert!(worksheet_prompt("x", 6, true).contains("worksheet_create"));
+        assert!(w.contains("Lösung und Punkten") && !w.contains(worksheet::NO_POINTS_RULE));
+        assert!(worksheet_prompt("x", 6, true, true).contains("worksheet_create"));
+        // Without points: the model is told so, and the spec it gets says the same.
+        let w = worksheet_prompt("Brüche", 6, false, false);
+        assert!(w.contains(worksheet::NO_POINTS_RULE) && w.contains("\"points\":false") && !w.contains("und Punkten"), "{w}");
+        let spec = |points: bool| tool_specs(points).into_iter().find(|t| t.name == "worksheet_create").unwrap().description;
+        assert!(spec(false).contains(worksheet::NO_POINTS_RULE) && !spec(true).contains(worksheet::NO_POINTS_RULE));
     }
 }

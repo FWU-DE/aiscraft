@@ -39,6 +39,11 @@
 //! cloze text can show its answers as a `word_bank`, with extra wrong `distractors` mixed in.
 //!
 //! Sheets written before `hints` existed have a single `"hint": "…"`; it still reads.
+//!
+//! A sheet can do without points: `"points": false` on the sheet (written only then, so older
+//! sheets stay byte for byte the same). The tasks keep their `points` so switching back restores
+//! them, but while the sheet has points off, checking counts right tasks instead of points and
+//! the printout names no points.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -76,8 +81,20 @@ pub struct Worksheet {
     pub grade: String,
     #[serde(default)]
     pub instructions: String,
+    /// Points on (the default): checking and printing count points. Off: they count right
+    /// tasks, and the tasks' `points` are kept but not shown.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub points: bool,
     #[serde(default)]
     pub tasks: Vec<Task>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
 }
 
 impl Default for Worksheet {
@@ -89,6 +106,7 @@ impl Default for Worksheet {
             subject: String::new(),
             grade: String::new(),
             instructions: String::new(),
+            points: true,
             tasks: Vec::new(),
         }
     }
@@ -584,6 +602,7 @@ pub fn from_value(v: &Value) -> Result<(Worksheet, Vec<String>), String> {
         subject: text_of(root, &["subject", "fach"], 100),
         grade: text_of(root, &["grade", "klasse", "jahrgang", "level"], 40),
         instructions: text_of(root, &["instructions", "description", "anleitung", "hinweise"], MAX_TEXT),
+        points: sheet_points(root),
         ..Worksheet::default()
     };
     let list = tasks_v.ok_or("Das Arbeitsblatt hat keine Aufgaben (tasks)")?;
@@ -605,6 +624,12 @@ pub fn from_value(v: &Value) -> Result<(Worksheet, Vec<String>), String> {
     normalize_ids(&mut ws);
     problems.extend(validate(&ws));
     Ok((ws, problems))
+}
+
+/// The sheet's points switch: `"points": false` (also `scoring`, `punkte`, `"punkte": "nein"`).
+/// A number there (a total some models write) means points on, unless it is 0.
+fn sheet_points(root: &Value) -> bool {
+    bool_of(root, &["points", "scoring", "punkte", "with_points", "mit_punkten"]).unwrap_or(true)
 }
 
 /// Unique, non-empty task ids (`a1`, `a2` … for missing or repeated ones).
@@ -811,10 +836,16 @@ impl Response {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TaskResult {
     pub id: String,
-    pub points: f64,
-    pub max: f64,
+    /// Points scored and possible; `None` on a sheet without points.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub points: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
     /// `None`: not checked by the app (free text, info).
     pub correct: Option<bool>,
+    /// Not all right, but some part of it (a gap, a pair, one of several right options).
+    #[serde(skip_serializing_if = "is_false")]
+    pub partial: bool,
     /// Per gap, pair or position where the task has parts.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<bool>,
@@ -844,7 +875,7 @@ fn text_matches(given: &str, accepted: &[String], case_sensitive: bool) -> bool 
 /// and positions; all or nothing for the rest.
 pub fn score_task(task: &Task, r: &Response) -> TaskResult {
     let max = task.points.clamp(0.0, MAX_POINTS);
-    let mut res = TaskResult { id: task.id.clone(), points: 0.0, max, correct: Some(false), parts: Vec::new() };
+    let mut res = TaskResult { id: task.id.clone(), points: Some(0.0), max: Some(max), correct: Some(false), partial: false, parts: Vec::new() };
     let fraction: f64 = match (&task.body, r) {
         (TaskBody::Info { .. }, _) | (TaskBody::FreeText { .. }, _) => {
             res.correct = None;
@@ -894,8 +925,10 @@ pub fn score_task(task: &Task, r: &Response) -> TaskResult {
         _ => 0.0,
     };
     let fraction = fraction.clamp(0.0, 1.0);
-    res.points = (max * fraction * 100.0).round() / 100.0;
-    res.correct = Some(fraction >= 1.0 - 1e-9);
+    res.points = Some((max * fraction * 100.0).round() / 100.0);
+    let right = fraction >= 1.0 - 1e-9;
+    res.correct = Some(right);
+    res.partial = !right && fraction > 1e-9;
     res
 }
 
@@ -903,20 +936,79 @@ pub fn score_task(task: &Task, r: &Response) -> TaskResult {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SheetResult {
     pub results: Vec<TaskResult>,
-    pub points: f64,
-    /// Points the app could check (free text not included).
-    pub max: f64,
+    /// Points scored; `None` on a sheet without points.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub points: Option<f64>,
+    /// Points the app could check (free text not included); `None` without points.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    /// Tasks the app checked (free text and info blocks not included) …
+    pub checked: usize,
+    /// … of them all right …
+    pub right: usize,
+    /// … and partly right.
+    pub partial: usize,
     /// Tasks the teacher checks (free text).
     pub open: usize,
 }
 
-/// Checks all answers; `answers` maps task id to answer.
+impl SheetResult {
+    /// The result in one line: „3 von 4 Punkten“ or, without points, „4 von 6 richtig, 1 teilweise“.
+    pub fn summary(&self) -> String {
+        let mut s = match (self.points, self.max) {
+            (Some(p), Some(m)) => format!("{} von {}", number_text(p), points_text(m)),
+            _ => {
+                let mut s = format!("{} von {} richtig", self.right, self.checked);
+                if self.partial > 0 {
+                    s.push_str(&format!(", {} teilweise", self.partial));
+                }
+                s
+            }
+        };
+        if self.open > 0 {
+            s.push_str(&format!(" · {} Aufgabe{} bewertet die Lehrkraft", self.open, if self.open == 1 { "" } else { "n" }));
+        }
+        s
+    }
+
+    /// Everything the app could check is right.
+    pub fn all_right(&self) -> bool {
+        self.checked > 0 && self.right == self.checked
+    }
+}
+
+/// A number of points without the unit: `2`, `1,5`.
+pub fn number_text(p: f64) -> String {
+    if (p - p.round()).abs() < 1e-9 { format!("{}", p.round() as i64) } else { format!("{p:.1}").replace('.', ",") }
+}
+
+/// Points with the unit: `1 Punkt`, `2 Punkte`, `1,5 Punkte`.
+pub fn points_text(p: f64) -> String {
+    let s = number_text(p);
+    if s == "1" { "1 Punkt".into() } else { format!("{s} Punkte") }
+}
+
+/// Checks all answers; `answers` maps task id to answer. On a sheet without points the result
+/// counts right tasks only and carries no points.
 pub fn score(ws: &Worksheet, answers: &std::collections::HashMap<String, Response>) -> SheetResult {
-    let results: Vec<TaskResult> = ws.tasks.iter().map(|t| score_task(t, answers.get(&t.id).unwrap_or(&Response::Empty))).collect();
-    let points = results.iter().filter(|r| r.correct.is_some()).map(|r| r.points).sum::<f64>();
-    let max = results.iter().filter(|r| r.correct.is_some()).map(|r| r.max).sum::<f64>();
+    let mut results: Vec<TaskResult> = ws.tasks.iter().map(|t| score_task(t, answers.get(&t.id).unwrap_or(&Response::Empty))).collect();
+    let checked: Vec<&TaskResult> = results.iter().filter(|r| r.correct.is_some()).collect();
+    let points = checked.iter().filter_map(|r| r.points).sum::<f64>();
+    let max = checked.iter().filter_map(|r| r.max).sum::<f64>();
+    let right = checked.iter().filter(|r| r.correct == Some(true)).count();
+    let partial = checked.iter().filter(|r| r.partial).count();
+    let n_checked = checked.len();
     let open = ws.tasks.iter().filter(|t| matches!(t.body, TaskBody::FreeText { .. })).count();
-    SheetResult { results, points: (points * 100.0).round() / 100.0, max, open }
+    let (points, max) = if ws.points {
+        (Some((points * 100.0).round() / 100.0), Some(max))
+    } else {
+        for r in &mut results {
+            r.points = None;
+            r.max = None;
+        }
+        (None, None)
+    };
+    SheetResult { results, points, max, checked: n_checked, right, partial, open }
 }
 
 /// A stable shuffle of `0..n` for showing items or matches in a different order than the
@@ -941,6 +1033,24 @@ pub fn display_order(n: usize, seed: &str) -> Vec<usize> {
 }
 
 // ---- prompts ---------------------------------------------------------------------------------
+
+/// The format for a sheet with or without points: without, the model is told to leave points
+/// out and to mark the sheet `"points": false`.
+pub fn prompt_schema_for(points: bool) -> String {
+    if points {
+        return prompt_schema().to_string();
+    }
+    let schema = prompt_schema().replacen(r#""instructions":"…","tasks""#, r#""instructions":"…","points":false,"tasks""#, 1).replacen(
+        r#""prompt" (Aufgabenstellung), "points", optional"#,
+        r#""prompt" (Aufgabenstellung), optional"#,
+        1,
+    );
+    format!("{schema}\n{NO_POINTS_RULE}")
+}
+
+/// What a model is told when the sheet has no points.
+pub const NO_POINTS_RULE: &str =
+    "Dieses Arbeitsblatt hat keine Punkte: schreib \"points\": false auf das Blatt, gib den Aufgaben keine \"points\" und nenne nirgends Punkte.";
 
 /// The format, compact, for a model that writes a worksheet without tools.
 pub fn prompt_schema() -> &'static str {
@@ -1035,19 +1145,19 @@ mod tests {
         let ws = sample();
         let t = |i: usize| &ws.tasks[i];
         assert_eq!(score_task(t(0), &Response::Chosen(vec![0])).correct, Some(true));
-        assert_eq!(score_task(t(0), &Response::Chosen(vec![0, 1])).points, 0.0, "single choice with two picks");
+        assert_eq!(score_task(t(0), &Response::Chosen(vec![0, 1])).points, Some(0.0), "single choice with two picks");
         // Multi: one right of two = half; right + wrong = 0.
-        assert_eq!(score_task(t(1), &Response::Chosen(vec![0])).points, 0.5);
-        assert_eq!(score_task(t(1), &Response::Chosen(vec![0, 2])).points, 0.0);
+        assert_eq!(score_task(t(1), &Response::Chosen(vec![0])).points, Some(0.5));
+        assert_eq!(score_task(t(1), &Response::Chosen(vec![0, 2])).points, Some(0.0));
         assert_eq!(score_task(t(1), &Response::Chosen(vec![1, 0, 99])).correct, Some(true));
         assert_eq!(score_task(t(2), &Response::Bool(true)).correct, Some(true));
         assert_eq!(score_task(t(2), &Response::Bool(false)).correct, Some(false));
         let r = score_task(t(3), &Response::Gaps(vec![" 0.5 ".into(), "1".into()]));
         assert_eq!(r.parts, vec![true, false]);
-        assert_eq!(r.points, 0.5);
+        assert_eq!(r.points, Some(0.5));
         assert_eq!(score_task(t(3), &Response::Gaps(vec!["2/4".into(), "2/2".into()])).correct, Some(true));
         assert_eq!(score_task(t(4), &Response::Matches(vec![Some(0), Some(1)])).correct, Some(true));
-        assert_eq!(score_task(t(4), &Response::Matches(vec![Some(1), None])).points, 0.0);
+        assert_eq!(score_task(t(4), &Response::Matches(vec![Some(1), None])).points, Some(0.0));
         assert_eq!(score_task(t(5), &Response::Order(vec![0, 1, 2])).correct, Some(true));
         assert_eq!(score_task(t(5), &Response::Order(vec![0, 2, 1])).parts, vec![true, false, false]);
         assert_eq!(score_task(t(6), &Response::Text("0.5".into())).correct, Some(true));
@@ -1057,15 +1167,88 @@ mod tests {
         assert_eq!(score_task(t(8), &Response::Text("lang".into())).correct, None);
         assert_eq!(score_task(t(9), &Response::Empty).correct, None);
         // Wrong answer shape never scores, never panics.
-        assert_eq!(score_task(t(0), &Response::Text("a".into())).points, 0.0);
+        assert_eq!(score_task(t(0), &Response::Text("a".into())).points, Some(0.0));
         let mut answers = std::collections::HashMap::new();
         answers.insert(t(0).id.clone(), Response::Chosen(vec![0]));
         let sheet = score(&ws, &answers);
-        assert_eq!(sheet.points, 1.0);
-        assert_eq!(sheet.max, 8.0);
+        assert_eq!(sheet.points, Some(1.0));
+        assert_eq!(sheet.max, Some(8.0));
         assert_eq!(sheet.open, 1);
         assert!(matches!(Response::from_json(&t(2).body, &json!("richtig")), Response::Bool(true)));
         assert!(matches!(Response::from_json(&t(0).body, &json!(1)), Response::Chosen(v) if v == vec![1]));
+    }
+
+    #[test]
+    fn sheets_without_points_round_trip_and_keep_task_points() {
+        // Old sheets: no flag, points on, and the flag is not written back.
+        let ws = sample();
+        assert!(ws.points);
+        assert!(!to_json(&ws).contains("\"points\": true") && !to_json(&ws).contains("\"points\": false"));
+        // Off: written, read back, task points kept.
+        let mut off = ws.clone();
+        off.points = false;
+        let json = to_json(&off);
+        assert!(json.contains("\"points\": false"), "{json}");
+        let (back, problems) = parse_lenient(&json).unwrap();
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(back, off);
+        assert_eq!(back.tasks[8].points, 3.0, "task points survive while off");
+        // Lenient: aliases and words, a total means on.
+        for (src, want) in [
+            (json!({"scoring": false, "tasks": [{"type": "true_false", "prompt": "p", "answer": true}]}), false),
+            (json!({"punkte": "nein", "tasks": [{"type": "true_false", "prompt": "p", "answer": true}]}), false),
+            (json!({"points": 0, "tasks": [{"type": "true_false", "prompt": "p", "answer": true}]}), false),
+            (json!({"points": 12, "tasks": [{"type": "true_false", "prompt": "p", "answer": true}]}), true),
+            (json!({"points": "irgendwas", "tasks": [{"type": "true_false", "prompt": "p", "answer": true}]}), true),
+            (json!({"points": {"x": 1}, "tasks": [{"type": "true_false", "prompt": "p", "answer": true}]}), true),
+        ] {
+            assert_eq!(from_value(&src).unwrap().0.points, want, "{src}");
+        }
+        // Serde straight from the canonical JSON as well (the store reads it leniently, others may not).
+        let direct: Worksheet = serde_json::from_str(&json).unwrap();
+        assert!(!direct.points);
+        let direct: Worksheet = serde_json::from_str(&to_json(&ws)).unwrap();
+        assert!(direct.points);
+    }
+
+    #[test]
+    fn scoring_without_points_counts_right_tasks() {
+        let mut ws = sample();
+        let t = |ws: &Worksheet, i: usize| ws.tasks[i].id.clone();
+        let mut answers = std::collections::HashMap::new();
+        answers.insert(t(&ws, 0), Response::Chosen(vec![0])); // right
+        answers.insert(t(&ws, 1), Response::Chosen(vec![0])); // half: partly
+        answers.insert(t(&ws, 2), Response::Bool(false)); // wrong
+        answers.insert(t(&ws, 3), Response::Gaps(vec!["2/4".into(), "2/2".into()])); // right
+        let with = score(&ws, &answers);
+        assert_eq!((with.checked, with.right, with.partial, with.open), (8, 2, 1, 1));
+        assert_eq!(with.points, Some(2.5));
+        assert_eq!(with.summary(), "2,5 von 8 Punkte · 1 Aufgabe bewertet die Lehrkraft");
+        ws.points = false;
+        let without = score(&ws, &answers);
+        assert_eq!((without.checked, without.right, without.partial, without.open), (8, 2, 1, 1));
+        assert_eq!((without.points, without.max), (None, None));
+        assert!(without.results.iter().all(|r| r.points.is_none() && r.max.is_none()));
+        assert!(without.results[1].partial && !without.results[0].partial && !without.results[2].partial);
+        assert_eq!(without.summary(), "2 von 8 richtig, 1 teilweise · 1 Aufgabe bewertet die Lehrkraft");
+        let v = serde_json::to_value(&without).unwrap();
+        let text = v.to_string();
+        assert!(!text.contains("\"points\"") && !text.contains("\"max\""), "{text}");
+        assert_eq!(v["right"], 2);
+        assert_eq!(v["results"][1]["partial"], true);
+        // Nothing answered, nothing checkable: no division, no panic.
+        let empty = score(&Worksheet { points: false, tasks: vec![ws.tasks[8].clone()], ..Worksheet::default() }, &std::collections::HashMap::new());
+        assert_eq!(empty.summary(), "0 von 0 richtig · 1 Aufgabe bewertet die Lehrkraft");
+        assert!(!empty.all_right());
+    }
+
+    #[test]
+    fn prompt_without_points_drops_them() {
+        let with = prompt_schema_for(true);
+        let without = prompt_schema_for(false);
+        assert_eq!(with, prompt_schema());
+        assert!(without.contains("\"points\":false") && without.contains(NO_POINTS_RULE));
+        assert!(!without.contains("(Aufgabenstellung), \"points\""), "{without}");
     }
 
     #[test]
@@ -1080,7 +1263,7 @@ mod tests {
         assert_eq!(score_task(t, &Response::Assign(vec![Some(0), Some(0), Some(1), Some(1)])).correct, Some(true));
         let r = score_task(t, &Response::Assign(vec![Some(0), Some(1), None]));
         assert_eq!(r.parts, vec![true, false, false, false]);
-        assert_eq!(r.points, 1.0);
+        assert_eq!(r.points, Some(1.0));
         // Answers as category names (tool calls), case and spacing ignored; unknown names count as no answer.
         assert!(
             matches!(Response::from_json(&t.body, &json!(["säugetiere", "Säugetiere ", 1, "Vögel"])), Response::Assign(v) if v == vec![Some(0), Some(0), Some(1), None])
