@@ -71,7 +71,8 @@ pub fn keep_copy(dir: &Path, original: &Path, bytes: &[u8]) -> Result<std::path:
 
 /// Images and PDFs are not kept in the database; read them back for a request.
 pub fn hydrate(messages: &mut [aiscraft_core::Message]) {
-    for m in messages.iter_mut() {
+    // Only what the person attached; files the assistant created stay on disk.
+    for m in messages.iter_mut().filter(|m| m.role == aiscraft_core::Role::User) {
         for a in m.attachments.iter_mut() {
             if a.data_base64.is_some() || a.remote_id.is_some() || !(is_image(&a.mime) || a.mime == "application/pdf") {
                 continue;

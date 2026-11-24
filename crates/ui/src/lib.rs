@@ -6,6 +6,7 @@ mod app;
 mod artifact_panel;
 mod conversation;
 mod dialogs;
+mod downloads;
 mod explore;
 pub mod manual;
 pub mod markup;
