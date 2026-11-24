@@ -96,7 +96,7 @@ fn title_of(text: &str, fallback: &str) -> String {
 /// The text of an artifact for a person or a model: a document's Markdown, a board's summary.
 pub fn artifact_text(kind: ArtifactKind, state: &[u8]) -> Result<String> {
     match kind {
-        ArtifactKind::Document => doc_text(state),
+        ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet => doc_text(state),
         ArtifactKind::Board => Ok(Board::from_state(state).map_err(|e| Error::invalid(format!("Whiteboard beschädigt: {e}")))?.summary_text()),
     }
 }
@@ -157,6 +157,16 @@ pub(crate) fn save_state(c: &Ctx, id: &str, state: &[u8], version_note: Option<&
 pub(crate) async fn create(c: Ctx, p: Value) -> Result<Value> {
     let kind =
         ArtifactKind::parse(&opt_str(&p, "kind").unwrap_or_else(|| "document".into())).ok_or_else(|| Error::invalid("kind muss document oder board sein"))?;
+    // Learning apps and worksheets are checked and parsed first.
+    match kind {
+        ArtifactKind::App => {
+            return crate::learn::app_create_cmd(c, json!({"html": p.get("content"), "from_message": p.get("from_message"), "title": p.get("title")})).await;
+        }
+        ArtifactKind::Worksheet => {
+            return crate::learn::ws_create_cmd(c, json!({"content": p.get("content"), "from_message": p.get("from_message"), "title": p.get("title")})).await;
+        }
+        _ => {}
+    }
     let state = c.state();
     let source = match opt_str(&p, "from_message") {
         Some(mid) => Some(state.messages.iter().find(|m| m.id == mid).map(|m| m.content.clone()).ok_or_else(|| Error::not_found("Nachricht nicht gefunden"))?),
@@ -166,7 +176,7 @@ pub(crate) async fn create(c: Ctx, p: Value) -> Result<Value> {
     let fallback = if kind == ArtifactKind::Board { "Whiteboard" } else { "Neues Dokument" };
     let title = opt_str(&p, "title").filter(|t| !t.trim().is_empty()).unwrap_or_else(|| title_of(&content, fallback));
     let bytes = match kind {
-        ArtifactKind::Document => doc_new(&content)?,
+        ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet => doc_new(&content)?,
         ArtifactKind::Board => {
             let mut b = if content.trim().is_empty() { Board::new() } else { Board::from_outline(&content) };
             b.set_title(&title);
@@ -226,7 +236,7 @@ pub(crate) async fn save(c: Ctx, p: Value) -> Result<Value> {
         // model, or by someone in a shared room) keeps that change.
         merge_states(&state_of(&c, &id)?, &bytes)?
     } else if let Some(text) = opt_str(&p, "text") {
-        if a.kind != ArtifactKind::Document {
+        if !a.kind.is_text() {
             return Err(Error::invalid("text gibt es nur für Dokumente"));
         }
         let text: String = text.chars().take(MAX_TEXT_CHARS).collect();
@@ -242,6 +252,9 @@ pub(crate) async fn revise(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let instruction = req_str(&p, "instruction")?;
     let a = get_artifact(&c, &id)?;
+    if matches!(a.kind, ArtifactKind::App | ArtifactKind::Worksheet) {
+        return crate::learn::revise(&c, &a, &instruction).await;
+    }
     if a.kind != ArtifactKind::Document {
         return Err(Error::unsupported("Überarbeiten geht bisher nur für Dokumente"));
     }
@@ -277,6 +290,9 @@ fn strip_fence(s: &str) -> String {
 pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let a = get_artifact(&c, &id)?;
+    if let Some(r) = crate::learn::export_for(&c, &a, &p) {
+        return r;
+    }
     let state = state_of(&c, &id)?;
     let text = artifact_text(a.kind, &state)?;
     let format = opt_str(&p, "format").unwrap_or_else(|| "markdown".into());
@@ -322,7 +338,7 @@ pub(crate) async fn restore(c: Ctx, p: Value) -> Result<Value> {
     let current = state_of(&c, &id)?;
     // Restoring is itself an edit on top of the current state, so nothing is lost.
     let new_state = match a.kind {
-        ArtifactKind::Document => doc_replace(&current, &doc_text(&old)?)?,
+        ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet => doc_replace(&current, &doc_text(&old)?)?,
         ArtifactKind::Board => old,
     };
     save_state(&c, &id, &new_state, Some(&format!("Version {v} wiederhergestellt")))?;
@@ -385,6 +401,7 @@ pub(crate) fn context_block(c: &Ctx, id: &str, without_tools: bool) -> Result<St
         block.push_str(match a.kind {
             ArtifactKind::Document => "\n\n(Wenn du dieses Dokument ändern sollst, gib die vollständige neue Fassung in einem Codeblock mit der Sprache `aiscraft-dokument` aus.)",
             ArtifactKind::Board => "\n\n(Wenn du dieses Whiteboard ergänzen sollst, gib nur die neuen Punkte als eingerückte Markdown-Liste in einem Codeblock mit der Sprache `aiscraft-whiteboard` aus.)",
+            kind => crate::learn::change_note(kind),
         });
     }
     Ok(block)

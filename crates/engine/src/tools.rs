@@ -127,6 +127,9 @@ async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<Stri
     if call.name == WEB_FETCH && !(sources.web && sources.tools) {
         return Some(Err(Error::refused("Webseiten lesen ist in diesem Chat abgeschaltet.")));
     }
+    if let Some(r) = crate::learn::run_tool(c, &call.name, a) {
+        return Some(r);
+    }
     Some(match call.name.as_str() {
         WEB_FETCH => web_fetch(c, a).await,
         "history_search" => {
@@ -238,6 +241,7 @@ pub(crate) fn specs_for(c: &Ctx, sources: &aiscraft_core::Sources) -> Vec<ToolSp
     }
     let mut out: Vec<ToolSpec> = builtin_specs().into_iter().filter(|t| sources.history || t.name != "history_search").collect();
     out.extend(crate::office::tool_specs());
+    out.extend(crate::learn::tool_specs());
     // No tasks inside tasks.
     if c.state().current.as_deref().and_then(|id| c.state().conversation(id).map(|x| x.title.starts_with("▶ "))).unwrap_or(false) {
         out.retain(|t| t.name != "task_start");

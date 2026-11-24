@@ -1,0 +1,16 @@
+[package]
+name = "aiscraft-preview"
+description = "AIS.ChatCraft HTML preview: shows one local learning app in a locked-down webview window, in its own process."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# One window, one webview. The main app stays pure egui; only this separate program links a
+# webview (WebKitGTK 4.1 on Linux, WebView2 on Windows, WKWebView on macOS).
+wry = "0.57"
+tao = "0.37"
+
+[lints]
+workspace = true

@@ -26,6 +26,10 @@ pub enum Segment<'a> {
     Math(&'a str),
     /// A Markdown paragraph (or list) with formulas inside the text.
     Paragraph(&'a str),
+    /// A whole HTML document in a ```` ```html ```` block (a learning app).
+    App(&'a str),
+    /// An ```` ```aiscraft-worksheet ```` block.
+    Worksheet(&'a str),
 }
 
 /// Split an answer for drawing.
@@ -133,6 +137,8 @@ fn split_blocks<'a>(md: &'a str, out: &mut Vec<Segment<'a>>) {
                     let body = md.get(le..cs).unwrap_or("");
                     let seg = match lang {
                         "mermaid" => Some(Segment::Mermaid(body)),
+                        "aiscraft-worksheet" | "aiscraft-arbeitsblatt" => Some(Segment::Worksheet(body)),
+                        "html" | "htm" | "xhtml" | "" if aiscraft_engine::learn::is_html_document(body) => Some(Segment::App(body)),
                         "math" | "latex" | "tex" if !body.trim().is_empty() && body.len() <= crate::math::MAX_TEX => Some(Segment::Math(body.trim())),
                         _ => None,
                     };
@@ -393,6 +399,12 @@ pub fn show(ui: &mut Ui, md: &mut egui_commonmark::CommonMarkCache, t: &Tokens, 
             None
         }
         Segment::Mermaid(src) => mermaid_block(ui, t, src, salt),
+        // In documents: the source, folded (the chat shows these as cards).
+        Segment::App(src) | Segment::Worksheet(src) => {
+            let label = if matches!(seg, Segment::App(_)) { "Lern-App (HTML)" } else { "Arbeitsblatt (JSON)" };
+            egui::CollapsingHeader::new(small_muted(t, label)).id_salt(("learn", salt)).default_open(false).show(ui, |ui| source_view(ui, t, src));
+            None
+        }
     }
 }
 

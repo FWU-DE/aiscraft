@@ -91,3 +91,13 @@ release assets in the forms it installs (AppImage, `.deb`/`.rpm`, `.dmg` for a m
 or the Windows portable zip with `portable.txt`; a standalone `.tar.gz` only where the program
 and its `share` files are writable), `SHA256SUMS.txt` in the release, a restart helper wired
 into `main` (`self_update::finish`), and signed Windows builds.
+
+Worksheets (`engine/src/learn/print.rs`) print through the same writer: the worksheet becomes
+Markdown (answer lines as escaped underscores, `( )`/`[ ]` instead of ballot boxes, which
+WinAnsi lacks) and then PDF or, through craft-markdown + craft-docx, Word.
+
+## HTML preview (not a craft-lib)
+
+Learning apps are shown by `apps/aiscraft-preview`, a separate program on `wry` 0.57 + `tao`
+0.37 (one window, one webview; WebKitGTK 4.1 on Linux). craft-libs has no webview crate, and
+the main app links none on purpose.

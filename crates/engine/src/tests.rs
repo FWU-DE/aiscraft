@@ -1018,7 +1018,8 @@ fn links_on_messages() {
 /// fails here.
 #[test]
 fn every_command_has_a_functional_test() {
-    let src = include_str!("tests.rs");
+    // The learning-app and worksheet tests live in their own file, included below.
+    let src = format!("{}{}", include_str!("tests.rs"), include_str!("learn_tests.rs"));
     // The panic hunt touches every command; count only calls outside it.
     let hunt_start = src.find("fn panic_hunt_every_command_with_hostile_params").unwrap_or(0);
     let hunt_end = src[hunt_start..].find("\n}\n").map(|e| hunt_start + e).unwrap_or(hunt_start);
@@ -1925,3 +1926,6 @@ fn update_check_remembers_across_starts() {
     drop(engine);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[path = "learn_tests.rs"]
+mod learn_tests;

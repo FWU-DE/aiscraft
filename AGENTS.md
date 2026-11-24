@@ -2,7 +2,9 @@
 
 **AIS.ChatCraft** is a native desktop client for [AIS.chat](https://app.ais-chat.schule) and other chat
 backends (OpenAI-compatible servers, Claude via API, the Claude subscription through the local Claude
-CLI). Rust only, egui/eframe, **no webview, no Electron, no Tauri**. It follows the conventions of the
+CLI). Rust only, egui/eframe, **no webview in the main app, no Electron, no Tauri**: HTML previews
+(learning apps) run in the separate `aiscraft-preview` process (wry), optional via the app's
+`preview` feature. It follows the conventions of the
 storytold Craft apps (see `~/code/photocraft/AGENTS.md`): never crash, every action is a command,
 tests are the gate. Product name in user-facing text: **AIS.ChatCraft** (AIS and AIS.chat are
 different things; never shorten to "AIS"). Machine names stay `aiscraft-*`. User-facing text is
@@ -31,6 +33,8 @@ apps/
   aiscraft      desktop app (+ `--control` JSON control channel, token-protected)
   aiscraft-cli  CLI (chat, login, status, search, export, `call`, `mcp` server)
   aiscraft-collab-server  relay for live collaboration (rooms on disk, compaction, /healthz)
+  aiscraft-preview  HTML preview of one learning app (wry webview, own process, CSP, no network,
+                    no navigation); needs WebKitGTK 4.1 on Linux
 deploy/autocraft  Coolify compose for AutoCraft
 deploy/collab     Dockerfile and Coolify compose for the collab relay
 docs/craft-libs.md  which shared Craft libraries we use, defer or reject, and why
@@ -137,8 +141,8 @@ words (with provenance, hourly tidy-up), trust check and approvals bound to exac
 connectors (MCP, also for the Claude subscription via the tool bridge), schedules, page watches,
 check-ins, usage ledger with monthly limit, history search and recall, learned skills, background
 tasks, voice in and out, hints (nudges) with quiet hours, vault with placeholders and TOTP.
-Not adopted on purpose: Nod's own sandbox computer and browser (AIS.ChatCraft has no webview and
-runs no code), WhatsApp/Telegram channels (out of scope for a school client). Nod's repo (`n8n-io/nod`, Apache-2.0) is a reference for behaviour, not for
+Not adopted on purpose: Nod's own sandbox computer and browser (AIS.ChatCraft runs no code itself; learning
+apps run only in the locked-down preview process or the browser), WhatsApp/Telegram channels (out of scope for a school client). Nod's repo (`n8n-io/nod`, Apache-2.0) is a reference for behaviour, not for
 code; it is Node/Electron, AIS.ChatCraft is Rust.
 
 ## 6. Before you finish

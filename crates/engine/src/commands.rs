@@ -37,6 +37,7 @@ pub fn commands() -> &'static [CommandSpec] {
         #[cfg(feature = "collab")]
         all.extend(crate::collab::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::office::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::learn::COMMANDS.iter().map(CommandSpec::copy));
         all
     })
 }

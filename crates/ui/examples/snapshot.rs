@@ -10,7 +10,8 @@
 //!
 //! `--demo` starts a local OpenAI-compatible server that streams a Markdown answer, adds it as a
 //! backend and fills projects, notes and a few chats (a prompt with "Formel" gets formulas and
-//! Mermaid diagrams). `--demo-ais` adds a local stand-in for
+//! Mermaid diagrams, "Arbeitsblatt Bruchrechnung" a worksheet block, "Lern-App" an html
+//! block; `worksheet.request`/`learning_app.request` go through the tools). `--demo-ais` adds a local stand-in for
 //! AIS.chat (assistants, characters, learning scenarios, image generation, a plot answer for
 //! prompts with "Parabel"), with a catalogue of placeholder portraits for the "Entdecken" page
 //! (`["ui.show", {"what": "personas"}]`, `{"what": "persona:character:c1"}` for one entry;
@@ -39,6 +40,22 @@ const ANSWER: &str = "Die **Photosynthese** ist der Vorgang, mit dem Pflanzen au
 /// The answer for prompts with "Formel": formulas in the text and on their own line, a Mermaid
 /// flowchart and a mind map.
 const MATH_ANSWER: &str = "Die **Mitternachtsformel** löst $ax^2 + bx + c = 0$ für $a \\neq 0$:\n\n$$x_{1,2} = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$\n\nDer Ausdruck unter der Wurzel heißt Diskriminante \\(D = b^2 - 4ac\\). Außerdem gilt\n\n\\[\n\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}, \\quad \\int_0^1 x^2\\,dx = \\frac{1}{3}, \\quad A = \\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}\n\\]\n\nSo gehst du vor:\n\n```mermaid\ngraph TD\n  A[Gleichung aufstellen] --> B{D berechnen}\n  B -->|D > 0| C(Zwei Lösungen)\n  B -->|D = 0| D(Eine Lösung)\n  B -->|D < 0| E([Keine reelle Lösung])\n  C & D --> F[/Probe machen/]\n```\n\n```mermaid\nmindmap\n  root((Quadratische Gleichungen))\n    Formen\n      Normalform\n      Scheitelpunktform\n    Lösen\n      Mitternachtsformel\n      pq-Formel\n      Faktorisieren\n    Graph\n      Parabel\n      Nullstellen\n```\n\nSoll ich Übungsaufgaben dazu erstellen?";
+
+/// The worksheet for prompts with "Arbeitsblatt Bruchrechnung" (as a block) and for
+/// `worksheet.request` (through the `worksheet_create` tool).
+const DEMO_SHEET: &str = r#"{"format":"aiscraft-worksheet","version":1,"title":"Bruchrechnung: Brüche vergleichen","subject":"Mathematik","grade":"6","instructions":"Bearbeite die Aufgaben der Reihe nach. Kürze, wo es geht.",
+"tasks":[
+{"id":"a1","type":"choice","prompt":"Welcher Bruch ist am größten?","points":1,"hint":"Bring die Brüche auf einen gemeinsamen Nenner.","feedback":"3/4 = 9/12 ist größer als 2/3 = 8/12 und 1/2 = 6/12.","options":[{"text":"1/2"},{"text":"2/3"},{"text":"3/4","correct":true}]},
+{"id":"a2","type":"true_false","prompt":"2/4 und 1/2 sind gleich groß.","points":1,"answer":true,"feedback":"2/4 lässt sich mit 2 kürzen."},
+{"id":"a3","type":"cloze","prompt":"Ergänze die Lücken.","points":2,"text":"Kürzt man 6/8 mit 2, erhält man [[3/4]]. Erweitert man 1/3 mit 4, erhält man [[4/12]]."},
+{"id":"a4","type":"matching","prompt":"Ordne jedem Bruch die Dezimalzahl zu.","points":3,"pairs":[{"left":"1/4","right":"0,25"},{"left":"1/5","right":"0,2"},{"left":"3/10","right":"0,3"}]},
+{"id":"a5","type":"ordering","prompt":"Ordne der Größe nach, den kleinsten zuerst.","points":2,"items":["1/8","1/3","5/6"]},
+{"id":"a6","type":"numeric","prompt":"Wie viel ist 3/4 von 20 €?","points":1,"answer":15,"unit":"€"},
+{"id":"a7","type":"free_text","prompt":"Erkläre einem Mitschüler, wie man zwei Brüche vergleicht.","points":2,"sample":"Man bringt beide Brüche auf denselben Nenner und vergleicht dann die Zähler.","lines":4}
+]}"#;
+
+/// The learning app for prompts with "Lern-App".
+const DEMO_APP: &str = "<!doctype html>\n<html lang=\"de\">\n<head>\n<meta charset=\"utf-8\">\n<title>Bruch-Trainer</title>\n<style>\n  body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; }\n  .bar { height: 2rem; background: #e2e8f0; border-radius: .5rem; }\n  .fill { height: 100%; background: #107fad; border-radius: .5rem; }\n</style>\n</head>\n<body>\n<h1>Bruch-Trainer</h1>\n<p>Welcher Bruch ist größer? Tippe auf deine Antwort.</p>\n<div id=\"aufgabe\" role=\"group\" aria-label=\"Aufgabe\"></div>\n<p id=\"rueckmeldung\" aria-live=\"polite\"></p>\n<button id=\"neu\">Neue Aufgabe</button>\n<script>\n  const paare = [[1, 2, 2, 3], [3, 4, 5, 8], [2, 5, 1, 3]];\n  let i = 0;\n  function zeige() {\n    const [a, b, c, d] = paare[i % paare.length];\n    document.getElementById('aufgabe').innerHTML =\n      `<button data-w=\"${a / b}\">${a}/${b}</button> <button data-w=\"${c / d}\">${c}/${d}</button>`;\n  }\n  document.getElementById('aufgabe').addEventListener('click', (e) => {\n    const w = Number(e.target.dataset.w);\n    const alle = [...document.querySelectorAll('#aufgabe button')].map((x) => Number(x.dataset.w));\n    document.getElementById('rueckmeldung').textContent = w === Math.max(...alle) ? 'Richtig!' : 'Noch einmal: Erweitere beide Brüche.';\n  });\n  document.getElementById('neu').addEventListener('click', () => { i++; zeige(); });\n  zeige();\n</script>\n</body>\n</html>";
 
 fn demo_server(engine: &Engine) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -75,8 +92,48 @@ fn demo_server(engine: &Engine) -> String {
                         let _ = sock.write_all(format!("data: {c}\n\ndata: [DONE]\n\n").as_bytes()).await;
                         return;
                     }
+                    // What the person wrote last (tool descriptions mention "Notenliste" and "Lern-App" too).
+                    let user_text = req
+                        .split_once("\r\n\r\n")
+                        .and_then(|(_, body)| serde_json::from_str::<Value>(body).ok())
+                        .and_then(|v| v["messages"].as_array().and_then(|m| m.iter().rev().find(|x| x["role"] == "user").map(|x| x["content"].to_string())))
+                        .unwrap_or_default();
+                    // Learning apps and worksheets: through the tools when the prompt helpers ask for
+                    // them, as blocks for plain prompts ("Arbeitsblatt Bruchrechnung", "Lern-App").
+                    let tool_result = req.contains("\"role\":\"tool\"");
+                    let tool = [("Werkzeug worksheet_create", "worksheet_create"), ("Werkzeug learning_app_create", "learning_app_create")].into_iter().find(|(k, _)| req.contains(k));
+                    if let Some((_, name)) = tool {
+                        let c = if tool_result {
+                            json!({"choices":[{"delta":{"content":"Fertig, es ist rechts geöffnet."}}]}).to_string()
+                        } else {
+                            let args = if name == "worksheet_create" {
+                                json!({"worksheet": serde_json::from_str::<Value>(DEMO_SHEET).unwrap()})
+                            } else {
+                                json!({"title": "Bruch-Trainer", "html": DEMO_APP})
+                            };
+                            let c1 = json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"l1","function":{"name":name,"arguments":args.to_string()}}]}}]});
+                            format!("{c1}\n\ndata: {}", json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}))
+                        };
+                        let _ = sock.write_all(format!("data: {c}\n\ndata: [DONE]\n\n").as_bytes()).await;
+                        return;
+                    }
+                    let learn = if user_text.contains("Lern-App") {
+                        Some(format!("Hier ist eine kleine Lern-App zum Vergleichen von Brüchen:\n\n```html\n{DEMO_APP}\n```\n\nDie Kinder wählen den größeren Bruch und bekommen sofort eine Rückmeldung."))
+                    } else if user_text.contains("Arbeitsblatt Bruchrechnung") {
+                        Some(format!("Gern, hier ist ein Arbeitsblatt mit sieben Aufgaben:\n\n```aiscraft-worksheet\n{DEMO_SHEET}\n```\n\nDu kannst es rechts bearbeiten, lösen lassen und drucken."))
+                    } else {
+                        None
+                    };
+                    if let Some(answer) = learn {
+                        for chunk in answer.split_inclusive('\n') {
+                            let c = json!({"choices":[{"delta":{"content":chunk}}]});
+                            let _ = sock.write_all(format!("data: {c}\n\n").as_bytes()).await;
+                        }
+                        let _ = sock.write_all(b"data: [DONE]\n\n").await;
+                        return;
+                    }
                     // "Notenliste": create a spreadsheet and a deck with the file tools (download cards).
-                    if req.contains("Notenliste") {
+                    if user_text.contains("Notenliste") {
                         let (c1, c2) = if req.contains("\"role\":\"tool\"") {
                             (json!({"choices":[{"delta":{"content":"Hier sind die Notenliste und die Folien für den Elternabend."}}]}), json!({"choices":[{"delta":{},"finish_reason":"stop"}]}))
                         } else {

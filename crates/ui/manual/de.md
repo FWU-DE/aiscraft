@@ -93,6 +93,24 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 **Im Chat:** Der Schalter „Im Chat“ schickt das geöffnete Dokument oder Whiteboard mit der nächsten Nachricht als Kontext mit. Modelle mit Werkzeugen ändern es dann direkt. AIS.chat schlägt Änderungen in einem Block vor; unter der Antwort übernimmst du sie mit „Ins Dokument übernehmen“ oder „Aufs Whiteboard“.
 
+## Lern-Apps und Arbeitsblätter
+
+**Lern-Apps** sind kleine interaktive Programme in einer einzigen HTML-Datei, etwa ein Bruch-Trainer oder ein Quiz. **Arbeitsblätter** sind Aufgabenblätter, die Schülerinnen und Schüler am Rechner lösen und die du als Arbeitsblatt und Lösungsblatt druckst.
+
+**Erstellen mit AIS.chat:** Schreib das Thema ins Eingabefeld, z. B. „Brüche vergleichen, Klasse 6“, und wähle unten **Erstellen** › **Lern-App** oder **Arbeitsblatt**. AIS.ChatCraft schickt eine ausführliche Anfrage mit allen Vorgaben (eine Datei, kein Internet, barrierefrei, Deutsch) und öffnet das Ergebnis rechts. Kommt in einer Antwort ein ```` ```html ````-Block mit einer ganzen HTML-Datei oder ein ```` ```aiscraft-worksheet ````-Block vor, zeigt AIS.ChatCraft darunter eine Karte mit „Als Lern-App öffnen“ bzw. „Als Arbeitsblatt öffnen“. Kleine HTML-Schnipsel werden nie von selbst zu Lern-Apps.
+
+**Erstellen mit Claude oder OpenAI:** Modelle mit Werkzeugen legen Lern-Apps und Arbeitsblätter direkt an, wenn du darum bittest („Mach mir ein Arbeitsblatt zur Fotosynthese“). „Erstellen“ funktioniert genauso. Ein Dokument wird mit **Als Arbeitsblatt** oben im Dokument zu einem Arbeitsblatt.
+
+**Ändern:** Mit „Mit KI ändern“ oben in der Lern-App oder im Arbeitsblatt, oder im Chat mit eingeschaltetem „Im Chat“ („Ändere die App: mehr Aufgaben“). Jede Änderung ist eine neue Fassung unter **Versionen**. Bei AIS.chat übernimmst du eine geänderte Fassung mit „In die Lern-App übernehmen“ bzw. „Ins Arbeitsblatt übernehmen“.
+
+**Lern-Apps ansehen:** Rechts siehst du den Quelltext (bearbeitbar). **Öffnen** zeigt die App in einem eigenen Vorschaufenster, oder, wenn die Vorschau nicht installiert ist, im Browser. **Speichern …** legt die HTML-Datei ab, z. B. zum Weitergeben an deine Klasse; sie läuft offline in jedem Browser.
+
+**Arbeitsblätter:** Unter **Bearbeiten** änderst du Titel, Aufgaben, Lösungen, Punkte, Tipps und Erklärungen, sortierst Aufgaben (⏶ ⏷) und fügst neue hinzu: Auswahl (eine oder mehrere richtig), richtig oder falsch, Lückentext (Lücken als `[[Lösung|Alternative]]`), Zuordnen, Reihenfolge, kurze Antwort, Zahl (mit Toleranz), freier Text (mit Musterlösung) und Info-Text. Unter **Lösen** füllst du es aus; **Prüfen** zeigt je Aufgabe richtig, teilweise richtig oder falsch und zählt die Punkte. Freie Texte bewertet die Lehrkraft. **Zurücksetzen** löscht alle Antworten.
+
+**Drucken:** **Drucken** › „Arbeitsblatt drucken“ oder „Lösungsblatt drucken“ öffnet ein PDF im PDF-Programm, dort druckst du. Das Arbeitsblatt hat Linien und Kästchen zum Ausfüllen, das Lösungsblatt die Lösungen. Als PDF oder Word speichern geht im selben Menü. PDFs nutzen die Standardschriften; Emojis und seltene Zeichen erscheinen als ?.
+
+**Datenschutz:** Eine Lern-App kann nichts aus dem Internet laden und nichts senden: AIS.ChatCraft gibt jeder geöffneten oder gespeicherten App eine strenge Sicherheitsregel (Content-Security-Policy) mit, die alle Verbindungen sperrt; das Vorschaufenster erlaubt außerdem keine Links nach außen und keine neuen Fenster. Lern-Apps und Arbeitsblätter liegen nur auf deinem Rechner, bis du sie speicherst oder teilst. Schreib keine Namen von Schülerinnen und Schülern in die Anfrage.
+
 ## Gemeinsam bearbeiten
 
 Dokumente und Whiteboards lassen sich live mit anderen bearbeiten. Dafür braucht es einen Server für die Zusammenarbeit (`aiscraft-collab-server`, z. B. von der Schule oder dem Träger betrieben). Ohne Server bleibt alles auf deinem Rechner.

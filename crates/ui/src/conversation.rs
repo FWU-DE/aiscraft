@@ -483,6 +483,8 @@ impl AisCraftApp {
             for (k, seg) in crate::markup::segments(&m.content).into_iter().enumerate() {
                 match seg {
                     crate::markup::Segment::Plot(src) => self.plot_block(ui, &m.id, k, src),
+                    crate::markup::Segment::App(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::App, src),
+                    crate::markup::Segment::Worksheet(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::Worksheet, src),
                     seg => {
                         if let Some(crate::markup::Action::Board(outline)) = crate::markup::show(ui, &mut self.md, &t, &seg, (&m.id, k)) {
                             self.run("artifact.create", json!({"kind": "board", "content": outline}));
@@ -533,6 +535,8 @@ impl AisCraftApp {
                             self.run("artifact.board_add", json!({"id": id, "outline": content}));
                         }
                     }
+                    // Learning apps and worksheets have their own cards (crate::learn_panel).
+                    (aiscraft_core::ArtifactKind::App | aiscraft_core::ArtifactKind::Worksheet, Some(_)) => {}
                     (kind, None) => {
                         let label = if kind == aiscraft_core::ArtifactKind::Board { "Als neues Whiteboard öffnen" } else { "Als neues Dokument öffnen" };
                         if ui.button(label).clicked() {
@@ -1076,6 +1080,7 @@ impl AisCraftApp {
                                 });
                             } else {
                                 self.sources_menu(ui);
+                                self.create_menu(ui);
                             }
                         });
                     });

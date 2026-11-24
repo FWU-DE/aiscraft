@@ -10,6 +10,7 @@ mod collab;
 mod commands;
 mod files;
 mod inbox;
+pub mod learn;
 pub mod office;
 mod pictures;
 mod proactive;
@@ -110,6 +111,12 @@ pub(crate) struct Inner {
     /// May this engine start a browser? Only the real app (with a data folder) does; engines in
     /// memory (tests, scripts) never open windows or start browsers.
     pub(crate) browser_allowed: bool,
+    /// Copies of learning apps and printed worksheets to open (`<data>/open`).
+    pub(crate) open_dir: PathBuf,
+    /// The HTML preview program (`aiscraft-preview`), set by the app when it is installed.
+    pub(crate) preview: Mutex<Option<PathBuf>>,
+    /// Running previews; they exit when their stdin (held here) closes.
+    pub(crate) previews: Mutex<Vec<std::process::Child>>,
     /// Cached pictures of assistants, characters and scenarios (`<data>/personas`).
     pub(crate) pictures_dir: PathBuf,
     /// Engines in memory fetch pictures only from this local server (tests, the demo).
@@ -201,6 +208,13 @@ impl Engine {
                 .clone()
                 .map(|d| d.join("personas"))
                 .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-personas-{}", std::process::id()))),
+            open_dir: opts
+                .data_dir
+                .clone()
+                .map(|d| d.join("open"))
+                .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-open-{}", std::process::id()))),
+            preview: Mutex::new(None),
+            previews: Mutex::new(Vec::new()),
             attachments_dir: opts
                 .data_dir
                 .clone()
@@ -235,6 +249,12 @@ impl Engine {
 
     pub fn ctx(&self) -> &Ctx {
         &self.ctx
+    }
+
+    /// Where the HTML preview program is (`aiscraft-preview`, feature `preview` of the app).
+    /// Without it, learning apps open in the system browser.
+    pub fn set_preview_program(&self, path: Option<PathBuf>) {
+        *self.ctx.0.preview.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = path;
     }
 
     /// The current state. Cheap: an `Arc` that stays valid while the engine moves on.

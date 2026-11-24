@@ -25,6 +25,15 @@ const DEFAULT_PORT: u16 = 7979;
 /// Longest request line the control channel reads.
 const MAX_CONTROL_LINE: usize = 16 * 1024 * 1024;
 
+/// The HTML preview (`aiscraft-preview`, its own process with a webview) next to this program.
+/// Without it, learning apps open in the system browser.
+#[cfg(feature = "preview")]
+fn preview_program() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let p = exe.with_file_name(if cfg!(windows) { "aiscraft-preview.exe" } else { "aiscraft-preview" });
+    p.is_file().then_some(p)
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -50,6 +59,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    #[cfg(feature = "preview")]
+    engine.set_preview_program(preview_program());
 
     let (ui_tx, ui_rx) = mpsc::channel::<UiRequest>();
     if let Some(port) = control_port {
