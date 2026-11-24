@@ -5,21 +5,21 @@ AIS.ChatCraft ist ein Programm für den Rechner, mit dem du mit AIS.chat und and
 ## Erste Schritte
 
 1. **Anmelden.** Unten links auf das Konto klicken oder im Startbildschirm „Bei AIS.chat anmelden“ wählen.
-2. **Modell wählen.** Im Eingabefeld auf „Backend · Modell“ klicken.
+2. **Modell wählen.** Im Eingabefeld auf „Dienst · Modell“ klicken.
 3. **Schreiben.** Enter sendet, Umschalt+Enter macht eine neue Zeile.
 
-Weitere Dienste (Claude, OpenAI, Ollama, LM Studio …) fügst du unter **Einstellungen › Backends** hinzu.
+Weitere Dienste (Claude, OpenAI, Ollama, LM Studio …) fügst du unter **Einstellungen › Dienste** hinzu.
 
 ### Startseite
 
 Ist kein Chat offen, zeigt AIS.ChatCraft die Startseite: oben das Eingabefeld (Schreiben beginnt einen neuen Chat), darunter Karten.
 
-- **Favoriten:** deine mit Stern markierten Assistenten, Figuren und Lernszenarien aus AIS.chat; ein Klick startet einen Chat. „Alle entdecken“ öffnet die Übersicht.
-- **Neu starten:** neuer Chat, neues Bild (wenn ein Backend Bildmodelle hat), neues Dokument oder Whiteboard.
+- **Favoriten:** deine mit Stern markierten Assistenten, Dialogpartner und Lernszenarien aus AIS.chat; ein Klick startet einen Chat. „Alle entdecken“ öffnet die Übersicht.
+- **Neu starten:** neuer Chat, neues Bild (wenn ein Dienst Bildmodelle hat), neues Dokument oder Whiteboard.
 - **Zuletzt:** die fünf zuletzt benutzten Chats.
 - **Zeitpläne:** die nächsten Läufe; „+ Zeitplan anlegen“ legt einen neuen an.
-- **Kontingent & Verbrauch:** die AIS.chat-Token-Punkte (sind sie aufgebraucht, nimmt AIS.chat bis zum nächsten Zeitraum keine Nachrichten an), die Tokens dieses Monats pro Backend, die Monatsgrenze und wie lange Anmeldungen (etwa das Claude-Abo) noch gelten. Es steht nur da, was die Dienste melden.
-- **Benachrichtigungen:** was Zeitpläne, Beobachtungen, Nachfragen, Hinweise und Aufgaben gemeldet haben, neue zuerst. Ein Klick öffnet den Chat dazu; „Alle gelesen“ markiert alles. Dieselbe Liste öffnet die Glocke 🔔 oben rechts, mit der Zahl der neuen. Die letzten 50 bleiben gespeichert; die Meldung ans System kommt weiterhin.
+- **Kontingent & Verbrauch:** die AIS.chat-Token-Punkte (sind sie aufgebraucht, nimmt AIS.chat bis zum nächsten Zeitraum keine Nachrichten an), die Tokens dieses Monats pro Dienst, die Monatsgrenze und wie lange Anmeldungen (etwa das Claude-Abo) noch gelten. Es steht nur da, was die Dienste melden.
+- **Benachrichtigungen:** was Zeitpläne, Beobachtungen, Nachfragen, Hinweise und Aufgaben gemeldet haben, neue zuerst. Ein Klick öffnet den Chat dazu; „Alle gelesen“ markiert alles. Dieselbe Liste öffnet die Glocke oben rechts; die Zahl daran zählt die neuen. Die letzten 50 bleiben gespeichert; die Meldung ans System kommt weiterhin.
 
 **Chat schließen:** das × oben rechts im Chat, Esc bei leerem Eingabefeld oder „Chat schließen“ in den Befehlen (Strg+K). Der Chat bleibt in der Seitenleiste.
 
@@ -37,24 +37,24 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 
 ## Chatten
 
-- **Modell wechseln:** jederzeit über „Backend · Modell“; die nächste Antwort kommt vom neuen Modell.
+- **Modell wechseln:** jederzeit über „Dienst · Modell“; die nächste Antwort kommt vom neuen Modell.
 - **Antwort anhalten:** Esc oder das Quadrat im Eingabefeld.
 - **Neu erzeugen:** „Neu erzeugen“ unter der letzten Antwort oder Strg+R.
 - **Bearbeiten:** über einer eigenen Nachricht auf das Stift-Symbol; alles danach wird neu erzeugt.
 - **Fassungen:** Nach Bearbeiten oder Neu erzeugen bleibt die vorige Fassung erhalten. Mit **‹ 1/2 ›** an der Nachricht (bei Antworten über dem Text) wechselst du zwischen ihnen; was danach kam, wechselt mit. Das Modell, die Suche und der Export sehen nur die gezeigte Fassung. Bei AIS.chat gibt es die Fassungen nur in AIS.ChatCraft: Der Server führt einen eigenen Verlauf, in dem Neu erzeugen die letzte Antwort ersetzt und eine bearbeitete Nachricht hinzukommt; ‹ › ändert daran nichts.
 - **Anhänge:** Büroklammer oder Dateien ins Fenster ziehen. Bilder und PDFs gehen an Modelle, die sie lesen können; Textdateien werden mitgeschickt.
-- **Diktieren:** Mikrofon im Eingabefeld. Der Text landet im Eingabefeld, du schickst ihn selbst ab. Braucht ein OpenAI-kompatibles Backend mit Transkription.
+- **Diktieren:** Mikrofon im Eingabefeld. Der Text landet im Eingabefeld, du schickst ihn selbst ab. Braucht einen OpenAI-kompatiblen Dienst mit Transkription.
 - **Vorlesen:** „Vorlesen“ unter einer Antwort. Nutzt AIS.chat, wenn du dort angemeldet bist.
 - **Links prüfen:** „Links prüfen“ unter einer Antwort fragt jede Adresse darin einmal an (höchstens 20). Tote Links stehen durchgestrichen unter der Antwort. Adressen im lokalen Netz fragt AIS.ChatCraft nie an. Automatisch für jede Antwort: Einstellungen › Fähigkeiten & Hinweise (standardmäßig aus, weil dabei fremde Seiten kontaktiert werden).
-- **Kontextfenster:** oben rechts im Chat, wie viel vom Kontext des Modells belegt ist. „≈“ heißt geschätzt.
+- **Kontextfenster:** oben rechts im Chat, wie viel vom Kontext des Modells belegt ist. „≈“ heißt geschätzt. Die Tokens einer einzelnen Antwort stehen im Tooltip am Modellnamen über ihr.
 - **Bilder erzeugen:** „🖼 Bild erzeugen“ in der Seitenleiste (oder ein Bildmodell im Modellmenü) startet einen Bild-Chat bei AIS.chat: beschreibe, was das Bild zeigen soll, und wähle das Format. Fehlt der Eintrag, hat dein Land die Bilderzeugung in AIS.chat ausgeschaltet.
 - **AIS.chat-Kontingent:** unten links, wie viele Token-Punkte noch übrig sind.
 - **Formeln und Diagramme:** Formeln in LaTeX (`$…$` und `\(…\)` im Text, `$$…$$` und `\[…\]` als eigene Zeile) und Mermaid-Flussdiagramme und -Mindmaps (```` ```mermaid ````) erscheinen gezeichnet, in Antworten wie in der Dokument-Vorschau. Fährst du über eine Formel, siehst du ihren Quelltext; ein Rechtsklick kopiert ihn. Eine Mindmap öffnest du mit „Als Whiteboard“ zum Weiterbearbeiten. Andere Mermaid-Arten zeigt AIS.ChatCraft als Quelltext.
 
-**Assistenten, Figuren und Lernszenarien.** „Assistenten & Figuren entdecken“ in der Seitenleiste (oder Strg+K) öffnet eine Seite mit allem, was AIS.chat dir anbietet: eigene, an der Schule geteilte und offizielle Einträge, mit Bild und Beschreibung.
+**Assistenten, Dialogpartner und Lernszenarien.** „Entdecken“ in der Seitenleiste (oder Strg+K) öffnet eine Seite mit allem, was AIS.chat dir anbietet: eigene, an der Schule geteilte und offizielle Einträge, mit Bild und Beschreibung.
 
 - **Suchen:** Strg+F, dann Name oder Beschreibung. Groß- und Kleinschreibung und Umlaute spielen keine Rolle („uebung“ findet „Übung“). Bleibt genau ein Treffer, öffnet Enter ihn.
-- **Eingrenzen:** Alle, Assistenten, Figuren, Lernszenarien; dazu „★ Favoriten“ und „Eigene“.
+- **Eingrenzen:** Alle, Assistenten, Dialogpartner, Lernszenarien; dazu „★ Favoriten“ und „Meine“.
 - **Favoriten:** Zeige auf eine Karte und klicke auf den Stern oben rechts, oder auf „☆ Als Favorit markieren“ in den Details und im neuen Chat. Favoriten gelten auch in AIS.chat im Browser.
 - **Details:** Ein Klick auf eine Karte zeigt Beschreibung, Begrüßung, Aufgabe, ob die Websuche an ist, und Gesprächsanfänge. „Chat starten“ (oder Enter) beginnt einen neuen Chat; ein Gesprächsanfang startet ihn und schickt den Satz gleich ab.
 - **Zurück:** Esc, erst zur Übersicht, dann zum Chat.
@@ -71,12 +71,12 @@ Chats von AIS.chat tragen in der Seitenleiste das AIS.chat-Zeichen. Über „AIS
 - **Projektanweisungen:** die Anweisungen des Projekts, in dem der Chat liegt.
 - **Werkzeuge:** Dokumente, Whiteboards, Zeitpläne, Aufgaben.
 - **Andere Chats durchsuchen.**
-- **Websuche:** Claude (API) sucht und liest selbst im Netz. Andere Backends mit Werkzeugen lesen Webseiten unter einer Adresse, nur lesend und nicht im lokalen Netz. Die genutzten Seiten stehen als **Quellen** unter der Antwort.
+- **Websuche:** Claude (API) sucht und liest selbst im Netz. Andere Dienste mit Werkzeugen lesen Webseiten unter einer Adresse, nur lesend und nicht im lokalen Netz. Die genutzten Seiten stehen als **Quellen** unter der Antwort.
 - **Einzelne Konnektoren.**
 
 Für einen neuen Chat stellst du die Quellen vor der ersten Nachricht ein. Das Menü bleibt offen, bis du „Schließen“ klickst.
 
-Bei AIS.chat sind Gedächtnis und Projektanweisungen zuerst aus. Schaltest du sie ein, gehen sie am Anfang deiner nächsten Nachricht mit und bleiben im AIS.chat-Verlauf; erneut nur, wenn sie sich ändern. Werkzeuge und Konnektoren nimmt AIS.chat nicht an. Seine eigenen Werkzeuge (Websuche, Bilder, Diagramme) legt das Land fest, bei Assistenten und Figuren auch deren Einstellung in AIS.chat; das Menü zeigt sie.
+Bei AIS.chat sind Gedächtnis und Projektanweisungen zuerst aus. Schaltest du sie ein, gehen sie am Anfang deiner nächsten Nachricht mit und bleiben im AIS.chat-Verlauf; erneut nur, wenn sie sich ändern. Werkzeuge und Konnektoren nimmt AIS.chat nicht an. Seine eigenen Werkzeuge (Websuche, Bilder, Diagramme) legt das Land fest, bei Assistenten und Dialogpartnern auch deren Einstellung in AIS.chat; das Menü zeigt sie.
 
 ## Projekte
 
@@ -132,7 +132,7 @@ Konnektoren sind MCP-Server, deren Werkzeuge Modelle aufrufen können: Obsidian,
 
 Werkzeuge, die nur lesen, laufen direkt. Alles andere fragt vorher, mit genau den Angaben, die ausgeführt würden. „Einmal erlauben“ gilt nur für diese Angaben. Die **Vertrauensprüfung** zeigt dazu, ob deine eigenen Worte die Aktion decken; sie muss dich wörtlich zitieren.
 
-Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Backends.
+Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
 
 ## Zeitpläne und Aufgaben
 
@@ -158,7 +158,7 @@ Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats
 
 ## Nutzung
 
-Unter **Einstellungen › Nutzung** stehen die Tokens pro Monat, Backend und Modell, bei Claude über API auch die Kosten. Mit einer **Monatsgrenze** fragt AIS.ChatCraft vor dem Senden nach, sobald sie erreicht ist.
+Unter **Einstellungen › Nutzung** stehen die Tokens pro Monat, Dienst und Modell, bei Claude über API auch die Kosten. Mit einer **Monatsgrenze** fragt AIS.ChatCraft vor dem Senden nach, sobald sie erreicht ist.
 
 ## Updates
 
@@ -172,7 +172,7 @@ Dafür geht eine anonyme Anfrage an `api.github.com` (die Releases von FWU-DE/ai
 |---|---|
 | Strg+K | Befehle, Chats, Projekte und Modelle suchen |
 | Strg+N | Neuer Chat |
-| Strg+B | Seitenleiste ein und aus |
+| Strg+B | Seitenleiste ein und aus (in einem schmalen Fenster unter 1000 Pixeln ist sie zuerst eingeklappt) |
 | Strg+Umschalt+F | Alle Chats durchsuchen |
 | Strg+F | Auf der Seite „Entdecken“: suchen |
 | Strg+R | Antwort neu erzeugen |
@@ -186,7 +186,7 @@ Dafür geht eine anonyme Anfrage an `api.github.com` (die Releases von FWU-DE/ai
 
 - Chats, Dokumente, Whiteboards, Notizen und Einstellungen liegen in einer Datenbank auf diesem Rechner (unter Linux in `~/.local/share/aiscraft`).
 - Zugangsdaten, Konnektoren und der Tresor liegen im Schlüsselbund des Systems.
-- Was du an ein Backend schickst, verarbeitet dieses Backend. Bei AIS.chat gelten dessen Regeln für Schulen.
+- Was du an einen Dienst schickst, verarbeitet dieser Dienst. Bei AIS.chat gelten dessen Regeln für Schulen.
 - Angehängte Dateien kopiert AIS.ChatCraft in seinen Datenordner, damit sie auch später noch mitgehen.
 - Die Update-Prüfung fragt einmal am Tag anonym bei GitHub nach der neuesten Version (abschaltbar, siehe „Updates“).
 

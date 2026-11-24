@@ -54,7 +54,7 @@ impl AisCraftApp {
                     if self.state.selection.kind == aiscraft_core::ConversationKind::Chat {
                         self.context_meter(ui);
                     }
-                    if icon_button(ui, &t, "⬇", "Exportieren (Strg+Umschalt+E)").clicked() {
+                    if icon_button(ui, &t, EXPORT_ICON, "Chat als Datei speichern (Strg+Umschalt+E)").clicked() {
                         self.export_dialog();
                     }
                     if let Some(url) = self.state.current.as_ref().and_then(|id| {
@@ -105,7 +105,7 @@ impl AisCraftApp {
         let label = match self.state.backend(&sel.backend_id) {
             Some(b) if sel.model_id.is_empty() => format!("{} · kein Modell", b.config.name),
             Some(b) => format!("{} · {}", b.config.name, self.state.model_name(&sel.backend_id, &sel.model_id)),
-            None => "Backend wählen".into(),
+            None => "Dienst wählen".into(),
         };
         ui.menu_button(RichText::new(format!("{label}  ⏷")).color(t.muted), |ui| {
             ui.set_min_width(260.0);
@@ -156,7 +156,7 @@ impl AisCraftApp {
                 ui.add_space(4.0);
             }
             ui.separator();
-            if ui.button("+ Backend hinzufügen …").clicked() {
+            if ui.button("+ Dienst hinzufügen …").clicked() {
                 self.dialog = Some(Dialog::add_backend());
                 ui.close();
             }
@@ -202,7 +202,7 @@ impl AisCraftApp {
             ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
                 for s in info.as_ref().map(|i| i.prompt_suggestions.clone()).unwrap_or_default() {
-                    if ui.add(egui::Button::new(small_muted(&t, &s)).corner_radius(CornerRadius::same(t.radius))).clicked() {
+                    if ui.add(suggestion_chip(&t, &s)).clicked() {
                         self.composer = s;
                         self.focus_composer = true;
                     }
@@ -226,7 +226,7 @@ impl AisCraftApp {
             _ => None,
         });
         let name = sso.unwrap_or_else(aiscraft_engine::local_user_name);
-        let first = name.split_whitespace().next().filter(|n| !n.is_empty()).map(|n| {
+        let first = name.split_whitespace().next().filter(|n| looks_like_a_name(n)).map(|n| {
             let mut c = n.chars();
             c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
         });
@@ -255,7 +255,7 @@ impl AisCraftApp {
                 if !any_ready {
                     card(&t).show(ui, |ui| {
                         ui.label(RichText::new("Noch nicht verbunden").strong());
-                        ui.label(muted(&t, "Melde dich bei AIS.chat an oder füge ein anderes Backend hinzu (OpenAI, Claude, Ollama, LM Studio …)."));
+                        ui.label(muted(&t, "Melde dich bei AIS.chat an oder füge einen anderen Dienst hinzu (OpenAI, Claude, Ollama, LM Studio …)."));
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             if let Some(ais) = self.state.backends.iter().find(|b| b.config.kind == BackendKind::AisChat)
@@ -263,7 +263,7 @@ impl AisCraftApp {
                             {
                                 self.dialog = Some(Dialog::login(&ais.config.id));
                             }
-                            if ui.button("Backend hinzufügen").clicked() {
+                            if ui.button("Dienst hinzufügen").clicked() {
                                 self.dialog = Some(Dialog::add_backend());
                             }
                         });
@@ -284,7 +284,7 @@ impl AisCraftApp {
                         ]
                     };
                     for s in ideas.iter().copied() {
-                        if ui.add(egui::Button::new(small_muted(&t, s)).corner_radius(CornerRadius::same(t.radius))).clicked() {
+                        if ui.add(suggestion_chip(&t, s)).clicked() {
                             self.composer = s.to_string();
                             self.focus_composer = true;
                         }
@@ -360,7 +360,7 @@ impl AisCraftApp {
                     if icon_button(ui, &t, "✏", "Bearbeiten").clicked() {
                         self.editing = Some((m.id.clone(), m.content.clone()));
                     }
-                    if ui.add(egui::Button::new(small_muted(&t, "Kopieren")).frame(false)).clicked() {
+                    if message_action(ui, &t, "🗐", "Kopieren").clicked() {
                         ui.ctx().copy_text(m.content.clone());
                     }
                 }
@@ -371,15 +371,26 @@ impl AisCraftApp {
     fn assistant_message(&mut self, ui: &mut Ui, m: &Message, is_last: bool) {
         let t = self.tokens.clone();
         let generating = is_last && self.state.current.as_ref().is_some_and(|c| self.state.is_generating(c));
+        // Token counts are for the curious: on the model name, not in the row of actions.
+        let tokens = m
+            .usage
+            .filter(|u| u.output_tokens > 0)
+            .map(|u| format!("Tokens: {} Eingabe, {} Antwort", crate::home::thousands(u.input_tokens), crate::home::thousands(u.output_tokens)));
+        let model_label = |ui: &mut Ui, model: &str| {
+            let r = ui.label(small_muted(&t, model));
+            if let Some(tk) = &tokens {
+                r.on_hover_text(tk);
+            }
+        };
         if self.state.variants.contains_key(&m.id) {
             ui.horizontal(|ui| {
                 self.variant_switcher(ui, &m.id);
                 if let Some(model) = &m.model {
-                    ui.label(small_muted(&t, model));
+                    model_label(ui, model);
                 }
             });
         } else if let Some(model) = &m.model {
-            ui.label(small_muted(&t, model));
+            model_label(ui, model);
         }
         if !m.activity.is_empty() {
             let open_default = generating;
@@ -555,28 +566,17 @@ impl AisCraftApp {
         }
         if !generating && !m.content.is_empty() {
             ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(small_muted(&t, "Kopieren")).frame(false)).clicked() {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if message_action(ui, &t, "🗐", "Kopieren").on_hover_text("Antwort in die Zwischenablage").clicked() {
                     ui.ctx().copy_text(m.content.clone());
                 }
-                if ui
-                    .add(egui::Button::new(small_muted(&t, "Vorlesen")).frame(false))
-                    .on_hover_text("Antwort vorlesen (AIS.chat oder OpenAI-kompatibles Backend)")
-                    .clicked()
-                {
+                if message_action(ui, &t, "🔊", "Vorlesen").on_hover_text("Antwort vorlesen (AIS.chat oder OpenAI-kompatibler Dienst)").clicked() {
                     self.run("voice.speak", json!({"message_id": m.id}));
                 }
-                if ui
-                    .add(egui::Button::new(small_muted(&t, "Als Dokument")).frame(false))
-                    .on_hover_text("Antwort neben dem Chat als bearbeitbares Dokument öffnen")
-                    .clicked()
-                {
+                if message_action(ui, &t, "📄", "Als Dokument").on_hover_text("Antwort neben dem Chat als bearbeitbares Dokument öffnen").clicked() {
                     self.run("artifact.create", json!({"kind": "document", "from_message": m.id}));
                 }
-                if ui
-                    .add(egui::Button::new(small_muted(&t, "Als Whiteboard")).frame(false))
-                    .on_hover_text("Gliederung der Antwort als Mindmap öffnen")
-                    .clicked()
-                {
+                if message_action(ui, &t, "▣", "Als Whiteboard").on_hover_text("Gliederung der Antwort als Mindmap öffnen").clicked() {
                     self.run("artifact.create", json!({"kind": "board", "from_message": m.id}));
                 }
                 if aiscraft_engine::has_links(&m.content)
@@ -589,14 +589,6 @@ impl AisCraftApp {
                 }
                 if is_last && icon_button(ui, &t, "⟳", "Neu erzeugen (Strg+R)").clicked() {
                     self.run("chat.regenerate", json!({}));
-                }
-                if let Some(u) = m.usage
-                    && u.output_tokens > 0
-                {
-                    // A frameless button, not a label: in a wrapping row a label is split mid-text, a button moves whole.
-                    ui.add(
-                        egui::Button::new(small_muted(&t, format!("{} ➡ {} Tokens", u.input_tokens, u.output_tokens))).frame(false).sense(egui::Sense::hover()),
-                    );
                 }
             });
         }
@@ -690,7 +682,7 @@ impl AisCraftApp {
         };
         let prefix = if estimated { "≈ " } else { "" };
         let tip = if estimated {
-            "Kontext geschätzt aus der Textlänge (dieses Backend meldet keine Token-Zahlen)".to_string()
+            "Kontext geschätzt aus der Textlänge (dieser Dienst meldet keine Token-Zahlen)".to_string()
         } else {
             "Kontext laut Server: Eingabe der letzten Antwort plus Antwort, also ungefähr das, was die nächste Nachricht mitschickt".to_string()
         };
@@ -704,19 +696,22 @@ impl AisCraftApp {
                 } else {
                     t.accent
                 };
-                let r = ui.label(small_muted(t, format!("{prefix}{} / {}", fmt(used), fmt(w))));
-                let (rect, bar) = ui.allocate_exact_size(egui::vec2(64.0, 6.0), egui::Sense::hover());
-                ui.painter().rect_filled(rect, CornerRadius::same(3), t.surface_hi);
-                let mut fill = rect;
-                fill.set_width((rect.width() * frac).max(2.0));
-                ui.painter().rect_filled(fill, CornerRadius::same(3), color);
+                // One control: label, numbers and bar share a tooltip (the row is right to left).
                 let tip = format!("{tip}. {:.0} % von {} Tokens belegt.", frac * 100.0, fmt(w));
-                r.on_hover_text(&tip);
-                bar.on_hover_text(tip);
+                let group = ui.scope(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(56.0, 6.0), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, CornerRadius::same(3), t.surface_hi);
+                    let mut fill = rect;
+                    fill.set_width((rect.width() * frac).max(2.0));
+                    ui.painter().rect_filled(fill, CornerRadius::same(3), color);
+                    ui.label(small_muted(t, format!("Kontext {prefix}{} / {}", fmt(used), fmt(w))));
+                });
+                group.response.interact(egui::Sense::hover()).on_hover_text(tip);
             }
             _ => {
                 ui.label(small_muted(t, format!("Kontext {prefix}{}", fmt(used))))
-                    .on_hover_text(format!("{tip}. Die Größe des Kontextfensters meldet dieses Backend nicht."));
+                    .on_hover_text(format!("{tip}. Die Größe des Kontextfensters meldet dieser Dienst nicht."));
             }
         }
     }
@@ -1005,13 +1000,7 @@ impl AisCraftApp {
                     if enter_sends { KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter) } else { KeyboardShortcut::new(Modifiers::NONE, Key::Enter) };
                 let edit = egui::TextEdit::multiline(&mut self.composer)
                     .id(egui::Id::unique("composer"))
-                    .hint_text(if image_mode {
-                        "Beschreibe das Bild, das entstehen soll …"
-                    } else if enter_sends {
-                        "Schreib eine Nachricht … (Umschalt+Enter für neue Zeile)"
-                    } else {
-                        "Schreib eine Nachricht … (Strg+Enter sendet)"
-                    })
+                    .hint_text(if image_mode { "Beschreibe das Bild, das entstehen soll …" } else { "Schreib eine Nachricht …" })
                     .desired_rows(2)
                     .desired_width(f32::INFINITY)
                     .frame(Frame::NONE)
@@ -1078,7 +1067,7 @@ impl AisCraftApp {
                             {
                                 self.pending_files.extend(files);
                             }
-                            if !image_mode && self.link_input.is_none() && icon_button(ui, &t, "🔗", "Webseite anhängen (bis zu 5 Links)").clicked() {
+                            if !image_mode && self.link_input.is_none() && icon_button(ui, &t, "🌐", "Webseite anhängen (bis zu 5 Links)").clicked() {
                                 self.link_input = Some(String::new());
                             }
                             self.model_picker(ui);
@@ -1132,8 +1121,18 @@ impl AisCraftApp {
         let sends = (b.config.send_context && b.capabilities.system_prompt) || (!b.capabilities.system_prompt && src.inline && (src.memory || src.project));
         ui.add_space(4.0);
         ui.vertical_centered(|ui| {
+            let typing = !self.composer.is_empty() && ui.memory(|m| m.focused()) == Some(egui::Id::unique("composer"));
             if (has_project || has_memory) && !sends {
                 ui.label(small_muted(t, format!("Projektanweisungen und Notizen gehen nicht an {}.", b.config.name)));
+            } else if typing {
+                ui.label(small_muted(
+                    t,
+                    if self.state.settings.enter_sends {
+                        "Enter sendet, Umschalt+Enter beginnt eine neue Zeile."
+                    } else {
+                        "Strg+Enter sendet, Enter beginnt eine neue Zeile."
+                    },
+                ));
             } else {
                 ui.label(small_muted(t, "KI kann Fehler machen. Prüfe wichtige Angaben."));
             }
@@ -1192,4 +1191,47 @@ fn dead_links_row(ui: &mut Ui, t: &crate::theme::Tokens, m: &Message) {
 fn short_url(url: &str) -> String {
     let s = url.split_once("://").map(|(_, r)| r).unwrap_or(url).trim_end_matches('/');
     if s.chars().count() > 48 { format!("{}…", s.chars().take(47).collect::<String>()) } else { s.to_string() }
+}
+
+/// Saving the chat as a file (Markdown or JSON).
+pub(crate) const EXPORT_ICON: &str = "📤";
+
+/// A login handle ("uds2027", "j.renz") is no name to greet someone with.
+fn looks_like_a_name(word: &str) -> bool {
+    let mut letters = 0;
+    for c in word.chars() {
+        if c.is_alphabetic() {
+            letters += 1;
+        } else if c != '-' && c != '\'' {
+            return false;
+        }
+    }
+    letters >= 2
+}
+
+/// A suggestion under the composer: readable text on a quiet, outlined pill.
+fn suggestion_chip<'a>(t: &crate::theme::Tokens, text: &str) -> egui::Button<'a> {
+    egui::Button::new(RichText::new(text).size(13.0).color(t.text))
+        .fill(t.surface)
+        .stroke(Stroke::new(1.0, t.border))
+        .corner_radius(CornerRadius::same(t.radius))
+        .min_size(egui::vec2(0.0, 30.0))
+}
+
+/// An action under a message: symbol and word, framed only on hover.
+fn message_action(ui: &mut Ui, t: &crate::theme::Tokens, icon: &str, label: &str) -> egui::Response {
+    ui.add(egui::Button::new(RichText::new(format!("{icon} {label}")).small().color(t.muted)).frame_when_inactive(false).min_size(egui::vec2(0.0, 24.0)))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn greets_names_not_login_handles() {
+        assert!(super::looks_like_a_name("Jan"));
+        assert!(super::looks_like_a_name("Anne-Marie"));
+        assert!(super::looks_like_a_name("Jürgen"));
+        assert!(!super::looks_like_a_name("uds2027"));
+        assert!(!super::looks_like_a_name("j.renz"));
+        assert!(!super::looks_like_a_name("x"));
+    }
 }

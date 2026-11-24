@@ -16,11 +16,11 @@ pub struct Palette {
 
 #[derive(Debug, Clone)]
 enum Item {
-    Command { id: &'static str, label: &'static str, shortcut: Option<&'static str> },
+    Command { id: &'static str, label: &'static str, group: &'static str, shortcut: Option<&'static str> },
     Chat { id: String, title: String },
     Project { id: String, name: String },
     Model { backend: String, model: String, label: String },
-    Ui { label: &'static str, action: UiAction },
+    Ui { label: &'static str, group: &'static str, action: UiAction },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -45,14 +45,31 @@ impl Item {
             Item::Model { label, .. } => format!("Modell: {label}"),
         }
     }
+    /// What the row is about (Chat, Dokumente, Einstellungen …), shown on its right unless it has a shortcut.
     fn kind(&self) -> &'static str {
         match self {
-            Item::Command { .. } | Item::Ui { .. } => "Befehl",
+            Item::Command { group, .. } => group_label(group),
+            Item::Ui { group, .. } => group,
             Item::Chat { .. } => "Chat",
             Item::Project { .. } => "Projekt",
             Item::Model { .. } => "Modell",
         }
     }
+}
+
+/// The engine's command groups in the words the rest of the app uses.
+fn group_label(group: &'static str) -> &'static str {
+    match group {
+        "Backends" => "Dienste",
+        "Artefakte" => "Dokumente",
+        "App" => "Einstellungen",
+        g => g,
+    }
+}
+
+/// "Ctrl+Shift+E" as German keyboards label it: "Strg+Umschalt+E".
+fn shortcut_label(s: &str) -> String {
+    s.replace("Ctrl", "Strg").replace("Shift", "Umschalt").replace("Escape", "Esc")
 }
 
 impl AisCraftApp {
@@ -62,18 +79,18 @@ impl AisCraftApp {
         let mut items: Vec<Item> = commands()
             .iter()
             .filter(|c| c.palette && !ui_handled.contains(&c.id))
-            .map(|c| Item::Command { id: c.id, label: c.label, shortcut: c.shortcut })
+            .map(|c| Item::Command { id: c.id, label: c.label, group: c.group, shortcut: c.shortcut })
             .collect();
         items.extend([
-            Item::Ui { label: "Einstellungen", action: UiAction::Settings },
-            Item::Ui { label: "Handbuch", action: UiAction::Manual },
-            Item::Ui { label: "Gedächtnis öffnen", action: UiAction::Memory },
-            Item::Ui { label: "Backend hinzufügen", action: UiAction::AddBackend },
-            Item::Ui { label: "Neues Projekt", action: UiAction::NewProject },
-            Item::Ui { label: "Seitenleiste ein/aus", action: UiAction::ToggleSidebar },
-            Item::Ui { label: "Chat exportieren", action: UiAction::Export },
-            Item::Ui { label: "Alle Chats durchsuchen", action: UiAction::Search },
-            Item::Ui { label: "Assistenten, Figuren & Lernszenarien entdecken", action: UiAction::Explore },
+            Item::Ui { label: "Einstellungen", group: "Einstellungen", action: UiAction::Settings },
+            Item::Ui { label: "Handbuch", group: "Hilfe", action: UiAction::Manual },
+            Item::Ui { label: "Gedächtnis öffnen", group: "Gedächtnis", action: UiAction::Memory },
+            Item::Ui { label: "Dienst hinzufügen", group: "Dienste", action: UiAction::AddBackend },
+            Item::Ui { label: "Neues Projekt", group: "Projekte", action: UiAction::NewProject },
+            Item::Ui { label: "Seitenleiste ein/aus", group: "Ansicht", action: UiAction::ToggleSidebar },
+            Item::Ui { label: "Chat exportieren", group: "Chat", action: UiAction::Export },
+            Item::Ui { label: "Alle Chats durchsuchen", group: "Suche", action: UiAction::Search },
+            Item::Ui { label: "Assistenten, Dialogpartner & Lernszenarien entdecken", group: "AIS.chat", action: UiAction::Explore },
         ]);
         for b in &self.state.backends {
             if matches!(b.status, BackendStatus::Ready { .. }) {
@@ -105,7 +122,7 @@ impl AisCraftApp {
         let enter = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
         let mut chosen = None;
         let mut close = false;
-        let modal = egui::Modal::new(Id::unique("palette")).show(ctx, |ui| {
+        let modal = egui::Modal::new(Id::unique("palette")).frame(crate::widgets::dialog_frame(ctx, &t).inner_margin(egui::Margin::same(14))).show(ctx, |ui| {
             ui.set_width(560.0);
             let r = ui.add(egui::TextEdit::singleline(&mut pal.query).hint_text("Befehl, Chat, Projekt oder Modell …").desired_width(f32::INFINITY));
             r.request_focus();
@@ -113,12 +130,14 @@ impl AisCraftApp {
                 pal.selected = 0;
             }
             ui.add_space(6.0);
-            egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
+            // A whole number of rows (28 px and the gap), so the last one is never cut in half.
+            let row = 28.0 + ui.spacing().item_spacing.y;
+            egui::ScrollArea::vertical().max_height(11.0 * row - ui.spacing().item_spacing.y).show(ui, |ui| {
                 for (i, (_, it)) in scored.iter().enumerate() {
                     let sel = i == pal.selected;
                     let resp = ui.add(egui::Button::selectable(sel, RichText::new(it.text())).truncate().min_size(egui::vec2(ui.available_width(), 28.0)));
                     let hint = match it {
-                        Item::Command { shortcut: Some(s), .. } => s.to_string(),
+                        Item::Command { shortcut: Some(s), .. } => shortcut_label(s),
                         _ => it.kind().to_string(),
                     };
                     ui.painter().text(

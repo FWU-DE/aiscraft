@@ -214,7 +214,7 @@ impl ConversationKind {
 pub enum PersonaKind {
     /// A custom assistant ("Assistent", `assistantId`).
     Assistant,
-    /// A character, e.g. a historical figure ("Figur", `characterId`).
+    /// A character, e.g. a historical figure ("Dialogpartner" in AIS.chat, `characterId`).
     Character,
     /// A learning scenario ("Lernszenario", `learningScenarioId`).
     LearningScenario,
@@ -240,14 +240,14 @@ impl PersonaKind {
     pub fn label(self) -> &'static str {
         match self {
             PersonaKind::Assistant => "Assistent",
-            PersonaKind::Character => "Figur",
+            PersonaKind::Character => "Dialogpartner",
             PersonaKind::LearningScenario => "Lernszenario",
         }
     }
     pub fn plural(self) -> &'static str {
         match self {
             PersonaKind::Assistant => "Assistenten",
-            PersonaKind::Character => "Figuren",
+            PersonaKind::Character => "Dialogpartner",
             PersonaKind::LearningScenario => "Lernszenarien",
         }
     }

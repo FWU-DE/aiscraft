@@ -10,7 +10,7 @@
 
 use std::borrow::Cow;
 
-use egui::{Frame, Margin, RichText, Stroke, Ui};
+use egui::{Color32, Frame, Margin, RichText, Stroke, Ui};
 
 use crate::theme::Tokens;
 
@@ -378,7 +378,15 @@ pub enum Action {
 pub fn show(ui: &mut Ui, md: &mut egui_commonmark::CommonMarkCache, t: &Tokens, seg: &Segment, salt: impl std::hash::Hash + std::fmt::Debug) -> Option<Action> {
     match seg {
         Segment::Markdown(text) => {
-            egui_commonmark::CommonMarkViewer::new().default_width(Some(ui.available_width().max(1.0) as usize)).show(ui, md, text);
+            ui.scope(|ui| {
+                // Tables are striped grids, and the stripe made a single row look selected: no stripes.
+                ui.visuals_mut().faint_bg_color = Color32::TRANSPARENT;
+                egui_commonmark::CommonMarkViewer::new()
+                    .default_width(Some(ui.available_width().max(1.0) as usize))
+                    .syntax_theme_light(t.code_theme())
+                    .syntax_theme_dark(t.code_theme())
+                    .show(ui, md, text);
+            });
             None
         }
         Segment::Math(tex) => {
@@ -435,10 +443,13 @@ fn mermaid_block(ui: &mut Ui, t: &Tokens, src: &str, salt: impl std::hash::Hash 
                 true
             }
             Ok(crate::mermaid::Diagram::Mindmap(root)) => {
+                // Top right, like the copy button of a code block.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if ui.small_button("Als Whiteboard").on_hover_text("Mindmap als bearbeitbares Whiteboard öffnen").clicked() {
+                        action = Some(Action::Board(crate::mermaid::mindmap_outline(&root)));
+                    }
+                });
                 crate::mermaid::show_mindmap(ui, &root, &pal);
-                if ui.button("Als Whiteboard").on_hover_text("Mindmap als bearbeitbares Whiteboard öffnen").clicked() {
-                    action = Some(Action::Board(crate::mermaid::mindmap_outline(&root)));
-                }
                 true
             }
             Ok(crate::mermaid::Diagram::Unsupported(kind)) => {

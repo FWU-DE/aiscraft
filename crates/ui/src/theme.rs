@@ -46,18 +46,20 @@ fn luminance(c: Color32) -> f32 {
 }
 
 impl Tokens {
-    /// AIS look, light: white, AIS blue, slate text (as app.ais-chat.schule).
+    /// AIS look, light: white, the ais.schule blue (`#107fad`, a shade darker so text in it passes
+    /// WCAG AA on the tinted sidebar too), slate text; card radius 12 and control radius 8 as in
+    /// AIS.chat (`packages/ui/src/styles/globals.css`: `--radius`, `--radius-enterprise-md`).
     pub fn light() -> Self {
         Self {
             dark: false,
             bg: Color32::WHITE,
-            sidebar: Color32::from_rgb(0xf5, 0xfa, 0xfc),
+            sidebar: Color32::from_rgb(0xee, 0xf5, 0xf8),
             surface: Color32::WHITE,
             surface_hi: Color32::from_rgb(0xe8, 0xf3, 0xf7),
-            border: Color32::from_rgb(0xd9, 0xe6, 0xed),
+            border: Color32::from_rgb(0xd5, 0xe3, 0xeb),
             text: Color32::from_rgb(0x1e, 0x29, 0x3b),
             muted: Color32::from_rgb(0x5f, 0x6f, 0x82),
-            accent: Color32::from_rgb(0x10, 0x7f, 0xad),
+            accent: Color32::from_rgb(0x0e, 0x74, 0xa0),
             on_accent: Color32::WHITE,
             selection: Color32::from_rgb(0xcf, 0xe6, 0xf1),
             user_bubble: Color32::from_rgb(0xe7, 0xf2, 0xf7),
@@ -65,7 +67,7 @@ impl Tokens {
             success: Color32::from_rgb(0x1f, 0x8a, 0x5b),
             warning: Color32::from_rgb(0xb7, 0x79, 0x1f),
             code_bg: Color32::from_rgb(0xf1, 0xf5, 0xf9),
-            radius: 10,
+            radius: 12,
         }
     }
 
@@ -88,7 +90,7 @@ impl Tokens {
             success: Color32::from_rgb(0x4c, 0xc0, 0x8a),
             warning: Color32::from_rgb(0xe8, 0xb0, 0x50),
             code_bg: Color32::from_rgb(0x09, 0x0f, 0x18),
-            radius: 10,
+            radius: 12,
         }
     }
 
@@ -127,13 +129,23 @@ impl Tokens {
             success: get("green").unwrap_or(base.success),
             warning: get("yellow").unwrap_or(base.warning),
             code_bg: get("darker_background").unwrap_or_else(|| mix(bg, Color32::BLACK, 0.2)),
-            radius: 10,
+            radius: 12,
         })
+    }
+
+    /// Corners of buttons, fields and menus (AIS.chat: `--radius` 0.5rem); cards use `radius`.
+    pub fn control_radius(&self) -> u8 {
+        self.radius.saturating_sub(4)
+    }
+
+    /// The syntax theme for code blocks: one whose colours stay readable on `code_bg`
+    /// (`base16-ocean.light` has strings at about 1.9:1 on a light background).
+    pub fn code_theme(&self) -> &'static str {
+        if self.dark { "base16-ocean.dark" } else { "InspiredGitHub" }
     }
 
     pub fn visuals(&self) -> Visuals {
         let mut v = if self.dark { Visuals::dark() } else { Visuals::light() };
-        let r = CornerRadius::same(self.radius);
         v.panel_fill = self.bg;
         v.window_fill = self.surface;
         v.extreme_bg_color = self.surface;
@@ -145,7 +157,7 @@ impl Tokens {
         v.selection.stroke = Stroke::new(1.0, self.accent);
         v.window_stroke = Stroke::new(1.0, self.border);
         v.window_corner_radius = CornerRadius::same(self.radius.saturating_add(4));
-        v.menu_corner_radius = r;
+        v.menu_corner_radius = CornerRadius::same(self.control_radius());
         v.error_fg_color = self.danger;
         v.warn_fg_color = self.warning;
         for (w, fill) in [
@@ -155,7 +167,7 @@ impl Tokens {
             (&mut v.widgets.active, mix(self.surface_hi, self.text, 0.14)),
             (&mut v.widgets.open, self.surface_hi),
         ] {
-            w.corner_radius = CornerRadius::same(self.radius.saturating_sub(3));
+            w.corner_radius = CornerRadius::same(self.control_radius());
             w.bg_fill = fill;
             w.weak_bg_fill = fill;
             w.fg_stroke = Stroke::new(1.0, self.text);

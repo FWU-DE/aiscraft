@@ -298,10 +298,10 @@ static COMMANDS: &[CommandSpec] = &[
         });
         Ok(out)
     })),
-    cmd!("persona.refresh", "Assistenten, Figuren und Lernszenarien laden", "Backends", None, "backend?: string", true, |c, p| Box::pin(persona_refresh(c, p))),
+    cmd!("persona.refresh", "Assistenten, Dialogpartner und Lernszenarien laden", "Backends", None, "backend?: string", true, |c, p| Box::pin(persona_refresh(c, p))),
     cmd!(
         "persona.start",
-        "Chat mit Assistent, Figur oder Lernszenario",
+        "Chat mit Assistent, Dialogpartner oder Lernszenario",
         "Chat",
         None,
         "kind: assistant|character|learning_scenario, id: string, backend?: string, text?: string (gleich senden)",
@@ -310,7 +310,7 @@ static COMMANDS: &[CommandSpec] = &[
     ),
     cmd!(
         "persona.picture",
-        "Bild eines Assistenten, einer Figur oder eines Lernszenarios laden",
+        "Bild eines Assistenten, Dialogpartners oder Lernszenarios laden",
         "Backends",
         None,
         "kind: assistant|character|learning_scenario, id: string, backend?: string, fresh?: bool (nicht aus dem Zwischenspeicher)",
@@ -319,7 +319,7 @@ static COMMANDS: &[CommandSpec] = &[
     ),
     cmd!(
         "persona.favorite",
-        "Assistent, Figur oder Lernszenario als Favorit markieren",
+        "Assistent, Dialogpartner oder Lernszenario als Favorit markieren",
         "Backends",
         None,
         "kind: assistant|character|learning_scenario, id: string, favorite?: bool (Standard: umschalten), backend?: string",

@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::app::AisCraftApp;
 use crate::dialogs::{Dialog, SettingsTab};
-use crate::widgets::{card, muted, small_muted, status_dot};
+use crate::widgets::{bell_button, card, muted, plain, small_muted, status_dot};
 
 /// Gap between cards.
 const GAP: f32 = 12.0;
@@ -76,11 +76,6 @@ pub(crate) fn when(ms: i64, now: i64) -> String {
         60..=1439 => format!("vor {} Std.", mins / 60),
         _ => aiscraft_engine::format_local(ms),
     }
-}
-
-/// A one-line summary without Markdown marks (answers often start with **bold** or a heading).
-fn plain(s: &str) -> String {
-    s.replace("**", "").replace("__", "").replace('`', "").trim_start_matches('#').trim().to_string()
 }
 
 /// A bar for a share used (0..=1), coloured by what is left.
@@ -192,7 +187,7 @@ impl AisCraftApp {
                 app.open_explore();
             }
             if ais.is_empty() {
-                ui.add(egui::Label::new(muted(&t, "Deine Lieblings-Assistenten, -Figuren und -Lernszenarien aus AIS.chat stehen hier, sobald du angemeldet bist.")).wrap());
+                ui.add(egui::Label::new(muted(&t, "Deine Lieblings-Assistenten, -Dialogpartner und -Lernszenarien aus AIS.chat stehen hier, sobald du angemeldet bist.")).wrap());
                 if let Some(id) = app.state.backends.iter().find(|b| b.config.kind == BackendKind::AisChat).map(|b| b.config.id.clone()) {
                     ui.add_space(6.0);
                     if ui.button("Bei AIS.chat anmelden").clicked() {
@@ -214,7 +209,7 @@ impl AisCraftApp {
                     ui.add(egui::Label::new(small_muted(&t, e)).wrap());
                 } else {
                     ui.add(
-                        egui::Label::new(muted(&t, "Noch keine Favoriten. Markiere Assistenten, Figuren oder Lernszenarien mit einem Stern, dann startest du sie hier mit einem Klick."))
+                        egui::Label::new(muted(&t, "Noch keine Favoriten. Markiere Assistenten, Dialogpartner oder Lernszenarien mit einem Stern, dann startest du sie hier mit einem Klick."))
                             .wrap(),
                     );
                     ui.add_space(6.0);
@@ -385,7 +380,7 @@ impl AisCraftApp {
                     });
                 });
                 bar(ui, &t, used).on_hover_text(format!(
-                    "{} von {} Token-Punkten verbraucht. Sind sie aufgebraucht, nimmt AIS.chat bis zum nächsten Zeitraum keine Nachrichten mehr an; andere Backends gehen weiter.",
+                    "{} von {} Token-Punkten verbraucht. Sind sie aufgebraucht, nimmt AIS.chat bis zum nächsten Zeitraum keine Nachrichten mehr an; andere Dienste gehen weiter.",
                     thousands(q.used.max(0.0) as u64),
                     thousands(q.max.max(0.0) as u64)
                 ));
@@ -486,7 +481,7 @@ impl AisCraftApp {
                     });
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            let head = RichText::new(&i.title);
+                            let head = RichText::new(plain(&i.title));
                             ui.label(if i.read { head.color(t.muted) } else { head.strong() });
                             ui.label(small_muted(&t, when(i.at, now)));
                         });
@@ -518,12 +513,7 @@ impl AisCraftApp {
     pub(crate) fn inbox_button(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let unread = self.state.inbox.iter().filter(|i| !i.read).count();
-        let label = if unread > 0 { RichText::new(format!("🔔 {unread}")).color(t.accent).strong() } else { RichText::new("🔔").color(t.muted) };
-        let r = ui.add(egui::Button::new(label.size(14.0)).frame(false)).on_hover_text(if unread > 0 {
-            format!("Benachrichtigungen: {unread} neu")
-        } else {
-            "Benachrichtigungen".to_string()
-        });
+        let r = bell_button(ui, &t, unread);
         egui::Popup::from_toggle_button_response(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             ui.set_width(340.0);
             ui.horizontal(|ui| {
@@ -557,7 +547,6 @@ mod tests {
         assert_eq!(when(now, now), "gerade eben");
         assert_eq!(when(now - 5 * 60_000, now), "vor 5 min");
         assert_eq!(when(now - 3 * 3_600_000, now), "vor 3 Std.");
-        assert_eq!(plain("## Die **Photosynthese** ist `x`"), "Die Photosynthese ist x");
     }
 
     #[test]
@@ -582,9 +571,17 @@ mod tests {
         let font = egui::FontId::proportional(14.0);
         let mut missing = Vec::new();
         let mut out = ctx.run_ui(Default::default(), |ui| {
-            for c in ['×', '🔔', '📄', '▣', '👥', '★', '+'] {
+            // Start page, sidebar, message actions and header.
+            for c in ['×', '📄', '▣', '★', '☆', '+', '•', '?', '⚙', '☰', '⌘', '⟳', '🗐', '🔊', '🎤', '📎', '🌐'] {
                 if !ui.fonts_mut(|f| f.has_glyph(&font, c)) {
                     missing.push(c);
+                }
+            }
+            for s in [crate::sidebar::EXPLORE_ICON, crate::conversation::EXPORT_ICON] {
+                for c in s.chars() {
+                    if !ui.fonts_mut(|f| f.has_glyph(&font, c)) {
+                        missing.push(c);
+                    }
                 }
             }
         });

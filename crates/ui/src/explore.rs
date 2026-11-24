@@ -121,11 +121,18 @@ fn pill(ui: &Ui, t: &Tokens, pos: egui::Pos2, text: &str, fill: Color32, color: 
     rect.width()
 }
 
-/// A tab or filter chip: a rounded, selectable button.
-fn chip(ui: &mut Ui, t: &Tokens, selected: bool, text: impl Into<String>) -> egui::Response {
-    let text = RichText::new(text.into()).color(if selected { t.on_accent } else { t.text });
+/// A tab or filter chip: a rounded, selectable button; the count after the label is dimmed.
+fn chip(ui: &mut Ui, t: &Tokens, selected: bool, text: impl Into<String>, count: Option<usize>) -> egui::Response {
+    let fg = if selected { t.on_accent } else { t.text };
+    let mut job = LayoutJob::default();
+    let font = FontId::proportional(14.0);
+    job.append(&text.into(), 0.0, TextFormat { font_id: font.clone(), color: fg, ..Default::default() });
+    if let Some(n) = count {
+        let dim = if selected { t.on_accent.gamma_multiply(0.75) } else { t.muted };
+        job.append(&n.to_string(), 6.0, TextFormat { font_id: FontId::proportional(12.5), color: dim, valign: Align::Center, ..Default::default() });
+    }
     ui.add(
-        egui::Button::new(text)
+        egui::Button::new(job)
             .fill(if selected { t.accent } else { t.surface })
             .stroke(Stroke::new(1.0, if selected { t.accent } else { t.border }))
             .corner_radius(CornerRadius::same(14))
@@ -266,7 +273,7 @@ impl AisCraftApp {
         let mut x = text_left;
         x += pill(ui, &t, egui::pos2(x, y), p.kind.label(), t.selection, t.text) + 6.0;
         if p.own {
-            pill(ui, &t, egui::pos2(x, y), "Eigene", t.surface_hi, t.muted);
+            pill(ui, &t, egui::pos2(x, y), "von mir", t.surface_hi, t.muted);
         }
         y += 23.0;
         if let Some(d) = p.description.as_deref().or(p.exercise.as_deref()) {
@@ -369,7 +376,7 @@ impl AisCraftApp {
                     });
                 });
                 ui.add_space(2.0);
-                ui.label(RichText::new("Assistenten, Figuren & Lernszenarien").size(24.0).strong());
+                ui.label(RichText::new("Assistenten, Dialogpartner & Lernszenarien").size(24.0).strong());
                 ui.label(muted(&t, "Aus AIS.chat: eigene, an deiner Schule geteilte und offizielle."));
                 ui.add_space(10.0);
                 let search = ui.add(
@@ -386,24 +393,32 @@ impl AisCraftApp {
                     open = shown.first().map(|(b, p)| Pick { backend: b.clone(), kind: p.kind, id: p.id.clone() });
                 }
                 ui.add_space(10.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-                    if chip(ui, &t, view.tab.is_none(), format!("Alle  {}", count(None))).clicked() {
-                        view.tab = None;
-                    }
-                    for k in PersonaKind::ALL {
-                        if chip(ui, &t, view.tab == Some(k), format!("{}  {}", k.plural(), count(Some(k)))).clicked() {
-                            view.tab = if view.tab == Some(k) { None } else { Some(k) };
-                        }
-                    }
-                    ui.add_space(10.0);
-                    if chip(ui, &t, view.favorites, "★ Favoriten").on_hover_text("Nur deine Favoriten (der Stern auf einer Karte)").clicked() {
-                        view.favorites = !view.favorites;
-                    }
-                    if chip(ui, &t, view.own, "Eigene").on_hover_text("Nur die, die du selbst angelegt hast").clicked() {
-                        view.own = !view.own;
-                    }
-                });
+                // One row that scrolls sideways in a narrow window instead of leaving a chip alone below.
+                egui::ScrollArea::horizontal().id_salt("explore-chips").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(
+                    ui,
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                            if chip(ui, &t, view.tab.is_none(), "Alle", Some(count(None))).clicked() {
+                                view.tab = None;
+                            }
+                            for k in PersonaKind::ALL {
+                                if chip(ui, &t, view.tab == Some(k), k.plural(), Some(count(Some(k)))).clicked() {
+                                    view.tab = if view.tab == Some(k) { None } else { Some(k) };
+                                }
+                            }
+                            ui.add_space(4.0);
+                            ui.separator();
+                            ui.add_space(4.0);
+                            if chip(ui, &t, view.favorites, "★ Favoriten", None).on_hover_text("Nur deine Favoriten (der Stern auf einer Karte)").clicked() {
+                                view.favorites = !view.favorites;
+                            }
+                            if chip(ui, &t, view.own, "Meine", None).on_hover_text("Nur die, die du selbst angelegt hast").clicked() {
+                                view.own = !view.own;
+                            }
+                        });
+                    },
+                );
             });
         });
 
@@ -411,7 +426,7 @@ impl AisCraftApp {
             Frame::new().inner_margin(Margin { left: 20, right: 20, top: 6, bottom: 24 }).show(ui, |ui| {
                 page_column(ui, |ui| {
                     if backends.is_empty() {
-                        empty_card(ui, &t, "Nicht bei AIS.chat angemeldet", "Assistenten, Figuren und Lernszenarien kommen aus AIS.chat.");
+                        empty_card(ui, &t, "Nicht bei AIS.chat angemeldet", "Assistenten, Dialogpartner und Lernszenarien kommen aus AIS.chat.");
                         if let Some(ais) = self.state.backends.iter().find(|b| b.config.kind == BackendKind::AisChat)
                             && accent_button(ui, &t, "Bei AIS.chat anmelden").clicked()
                         {
@@ -434,7 +449,7 @@ impl AisCraftApp {
                             ui.add_space(30.0);
                             ui.vertical_centered(|ui| {
                                 ui.add(egui::Spinner::new().size(28.0));
-                                ui.label(muted(&t, "Lade Assistenten, Figuren und Lernszenarien …"));
+                                ui.label(muted(&t, "Lade Assistenten, Dialogpartner und Lernszenarien …"));
                             });
                         } else if backends.iter().all(|b| b.personas.is_some()) {
                             empty_card(ui, &t, "Noch keine", "In AIS.chat angelegte und mit dir geteilte erscheinen hier.");
@@ -447,7 +462,7 @@ impl AisCraftApp {
                             ui,
                             &t,
                             "Noch keine Favoriten",
-                            "Favoriten sind Assistenten, Figuren und Lernszenarien, die du oft brauchst. Zeige auf eine Karte und klicke auf den Stern ☆ \
+                            "Favoriten sind Assistenten, Dialogpartner und Lernszenarien, die du oft brauchst. Zeige auf eine Karte und klicke auf den Stern ☆ \
                              oben rechts: Sie erscheint dann hier und in der Seitenleiste, auch in AIS.chat im Browser.",
                         );
                         if accent_button(ui, &t, "Alle zeigen").clicked() {
@@ -550,10 +565,26 @@ impl AisCraftApp {
         let info = self.explore_find(&pick);
         let mut back = false;
         let mut start: Option<Option<String>> = None;
+        // Starting a chat stays in reach however long the page is.
+        if let Some(p) = &info {
+            egui::Panel::bottom("explore-detail-start")
+                .frame(Frame::new().fill(t.bg).stroke(Stroke::new(1.0, t.border)).inner_margin(Margin::symmetric(20, 10)))
+                .show(ui, |ui| {
+                    page_column(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if accent_button(ui, &t, &format!("Chat mit {} starten", p.name)).on_hover_text("Enter").clicked() {
+                                start = Some(None);
+                            }
+                            ui.label(small_muted(&t, p.kind.label()));
+                        });
+                    });
+                });
+        }
         ScrollArea::vertical().id_salt(("explore-detail", &pick.id)).auto_shrink([false, false]).show(ui, |ui| {
             Frame::new().inner_margin(Margin { left: 20, right: 20, top: 12, bottom: 28 }).show(ui, |ui| {
-                page_column_max(ui, 900.0, |ui| {
-                    if ui.add(egui::Button::new(muted(&t, "‹  Alle Assistenten, Figuren & Lernszenarien")).frame(false)).on_hover_text("Esc").clicked() {
+                page_column(ui, |ui| {
+                    if ui.add(egui::Button::new(muted(&t, "‹  Alle Assistenten, Dialogpartner & Lernszenarien")).frame(false)).on_hover_text("Esc").clicked()
+                    {
                         back = true;
                     }
                     ui.add_space(10.0);
@@ -563,12 +594,12 @@ impl AisCraftApp {
                     };
                     let wide = ui.available_width() >= 620.0;
                     let side = if wide { 232.0 } else { 148.0 };
-                    let mut header = |ui: &mut Ui, this: &mut Self| {
+                    let header = |ui: &mut Ui, this: &mut Self| {
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
                             badge(ui, &t, p.kind.label(), t.selection, t.text);
                             if p.own {
-                                badge(ui, &t, "Eigene", t.surface_hi, t.muted);
+                                badge(ui, &t, "von mir", t.surface_hi, t.muted);
                             }
                             let (label, hint) = if p.favorite {
                                 ("★ Favorit", "Favorit entfernen")
@@ -597,19 +628,6 @@ impl AisCraftApp {
                             ui.add_space(2.0);
                             ui.label(small_muted(&t, format!("Websuche: {} (in AIS.chat eingestellt)", if on { "an" } else { "aus" })));
                         }
-                        ui.add_space(14.0);
-                        ui.horizontal(|ui| {
-                            let b = ui.add(
-                                egui::Button::new(RichText::new("Chat starten").color(t.on_accent).strong().size(15.0))
-                                    .fill(t.accent)
-                                    .corner_radius(CornerRadius::same(t.radius))
-                                    .min_size(vec2(150.0, 36.0)),
-                            );
-                            if b.clicked() {
-                                start = Some(None);
-                            }
-                            ui.label(small_muted(&t, "Enter"));
-                        });
                     };
                     if wide {
                         ui.horizontal_top(|ui| {
@@ -644,6 +662,7 @@ impl AisCraftApp {
                     if !p.prompt_suggestions.is_empty() {
                         ui.add_space(4.0);
                         ui.label(small_muted(&t, "SO KANNST DU ANFANGEN"));
+                        ui.label(small_muted(&t, format!("Vorschläge von „{}“ aus AIS.chat", p.name)));
                         ui.add_space(4.0);
                         for s in &p.prompt_suggestions {
                             let r = ui.add(
