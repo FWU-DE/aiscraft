@@ -31,37 +31,7 @@ pub struct WebPage {
 pub async fn fetch(url: &str, allow_private: bool) -> Result<WebPage> {
     let mut url = parse(url)?;
     for _ in 0..=MAX_REDIRECTS {
-        let host = url.host_str().unwrap_or("").to_string();
-        let port = url.port_or_known_default().unwrap_or(443);
-        if host.is_empty() {
-            return Err(Error::invalid("Die Adresse hat keinen Rechnernamen"));
-        }
-        let literal: Option<IpAddr> = host.trim_start_matches('[').trim_end_matches(']').parse().ok();
-        let addrs: Vec<SocketAddr> = match literal {
-            Some(ip) => vec![SocketAddr::new(ip, port)],
-            None => tokio::time::timeout(Duration::from_secs(10), tokio::net::lookup_host((host.as_str(), port)))
-                .await
-                .map_err(|_| Error::network(format!("{host}: Namensauflösung dauert zu lange")))?
-                .map_err(|_| Error::network(format!("{host} gibt es nicht oder ist nicht erreichbar")))?
-                .take(16)
-                .collect(),
-        };
-        if addrs.is_empty() {
-            return Err(Error::network(format!("{host} gibt es nicht oder ist nicht erreichbar")));
-        }
-        if !allow_private && addrs.iter().any(|a| !is_public(a.ip())) {
-            return Err(Error::refused(format!("{host} liegt im lokalen Netz; solche Adressen liest AIS.ChatCraft nicht")));
-        }
-        // Connect to exactly the addresses checked above, so the name cannot change in between.
-        let mut builder = reqwest::Client::builder()
-            .user_agent(USER_AGENT)
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(TIMEOUT);
-        if literal.is_none() {
-            builder = builder.resolve_to_addrs(&host, &addrs);
-        }
-        let client = builder.build().map_err(|e| Error::network(format!("HTTP-Client: {e}")))?;
+        let (client, host) = client_for(&url, allow_private, TIMEOUT).await?;
         let resp = client
             .get(url.clone())
             .header(reqwest::header::ACCEPT, "text/html, text/plain;q=0.9, application/json;q=0.8, */*;q=0.1")
@@ -70,13 +40,7 @@ pub async fn fetch(url: &str, allow_private: bool) -> Result<WebPage> {
             .map_err(net_err)?;
         let status = resp.status();
         if status.is_redirection() {
-            let next = resp
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|l| url.join(l).ok())
-                .ok_or_else(|| Error::protocol("Weiterleitung ohne gültiges Ziel"))?;
-            url = parse(next.as_str())?;
+            url = redirect_target(&url, &resp)?;
             continue;
         }
         if !status.is_success() {
@@ -97,6 +61,150 @@ pub async fn fetch(url: &str, allow_private: bool) -> Result<WebPage> {
         return Ok(WebPage { url: url.to_string(), title, text, truncated });
     }
     Err(Error::network("Zu viele Weiterleitungen"))
+}
+
+/// A client that connects to exactly the addresses of `url`'s host checked here, so the name
+/// cannot change in between; refuses addresses in the local network unless `allow_private`.
+async fn client_for(url: &reqwest::Url, allow_private: bool, timeout: Duration) -> Result<(reqwest::Client, String)> {
+    let host = url.host_str().unwrap_or("").to_string();
+    let port = url.port_or_known_default().unwrap_or(443);
+    if host.is_empty() {
+        return Err(Error::invalid("Die Adresse hat keinen Rechnernamen"));
+    }
+    let literal: Option<IpAddr> = host.trim_start_matches('[').trim_end_matches(']').parse().ok();
+    let addrs: Vec<SocketAddr> = match literal {
+        Some(ip) => vec![SocketAddr::new(ip, port)],
+        None => tokio::time::timeout(timeout.min(Duration::from_secs(10)), tokio::net::lookup_host((host.as_str(), port)))
+            .await
+            .map_err(|_| Error::network(format!("{host}: Namensauflösung dauert zu lange")))?
+            .map_err(|_| Error::network(format!("{host} gibt es nicht oder ist nicht erreichbar")))?
+            .take(16)
+            .collect(),
+    };
+    if addrs.is_empty() {
+        return Err(Error::network(format!("{host} gibt es nicht oder ist nicht erreichbar")));
+    }
+    if !allow_private && addrs.iter().any(|a| !is_public(a.ip())) {
+        return Err(Error::refused(format!("{host} liegt im lokalen Netz; solche Adressen liest AIS.ChatCraft nicht")));
+    }
+    let mut builder = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(timeout.min(Duration::from_secs(10)))
+        .timeout(timeout);
+    if literal.is_none() {
+        builder = builder.resolve_to_addrs(&host, &addrs);
+    }
+    let client = builder.build().map_err(|e| Error::network(format!("HTTP-Client: {e}")))?;
+    Ok((client, host))
+}
+
+/// Where a redirect points, checked like the first address.
+fn redirect_target(url: &reqwest::Url, resp: &reqwest::Response) -> Result<reqwest::Url> {
+    let next = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|l| url.join(l).ok())
+        .ok_or_else(|| Error::protocol("Weiterleitung ohne gültiges Ziel"))?;
+    parse(next.as_str())
+}
+
+/// What a link check found out about one address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkState {
+    /// The page answers (also behind a login or a bot check: it exists).
+    Alive,
+    /// Gone or unreachable, with the reason people read.
+    Dead(String),
+    /// Not asked: an address in the local network or not http(s).
+    Skipped(String),
+}
+
+/// Check whether a link leads somewhere: HEAD first, GET when the server does not take HEAD;
+/// redirects followed (at most [`MAX_REDIRECTS`], each target checked again), the body never read.
+/// Same rules as [`fetch`]: http and https only, no addresses in the local network unless
+/// `allow_private` (tests).
+pub async fn check(url: &str, allow_private: bool, timeout: Duration) -> LinkState {
+    let mut url = match parse(url) {
+        Ok(u) => u,
+        Err(e) => return LinkState::Skipped(e.message),
+    };
+    for _ in 0..=MAX_REDIRECTS {
+        let client = match client_for(&url, allow_private, timeout).await {
+            Ok((c, _)) => c,
+            Err(e) if e.kind == aiscraft_core::ErrorKind::Refused || e.kind == aiscraft_core::ErrorKind::Invalid => return LinkState::Skipped(e.message),
+            Err(e) => return LinkState::Dead(e.message),
+        };
+        let mut resp = client.head(url.clone()).send().await;
+        // Some servers refuse or botch HEAD; ask once more the normal way (only the head is read).
+        let retry = match &resp {
+            Ok(r) => matches!(r.status().as_u16(), 400 | 403 | 404 | 405 | 406 | 429 | 500 | 501 | 503),
+            Err(e) => !e.is_timeout(),
+        };
+        if retry {
+            resp = client.get(url.clone()).send().await;
+        }
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => return LinkState::Dead(net_err(e).message),
+        };
+        let status = resp.status();
+        if status.is_redirection() {
+            match redirect_target(&url, &resp) {
+                Ok(next) => {
+                    url = next;
+                    continue;
+                }
+                Err(e) if e.kind == aiscraft_core::ErrorKind::Invalid => return LinkState::Skipped(e.message),
+                Err(e) => return LinkState::Dead(e.message),
+            }
+        }
+        return match status.as_u16() {
+            200..=299 => LinkState::Alive,
+            // Behind a login, a bot check or a rate limit: the page is there.
+            401 | 403 | 429 => LinkState::Alive,
+            404 | 410 => LinkState::Dead(format!("Seite nicht gefunden (HTTP {})", status.as_u16())),
+            code => LinkState::Dead(format!("HTTP {code}")),
+        };
+    }
+    LinkState::Dead("Zu viele Weiterleitungen".into())
+}
+
+/// The http(s) addresses in a text (Markdown links, `<…>` and bare), in order, without
+/// duplicates, at most `max`.
+pub fn urls_in(text: &str, max: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = text;
+    while out.len() < max {
+        let at = match (rest.find("https://"), rest.find("http://")) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None) | (None, Some(a)) => a,
+            (None, None) => break,
+        };
+        let Some(tail) = rest.get(at..) else { break };
+        let end = tail.find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | '`' | '|' | '[' | ']' | '{' | '}')).unwrap_or(tail.len());
+        let mut url = tail.get(..end).unwrap_or("");
+        // Trailing punctuation and unbalanced closing brackets belong to the sentence.
+        loop {
+            let trimmed = url.trim_end_matches(['.', ',', ';', ':', '!', '?', '*', '_', '~']);
+            let trimmed = if trimmed.ends_with(')') && trimmed.matches('(').count() < trimmed.matches(')').count() {
+                trimmed.get(..trimmed.len().saturating_sub(1)).unwrap_or("")
+            } else {
+                trimmed
+            };
+            if trimmed.len() == url.len() {
+                break;
+            }
+            url = trimmed;
+        }
+        let scheme_only = url == "https://" || url == "http://";
+        if !scheme_only && !out.iter().any(|u| u == url) {
+            out.push(url.to_string());
+        }
+        rest = tail.get(end.max(1)..).unwrap_or("");
+    }
+    out
 }
 
 fn parse(raw: &str) -> Result<reqwest::Url> {
@@ -312,6 +420,36 @@ mod tests {
         }
         for ip in ["93.184.216.34", "2606:4700::1111"] {
             assert!(is_public(ip.parse().unwrap()), "{ip}");
+        }
+    }
+
+    #[test]
+    fn urls_in_text() {
+        let t = "Siehe [Plan](https://schule.example/plan). Auch https://a.example/x_(y), <http://b.example/?q=1&r=2> und https://schule.example/plan!\n\
+                 `https://` allein, ftp://c.example, (https://d.example/pfad) und https://e.example/ä?x=1.";
+        assert_eq!(
+            urls_in(t, 20),
+            vec!["https://schule.example/plan", "https://a.example/x_(y)", "http://b.example/?q=1&r=2", "https://d.example/pfad", "https://e.example/ä?x=1"]
+        );
+        assert_eq!(urls_in(t, 2).len(), 2);
+        for s in ["", "https://", "http://)", "ähttps://ö", "https://)))...", "[x](https://"] {
+            let _ = urls_in(s, 20);
+        }
+    }
+
+    #[tokio::test]
+    async fn link_check_never_asks_local_addresses() {
+        for u in [
+            "http://127.0.0.1:9/",
+            "http://10.0.0.1/",
+            "http://192.168.1.1/",
+            "http://169.254.169.254/latest",
+            "http://[::1]/",
+            "http://localhost:9/",
+            "ftp://example.org/",
+        ] {
+            let state = check(u, false, Duration::from_millis(500)).await;
+            assert!(matches!(state, LinkState::Skipped(_)), "{u}: {state:?}");
         }
     }
 

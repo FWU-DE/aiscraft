@@ -1336,21 +1336,152 @@ fn inline_context_for_backends_without_system_prompt() {
     let conv = || engine.state().conversation(engine.state().current.as_deref().unwrap()).cloned().unwrap();
     // Older chats and new ones: off until switched on.
     assert!(!conv().sources.inline);
-    assert!(crate::chat::inline_context(engine.ctx(), &conv(), false).is_none());
+    assert!(crate::chat::inline_context(engine.ctx(), &conv(), false, "").is_none());
     assert!(!conv().sources.memory_for(false) && conv().sources.memory_for(true));
     engine.call("chat.set_sources", json!({"memory": true, "project": false, "inline": true})).unwrap();
-    let (block, print) = crate::chat::inline_context(engine.ctx(), &conv(), false).unwrap();
-    assert!(block.contains("MERKNOTIZ") && !block.contains("PROJEKTREGEL"), "only what is switched on");
+    let first = crate::chat::inline_context(engine.ctx(), &conv(), false, "").unwrap();
+    assert!(first.block.contains("MERKNOTIZ") && !first.block.contains("PROJEKTREGEL"), "only what is switched on");
+    assert_eq!(first.labels, vec!["Gedächtnis".to_string()]);
+    let print = first.print.clone().unwrap();
     // Backends with a system prompt never get it inline.
-    assert!(crate::chat::inline_context(engine.ctx(), &conv(), true).is_none());
+    assert!(crate::chat::inline_context(engine.ctx(), &conv(), true, "").is_none());
     // Once sent, not again …
     let mut sent = conv();
     sent.sources.inline_sent = Some(print.clone());
-    assert!(crate::chat::inline_context(engine.ctx(), &sent, false).is_none());
+    assert!(crate::chat::inline_context(engine.ctx(), &sent, false, "").is_none());
     // … until the notes change.
     engine.call("memory.update", json!({"id": nid, "text": "NEUE NOTIZ"})).unwrap();
-    let (block, print2) = crate::chat::inline_context(engine.ctx(), &sent, false).unwrap();
-    assert!(block.contains("NEUE NOTIZ") && print2 != print);
+    let again = crate::chat::inline_context(engine.ctx(), &sent, false, "").unwrap();
+    assert!(again.block.contains("NEUE NOTIZ") && again.print.unwrap() != print);
+}
+
+/// AIS.chat: fitting earlier chats and skills go along with the request they fit (#49), once per
+/// chat, and the message says what went along; unrelated requests carry nothing.
+#[test]
+fn ais_chat_recall_goes_along_once() {
+    let (engine, posted) = ais_engine();
+    engine.call("chat.send", json!({"text": "Arbeitsblatt Photosynthese für die 7b mit Lückentext"})).unwrap();
+    let first = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(!first.contains("früheren Chats"), "nothing to recall yet: {first}");
+    engine.call("skill.create", json!({"title": "Lückentext erstellen", "when": "Lückentext für eine Klasse", "steps": "1. Text\n2. Lücken"})).unwrap();
+
+    // A related request in a new chat: the excerpt and the skill go along, at the top of the message.
+    engine.call("chat.new", json!({})).unwrap();
+    engine.call("chat.send", json!({"text": "Wie letztes Mal: Photosynthese Lückentext, diesmal für die 8a"})).unwrap();
+    let sent = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(sent.contains("früheren Chats") && sent.contains("Arbeitsblatt Photosynthese"), "recall excerpt: {sent}");
+    assert!(sent.contains("Lückentext erstellen"), "fitting skill: {sent}");
+    let user = engine.state().messages.iter().find(|m| m.role == aiscraft_core::Role::User).cloned().unwrap();
+    let along = user.activity.iter().find(|s| s.label == crate::SENT_ALONG).and_then(|s| s.detail.clone()).unwrap();
+    assert!(along.contains("Chat „") && along.contains("Vorgehen „Lückentext erstellen“"), "{along}");
+    assert!(!user.content.contains("früheren Chats"), "the stored message stays as typed");
+    let conv = engine.state().current.clone().unwrap();
+    assert!(!engine.state().conversation(&conv).unwrap().sources.inline_recalled.is_empty());
+
+    // The next turn: AIS.chat has it in its history already, nothing goes along twice.
+    engine.call("chat.send", json!({"text": "Und noch Photosynthese Lückentext mit Lösungen"})).unwrap();
+    let next = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(!next.contains("Hinweise der Person") && !next.contains("früheren Chats"), "no duplicate context: {next}");
+    let last_user = engine.state().messages.iter().rev().find(|m| m.role == aiscraft_core::Role::User).cloned().unwrap();
+    assert!(last_user.activity.iter().all(|s| s.label != crate::SENT_ALONG));
+
+    // An unrelated request in a new chat carries nothing.
+    engine.call("chat.new", json!({})).unwrap();
+    engine.call("chat.send", json!({"text": "Wetter morgen Hamburg"})).unwrap();
+    let unrelated = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(!unrelated.contains("Hinweise der Person"), "{unrelated}");
+
+    // Recall switched off: nothing, also for a related request.
+    engine.call("settings.set", json!({"key": "recall", "value": false})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    engine.call("chat.send", json!({"text": "Photosynthese Lückentext"})).unwrap();
+    assert!(!posted.lock().unwrap().last().unwrap().contains("Hinweise der Person"));
+}
+
+/// A local site for the link check: alive, gone, redirect, HEAD refused, slow.
+fn scripted_links(engine: &Engine) -> String {
+    engine.block_on(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    let req = read_http(&mut sock).await;
+                    let line = req.lines().next().unwrap_or("").to_string();
+                    let head = line.starts_with("HEAD ");
+                    let path = line.split(' ').nth(1).unwrap_or("").to_string();
+                    let status = match path.as_str() {
+                        "/da" => "200 OK".to_string(),
+                        "/weg" => "404 Not Found".to_string(),
+                        "/alt" => "301 Moved Permanently\r\nlocation: /da".to_string(),
+                        "/kreis" => "302 Found\r\nlocation: /kreis".to_string(),
+                        "/nurget" if head => "405 Method Not Allowed".to_string(),
+                        "/nurget" => "200 OK".to_string(),
+                        "/langsam" => {
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            "200 OK".to_string()
+                        }
+                        _ => "500 Internal Server Error".to_string(),
+                    };
+                    let _ = sock
+                        .write_all(format!("HTTP/1.1 {status}\r\ncontent-type: text/html\r\nconnection: close\r\ncontent-length: 0\r\n\r\n").as_bytes())
+                        .await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    })
+}
+
+/// Links in answers (#52): checked on click, dead ones marked; local addresses never asked
+/// unless allowed (tests); with the setting on, every answer is checked by itself.
+#[test]
+fn links_in_answers_are_checked() {
+    let (engine, _) = engine_with_recording("Siehe http://127.0.0.1:9/nichts und [Lehrplan](http://10.0.0.1/plan).");
+    let site = scripted_links(&engine);
+    engine.call("chat.send", json!({"text": "Links bitte"})).unwrap();
+    let answer = engine.state().messages.last().cloned().unwrap();
+    // Without permission for local addresses (the real app): nothing in the local network is asked.
+    let r = engine.call("message.check_links", json!({"message_id": answer.id, "timeout_ms": 1000})).unwrap();
+    assert_eq!((r["checked"].as_u64(), r["skipped"].as_u64(), r["dead"].as_u64()), (Some(2), Some(2), Some(0)), "{r}");
+    let user = engine.state().messages[0].id.clone();
+    assert!(engine.call("message.check_links", json!({"message_id": user})).is_err(), "only answers");
+    assert!(engine.call("message.check_links", json!({"message_id": "nope"})).is_err());
+
+    // An answer with links to the local site.
+    engine.allow_local_web().unwrap();
+    let conv = engine.state().current.clone().unwrap();
+    let mut m = answer.clone();
+    m.content = format!("Quellen: {site}/da, [alt]({site}/alt), {site}/weg. Dazu {site}/nurget und {site}/langsam sowie {site}/kreis!");
+    engine.ctx().store(|st| st.save_message(&m)).unwrap();
+    engine.call("chat.open", json!({"id": conv})).unwrap();
+    let r = engine.call("message.check_links", json!({"message_id": m.id, "timeout_ms": 1500})).unwrap();
+    let status =
+        |path: &str| r["links"].as_array().unwrap().iter().find(|l| l["url"] == format!("{site}{path}")).map(|l| l["status"].as_str().unwrap().to_string());
+    assert_eq!(status("/da").as_deref(), Some("ok"), "{r}");
+    assert_eq!(status("/alt").as_deref(), Some("ok"), "redirect followed: {r}");
+    assert_eq!(status("/nurget").as_deref(), Some("ok"), "GET after a refused HEAD: {r}");
+    assert_eq!(status("/weg").as_deref(), Some("dead"), "{r}");
+    assert_eq!(status("/langsam").as_deref(), Some("dead"), "timeout: {r}");
+    assert_eq!(status("/kreis").as_deref(), Some("dead"), "endless redirects: {r}");
+    let shown = engine.state().messages.iter().find(|x| x.id == m.id).cloned().unwrap();
+    let step = shown.activity.iter().find(|s| s.label == crate::LINK_CHECK).unwrap();
+    assert!(step.failed && step.detail.as_deref().unwrap().contains("3 nicht erreichbar"), "{step:?}");
+    assert!(step.links.iter().any(|l| l.failed && l.url.ends_with("/weg")) && step.links.iter().any(|l| !l.failed && l.url.ends_with("/da")));
+    // Checked again: the result is replaced, not added.
+    engine.call("message.check_links", json!({"message_id": m.id, "timeout_ms": 500})).unwrap();
+    let shown = engine.state().messages.iter().find(|x| x.id == m.id).cloned().unwrap();
+    assert_eq!(shown.activity.iter().filter(|s| s.label == crate::LINK_CHECK).count(), 1);
+
+    // With the setting, the next answer is checked by itself (127.0.0.1:9 refuses at once).
+    assert!(!engine.state().settings.check_links, "off by default");
+    engine.call("settings.set", json!({"key": "check_links", "value": true})).unwrap();
+    engine.call("chat.send", json!({"text": "Nochmal"})).unwrap();
+    let id = engine.state().messages.last().unwrap().id.clone();
+    assert!(engine.wait_for(Duration::from_secs(15), |s| {
+        s.messages.iter().any(|x| x.id == id && x.activity.iter().any(|a| a.label == crate::LINK_CHECK && a.links.iter().any(|l| l.failed)))
+    }));
 }
 
 /// The collab plug-in without a relay: present, but nothing is shared and nothing connects.

@@ -9,6 +9,7 @@ mod chat;
 mod collab;
 mod commands;
 mod files;
+mod links;
 pub mod office;
 mod pictures;
 mod proactive;
@@ -35,8 +36,10 @@ use serde_json::Value;
 
 pub use aiscraft_backends::SESSION_COOKIE;
 pub use artifacts::{change_blocks, doc_replace, doc_text, markdown_html, merge_states};
+pub use chat::SENT_ALONG;
 pub use commands::{CommandSpec, commands};
 pub use files::{MAX_FILE_BYTES, mime_of};
+pub use links::{LINK_CHECK, has_links};
 pub use schedules::{Cron, Schedule, next_run as schedule_next_run};
 pub use secrets::Secrets;
 pub use skills::Skill;

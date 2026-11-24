@@ -10,7 +10,7 @@
 //!
 //! `--demo` starts a local OpenAI-compatible server that streams a Markdown answer, adds it as a
 //! backend and fills projects, notes and a few chats (a prompt with "Formel" gets formulas and
-//! Mermaid diagrams). `--demo-ais` adds a local stand-in for
+//! Mermaid diagrams, "Linkliste" one working and one dead link). `--demo-ais` adds a local stand-in for
 //! AIS.chat (assistants, characters, learning scenarios, image generation, a plot answer for
 //! prompts with "Parabel"), with a catalogue of placeholder portraits for the "Entdecken" page
 //! (`["ui.show", {"what": "personas"}]`, `{"what": "persona:character:c1"}` for one entry;
@@ -50,6 +50,14 @@ fn demo_server(engine: &Engine) -> String {
                     let mut buf = vec![0u8; 1 << 16];
                     let n = sock.read(&mut buf).await.unwrap_or(0);
                     let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    if req.starts_with("HEAD /weg") || req.starts_with("GET /weg") {
+                        let _ = sock.write_all(b"HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-length: 0\r\n\r\n").await;
+                        return;
+                    }
+                    if req.starts_with("HEAD /ferien") {
+                        let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/html\r\nconnection: close\r\ncontent-length: 0\r\n\r\n").await;
+                        return;
+                    }
                     if req.starts_with("GET /ferien") {
                         let body = "<html><head><title>Ferientermine Berlin 2027</title></head><body><p>Sommerferien: 8. Juli bis 21. August 2027.</p></body></html>";
                         let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: text/html\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
@@ -74,7 +82,7 @@ fn demo_server(engine: &Engine) -> String {
                         return;
                     }
                     // "Notenliste": create a spreadsheet and a deck with the file tools (download cards).
-                    if req.contains("Notenliste") {
+                    if req.contains("Notenliste") && !req.contains("Linkliste") {
                         let (c1, c2) = if req.contains("\"role\":\"tool\"") {
                             (json!({"choices":[{"delta":{"content":"Hier sind die Notenliste und die Folien für den Elternabend."}}]}), json!({"choices":[{"delta":{},"finish_reason":"stop"}]}))
                         } else {
@@ -99,7 +107,16 @@ fn demo_server(engine: &Engine) -> String {
                             return;
                         }
                     }
-                    let answer = if req.contains("Formel") { MATH_ANSWER } else { ANSWER };
+                    // "Linkliste": an answer with one working and one dead link (for "Links prüfen").
+                    let links;
+                    let answer = if req.contains("Linkliste") {
+                        links = format!("Zwei Seiten zum Thema:\n\n- [Ferientermine](http://{addr}/ferien)\n- [Arbeitsblätter Photosynthese](http://{addr}/weg/photosynthese)\n\nPrüfe die Links, bevor du sie weitergibst.");
+                        links.as_str()
+                    } else if req.contains("Formel") {
+                        MATH_ANSWER
+                    } else {
+                        ANSWER
+                    };
                     for chunk in answer.split_inclusive(' ') {
                         let c = json!({"choices":[{"delta":{"content":chunk}}]});
                         let _ = sock.write_all(format!("data: {c}\n\n").as_bytes()).await;

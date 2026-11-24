@@ -410,22 +410,89 @@ pub(crate) fn select_variant(c: &Ctx, message_id: &str, index: usize) -> Result<
     Ok(json!({"index": index, "count": count, "messages": c.state().messages.len()}))
 }
 
-/// The block of memory and project instructions to put in front of the next message, with its
-/// fingerprint, for a backend without a system prompt; `None` when nothing (new) has to go along.
-pub(crate) fn inline_context(c: &Ctx, conv: &Conversation, takes_system: bool) -> Option<(String, String)> {
-    if takes_system || !conv.sources.inline || !(conv.sources.memory || conv.sources.project) {
+/// Label of the step on a user message that names what went along with it.
+pub const SENT_ALONG: &str = "Mitgeschickt";
+
+/// Context to put in front of the next message for a backend without a system prompt.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct InlineContext {
+    pub block: String,
+    /// Fingerprint of memory and project instructions, when they go along (again).
+    pub print: Option<String>,
+    /// Recalled skills and excerpts that go along for the first time in this chat.
+    pub recalled: Vec<String>,
+    /// What went along, as people read it.
+    pub labels: Vec<String>,
+}
+
+/// Recall keys a chat remembers as sent at most.
+const MAX_RECALLED_KEYS: usize = 64;
+
+/// The context to put in front of the next message, for a backend without a system prompt
+/// (AIS.chat), which keeps it in its history: memory and project instructions when the person
+/// agreed (`inline`), once and again only after they change; fitting skills and excerpts from
+/// earlier chats for this `request` (setting "recall"), each once per chat. `None` when nothing
+/// (new) has to go along.
+pub(crate) fn inline_context(c: &Ctx, conv: &Conversation, takes_system: bool, request: &str) -> Option<InlineContext> {
+    if takes_system {
         return None;
     }
-    let ctx = system_prompt_for(c, conv, true, true, "")?;
-    let print = fingerprint(&ctx);
-    if conv.sources.inline_sent.as_deref() == Some(print.as_str()) {
+    let state = c.state();
+    let mut parts = Vec::new();
+    let mut labels = Vec::new();
+    let mut print = None;
+    if conv.sources.inline
+        && (conv.sources.memory || conv.sources.project)
+        && let Some(stable) = system_prompt_for(c, conv, true, true, "")
+    {
+        let p = fingerprint(&stable);
+        if conv.sources.inline_sent.as_deref() != Some(p.as_str()) {
+            if state.settings.memory && conv.sources.memory && memory_prompt(&state.memory).is_some() {
+                labels.push("Gedächtnis".to_string());
+            }
+            if conv.sources.project
+                && conv.project_id.as_ref().and_then(|pid| state.projects.iter().find(|p| &p.id == pid)).is_some_and(|p| !p.instructions.trim().is_empty())
+            {
+                labels.push("Projektanweisungen".to_string());
+            }
+            parts.push(stable);
+            print = Some(p);
+        }
+    }
+    let mut recalled = Vec::new();
+    if state.settings.recall && !request.trim().is_empty() {
+        let fresh: Vec<_> =
+            crate::skills::recall(c, &conv.id, request, conv.sources.history).into_iter().filter(|r| !conv.sources.inline_recalled.contains(&r.key)).collect();
+        if let Some(block) = crate::skills::render(&fresh) {
+            crate::skills::mark_used(c, &fresh);
+            parts.push(block);
+            for r in fresh {
+                if !labels.contains(&r.label) {
+                    labels.push(r.label);
+                }
+                recalled.push(r.key);
+            }
+        }
+    }
+    if parts.is_empty() {
         return None;
     }
-    Some((format!("[Hinweise der Person für diesen Chat, aus AIS.ChatCraft]\n{ctx}\n[Ende der Hinweise]"), print))
+    let block = format!("[Hinweise der Person für diesen Chat, aus AIS.ChatCraft]\n{}\n[Ende der Hinweise]", parts.join("\n\n"));
+    Some(InlineContext { block, print, recalled, labels })
+}
+
+/// Remember what went along inline (after the backend took the message).
+fn remember_inline(sources: &mut aiscraft_core::Sources, sent: &InlineContext) {
+    if let Some(p) = &sent.print {
+        sources.inline_sent = Some(p.clone());
+    }
+    sources.inline_recalled.extend(sent.recalled.iter().cloned());
+    let extra = sources.inline_recalled.len().saturating_sub(MAX_RECALLED_KEYS);
+    sources.inline_recalled.drain(..extra);
 }
 
 /// FNV-1a, stable across builds (it is stored with the chat).
-fn fingerprint(s: &str) -> String {
+pub(crate) fn fingerprint(s: &str) -> String {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in s.bytes() {
         h ^= u64::from(b);
@@ -575,7 +642,8 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     let conv = c.state().conversation(&conv_id).cloned().ok_or_else(|| Error::not_found("Chat nicht gefunden"))?;
     let backend = c.backend(&conv.backend_id)?;
     let caps = backend.capabilities();
-    let request = c.store(|st| st.messages(&conv_id))?.iter().rev().find(|m| m.role == Role::User).map(|m| m.content.clone()).unwrap_or_default();
+    let last_user = c.store(|st| st.messages(&conv_id))?.into_iter().rev().find(|m| m.role == Role::User);
+    let request = last_user.as_ref().map(|m| m.content.clone()).unwrap_or_default();
     let system = system_prompt_for(&c, &conv, backend.config().send_context, caps.system_prompt, &request);
     let model_name = c.state().model_name(&conv.backend_id, &conv.model_id);
     let tools_on = c.state().settings.tools && conv.sources.tools;
@@ -601,11 +669,17 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     };
 
     // Backends without a system prompt (AIS.chat): memory and project instructions go at the top of
-    // the message, once and again only after they change, when the person agreed to it.
-    let inline = inline_context(&c, &conv, caps.system_prompt);
+    // the message, once and again only after they change, when the person agreed to it; fitting
+    // skills and earlier chats once per chat. The message says what went along.
+    let inline = inline_context(&c, &conv, caps.system_prompt, &request);
+    if let (Some(sent), Some(mut user)) = (&inline, last_user) {
+        user.activity.retain(|s| s.label != SENT_ALONG);
+        user.activity.push(aiscraft_core::ActivityStep { label: SENT_ALONG.into(), detail: Some(sent.labels.join(" · ")), done: true, ..Default::default() });
+        put_message(&c, &conv_id, &user);
+    }
     let context = match (&inline, context) {
-        (Some((block, _)), Some(ctx)) => Some(format!("{block}\n\n{ctx}")),
-        (Some((block, _)), None) => Some(block.clone()),
+        (Some(sent), Some(ctx)) => Some(format!("{}\n\n{ctx}", sent.block)),
+        (Some(sent), None) => Some(sent.block.clone()),
         (None, ctx) => ctx,
     };
 
@@ -703,6 +777,9 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         answer.error = Some("Keine Antwort erhalten".into());
     }
     put_message(&c, &conv_id, &answer);
+    if result.is_ok() && answer.error.is_none() {
+        crate::links::check_later(&c, &answer);
+    }
     drop(bridge);
     crate::tools::deny_all(&c, &conv_id);
     // Several tool steps went well: maybe there is a procedure worth keeping.
@@ -716,9 +793,9 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     let mut updated = c.state().conversation(&conv_id).cloned().unwrap_or_else(|| conv.clone());
     updated.updated_at = now_ms();
     // The backend has the inline context now (it keeps it in its history); not again until it changes.
-    let sent = inline.filter(|_| result.is_ok() && answer.error.is_none()).map(|(_, print)| print);
-    if let Some(print) = &sent {
-        updated.sources.inline_sent = Some(print.clone());
+    let sent = inline.filter(|_| result.is_ok() && answer.error.is_none());
+    if let Some(sent) = &sent {
+        remember_inline(&mut updated.sources, sent);
     }
     let _ = c.store(|st| st.save_conversation(&updated));
     c.0.cancels.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&conv_id);

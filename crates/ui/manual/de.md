@@ -32,6 +32,7 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 - **Anhänge:** Büroklammer oder Dateien ins Fenster ziehen. Bilder und PDFs gehen an Modelle, die sie lesen können; Textdateien werden mitgeschickt.
 - **Diktieren:** Mikrofon im Eingabefeld. Der Text landet im Eingabefeld, du schickst ihn selbst ab. Braucht ein OpenAI-kompatibles Backend mit Transkription.
 - **Vorlesen:** „Vorlesen“ unter einer Antwort. Nutzt AIS.chat, wenn du dort angemeldet bist.
+- **Links prüfen:** „Links prüfen“ unter einer Antwort fragt jede Adresse darin einmal an (höchstens 20). Tote Links stehen durchgestrichen unter der Antwort. Adressen im lokalen Netz fragt AIS.ChatCraft nie an. Automatisch für jede Antwort: Einstellungen › Fähigkeiten & Hinweise (standardmäßig aus, weil dabei fremde Seiten kontaktiert werden).
 - **Kontextfenster:** oben rechts im Chat, wie viel vom Kontext des Modells belegt ist. „≈“ heißt geschätzt.
 - **Bilder erzeugen:** „🖼 Bild erzeugen“ in der Seitenleiste (oder ein Bildmodell im Modellmenü) startet einen Bild-Chat bei AIS.chat: beschreibe, was das Bild zeigen soll, und wähle das Format. Fehlt der Eintrag, hat dein Land die Bilderzeugung in AIS.chat ausgeschaltet.
 - **AIS.chat-Kontingent:** unten links, wie viele Token-Punkte noch übrig sind.
@@ -112,7 +113,7 @@ Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Backends.
 
 **Fähigkeiten:** Nach Aufgaben mit mehreren Werkzeugschritten merkt sich AIS.ChatCraft das Vorgehen, ohne persönliche Daten. Passende Vorgehen gehen bei ähnlichen Anfragen als Hinweis mit, nie als Erlaubnis.
 
-**Erinnern:** Passende Ausschnitte aus früheren Chats gehen als Kontext mit.
+**Erinnern:** Passende Ausschnitte aus früheren Chats gehen als Kontext mit. Bei AIS.chat stehen sie und passende Vorgehen oben in deiner Nachricht, je Chat nur einmal, weil AIS.chat sie im Verlauf behält; „Mitgeschickt: …“ unter der Nachricht zeigt, welche früheren Chats und Vorgehen mitgingen. Ausschnitte früherer Chats nimmt AIS.ChatCraft nur, wenn „Andere Chats durchsuchen“ in den Quellen an ist.
 
 **Hinweise** (standardmäßig aus): Stündlich, außerhalb der Ruhezeit, achtet AIS.ChatCraft auf offene Zusagen, Fristen und Erinnerungswünsche in deinen Nachrichten und meldet sich höchstens einmal pro Punkt.
 

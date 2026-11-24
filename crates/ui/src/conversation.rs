@@ -335,6 +335,11 @@ impl AisCraftApp {
                         ui.add(egui::Label::new(&m.content).wrap().selectable(true));
                     }
                 });
+            // What AIS.ChatCraft put in front of the message for a backend without a system prompt.
+            if let Some(along) = m.activity.iter().find(|s| s.label == aiscraft_engine::SENT_ALONG).and_then(|s| s.detail.as_deref()) {
+                ui.add(egui::Label::new(small_muted(&t, format!("Mitgeschickt: {along}"))).wrap())
+                    .on_hover_text("Stand oben in deiner Nachricht; der Server behält es im Verlauf, darum geht es in diesem Chat nur einmal mit.");
+            }
             let hovered = ui.rect_contains_pointer(r.response.rect.expand(24.0));
             ui.horizontal_wrapped(|ui| {
                 ui.set_min_height(18.0);
@@ -385,11 +390,12 @@ impl AisCraftApp {
                                 ui.add(egui::Label::new(small_muted(&t, d.chars().take(300).collect::<String>())).wrap());
                             }
                         });
+                        let dead_note = if s.label == aiscraft_engine::LINK_CHECK { "nicht erreichbar" } else { "nicht lesbar" };
                         for l in &s.links {
                             if l.failed {
                                 ui.horizontal(|ui| {
                                     ui.hyperlink_to(RichText::new(format!("   ↗ {}", l.title)).small().color(t.muted).strikethrough(), &l.url);
-                                    ui.label(RichText::new("nicht lesbar").small().color(t.danger));
+                                    ui.label(RichText::new(dead_note).small().color(t.danger));
                                 });
                             } else {
                                 ui.hyperlink_to(RichText::new(format!("   ↗ {}", l.title)).small(), &l.url);
@@ -480,6 +486,7 @@ impl AisCraftApp {
             }
         }
         sources_row(ui, &t, m);
+        dead_links_row(ui, &t, m);
         if let Some(err) = &m.error {
             Frame::new()
                 .fill(t.danger.gamma_multiply(0.12))
@@ -555,6 +562,14 @@ impl AisCraftApp {
                     .clicked()
                 {
                     self.run("artifact.create", json!({"kind": "board", "from_message": m.id}));
+                }
+                if aiscraft_engine::has_links(&m.content)
+                    && ui
+                        .add(egui::Button::new(small_muted(&t, "Links prüfen")).frame(false))
+                        .on_hover_text("Fragt jede Adresse in der Antwort einmal an; tote Links werden durchgestrichen")
+                        .clicked()
+                {
+                    self.run("message.check_links", json!({"message_id": m.id}));
                 }
                 if is_last && icon_button(ui, &t, "⟳", "Neu erzeugen (Strg+R)").clicked() {
                     self.run("chat.regenerate", json!({}));
@@ -1136,6 +1151,22 @@ fn sources_row(ui: &mut Ui, t: &crate::theme::Tokens, m: &Message) {
         ui.label(small_muted(t, "Quellen:"));
         for (i, l) in links.iter().enumerate() {
             ui.hyperlink_to(RichText::new(format!("[{}] {}", i + 1, l.title.chars().take(60).collect::<String>())).small(), &l.url).on_hover_text(&l.url);
+        }
+    });
+}
+
+/// Links of the answer the link check found dead, struck through right under it.
+fn dead_links_row(ui: &mut Ui, t: &crate::theme::Tokens, m: &Message) {
+    let Some(step) = m.activity.iter().find(|s| s.label == aiscraft_engine::LINK_CHECK) else { return };
+    let dead: Vec<_> = step.links.iter().filter(|l| l.failed).collect();
+    if dead.is_empty() {
+        ui.label(small_muted(t, format!("Links geprüft: {}", step.detail.as_deref().unwrap_or(""))));
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Nicht erreichbar:").small().color(t.danger));
+        for l in dead {
+            ui.hyperlink_to(RichText::new(short_url(&l.url)).small().color(t.muted).strikethrough(), &l.url).on_hover_text(&l.title);
         }
     });
 }
