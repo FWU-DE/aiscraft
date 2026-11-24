@@ -16,6 +16,7 @@ pub mod learn;
 mod links;
 pub mod office;
 mod pictures;
+pub mod privacy;
 mod proactive;
 mod schedules;
 mod secrets;
@@ -157,6 +158,8 @@ pub(crate) struct Inner {
     pub(crate) web_local_ok: std::sync::atomic::AtomicBool,
     /// Where the update check reads releases from; off for engines in memory.
     pub(crate) update_feed: Mutex<update::Feed>,
+    /// Placeholder mappings of chats read so far (#55), so drawing never waits for the database.
+    pub(crate) privacy_maps: Mutex<HashMap<String, Arc<privacy::Mapping>>>,
 }
 
 /// What commands and tasks hold. It never owns the runtime, so it can be dropped anywhere.
@@ -244,6 +247,7 @@ impl Engine {
                 .map(|d| d.join("open"))
                 .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-open-{}", std::process::id()))),
             preview: Mutex::new(None),
+            privacy_maps: Mutex::new(HashMap::new()),
             previews: Mutex::new(Vec::new()),
             attachments_dir: opts
                 .data_dir
@@ -270,6 +274,7 @@ impl Engine {
             });
             schedules::start(&engine.ctx);
             vault::refresh(&engine.ctx);
+            privacy::refresh(&engine.ctx);
             update::start(&engine.ctx);
             #[cfg(feature = "collab")]
             collab::load(&engine.ctx);
@@ -290,6 +295,17 @@ impl Engine {
     /// The current state. Cheap: an `Arc` that stays valid while the engine moves on.
     pub fn state(&self) -> Arc<State> {
         self.ctx.state()
+    }
+
+    /// The open chat's messages as people read them: placeholders of „Namen schützen“ translated
+    /// back (#55). Drawing, copying and editing use these; the state keeps what the backend saw.
+    pub fn shown_messages(&self, state: &State) -> Vec<aiscraft_core::Message> {
+        privacy::shown_messages(&self.ctx, state)
+    }
+
+    /// Placeholders of chat `conv` in `text` translated back (titles, single texts).
+    pub fn reveal(&self, conv: &str, text: &str) -> String {
+        privacy::reveal(&self.ctx, conv, text)
     }
 
     /// The microphone level while dictating, 0..1.

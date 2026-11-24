@@ -35,6 +35,8 @@ pub struct AisCraftApp {
     /// Web links for the next message, and the address being typed (`Some` while the field is open).
     pub(crate) pending_links: Vec<String>,
     pub(crate) link_input: Option<String>,
+    /// „Namen schützen“: the person's choices in the preview for the next message (#55).
+    pub(crate) privacy: crate::privacy_panel::Choices,
     pub(crate) sidebar_open: bool,
     pub(crate) search_text: String,
     pub(crate) project_filter: Option<String>,
@@ -180,6 +182,7 @@ impl AisCraftApp {
             pending_files: Vec::new(),
             pending_links: Vec::new(),
             link_input: None,
+            privacy: Default::default(),
             sidebar_open: true,
             search_text: String::new(),
             project_filter: None,
@@ -485,6 +488,10 @@ impl AisCraftApp {
                         }
                         "about" => {
                             self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::About, new_note: String::new() });
+                            true
+                        }
+                        "privacy" => {
+                            self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Privacy, new_note: String::new() });
                             true
                         }
                         "appearance" => {

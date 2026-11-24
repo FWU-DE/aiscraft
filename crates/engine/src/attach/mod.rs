@@ -154,6 +154,11 @@ fn looks_like_text(bytes: &[u8]) -> bool {
     std::str::from_utf8(bytes).is_ok_and(|t| !t.chars().any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r' | '\u{c}')))
 }
 
+/// The sheets of a workbook (class lists, #55).
+pub(crate) fn read_sheets(ext: &str, bytes: &[u8]) -> Result<Vec<sheets::Grid>> {
+    sheets::read(ext, bytes, Some(0))
+}
+
 /// Prepare `path` for `target`, with the part a person picked (`range`, "" = all).
 pub fn prepare(path: &Path, range: &str, target: Target) -> Result<Prepared> {
     let bytes = read_file(path)?;

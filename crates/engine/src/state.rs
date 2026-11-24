@@ -45,6 +45,9 @@ pub struct State {
     pub recording: bool,
     /// Vault entries, without their secrets.
     pub vault: Vec<crate::vault::EntryInfo>,
+    /// „Namen schützen“: class lists (without names) and the composer's preview (#55).
+    #[serde(default)]
+    pub privacy: crate::privacy::PrivacyState,
     /// Live collaboration (the `collab` plug-in); empty and unavailable without it.
     #[serde(default)]
     pub collab: CollabState,

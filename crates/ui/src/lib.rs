@@ -21,6 +21,7 @@ pub mod math;
 pub mod mermaid;
 mod palette;
 pub mod plot;
+mod privacy_panel;
 mod rich;
 mod share;
 mod sidebar;

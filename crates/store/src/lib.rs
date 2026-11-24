@@ -752,6 +752,11 @@ impl Store {
             .map_err(db_err)?;
         Ok(())
     }
+
+    pub fn delete_setting(&self, key: &str) -> Result<()> {
+        self.db.execute("DELETE FROM settings WHERE key = ?1", params![key]).map_err(db_err)?;
+        Ok(())
+    }
 }
 
 impl Store {

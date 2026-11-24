@@ -13,6 +13,7 @@ pub enum SettingsTab {
     Schedules,
     Skills,
     Vault,
+    Privacy,
     Usage,
     Memory,
     Appearance,
@@ -710,6 +711,7 @@ impl AisCraftApp {
             SettingsTab::Schedules => ("Zeitpläne und Aufgaben", "Zeitpläne", "Aufträge, die regelmäßig oder einmal zu einer Zeit laufen."),
             SettingsTab::Skills => ("Fähigkeiten und Hinweise", "Fähigkeiten", "Gelernte Vorgehen und Hinweise zur rechten Zeit."),
             SettingsTab::Vault => ("Tresor", "Tresor", "Zugangsdaten, die Werkzeuge nutzen dürfen, ohne sie zu sehen."),
+            SettingsTab::Privacy => ("Namen schützen", "Namen schützen", "Klassenlisten: diese Namen gehen nur als Platzhalter raus."),
             SettingsTab::Usage => ("Nutzung", "Nutzung", "Verbrauch je Dienst und eine Monatsgrenze."),
             SettingsTab::Memory => ("Gedächtnis", "Gedächtnis", "Was AIS.ChatCraft sich von dir gemerkt hat."),
             SettingsTab::Appearance => ("Erscheinungsbild", "Darstellung", "So sieht AIS.ChatCraft auf diesem Gerät aus."),
@@ -736,6 +738,7 @@ impl AisCraftApp {
                             (SettingsTab::Schedules, Icon::Calendar, "Zeitpläne"),
                             (SettingsTab::Skills, Icon::Bulb, "Fähigkeiten"),
                             (SettingsTab::Vault, Icon::Lock, "Tresor"),
+                            (SettingsTab::Privacy, Icon::Users, "Namen schützen"),
                             (SettingsTab::Usage, Icon::Chart, "Nutzung"),
                             (SettingsTab::Memory, Icon::Memory, "Gedächtnis"),
                             (SettingsTab::Appearance, Icon::Palette, "Darstellung"),
@@ -819,6 +822,7 @@ impl AisCraftApp {
             SettingsTab::Schedules => "Zeitpläne und Aufgaben",
             SettingsTab::Skills => "Fähigkeiten und Hinweise",
             SettingsTab::Vault => "Tresor",
+            SettingsTab::Privacy => "Namen schützen",
             SettingsTab::Usage => "Nutzung",
             SettingsTab::Memory => "Gedächtnis",
             SettingsTab::Appearance => "Erscheinungsbild",
@@ -853,6 +857,7 @@ impl AisCraftApp {
                     (SettingsTab::Schedules, "Zeitpläne"),
                     (SettingsTab::Skills, "Fähigkeiten"),
                     (SettingsTab::Vault, "Tresor"),
+                    (SettingsTab::Privacy, "Namen schützen"),
                     (SettingsTab::Usage, "Nutzung"),
                     (SettingsTab::Memory, "Gedächtnis"),
                     (SettingsTab::Appearance, "Darstellung"),
@@ -1099,6 +1104,7 @@ impl AisCraftApp {
                     self.dialog = Some(Dialog::EditSkill { id: None, title: String::new(), when: String::new(), steps: String::new() });
                 }
             }
+            SettingsTab::Privacy => self.privacy_settings(ui, new_note),
             SettingsTab::Vault => {
                 ui.label(muted(&t, "Zugangsdaten, die AIS.ChatCraft selbst in Konnektor-Aufrufe einsetzt. Das Modell schreibt nur Platzhalter wie {{vault:name.password}} und sieht die Werte nie; jeder Aufruf mit Tresor-Daten fragt vorher. Gespeichert im Schlüsselbund des Systems."));
                 ui.add_space(6.0);
@@ -1290,6 +1296,73 @@ impl AisCraftApp {
 }
 /// One row of a settings section: title and line on the left, the control on the right, a
 /// hairline under it.
+impl AisCraftApp {
+    /// Class lists for „Namen schützen“ (#55).
+    fn privacy_settings(&mut self, ui: &mut Ui, pasted: &mut String) {
+        let t = self.tokens.clone();
+        ui.label(muted(
+            &t,
+            "Vor dem Senden ersetzt AIS.ChatCraft Namen aus diesen Listen sowie E-Mail-Adressen, Telefonnummern, IBAN, Geburtsdaten und Adressen durch Platzhalter wie [S1] oder [E-Mail 1]. Die Zuordnung bleibt auf diesem Gerät; in der Antwort stehen wieder die Namen. Mit einer Liste ist der Schutz in passenden Chats von selbst an.",
+        ));
+        ui.add_space(6.0);
+        for l in self.state.privacy.lists.clone() {
+            card(&t).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(&l.name).strong());
+                    let scope = l
+                        .project_id
+                        .as_ref()
+                        .and_then(|p| self.state.projects.iter().find(|x| &x.id == p))
+                        .map(|p| format!("Projekt {}", p.name))
+                        .unwrap_or_else(|| "alle Chats".into());
+                    ui.label(small_muted(&t, format!("  {} Namen · {scope}", l.count)));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Löschen").clicked() {
+                            self.dialog = Some(Dialog::Confirm {
+                                text: format!("Klassenliste {} löschen?", l.name),
+                                command: "privacy.list_remove".into(),
+                                params: json!({"id": l.id}),
+                            });
+                        }
+                    });
+                });
+            });
+            ui.add_space(6.0);
+        }
+        if self.state.privacy.lists.is_empty() {
+            ui.label(small_muted(&t, "Noch keine Klassenliste. Ohne Liste werden nur Kontaktdaten erkannt, keine Namen."));
+            ui.add_space(6.0);
+        }
+        let project = self.state.selection.project_id.clone();
+        let project_name = project.as_ref().and_then(|p| self.state.projects.iter().find(|x| &x.id == p)).map(|p| p.name.clone());
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .button("Klassenliste einlesen …")
+                .on_hover_text("CSV, Excel (xlsx, xls), OpenDocument (ods) oder Kontakte (vcf): Spalten Vorname und Nachname oder eine Person pro Zeile")
+                .clicked()
+                && let Some(path) = rfd::FileDialog::new().add_filter("Klassenliste", &["csv", "tsv", "txt", "xlsx", "xls", "ods", "vcf"]).pick_file()
+            {
+                self.run("privacy.list_import", json!({"path": path.display().to_string()}));
+            }
+            if let (Some(pid), Some(name)) = (&project, &project_name)
+                && ui.button(format!("… nur für Projekt {name}")).clicked()
+                && let Some(path) = rfd::FileDialog::new().add_filter("Klassenliste", &["csv", "tsv", "txt", "xlsx", "xls", "ods", "vcf"]).pick_file()
+            {
+                self.run("privacy.list_import", json!({"path": path.display().to_string(), "project": pid}));
+            }
+        });
+        ui.add_space(8.0);
+        ui.label(small_muted(&t, "Oder Namen einfügen, eine Person pro Zeile („Lea Müller“ oder „Müller, Lea“):"));
+        ui.add(egui::TextEdit::multiline(pasted).hint_text("Lea Müller\nSchmidt, Jonas").desired_rows(3).desired_width(f32::INFINITY));
+        if ui.add_enabled(!pasted.trim().is_empty(), egui::Button::new("Als Klassenliste speichern")).clicked() {
+            self.run("privacy.list_add", json!({"text": pasted.clone(), "name": "Eingefügte Namen"}));
+            pasted.clear();
+        }
+        ui.add_space(8.0);
+        ui.label(small_muted(&t, "Grenzen: Spitznamen, Tippfehler, Namen außerhalb der Listen und Namen in Bildern oder PDF-Dateien erkennt AIS.ChatCraft nicht. Prüfe die Vorschau über dem Eingabefeld vor dem Senden."));
+    }
+}
+
 fn setting_row(ui: &mut Ui, t: &crate::theme::Tokens, title: &str, sub: &str, control: impl FnOnce(&mut Ui)) {
     ui.add_space(12.0);
     ui.horizontal(|ui| {

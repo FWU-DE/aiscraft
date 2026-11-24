@@ -171,6 +171,23 @@ Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
 
 Im Tresor (Einstellungen › Tresor) liegen Zugangsdaten und Einmalcodes, die AIS.ChatCraft selbst in Konnektor-Aufrufe einsetzt. Das Modell schreibt nur Platzhalter wie `{{vault:schulportal.password}}` und sieht die Werte nie; jeder Aufruf mit Tresor-Daten fragt vorher. Einträge lassen sich aus einem Bitwarden-CSV-Export übernehmen. Die CSV-Datei danach löschen.
 
+## Namen schützen
+
+Für Zeugnisbemerkungen, Elternbriefe und Förderpläne: Vor dem Senden ersetzt AIS.ChatCraft Namen von Schülerinnen und Schülern und andere persönliche Angaben durch Platzhalter. Aus „Lea Müller“ wird `[S1] [N1]`, aus einer E-Mail-Adresse `[E-Mail 1]`. Der Dienst (AIS.chat, Claude, ein anderer Server) sieht nur die Platzhalter; in der Antwort stehen bei dir wieder die Namen, auch beim Kopieren und beim Speichern als Markdown, Word oder PDF.
+
+**Klassenliste:** Unter **Einstellungen › Namen schützen** eine Liste einlesen (CSV, Excel, OpenDocument oder Kontakte als vcf) oder Namen einfügen, eine Person pro Zeile. Eine Liste gilt für alle Chats oder nur für ein Projekt. Sobald es eine Liste gibt, ist der Schutz in passenden Chats an; der Schalter **Namen schützen** neben „Quellen“ schaltet ihn pro Chat aus oder ein.
+
+**Was erkannt wird:**
+
+- Vornamen allein, Nachnamen allein und ganze Namen aus der Liste, auch „Leas“, „Jonas'“, in Großbuchstaben oder „Müller, Lea“. Dieselbe Person behält im ganzen Chat denselben Platzhalter.
+- E-Mail-Adressen, Telefonnummern (deutsche Schreibweisen), IBAN (mit Prüfsumme), Geburtsdaten (mit „geb.“ oder im Schulalter) und Adressen mit Straße und Hausnummer.
+
+**Vorschau:** Über dem Eingabefeld steht, was genau rausgeht; Ersetzungen sind markiert. Ein Klick auf einen Treffer lässt ihn stehen oder ersetzt ihn doch. **Unsichere Treffer** (Namen, die auch Wörter sind, wie „Mark“ oder „Koch“, Namen in Kleinbuchstaben, Daten ohne „geb.“) bleiben stehen, bis du sie antippst. Mit **+ Begriff ersetzen** ergänzt du einen Namen, der in keiner Liste steht; er wird in diesem Chat immer ersetzt.
+
+**Grenzen:** Spitznamen, Tippfehler, Namen außerhalb der Listen und Namen in Bildern oder PDF-Dateien, die als Datei hochgeladen werden, erkennt AIS.ChatCraft nicht. Text aus Dokumenten (Word, Text, Tabellen als CSV) wird mitgeprüft. Die Suche findet geschützte Namen nicht, denn gespeichert ist, was rausging. Von AIS.chat erzeugte Word- oder PDF-Dateien enthalten die Platzhalter. Die Vorschau ist eine Hilfe, keine Garantie: Lies den Text vor dem Senden.
+
+**Wo die Zuordnung liegt:** nur in der Datenbank auf diesem Gerät, pro Chat. Sie steht in keinem Protokoll, geht an keinen Dienst und ist nicht im JSON-Export. **Platzhalter des Chats anzeigen** (Befehlspalette) zeigt sie; mit dem Chat wird sie gelöscht.
+
 ## Suche und Verlauf
 
 Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats. Rechtsklick auf einen Chat: umbenennen, anheften, in ein Projekt verschieben, exportieren, löschen.

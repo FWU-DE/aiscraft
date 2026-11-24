@@ -272,13 +272,16 @@ pub(crate) async fn run(c: &Ctx, conv: &str, call: &ToolCall, owner_words: &str,
     if call.arguments.get("_invalid_json").is_some() {
         return ("Die Argumente waren kein gültiges JSON. Bitte erneut mit gültigem JSON aufrufen.".into(), true, "error");
     }
-    if let Some(r) = run_file_tool(c, conv, call) {
+    // Built-in tools work on the person's own files and documents: placeholders of „Namen
+    // schützen“ become the names again there (#55). Connectors get the call as the model wrote it.
+    let local = ToolCall { arguments: crate::privacy::reveal_value(c, conv, &call.arguments), ..call.clone() };
+    if let Some(r) = run_file_tool(c, conv, &local) {
         return match r {
             Ok(t) => (t, false, "ok"),
             Err(e) => (e.message, true, "error"),
         };
     }
-    if let Some(r) = run_builtin(c, conv, call).await {
+    if let Some(r) = run_builtin(c, conv, &local).await {
         return match r {
             Ok(t) => (t, false, "ok"),
             Err(e) => (e.message, true, "error"),

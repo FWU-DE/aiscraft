@@ -111,6 +111,23 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
         return Err(Error::invalid("Kein Modell gewählt"));
     }
     let takes_system = backend.capabilities().system_prompt;
+    // „Namen schützen“: names in documents, notes or chats being revised go out as placeholders,
+    // with a mapping just for this call, and come back as names (#55).
+    let mut guard = crate::privacy::Guard::for_call(c);
+    let guarded_system = match (&mut guard, system) {
+        (Some(g), Some(s)) => Some(g.text(s)),
+        (_, s) => s.map(str::to_string),
+    };
+    let guarded_prompt = match &mut guard {
+        Some(g) => g.text(prompt),
+        None => prompt.to_string(),
+    };
+    let guarded_system = match (guard.as_ref().and_then(|g| g.note()), guarded_system) {
+        (Some(n), Some(s)) => Some(format!("{s}\n\n{n}")),
+        (Some(n), None) => Some(n.to_string()),
+        (None, s) => s,
+    };
+    let (system, prompt) = (guarded_system.as_deref(), guarded_prompt.as_str());
     let content = match system {
         Some(s) if !takes_system => format!("{s}\n\n{prompt}"),
         _ => prompt.to_string(),
@@ -148,7 +165,10 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
             _ => {}
         }
     }
-    Ok(out)
+    Ok(match &guard {
+        Some(g) => g.mapping.reveal(&out),
+        None => out,
+    })
 }
 
 /// At most this many links per message (AIS.chat's web scraper reads five at a time).
@@ -168,6 +188,19 @@ pub(crate) fn check_url(url: &str) -> Result<String> {
 }
 
 pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: Vec<String>, artifact: Option<String>, force: bool) -> Result<Value> {
+    send_full(c, text, paths, links, artifact, force, crate::privacy::Decisions::default()).await
+}
+
+/// Send from the composer, with the person's choices in the „Namen schützen“ preview.
+pub(crate) async fn send_full(
+    c: Ctx,
+    text: String,
+    paths: Vec<String>,
+    links: Vec<String>,
+    artifact: Option<String>,
+    force: bool,
+    decisions: crate::privacy::Decisions,
+) -> Result<Value> {
     let text = text.trim().to_string();
     if text.is_empty() && paths.is_empty() && links.is_empty() {
         return Err(Error::invalid("Nachricht ist leer"));
@@ -187,6 +220,12 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: V
         return Err(Error::invalid("Die vorige Antwort läuft noch"));
     }
     let kind = state.current.as_ref().and_then(|id| state.conversation(id)).map(|c| c.kind).unwrap_or(state.selection.kind);
+    // „Namen schützen“ (#55): the message keeps what leaves the device; the names stay in the
+    // chat's mapping, the title too (the UI shows it with the names). `raw` is the person's own
+    // text, for memory notes.
+    let raw = text.clone();
+    let mut protection = crate::privacy::for_send(&c, &text, &decisions);
+    let text = protection.as_ref().map(|(p, _)| p.text.clone()).unwrap_or(text);
     if kind == ConversationKind::Image {
         if !paths.is_empty() || !links.is_empty() {
             return Err(Error::unsupported("Vorlagenbilder für die Bilderzeugung kann AIS.ChatCraft noch nicht mitschicken."));
@@ -195,7 +234,11 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: V
             return Err(Error::invalid("Beschreibe, was das Bild zeigen soll"));
         }
         let conv = ensure_conversation(&c, &text)?;
-        let user = plain_message(&conv, Role::User, &text);
+        let mut user = plain_message(&conv, Role::User, &text);
+        if let Some((p, _)) = &protection {
+            crate::privacy::save_mapping(&c, &conv, &p.mapping)?;
+            user.activity.push(protected_step(p.replaced()));
+        }
         c.store(|st| st.save_message(&user))?;
         put_message(&c, &conv, &user);
         return image_answer(c, conv, text).await;
@@ -213,9 +256,18 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: V
     for p in &paths {
         let range = crate::attach::range_for(&c, p);
         let (p2, r) = (p.clone(), range.clone());
-        let prep = tokio::task::spawn_blocking(move || crate::attach::prepare(Path::new(&p2), &r, target))
+        let mut prep = tokio::task::spawn_blocking(move || crate::attach::prepare(Path::new(&p2), &r, target))
             .await
             .map_err(|e| Error::invalid(format!("Vorbereiten abgebrochen: {e}")))??;
+        // Text from documents (#45) is protected like the message, before it is kept or uploaded.
+        if let Some((pr, d)) = protection.as_mut()
+            && files::is_text(&prep.mime)
+        {
+            let body = String::from_utf8_lossy(&prep.bytes).to_string();
+            let (out, hits) = crate::privacy::protect_text(d, &mut pr.mapping, &body, None);
+            pr.hits.extend(hits.into_iter().filter(|h| h.on));
+            prep.bytes = out.into_bytes();
+        }
         prepared.push(prep);
     }
     if target == crate::attach::Target::AisChat {
@@ -241,7 +293,7 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: V
     }
 
     let conv = ensure_conversation(&c, if text.is_empty() { paths.first().or(links.first()).map(String::as_str).unwrap_or("Datei") } else { &text })?;
-    let user = Message {
+    let mut user = Message {
         id: new_id(),
         conversation_id: conv.clone(),
         role: Role::User,
@@ -255,6 +307,10 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: V
         tool_calls: vec![],
         tool_result: None,
     };
+    if let Some((p, _)) = &protection {
+        crate::privacy::save_mapping(&c, &conv, &p.mapping)?;
+        user.activity.push(protected_step(p.replaced()));
+    }
     c.store(|st| st.save_message(&user))?;
     // The state is copied on every change; image bytes stay out of it (requests read the copy).
     let mut shown = user.clone();
@@ -268,14 +324,14 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: V
     });
 
     if c.state().settings.memory
-        && let Some((area, note_text)) = extract_explicit_memory(&text)
+        && let Some((area, note_text)) = extract_explicit_memory(&raw)
     {
         let note = MemoryNote {
             id: new_id(),
             area,
             text: note_text.clone(),
             source_message_id: Some(user.id.clone()),
-            source_quote: text.clone(),
+            source_quote: raw.clone(),
             created_at: now_ms(),
             archived: false,
         };
@@ -294,6 +350,16 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: V
         None => None,
     };
     generate_with(c, conv, context, true).await
+}
+
+/// The step that marks a message as sent through the „Namen schützen“ preview.
+fn protected_step(replaced: usize) -> aiscraft_core::ActivityStep {
+    let detail = match replaced {
+        0 => "nichts gefunden".to_string(),
+        1 => "1 Angabe ersetzt".to_string(),
+        n => format!("{n} Angaben ersetzt"),
+    };
+    aiscraft_core::ActivityStep { label: crate::privacy::PROTECTED.into(), detail: Some(detail), done: true, ..Default::default() }
 }
 
 async fn generate(c: Ctx, conv_id: String) -> Result<Value> {
@@ -720,6 +786,33 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         (Some(sent), None) => Some(sent.block.clone()),
         (None, ctx) => ctx,
     };
+    // „Namen schützen“ (#55): the single point every request of this chat passes. The system
+    // prompt and the context (memory, project instructions, recalled chats, an attached document)
+    // are protected here, the messages per round below.
+    let mut guard = crate::privacy::Guard::for_conversation(&c, &conv);
+    let (system, context) = match guard.as_mut() {
+        None => (system, context),
+        Some(g) => {
+            let mut system = system.map(|s| g.text(&s));
+            let mut context = context.map(|s| g.text(&s));
+            if let Some(note) = g.note() {
+                if caps.system_prompt {
+                    system = Some(match system {
+                        Some(s) => format!("{s}\n\n{note}"),
+                        None => note.to_string(),
+                    });
+                } else if !g.mapping.noted {
+                    // Backends without a system prompt keep it in their history: once per chat.
+                    context = Some(match context {
+                        Some(ctx) => format!("{note}\n\n{ctx}"),
+                        None => format!("[{note}]"),
+                    });
+                    g.mapping.noted = true;
+                }
+            }
+            (system, context)
+        }
+    };
 
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
     c.0.cancels.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(conv_id.clone(), cancel_tx);
@@ -734,6 +827,9 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         let mut history = c.store(|st| st.messages(&conv_id))?;
         history.retain(|m| m.id != answer.id);
         files::hydrate(&mut history);
+        if let Some(g) = guard.as_mut() {
+            g.messages(&mut history);
+        }
         // An attached document or board goes in front of the last user message, for this request only.
         if let Some(ctx_block) = &context
             && let Some(last) = history.iter_mut().rev().find(|m| m.role == Role::User)
@@ -819,6 +915,9 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         crate::links::check_later(&c, &answer);
     }
     drop(bridge);
+    if let Some(g) = &guard {
+        g.finish(&c);
+    }
     crate::tools::deny_all(&c, &conv_id);
     // Several tool steps went well: maybe there is a procedure worth keeping.
     if result.is_ok() && c.state().settings.learn_skills && (caps.tools || caps.tools_via_mcp) {
@@ -878,7 +977,8 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
                 && r.title != auto_title
                 && ctx.state().conversation(&id).is_some_and(|x| x.title == auto_title)
             {
-                let title = r.title.clone();
+                // AIS.chat only ever saw placeholders; the title shows the names again.
+                let title = crate::privacy::reveal(&ctx, &id, &r.title);
                 let _ = crate::commands::edit_conversation(&ctx, &id, |x| x.title = title);
             }
         });

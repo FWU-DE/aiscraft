@@ -25,7 +25,8 @@ impl AisCraftApp {
         let out = ScrollArea::vertical().id_salt(("messages", self.state.current.clone())).stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
             centered(ui, |ui| {
                 ui.add_space(12.0);
-                let msgs = self.state.messages.clone();
+                // Placeholders of „Namen schützen“ shown, copied and edited as the names (#55).
+                let msgs = self.engine.shown_messages(&self.state);
                 let last_assistant = msgs.iter().rposition(|m| m.role == Role::Assistant);
                 for (i, m) in msgs.iter().enumerate() {
                     match m.role {
@@ -93,7 +94,7 @@ impl AisCraftApp {
                     if !self.sidebar_open && icon_button(ui, &t, "☰", "Seitenleiste (Strg+B)").clicked() {
                         self.sidebar_open = true;
                     }
-                    let title = self.state.current.as_ref().and_then(|id| self.state.conversation(id)).map(|c| c.title.clone());
+                    let title = self.state.current.as_ref().and_then(|id| self.state.conversation(id)).map(|c| self.engine.reveal(&c.id, &c.title));
                     if let Some(title) = &title {
                         let r = ui
                             .add(egui::Label::new(RichText::new(title).strong()).truncate().sense(egui::Sense::click()))
@@ -188,7 +189,11 @@ impl AisCraftApp {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 3.0;
                         let r = ui
-                            .add(egui::Label::new(crate::theme::bold(&c.title).size(20.0).color(t.text)).truncate().sense(egui::Sense::click()))
+                            .add(
+                                egui::Label::new(crate::theme::bold(self.engine.reveal(&c.id, &c.title)).size(20.0).color(t.text))
+                                    .truncate()
+                                    .sense(egui::Sense::click()),
+                            )
                             .on_hover_text("Doppelklick zum Umbenennen");
                         if r.double_clicked() {
                             self.dialog = Some(Dialog::Rename { id: c.id.clone(), title: c.title.clone() });
@@ -500,6 +505,11 @@ impl AisCraftApp {
             if let Some(along) = m.activity.iter().find(|s| s.label == aiscraft_engine::SENT_ALONG).and_then(|s| s.detail.as_deref()) {
                 ui.add(egui::Label::new(small_muted(&t, format!("Mitgeschickt: {along}"))).wrap())
                     .on_hover_text("Stand oben in deiner Nachricht; der Server behält es im Verlauf, darum geht es in diesem Chat nur einmal mit.");
+            }
+            if let Some(done) = m.activity.iter().find(|s| s.label == aiscraft_engine::privacy::PROTECTED).and_then(|s| s.detail.as_deref()) {
+                let sent = self.state.messages.iter().find(|x| x.id == m.id).map(|x| x.content.clone()).unwrap_or_default();
+                ui.add(egui::Label::new(small_muted(&t, format!("Namen geschützt: {done}"))).wrap())
+                    .on_hover_text(format!("So ging die Nachricht raus:\n{}", sent.chars().take(1500).collect::<String>()));
             }
             if let Some(left) = m.activity.iter().find(|s| s.label == aiscraft_engine::LEFT_OUT).and_then(|s| s.detail.as_deref()) {
                 ui.add(egui::Label::new(small_muted(&t, format!("Nicht mitgeschickt (anderer Dienst): {left}"))).wrap()).on_hover_text(
@@ -1325,6 +1335,9 @@ impl AisCraftApp {
             {
                 ui.label(small_muted(&t, format!("📄 {} geht als Kontext mit", a.title)));
             }
+            if !image_mode {
+                self.privacy_preview(ui);
+            }
             let has_focus = ui.memory(|m| m.focused()) == Some(egui::Id::unique("composer"));
             if enter_sends && has_focus && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
                 send = true;
@@ -1434,6 +1447,7 @@ impl AisCraftApp {
                             });
                         } else {
                             self.sources_menu(ui);
+                            self.privacy_switch(ui);
                             self.create_menu(ui);
                         }
                     });
@@ -1451,7 +1465,9 @@ impl AisCraftApp {
             if !text.trim().is_empty() || !files.is_empty() || !links.is_empty() {
                 self.save_if_dirty();
                 let artifact = if self.attach_artifact { self.state.open_artifact.clone() } else { None };
-                self.run("chat.send", json!({"text": text, "files": files, "links": links, "artifact": artifact}));
+                let privacy = self.privacy.params();
+                self.privacy.clear();
+                self.run("chat.send", json!({"text": text, "files": files, "links": links, "artifact": artifact, "privacy": privacy}));
             }
             self.focus_composer = true;
         }
@@ -1551,6 +1567,7 @@ impl AisCraftApp {
                         });
                     } else {
                         self.sources_menu(ui);
+                        self.privacy_switch(ui);
                         if !compact {
                             self.create_menu(ui);
                         }
