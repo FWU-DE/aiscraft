@@ -238,7 +238,7 @@ fn format_spec_is_folded_under_the_request() {
     engine.call("backend.check", json!({"id": id})).unwrap();
     engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
     engine.call("chat.new", json!({})).unwrap();
-    let prompt = aiscraft_engine::learn::worksheet_prompt("Photosynthese (Klasse: 7)", 8, false);
+    let prompt = aiscraft_engine::learn::worksheet_prompt("Photosynthese (Klasse: 7)", 8, false, true);
     engine.call("chat.send", json!({"text": prompt})).unwrap();
     let mut h = harness(&engine);
     h.run_steps(6);
@@ -361,6 +361,39 @@ fn worksheet_work_mode_checks_answers_and_app_panel_shows_source() {
     h.run_steps(8);
     assert!(h.query_by_label("▶ Öffnen").is_some());
     assert!(h.query_by_label("Speichern …").is_some());
+}
+
+/// A worksheet without points (#72): the switch „Punkte vergeben“ in the editor hides the points
+/// fields, the sheet is saved without points, and „Prüfen“ counts right tasks.
+#[test]
+fn worksheet_points_switch_hides_points() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let sheet = serde_json::json!({"title": "Brüche", "tasks": [
+        {"id": "a1", "type": "choice", "prompt": "Welcher Bruch ist am größten?", "points": 2, "options": [{"text": "ein Halb"}, {"text": "drei Viertel", "correct": true}]},
+        {"id": "a2", "type": "true_false", "prompt": "Zwei Viertel sind ein Halb.", "answer": true}
+    ]});
+    let id = engine.call("worksheet.create", serde_json::json!({"worksheet": sheet})).unwrap()["id"].as_str().unwrap().to_string();
+    let mut h = harness(&engine);
+    step_until(&mut h, "the editor", |h| h.query_by_label("Punkte vergeben").is_some());
+    assert!(chosen(&h, "Punkte vergeben"), "on for a sheet with points");
+    assert_eq!(h.query_all_by_label("Punkte").count(), 2, "a points field per task");
+    click_until(&mut h, "Punkte vergeben", "the points fields hidden", |h| h.query_all_by_label("Punkte").count() == 0);
+    assert!(!chosen(&h, "Punkte vergeben"));
+    let text = |e: &Engine| e.call("artifact.get", serde_json::json!({"id": id})).unwrap()["text"].as_str().unwrap().to_string();
+    step_until(&mut h, "saved without points", |_| text(&engine).contains("\"points\": false"));
+    assert!(text(&engine).contains("\"points\": 2"), "task points kept");
+    // Lösen: no points next to the task, and „Prüfen“ counts right tasks.
+    h.get_by_label("Lösen").click();
+    settled(&mut h, "drei Viertel");
+    assert!(h.query_by_label("(2 Punkte)").is_none());
+    h.get_by_label("drei Viertel").click();
+    h.run_steps(4);
+    h.get_by_label("Prüfen").click();
+    step_until(&mut h, "the count", |h| h.query_by_label_contains("1 von 2 richtig").is_some());
+    assert!(h.query_by_label_contains("Punkte").is_none(), "no points anywhere");
+    // Switched back on: the fields are back with their points.
+    h.get_by_label("Bearbeiten").click();
+    click_until(&mut h, "Punkte vergeben", "the points fields back", |h| h.query_all_by_label("Punkte").count() == 2);
 }
 
 /// The look question: a fresh profile gets the whole welcome (look, then sign-in), a profile that
@@ -488,10 +521,11 @@ fn omarchy_card_only_with_an_omarchy_theme() {
 /// panel keeps its default width and stays put, in every look.
 #[test]
 fn artifact_panel_does_not_grow_frame_by_frame() {
-    for theme in ["glas-dark", "modern-light", "omarchy"] {
+    // Each look, and a sheet without points (its header row has the switch but no points fields).
+    for (theme, points) in [("glas-dark", true), ("modern-light", true), ("omarchy", true), ("modern-dark", false)] {
         let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
         engine.call("settings.set", serde_json::json!({"key": "theme", "value": theme})).unwrap();
-        let sheet = serde_json::json!({"title": "Photosynthese – So stellen Pflanzen Nahrung her", "tasks": [
+        let sheet = serde_json::json!({"title": "Photosynthese – So stellen Pflanzen Nahrung her", "points": points, "tasks": [
             {"type": "choice", "prompt": "Welche Zellbestandteile führen die Photosynthese durch?", "options": [{"text": "Chloroplasten", "correct": true}, {"text": "Mitochondrien"}]},
             {"type": "true_false", "prompt": "Pflanzen nehmen Sauerstoff auf.", "answer": false, "hints": ["Welches Gas geben Pflanzen ab?"]},
             {"type": "categorize", "prompt": "Sortiere", "categories": [{"name": "Säugetiere", "items": ["Wal"]}, {"name": "Fische", "items": ["Hai"]}]}

@@ -163,7 +163,7 @@ fn format_requests_send_the_spec_but_show_only_the_topic() {
     let (engine, log) = routed_engine_logged();
     engine.call("settings.set", json!({"key": "tools", "value": false})).unwrap();
     let cases = [
-        ("worksheet.request", "worksheet", worksheet_prompt("Bruchrechnung (Klasse: 6)", 8, false)),
+        ("worksheet.request", "worksheet", worksheet_prompt("Bruchrechnung (Klasse: 6)", 8, false, true)),
         ("learning_app.request", "learning_app", app_prompt("Bruchrechnung (Klasse: 6)", false)),
         ("h5p.request", "h5p", crate::learn::h5p::h5p_prompt("Bruchrechnung (Klasse: 6)", 6, false)),
     ];
@@ -187,11 +187,11 @@ fn format_requests_send_the_spec_but_show_only_the_topic() {
         let r = formats::split_request(&user.content).unwrap();
         assert_eq!(r.format.id, format);
         assert_eq!(r.topic, "Bruchrechnung (Klasse: 6)");
-        assert!(r.spec.contains(&(r.format.prompt_description)()), "{command}: the folded part is the spec");
+        assert!(r.spec.contains(&(r.format.prompt_description)(&formats::PromptOptions::default())), "{command}: the folded part is the spec");
         // The export carries a one-line note, not the spec.
         let md = engine.call("chat.export", json!({})).unwrap()["text"].as_str().unwrap().to_string();
         assert!(md.contains("Bruchrechnung (Klasse: 6)") && md.contains(&format!("_Mit Formatvorgabe: {}_", r.format.label)), "{md}");
-        assert!(!md.contains(&(r.format.prompt_description)()), "{command}: no spec in the export");
+        assert!(!md.contains(&(r.format.prompt_description)(&formats::PromptOptions::default())), "{command}: no spec in the export");
     }
 }
 
@@ -265,6 +265,60 @@ fn tool_backends_create_apps_and_worksheets_with_tools() {
     let out = engine.call("learning_app.request", json!({"topic": "Brüche"})).unwrap();
     assert_eq!(out["created"], true);
     assert!(engine.state().artifacts.iter().any(|a| a.kind == aiscraft_core::ArtifactKind::App));
+}
+
+/// Worksheets without points (#72): the setting makes new sheets from the tools path go without
+/// points and tells the model so; checking counts right tasks; the flag survives export, model
+/// updates and revisions; the per-sheet switch brings the task points back.
+#[test]
+fn worksheets_without_points_from_the_setting() {
+    let (engine, log) = routed_engine_logged();
+    assert!(engine.state().settings.worksheet_points, "on by default");
+    engine.call("settings.set", json!({"key": "worksheet_points", "value": false})).unwrap();
+    let out = engine.call("worksheet.request", json!({"topic": "Bruchrechnung", "count": 5})).unwrap();
+    assert_eq!(out["created"], true, "{out}");
+    let s = engine.state();
+    assert!(s.messages.iter().any(|m| m.tool_calls.iter().any(|t| t.name == "worksheet_create")), "made by the tool");
+    let id = s.artifacts.iter().find(|a| a.kind == aiscraft_core::ArtifactKind::Worksheet).unwrap().id.clone();
+    // The model was told: in the request and in the tool description.
+    let sent = log.lock().unwrap().clone();
+    let first = sent.first().unwrap().to_string();
+    assert!(first.contains("keine Punkte") && first.contains("(ohne Punkte)"), "the request says so");
+    let tool = sent.first().unwrap()["tools"].as_array().unwrap().iter().find(|t| t["function"]["name"] == "worksheet_create").unwrap().to_string();
+    assert!(tool.contains("keine Punkte"), "{tool}");
+    // The model sent points anyway: the sheet has none, the task points are kept.
+    let text = engine.call("artifact.get", json!({"id": id})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(text.contains("\"points\": false") && text.contains("\"points\": 2"), "{text}");
+    let r = engine.call("worksheet.check", json!({"id": id, "answers": {"t1": [0], "t2": false, "t3": ["0.5"], "t4": "0,25", "t5": "weil"}})).unwrap();
+    assert!(r.get("points").is_none() && r.get("max").is_none() && r["results"][0].get("points").is_none(), "{r}");
+    assert_eq!((r["right"].as_u64(), r["checked"].as_u64(), r["open"].as_u64()), (Some(3), Some(4), Some(1)), "{r}");
+    // JSON export keeps the flag; the printout names no points.
+    let json_out = engine.call("worksheet.export", json!({"id": id, "format": "json"})).unwrap();
+    let decoded = String::from_utf8(decode(&json_out)).unwrap();
+    assert!(decoded.contains("\"points\": false"));
+    for variant in ["arbeitsblatt", "loesung"] {
+        let md = engine.call("artifact.export", json!({"id": id, "format": "markdown", "variant": variant})).unwrap()["text"].as_str().unwrap().to_string();
+        assert!(md.contains("Welcher Bruch") && !md.contains("Punkt") && !md.contains("Gesamt"), "{variant}: {md}");
+    }
+    // A model update and an AI revision keep the teacher's switch.
+    let r = crate::learn::run_tool(engine.ctx(), "worksheet_update", &json!({"id": id, "worksheet": sheet_json()})).unwrap().unwrap();
+    assert!(r.contains("aktualisiert"));
+    engine.call("artifact.revise", json!({"id": id, "instruction": "leichter"})).unwrap();
+    let text = engine.call("artifact.get", json!({"id": id})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(text.contains("Bruchrechnung leicht") && text.contains("\"points\": false"), "{text}");
+    // Switched back on: the points are there again.
+    engine.call("worksheet.set_points", json!({"id": id, "points": true})).unwrap();
+    let r = engine.call("worksheet.check", json!({"id": id, "answers": {"t1": [0], "t3": ["0.5"]}})).unwrap();
+    assert_eq!(r["points"], 3.0, "{r}");
+    assert_eq!(r["max"], 5.0);
+    assert!(!engine.call("artifact.get", json!({"id": id})).unwrap()["text"].as_str().unwrap().contains("\"points\": false"));
+    assert!(engine.call("worksheet.set_points", json!({"id": id})).is_err(), "points must be given");
+    assert!(engine.call("worksheet.set_points", json!({"id": "nope", "points": false})).is_err());
+    // With the setting on again, a new sheet counts points.
+    engine.call("settings.set", json!({"key": "worksheet_points", "value": true})).unwrap();
+    let out = engine.call("worksheet.create", json!({"worksheet": sheet_json()})).unwrap();
+    let text = engine.call("artifact.get", json!({"id": out["id"]})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(!text.contains("\"points\": false"));
 }
 
 /// Worksheets: from a block (AIS.chat), validation, editing tasks, checking answers, export as

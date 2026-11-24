@@ -1,12 +1,13 @@
 //! Interactive worksheets in the artifact panel: edit mode for the teacher (tasks, solutions,
 //! order) and work mode for pupils (fill in, "Prüfen", hints, score). Native egui, laid out
 //! like a calm printed page. The format and the scoring live in `aiscraft_core::worksheet`;
-//! "Prüfen" uses the same `score` as the `worksheet.check` command.
+//! "Prüfen" uses the same `score` as the `worksheet.check` command. A sheet without points
+//! (`Worksheet::points` off) hides the points fields and counts right tasks instead.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use aiscraft_core::worksheet::{self, Category, ChoiceOption, ClozePart, Pair, Response, SheetResult, Task, TaskBody, Worksheet};
+use aiscraft_core::worksheet::{self, Category, ChoiceOption, ClozePart, Pair, Response, SheetResult, Task, TaskBody, Worksheet, number_text, points_text};
 use egui::{CornerRadius, Frame, Margin, RichText, ScrollArea, Stroke, Ui};
 use serde_json::json;
 
@@ -186,11 +187,6 @@ fn task_card<R>(ui: &mut Ui, t: &Tokens, stroke: egui::Color32, add: impl FnOnce
         .inner
 }
 
-fn points_text(p: f64) -> String {
-    let s = if (p - p.round()).abs() < 1e-9 { format!("{}", p.round() as i64) } else { format!("{p:.1}").replace('.', ",") };
-    if s == "1" { "1 Punkt".into() } else { format!("{s} Punkte") }
-}
-
 impl AisCraftApp {
     pub(crate) fn worksheet_body(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
@@ -201,6 +197,7 @@ impl AisCraftApp {
         // Toolbar: mode, print.
         let mut print: Option<(&str, &str, bool)> = None;
         let (mut check, mut reset) = (false, false);
+        let scored = v.sheet.ws.as_ref().is_none_or(|ws| ws.points);
         Frame::new().inner_margin(Margin::symmetric(12, 4)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 if t.designed() {
@@ -212,7 +209,8 @@ impl AisCraftApp {
                 }
                 ui.separator();
                 if mode == Mode::Work {
-                    check = accent_button(ui, &t, "Prüfen").on_hover_text("Antworten prüfen und Punkte zählen").clicked();
+                    let tip = if scored { "Antworten prüfen und Punkte zählen" } else { "Antworten prüfen und richtige Aufgaben zählen" };
+                    check = accent_button(ui, &t, "Prüfen").on_hover_text(tip).clicked();
                     reset = ui.button("Zurücksetzen").on_hover_text("Alle Antworten löschen").clicked();
                     ui.separator();
                 }
@@ -396,6 +394,11 @@ pub(crate) fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet, h5p: bool)
             changed |= ui.add(egui::TextEdit::singleline(&mut ws.subject).hint_text("z. B. Mathematik").desired_width(180.0)).labelled_by(l.id).changed();
             let l = ui.label(muted(t, "Klasse"));
             changed |= ui.add(egui::TextEdit::singleline(&mut ws.grade).hint_text("6").desired_width(60.0)).labelled_by(l.id).changed();
+            ui.add_space(8.0);
+            changed |= ui
+                .checkbox(&mut ws.points, "Punkte vergeben")
+                .on_hover_text("Aus: „Prüfen“ zählt richtige Aufgaben, der Ausdruck nennt keine Punkte. Die Punkte der Aufgaben bleiben gespeichert.")
+                .changed();
         });
     }
     let intro_hint = if h5p { "Einleitung auf der Startseite des Quiz (optional)" } else { "Arbeitsauftrag für alle Aufgaben (optional)" };
@@ -404,6 +407,7 @@ pub(crate) fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet, h5p: bool)
     let mut action = None;
     let n = ws.tasks.len();
     let mut number = 0;
+    let scored = ws.points;
     for (i, task) in ws.tasks.iter_mut().enumerate() {
         let info = matches!(task.body, TaskBody::Info { .. });
         if !info {
@@ -424,7 +428,7 @@ pub(crate) fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet, h5p: bool)
                     if ui.add_enabled(i > 0, egui::Button::new("⏶").frame(false)).on_hover_text("Nach oben").clicked() {
                         action = Some(Move::Up(i));
                     }
-                    if !info && !h5p {
+                    if !info && !h5p && scored {
                         let l = ui.label(muted(t, "Punkte"));
                         changed |= ui
                             .add(egui::DragValue::new(&mut task.points).range(0.0..=worksheet::MAX_POINTS).speed(0.5).max_decimals(1))
@@ -704,18 +708,17 @@ pub(crate) fn work_sheet(ui: &mut Ui, t: &Tokens, sheet: &mut SheetState) {
     }
     if let Some(r) = &sheet.result {
         ui.add_space(6.0);
-        let full = r.max > 0.0 && (r.points - r.max).abs() < 1e-9;
+        let full = match (r.points, r.max) {
+            (Some(p), Some(m)) => m > 0.0 && (p - m).abs() < 1e-9,
+            _ => r.all_right(),
+        };
         Frame::new()
             .fill(if full { t.success.gamma_multiply(0.15) } else { t.accent.gamma_multiply(0.12) })
             .corner_radius(CornerRadius::same(t.radius))
             .inner_margin(Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                let mut s = format!("{} von {}", points_text(r.points).replace(" Punkte", "").replace(" Punkt", ""), points_text(r.max));
-                if r.open > 0 {
-                    s.push_str(&format!(" · {} Aufgabe{} bewertet die Lehrkraft", r.open, if r.open == 1 { "" } else { "n" }));
-                }
-                ui.label(RichText::new(s).strong());
+                ui.label(RichText::new(r.summary()).strong());
             });
     }
     ui.add_space(10.0);
@@ -732,7 +735,7 @@ pub(crate) fn work_sheet(ui: &mut Ui, t: &Tokens, sheet: &mut SheetState) {
         let res = results.get(&task.id);
         let stroke = match res.and_then(|r| r.correct) {
             Some(true) => t.success,
-            Some(false) if res.is_some_and(|r| r.points > 0.0) => t.warning,
+            Some(false) if res.is_some_and(|r| r.partial) => t.warning,
             Some(false) => t.danger,
             None => t.border,
         };
@@ -750,7 +753,9 @@ pub(crate) fn work_sheet(ui: &mut Ui, t: &Tokens, sheet: &mut SheetState) {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(format!("{number}.")).strong().color(t.accent));
                 ui.label(RichText::new(&task.prompt).strong());
-                ui.label(small_muted(t, format!("({})", points_text(task.points))));
+                if ws.points {
+                    ui.label(small_muted(t, format!("({})", points_text(task.points))));
+                }
             });
             if let Some(img) = &task.image {
                 ui.label(small_muted(t, format!("Bild: {img}")));
@@ -778,8 +783,11 @@ pub(crate) fn work_sheet(ui: &mut Ui, t: &Tokens, sheet: &mut SheetState) {
                 if let Some(r) = res {
                     let (label, color) = match r.correct {
                         Some(true) => ("✔ Richtig".to_string(), t.success),
-                        Some(false) if r.points > 0.0 => (
-                            format!("Teilweise richtig: {} von {}", points_text(r.points).replace(" Punkte", "").replace(" Punkt", ""), points_text(r.max)),
+                        Some(false) if r.partial => (
+                            match (r.points, r.max) {
+                                (Some(p), Some(m)) => format!("Teilweise richtig: {} von {}", number_text(p), points_text(m)),
+                                _ => "Teilweise richtig".to_string(),
+                            },
                             t.warning,
                         ),
                         Some(false) => ("❌ Noch nicht richtig".to_string(), t.danger),

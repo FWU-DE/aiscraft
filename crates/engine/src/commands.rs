@@ -340,7 +340,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Einstellung ändern",
         "Einstellungen",
         None,
-        "key: theme|transparency|look_chosen|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|check_links|proactive|quiet_start|quiet_end|update_check, value: any",
+        "key: theme|transparency|look_chosen|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|check_links|proactive|quiet_start|quiet_end|update_check|worksheet_points, value: any",
         false,
         |c, p| Box::pin(async move {
             let key = req_str(&p, "key")?;

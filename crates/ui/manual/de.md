@@ -111,6 +111,8 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 **Arbeitsblätter:** Unter **Bearbeiten** änderst du Titel, Aufgaben, Lösungen, Punkte, Tipps und Erklärungen, sortierst Aufgaben (⏶ ⏷) und fügst neue hinzu: Auswahl (eine oder mehrere richtig), richtig oder falsch, Lückentext (Lücken als `[[Lösung|Alternative]]`), Zuordnen, Reihenfolge, kurze Antwort, Zahl (mit Toleranz), freier Text (mit Musterlösung) und Info-Text. Unter **Lösen** füllst du es aus; **Prüfen** zeigt je Aufgabe richtig, teilweise richtig oder falsch und zählt die Punkte. Freie Texte bewertet die Lehrkraft. **Zurücksetzen** löscht alle Antworten.
 
+**Ohne Punkte:** Den Schalter **Punkte vergeben** findest du unter **Bearbeiten** neben Fach und Klasse. Ist er aus, verschwinden die Punktefelder, **Prüfen** zeigt „4 von 6 richtig“ (teilweise richtige Aufgaben als „teilweise“), und Arbeits- und Lösungsblatt nennen keine Punkte. Die Punkte der Aufgaben bleiben gespeichert und sind wieder da, wenn du den Schalter einschaltest. Für neue Arbeitsblätter, auch die von der KI, gilt Einstellungen › Fähigkeiten und Hinweise › **Arbeitsblätter mit Punkten**; ist das aus, vergibt das Modell keine Punkte.
+
 **Druckvorschau:** Der Reiter **Druckvorschau** zeigt die Seiten genau so, wie sie aus dem Drucker kommen; oben wechselst du zwischen Arbeitsblatt und Lösungsblatt.
 
 **Drucken:** **Drucken** › „Arbeitsblatt drucken“ oder „Lösungsblatt drucken“ öffnet ein PDF im PDF-Programm, dort druckst du. Das Arbeitsblatt hat Linien und Kästchen zum Ausfüllen, das Lösungsblatt die Lösungen. Als PDF oder Word speichern geht im selben Menü. PDFs nutzen die Standardschriften; Emojis und seltene Zeichen erscheinen als ?.
