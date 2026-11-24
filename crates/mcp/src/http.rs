@@ -242,6 +242,15 @@ async fn listen(weak: Weak<Inner>, mut shutdown: watch::Receiver<bool>) {
 fn net_err(name: &str, e: &reqwest::Error) -> Error {
     if e.is_timeout() {
         Error::network(format!("Zeitüberschreitung beim Konnektor „{name}“."))
+    } else if let Some(url) = e.url()
+        && let Some(host) = url.host_str()
+        && aiscraft_core::is_loopback_host(host)
+        && (e.is_connect() || aiscraft_core::is_connection_lost(e))
+    {
+        let port = url.port_or_known_default().map(|p| format!(":{p}")).unwrap_or_default();
+        Error::network(format!(
+            "Der Konnektor „{name}“ unter {host}{port} antwortet nicht. Bitte das Programm des Konnektors starten und den Konnektor neu verbinden."
+        ))
     } else if e.is_connect() {
         Error::network(format!("Der Konnektor „{name}“ ist nicht erreichbar."))
     } else {

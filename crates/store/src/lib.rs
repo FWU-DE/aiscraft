@@ -98,13 +98,18 @@ pub struct Store {
 }
 
 fn db_err(e: rusqlite::Error) -> Error {
-    Error::storage(format!("Datenbank: {e}"))
+    // A full disk is named as such (SQLITE_FULL, or the I/O error under it), from the codes.
+    let full = match &e {
+        rusqlite::Error::SqliteFailure(f, _) => f.code == rusqlite::ErrorCode::DiskFull,
+        _ => false,
+    };
+    if full { Error::disk_full(format_args!("Datenbank: {e}")) } else { Error::storage(format!("Datenbank: {e}")) }
 }
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| Error::storage(format!("Ordner {}: {e}", dir.display())))?;
+            std::fs::create_dir_all(dir).map_err(|e| Error::io(format_args!("Ordner {}", dir.display()), &e))?;
         }
         Self::init(Connection::open(path).map_err(db_err)?)
     }
@@ -857,7 +862,30 @@ fn fts_query(q: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aiscraft_core::{Attachment, BackendKind};
+    use aiscraft_core::{Attachment, BackendKind, DISK_FULL, ErrorKind};
+
+    #[test]
+    fn sqlite_full_is_named_as_a_full_disk() {
+        let full = rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_FULL), Some("database or disk is full".into()));
+        let e = db_err(full);
+        assert_eq!(e.kind, ErrorKind::Storage);
+        assert!(e.message.starts_with(DISK_FULL), "{}", e.message);
+        assert!(e.message.contains("database or disk is full"), "details kept: {}", e.message);
+        let busy = db_err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY), None));
+        assert!(!busy.message.contains(DISK_FULL), "{}", busy.message);
+    }
+
+    /// A real SQLITE_FULL from the store: the database may not grow past a few pages.
+    #[test]
+    fn a_store_that_cannot_grow_says_the_disk_is_full() {
+        let st = Store::open_in_memory().unwrap();
+        let pages: i64 = st.db.query_row("PRAGMA page_count", [], |r| r.get(0)).unwrap();
+        st.db.execute_batch(&format!("PRAGMA max_page_count = {}", pages + 1)).unwrap();
+        let big = Value::String("x".repeat(256 * 1024));
+        let e = st.set_setting("gross", &big).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Storage);
+        assert!(e.message.starts_with(DISK_FULL), "{}", e.message);
+    }
 
     fn conv(id: &str, updated: i64) -> Conversation {
         Conversation {

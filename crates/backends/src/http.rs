@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use aiscraft_core::{Error, Result};
 use futures::StreamExt;
-use reqwest::{Response, StatusCode};
+use reqwest::{RequestBuilder, Response, StatusCode};
 
 pub const USER_AGENT: &str = concat!("AIS.ChatCraft/", env!("CARGO_PKG_VERSION"));
 
@@ -16,10 +16,26 @@ pub fn client(follow_redirects: bool) -> Result<reqwest::Client> {
         .map_err(|e| Error::network(format!("HTTP-Client: {e}")))
 }
 
+/// Adds the headers OpenRouter and the Vercel AI Gateway use to name AIS.ChatCraft, when `url`
+/// points there ([`aiscraft_core::attribution_headers`]). Other providers get only the User-Agent.
+pub fn attributed(rb: RequestBuilder, url: &str) -> RequestBuilder {
+    aiscraft_core::attribution_headers(url).iter().fold(rb, |rb, (k, v)| rb.header(*k, *v))
+}
+
 pub fn net_err(e: reqwest::Error) -> Error {
     if e.is_timeout() {
-        Error::network("Zeitüberschreitung beim Server")
-    } else if e.is_connect() {
+        return Error::network("Zeitüberschreitung beim Server");
+    }
+    // A server on this computer that refuses or drops the connection has stopped (Ollama, LM
+    // Studio, the demo server): say which one and what to do.
+    if let Some(url) = e.url()
+        && let Some(host) = url.host_str()
+        && aiscraft_core::is_loopback_host(host)
+        && (e.is_connect() || aiscraft_core::is_connection_lost(&e))
+    {
+        return Error::local_service_gone(host.trim_start_matches('[').trim_end_matches(']'), url.port_or_known_default());
+    }
+    if e.is_connect() {
         Error::network(format!("Server nicht erreichbar: {}", e.url().map(|u| u.host_str().unwrap_or("").to_string()).unwrap_or_default()))
     } else {
         Error::network(e.to_string())

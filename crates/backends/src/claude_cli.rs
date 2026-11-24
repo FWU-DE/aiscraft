@@ -60,8 +60,23 @@ impl Drop for TempFile {
 fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     // Mode 0600 from the first byte: the file holds the bridge token.
     let private = craft_atomic::WriteOptions::default().with_new_file_permissions(craft_atomic::NewFilePermissions::Private);
-    private.atomic_write(path, bytes).map_err(|e| Error::storage(format!("MCP-Konfiguration: {e}")))?;
+    private.atomic_write(path, bytes).map_err(|e| Error::io("MCP-Konfiguration", &e))?;
     Ok(())
+}
+
+/// The Claude CLI ended in the middle of an answer: which service stopped and what to do, in the
+/// style of the connector messages, with the CLI's last output.
+pub fn cli_ended(code: Option<i32>, last_output: &str) -> Error {
+    let code = code.map(|c| format!(" (Exit-Code {c})")).unwrap_or_default();
+    let mut msg = format!(
+        "Die Claude-CLI wurde unerwartet beendet{code}. Bitte die Nachricht noch einmal senden; wenn das wieder passiert, im Terminal `claude` starten und prüfen, ob sie läuft, dann AIS.ChatCraft neu starten."
+    );
+    let tail: String = last_output.trim().chars().rev().take(600).collect::<Vec<_>>().into_iter().rev().collect();
+    if !tail.is_empty() {
+        msg.push_str(" Letzte Ausgabe: ");
+        msg.push_str(&tail);
+    }
+    Error::network(msg)
 }
 
 /// The conversation so far as one prompt: earlier turns as a transcript, the last user message
@@ -190,7 +205,7 @@ impl Backend for ClaudeCli {
     fn chat(&self, req: ChatRequest) -> BoxFuture<'_, Result<EventStream>> {
         Box::pin(async move {
             let dir = std::env::temp_dir().join(format!("aiscraft-claude-{}", std::process::id()));
-            std::fs::create_dir_all(&dir).map_err(|e| Error::storage(format!("Arbeitsordner: {e}")))?;
+            std::fs::create_dir_all(&dir).map_err(|e| Error::io("Arbeitsordner", &e))?;
             let mut c = self.command();
             c.current_dir(&dir).args([
                 "-p",
@@ -229,7 +244,11 @@ impl Backend for ClaudeCli {
             let stdout = child.stdout.take().ok_or_else(|| Error::protocol("Claude-CLI: keine Ausgabe"))?;
             let mut stderr = child.stderr.take();
             let line = format!("{}\n", input_message(&req));
-            stdin.write_all(line.as_bytes()).await.map_err(|e| Error::protocol(format!("Claude-CLI: {e}")))?;
+            // A CLI that dies at start closes its input before we write; the read side then says
+            // why it ended (exit code, last output), which tells more than "broken pipe".
+            if let Err(e) = stdin.write_all(line.as_bytes()).await {
+                log::debug!("Claude-CLI: Eingabe nicht geschrieben: {e}");
+            }
             drop(stdin); // end of input: one turn
 
             struct St {
@@ -276,14 +295,13 @@ impl Backend for ClaudeCli {
                                 err = String::from_utf8_lossy(&buf).trim().to_string();
                             }
                             let status = st.child.wait().await.ok();
-                            st.queue.push_back(if status.is_some_and(|s| s.success()) && err.is_empty() {
+                            let success = status.is_some_and(|s| s.success());
+                            st.queue.push_back(if success && err.is_empty() {
                                 Ok(StreamEvent::Done)
+                            } else if success {
+                                Err(Error::protocol(format!("Claude-CLI: {err}")))
                             } else {
-                                Err(Error::protocol(if err.is_empty() {
-                                    "Claude-CLI wurde unerwartet beendet".to_string()
-                                } else {
-                                    format!("Claude-CLI: {err}")
-                                }))
+                                Err(cli_ended(status.and_then(|s| s.code()), &err))
                             });
                         }
                         Err(e) => st.queue.push_back(Err(Error::protocol(format!("Claude-CLI: {e}")))),
@@ -347,6 +365,70 @@ mod tests {
                 == aiscraft_core::ErrorKind::Auth
         );
         assert!(line_events("garbage").unwrap().is_empty());
+    }
+
+    /// A CLI that ends in the middle of an answer: the message names the Claude CLI, the exit
+    /// code and the next step, and keeps its last output. A shell script stands in for `claude`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn claude_cli_that_ends_mid_answer_says_so() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("aiscraft-fake-claude-{}-{}", std::process::id(), line!()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("claude");
+        std::fs::write(&script, "#!/bin/sh\ncat >/dev/null\necho '{\"type\":\"system\"}'\necho 'Speicherzugriffsfehler' >&2\nexit 3\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let cfg = BackendConfig {
+            id: "cc".into(),
+            name: "Claude".into(),
+            kind: aiscraft_core::BackendKind::ClaudeCli,
+            base_url: "claude".into(),
+            default_model: None,
+            send_context: true,
+        };
+        let b = ClaudeCli::new(cfg, script.display().to_string()).unwrap();
+        let req = || ChatRequest {
+            conversation_id: "c".into(),
+            model: "claude-haiku-5-5".into(),
+            system: None,
+            messages: vec![m(Role::User, "Hallo")],
+            tools: vec![],
+            tool_bridge: None,
+            persona: None,
+            web: false,
+        };
+        // Another test thread may still hold the fresh script open for writing (ETXTBSY).
+        let mut stream = None;
+        for _ in 0..20 {
+            match b.chat(req()).await {
+                Ok(s) => {
+                    stream = Some(s);
+                    break;
+                }
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+            }
+        }
+        let mut stream = stream.expect("fake CLI starts");
+        let mut err = None;
+        while let Some(ev) = stream.next().await {
+            if let Err(e) = ev {
+                err = Some(e);
+            }
+        }
+        let e = err.expect("an error at the end");
+        assert_eq!(e.kind, aiscraft_core::ErrorKind::Network);
+        assert!(e.message.starts_with("Die Claude-CLI wurde unerwartet beendet (Exit-Code 3)."), "{}", e.message);
+        assert!(e.message.contains("noch einmal senden"), "{}", e.message);
+        assert!(e.message.ends_with("Letzte Ausgabe: Speicherzugriffsfehler"), "{}", e.message);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cli_ended_without_code_or_output() {
+        let e = cli_ended(None, "  ");
+        assert!(e.message.starts_with("Die Claude-CLI wurde unerwartet beendet. Bitte"), "{}", e.message);
+        assert!(!e.message.contains("Letzte Ausgabe"));
+        assert!(cli_ended(Some(1), &"x".repeat(5000)).message.chars().count() < 900);
     }
 
     /// Talks to the real CLI with the subscription. `cargo test -p aiscraft-backends -- --ignored claude_cli_live`

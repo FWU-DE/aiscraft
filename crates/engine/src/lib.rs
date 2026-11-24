@@ -9,6 +9,7 @@ mod chat;
 #[cfg(feature = "collab")]
 mod collab;
 mod commands;
+mod disk;
 mod files;
 mod inbox;
 pub mod learn;
@@ -538,17 +539,18 @@ impl Ctx {
         if files.is_empty() {
             return;
         }
-        if let Err(e) = std::fs::create_dir_all(dir) {
-            log::warn!("Zwischenspeicher {}: {e}", dir.display());
+        // Only a cache: a full disk or a broken folder is logged (named as such), never shown.
+        if let Err(e) = crate::disk::create_dir(dir) {
+            log::warn!("Zwischenspeicher: {e}");
             return;
         }
         for (path, bytes) in files {
             if let Some(path) = path
                 && !bytes.is_empty()
                 && std::fs::read(&path).ok().as_deref() != Some(&bytes[..])
-                && let Err(e) = craft_atomic::atomic_write(&path, &bytes)
+                && let Err(e) = crate::disk::write(&path, &bytes)
             {
-                log::warn!("Zwischenspeicher {}: {e}", path.display());
+                log::warn!("Zwischenspeicher: {e}");
             }
         }
     }

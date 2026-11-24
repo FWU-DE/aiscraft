@@ -92,7 +92,7 @@ async fn write_loop(inner: Weak<Inner>, mut stdin: ChildStdin, mut rx: mpsc::Rec
             }
             if let Some(inner) = inner.upgrade() {
                 let tail = crate::client::stderr_tail_of(&inner, 600);
-                inner.fail_all(Error::network(with_tail(format!("Der Konnektor „{}“ nimmt keine Eingaben mehr an ({e}).", inner.name), &tail)));
+                inner.fail_all(Error::network(with_tail(format!("Der Konnektor „{}“ nimmt keine Eingaben mehr an ({e}). {RECONNECT}", inner.name), &tail)));
             }
             return;
         }
@@ -137,7 +137,7 @@ async fn read_loop(weak: Weak<Inner>, stdout: ChildStdout, stderr_done: oneshot:
     };
     let code = status.and_then(|s| s.code()).map(|c| format!(" (Exit-Code {c})")).unwrap_or_default();
     let tail = crate::client::stderr_tail_of(&inner, 600);
-    inner.fail_all(Error::network(with_tail(format!("Der Konnektor „{}“ wurde beendet{code}.", inner.name), &tail)));
+    inner.fail_all(Error::network(with_tail(format!("Der Konnektor „{}“ wurde beendet{code}. {RECONNECT}", inner.name), &tail)));
 }
 
 async fn stderr_loop(name: String, stderr: ChildStderr, ring: Arc<Mutex<StderrRing>>, done: oneshot::Sender<()>) {
@@ -153,6 +153,9 @@ async fn stderr_loop(name: String, stderr: ChildStderr, ring: Arc<Mutex<StderrRi
     }
     let _ = done.send(());
 }
+
+/// The next step after a connector stopped, named like the button in the settings.
+const RECONNECT: &str = "Bitte den Konnektor in den Einstellungen bei den Konnektoren neu verbinden.";
 
 fn with_tail(mut msg: String, tail: &str) -> String {
     if !tail.is_empty() {

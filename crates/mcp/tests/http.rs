@@ -252,6 +252,8 @@ async fn unreachable_and_invalid_urls() {
     let port = TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
     let e = McpClient::connect(&config(&format!("http://127.0.0.1:{port}/mcp"))).await.unwrap_err();
     assert_eq!(e.kind, ErrorKind::Network);
+    assert!(e.message.starts_with(&format!("Der Konnektor „Web“ unter 127.0.0.1:{port} antwortet nicht.")), "{}", e.message);
+    assert!(e.message.contains("neu verbinden"), "{}", e.message);
     assert_eq!(McpClient::connect(&config("ftp://example.org")).await.unwrap_err().kind, ErrorKind::Invalid);
     assert_eq!(McpClient::connect(&config("kein url")).await.unwrap_err().kind, ErrorKind::Invalid);
     let mut cfg = config("http://127.0.0.1:1/mcp");

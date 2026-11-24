@@ -7,7 +7,7 @@ use aiscraft_core::{Error, Result};
 use reqwest::multipart::{Form, Part};
 use serde_json::Value;
 
-use crate::http::{base, client, net_err, read_capped, status_error};
+use crate::http::{attributed, base, client, net_err, read_capped, status_error};
 
 /// OpenAI's upload limit; local servers accept the same.
 pub const MAX_UPLOAD: usize = 25 * 1024 * 1024;
@@ -31,7 +31,8 @@ pub async fn transcribe_openai(base_url: &str, api_key: Option<&str>, model: &st
     if let Some(lang) = language.map(str::trim).filter(|l| !l.is_empty()) {
         form = form.text("language", lang.to_string());
     }
-    let mut rb = client(true)?.post(format!("{base}/audio/transcriptions")).timeout(Duration::from_secs(300)).multipart(form);
+    let url = format!("{base}/audio/transcriptions");
+    let mut rb = attributed(client(true)?.post(&url), &url).timeout(Duration::from_secs(300)).multipart(form);
     if let Some(k) = api_key.map(str::trim).filter(|k| !k.is_empty()) {
         rb = rb.bearer_auth(k);
     }

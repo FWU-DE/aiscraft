@@ -478,7 +478,7 @@ async fn app_save(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let path = req_str(&p, "path")?;
     let (_, html) = app_of(&c, &id)?;
-    craft_atomic::atomic_write(Path::new(&path), with_csp(&html).as_bytes()).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+    crate::disk::write(Path::new(&path), with_csp(&html).as_bytes())?;
     c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
     Ok(json!({"path": path}))
 }
@@ -486,11 +486,11 @@ async fn app_save(c: Ctx, p: Value) -> Result<Value> {
 /// Writes a file to open into `<data>/open` (never somewhere the person did not choose).
 fn open_copy(c: &Ctx, a: &Artifact, ext: &str, bytes: &[u8]) -> Result<PathBuf> {
     let dir = c.0.open_dir.clone();
-    std::fs::create_dir_all(&dir).map_err(|e| Error::storage(format!("{}: {e}", dir.display())))?;
+    crate::disk::create_dir(&dir)?;
     let short: String = a.id.chars().filter(char::is_ascii_alphanumeric).take(8).collect();
     let name = crate::office::file_name(&format!("{} {short}", a.title), ext);
     let path = dir.join(name);
-    craft_atomic::atomic_write(&path, bytes).map_err(|e| Error::storage(format!("{}: {e}", path.display())))?;
+    crate::disk::write(&path, bytes)?;
     Ok(path)
 }
 
@@ -510,9 +510,21 @@ fn show_html(c: &Ctx, path: &Path, title: &str) -> Result<&'static str> {
             .spawn();
         match child {
             Ok(child) => {
-                let mut kids = c.0.previews.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                kids.retain_mut(|k| matches!(k.try_wait(), Ok(None)));
-                kids.push(child);
+                let pid = child.id();
+                {
+                    let mut kids = c.0.previews.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    kids.retain_mut(|k| matches!(k.try_wait(), Ok(None)));
+                    kids.push(child);
+                }
+                // A preview that dies right away (missing WebKitGTK, a crash) would leave the
+                // person with nothing: say so.
+                let ctx = c.clone();
+                c.spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    if let Some(code) = preview_failed(&ctx, pid) {
+                        ctx.notice(NoticeLevel::Warning, preview_gone_message(code));
+                    }
+                });
                 return Ok("preview");
             }
             Err(e) => log::warn!("aiscraft-preview: {e}"),
@@ -520,6 +532,34 @@ fn show_html(c: &Ctx, path: &Path, title: &str) -> Result<&'static str> {
     }
     system_open(path)?;
     Ok("browser")
+}
+
+/// Whether the preview process `pid` has ended with an error; then it is forgotten, and the
+/// result is its exit code (none when a signal ended it).
+pub(crate) fn preview_failed(c: &Ctx, pid: u32) -> Option<Option<i32>> {
+    let mut kids = c.0.previews.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut ended = None;
+    kids.retain_mut(|k| {
+        if k.id() != pid {
+            return true;
+        }
+        match k.try_wait() {
+            Ok(Some(status)) => {
+                ended = Some(status);
+                false
+            }
+            _ => true,
+        }
+    });
+    ended.filter(|s| !s.success()).map(|s| s.code())
+}
+
+/// What a person reads when the preview stopped: which program, and what to do.
+pub(crate) fn preview_gone_message(code: Option<i32>) -> String {
+    let code = code.map(|c| format!(" (Exit-Code {c})")).unwrap_or_default();
+    format!(
+        "Die Vorschau (aiscraft-preview) wurde unerwartet beendet{code}. Bitte die Lern-App noch einmal öffnen; wenn das wieder passiert, AIS.ChatCraft neu starten."
+    )
 }
 
 /// Opens a file with the system's default program (browser, PDF viewer).
@@ -659,7 +699,7 @@ async fn ws_export(c: Ctx, p: Value) -> Result<Value> {
     let format = opt_str(&p, "format").unwrap_or_else(|| "pdf".into());
     let (bytes, _) = worksheet_bytes(&ws, &format, variant(&p))?;
     if let Some(path) = opt_str(&p, "path") {
-        craft_atomic::atomic_write(Path::new(&path), &bytes).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+        crate::disk::write(Path::new(&path), &bytes)?;
         c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
         return Ok(json!({"path": path}));
     }
@@ -697,7 +737,7 @@ pub(crate) fn export_for(c: &Ctx, a: &Artifact, p: &Value) -> Option<Result<Valu
     };
     Some(bytes.and_then(|bytes| {
         if let Some(path) = opt_str(p, "path") {
-            craft_atomic::atomic_write(Path::new(&path), &bytes).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+            crate::disk::write(Path::new(&path), &bytes)?;
             c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
             return Ok(json!({"path": path}));
         }

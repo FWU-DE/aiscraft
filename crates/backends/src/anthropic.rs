@@ -8,7 +8,7 @@ use aiscraft_core::{
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
 
-use crate::http::{client, json as read_json, net_err, status_error};
+use crate::http::{attributed, client, json as read_json, net_err, status_error};
 use crate::sse::event_stream;
 use crate::{Backend, EventStream};
 
@@ -38,7 +38,8 @@ impl Anthropic {
 
     fn req(&self, method: reqwest::Method, path: &str) -> Result<reqwest::RequestBuilder> {
         let key = self.key.as_deref().ok_or_else(|| Error::auth("Kein API-Schlüssel für Anthropic hinterlegt"))?;
-        Ok(self.http.request(method, format!("{}{path}", self.base)).header("x-api-key", key.trim()).header("anthropic-version", API_VERSION))
+        let url = format!("{}{path}", self.base);
+        Ok(attributed(self.http.request(method, &url), &url).header("x-api-key", key.trim()).header("anthropic-version", API_VERSION))
     }
 }
 
@@ -584,7 +585,8 @@ fn continuing(http: reqwest::Client, parts: ReqParts, body: Value, acc: Arc<Mute
                                 m.truncate(t.messages);
                                 m.push(json!({"role": "assistant", "content": c}));
                             }
-                            let mut r = t.http.post(&t.parts.url).header("x-api-key", &t.parts.key).header("anthropic-version", API_VERSION);
+                            let mut r =
+                                attributed(t.http.post(&t.parts.url), &t.parts.url).header("x-api-key", &t.parts.key).header("anthropic-version", API_VERSION);
                             if let Some(b) = t.parts.beta {
                                 r = r.header("anthropic-beta", b);
                             }
