@@ -147,7 +147,9 @@ fn package_card(ui: &mut Ui, t: &crate::theme::Tokens, p: &h5p::PackageInfo) {
                     "Diesen Inhaltstyp kann AIS.ChatCraft nicht bearbeiten. „Als H5P speichern“ speichert das Paket unverändert, z. B. zum Hochladen in eine Lernplattform.",
                 ));
             }
-            for n in p.notes.iter().take(6) {
+            // "H5P.X kann AIS.ChatCraft nicht bearbeiten" says what the paragraph above says;
+            // a quiz with one unknown question ("Frage 3: …") is worth naming.
+            for n in p.notes.iter().filter(|n| p.editable || n.starts_with("Frage")).take(6) {
                 ui.label(RichText::new(n).small().color(t.warning));
             }
             if !p.libraries.is_empty() {
