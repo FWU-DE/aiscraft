@@ -93,7 +93,7 @@ impl AisCraftApp {
         let mut switch: Option<(String, usize, bool, bool)> = None;
         Frame::new().fill(t.surface_hi).corner_radius(CornerRadius::same(8)).inner_margin(Margin::symmetric(10, 6)).show(ui, |ui| {
             let replaced = p.hits.iter().filter(|h| h.on).count();
-            let unsure = p.hits.iter().filter(|h| h.ambiguous && !h.on).count();
+            let unsure = p.hits.iter().filter(|h| h.ambiguous && h.on).count();
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Geht so raus").small().strong());
                 let mut parts = vec![match replaced {
@@ -102,7 +102,7 @@ impl AisCraftApp {
                     n => format!("{n} Angaben ersetzt"),
                 }];
                 if unsure > 0 {
-                    parts.push(format!("{unsure} unsicher: antippen, um zu ersetzen"));
+                    parts.push(format!("davon {unsure} unsicher: antippen, um es stehen zu lassen"));
                 }
                 ui.label(small_muted(&t, parts.join(" · ")));
             });

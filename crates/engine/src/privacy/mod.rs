@@ -13,8 +13,9 @@
 //! - Every outgoing request passes [`Guard`] (in `chat.rs`, where the payload is built): user
 //!   messages the person reviewed in the preview carry the step [`PROTECTED`] and stay as they
 //!   were sent; everything else (system prompt, memory, project instructions, attached documents,
-//!   tool results, older messages, background prompts) is protected automatically, without the
-//!   unsure findings.
+//!   tool results, older messages, background prompts) is protected automatically. Unsure findings
+//!   (a name that is also a word, a lower-case name, a date of school age) are replaced too:
+//!   privacy first (owner, 2026-11-24); the preview lets the person take single ones back.
 
 pub mod detect;
 #[cfg(test)]
@@ -342,7 +343,8 @@ fn detector(c: &Ctx, project: Option<&str>, m: &Mapping, extra: &[String]) -> De
 
 // ---- protecting -----------------------------------------------------------------------------
 
-/// Replace what `d` finds in `text`, as the person decided (`None`: automatic, unsure hits stay).
+/// Replace what `d` finds in `text`, as the person decided (`None`: automatic, everything found
+/// is replaced, unsure hits too).
 pub(crate) fn protect_text(d: &Detector, m: &mut Mapping, text: &str, decisions: Option<&Decisions>) -> (String, Vec<Hit>) {
     let text = text.get(..text.len().min(MAX_TEXT)).unwrap_or(text);
     let found = d.detect(text);
@@ -361,7 +363,7 @@ pub(crate) fn protect_text(d: &Detector, m: &mut Mapping, text: &str, decisions:
         let on = match decisions {
             Some(dc) if dc.off.contains(&(folded.clone(), n)) => false,
             Some(dc) if dc.on.contains(&(folded.clone(), n)) => true,
-            _ => !f.ambiguous,
+            _ => true,
         };
         let placeholder = if on { m.placeholder_for(&f) } else { String::new() };
         out.push_str(text.get(at..f.start).unwrap_or(""));

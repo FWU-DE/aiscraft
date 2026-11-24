@@ -103,15 +103,18 @@ fn no_real_name_reaches_the_backend() {
 
     let text = "Schreib eine Zeugnisbemerkung für Lea Müller (geb. 03.05.2014). Leas Mitarbeit ist gut, Jonas hilft ihr. \
                 Das Mark der Sache: IBAN DE89 3704 0044 0532 0130 00.";
-    // The preview shows exactly what goes out; "Mark" is unsure and stays until confirmed.
+    // The preview shows exactly what goes out; "Mark" is unsure and replaced too (privacy first),
+    // the person can take it back.
     let pv = engine.call("privacy.preview", json!({"text": text})).unwrap();
     assert_eq!(pv["active"], true);
     let out = pv["outgoing"].as_str().unwrap();
     assert!(out.starts_with("Schreib eine Zeugnisbemerkung für [S1] [N1] (geb. [Geburtsdatum 1]). [S1]s Mitarbeit ist gut, [S2] hilft ihr."), "{out}");
-    assert!(out.contains("Das Mark der Sache: IBAN [IBAN 1]."), "{out}");
+    assert!(out.contains("Das [S3] der Sache: IBAN [IBAN 1]."), "{out}");
     let mark = pv["hits"].as_array().unwrap().iter().find(|h| h["text"] == "Mark").unwrap();
-    assert_eq!((mark["ambiguous"].as_bool(), mark["on"].as_bool()), (Some(true), Some(false)));
+    assert_eq!((mark["ambiguous"].as_bool(), mark["on"].as_bool()), (Some(true), Some(true)));
     assert!(engine.state().privacy.preview.as_ref().is_some_and(|p| p.outgoing == out));
+    let kept = engine.call("privacy.preview", json!({"text": text, "off": [{"text": "Mark", "n": 0}]})).unwrap();
+    assert!(kept["outgoing"].as_str().unwrap().contains("Das Mark der Sache"), "an unsure hit can be taken back");
     // Switching a hit off keeps it; nothing of the preview is kept in the chat.
     let off = engine.call("privacy.preview", json!({"text": text, "off": [{"text": "Jonas", "n": 0}]})).unwrap();
     assert!(off["outgoing"].as_str().unwrap().contains("Jonas hilft"));
@@ -131,7 +134,11 @@ fn no_real_name_reaches_the_backend() {
     // Stored: what the backend saw. Shown, copied, exported: the names.
     let s = engine.state();
     assert!(s.messages[0].content.contains("[S1] [N1]") && !s.messages[0].content.contains("Müller"));
-    assert_eq!(s.messages[0].activity.iter().find(|a| a.label == PROTECTED).and_then(|a| a.detail.clone()).as_deref(), Some("11 Angaben ersetzt"));
+    assert_eq!(
+        s.messages[0].activity.iter().find(|a| a.label == PROTECTED).and_then(|a| a.detail.clone()).as_deref(),
+        Some("12 Angaben ersetzt"),
+        "Mark (unsure) is replaced too"
+    );
     assert!(s.messages[0].attachments[0].text.as_deref().unwrap_or("").contains("[Telefon 1]"));
     let shown = engine.shown_messages(&s);
     assert!(shown[0].content.starts_with("Schreib eine Zeugnisbemerkung für Lea Müller (geb. 03.05.2014). Leas Mitarbeit"));
@@ -144,7 +151,7 @@ fn no_real_name_reaches_the_backend() {
     assert!(map["entries"].as_array().unwrap().iter().any(|e| e["placeholder"] == "[N1]" && e["original"] == "Müller"));
     assert_eq!(engine.call("privacy.reveal", json!({"text": "[S2] [N2]"})).unwrap()["text"], "Jonas Schmidt");
 
-    // Confirming "Mark" in the preview replaces it, here and from then on.
+    // Mark is replaced anyway now; confirming it (and adding a name by hand) keeps it replaced.
     engine.call("chat.send", json!({"text": "Mark kommt auch.", "privacy": {"on": [{"text": "Mark", "n": 0}], "add": ["Frau Özdemir"]}})).unwrap();
     engine.call("chat.send", json!({"text": "Grüße an Mark und Frau Özdemir"})).unwrap();
     let last = posted(&seen).pop().unwrap();
