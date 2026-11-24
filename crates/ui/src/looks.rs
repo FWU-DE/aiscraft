@@ -39,6 +39,9 @@ impl AisCraftApp {
         let gap = 12.0;
         let w = ((ui.available_width() - gap * (n - 1.0)) / n).max(110.0);
         let dark = t.dark;
+        // One height for all cards: the tallest caption.
+        let cap_h =
+            looks.iter().map(|(_, _, line)| ui.painter().layout(line.to_string(), FontId::proportional(12.5), t.muted, w - 24.0).size().y).fold(0.0, f32::max);
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
             for (l, name, line) in looks {
@@ -46,7 +49,7 @@ impl AisCraftApp {
                     Look::Omarchy => Some(t.clone()).filter(|t| t.look == Look::Omarchy).unwrap_or_else(|| theme::resolve("omarchy", dark, false)),
                     l => theme::tokens(*l, dark),
                 };
-                if look_card(ui, &t, &preview, *l == look, name, line, w).clicked() {
+                if look_card(ui, &t, &preview, *l == look, name, line, w, cap_h).clicked() {
                     self.set_look(*l, mode);
                 }
             }
@@ -80,9 +83,11 @@ impl AisCraftApp {
 }
 
 /// A selectable card: the preview, the name and a line; framed in the accent when chosen.
-fn look_card(ui: &mut Ui, t: &Tokens, preview: &Tokens, on: bool, name: &str, line: &str, w: f32) -> egui::Response {
+#[allow(clippy::too_many_arguments)]
+fn look_card(ui: &mut Ui, t: &Tokens, preview: &Tokens, on: bool, name: &str, line: &str, w: f32, cap_h: f32) -> egui::Response {
     let ph = (w * 0.56).round();
-    let h = ph + 74.0;
+    let caption = ui.painter().layout(line.to_string(), FontId::proportional(12.5), t.muted, w - 24.0);
+    let h = ph + 44.0 + caption.size().y.max(cap_h);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, name));
     let p = ui.painter();
@@ -99,8 +104,7 @@ fn look_card(ui: &mut Ui, t: &Tokens, preview: &Tokens, on: bool, name: &str, li
     paint_preview(p, pv, preview);
     let ty = pv.bottom() + 10.0;
     p.text(pos2(rect.left() + 12.0, ty), Align2::LEFT_TOP, name, FontId::new(15.0, egui::FontFamily::Name(theme::SEMIBOLD.into())), t.text);
-    let galley = p.layout(line.to_string(), FontId::proportional(12.5), t.muted, w - 24.0);
-    p.galley(pos2(rect.left() + 12.0, ty + 21.0), galley, t.muted);
+    p.galley(pos2(rect.left() + 12.0, ty + 21.0), caption, t.muted);
     if on {
         let c = pos2(rect.right() - 20.0, ty + 9.0);
         p.circle_filled(c, 10.0, t.accent);

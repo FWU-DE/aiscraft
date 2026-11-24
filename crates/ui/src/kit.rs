@@ -52,8 +52,8 @@ pub enum Pill {
     Chip,
     /// The second accent, tinted ("Neu: …").
     Accent2,
-    /// Text only.
-    Plain,
+    /// Text only, in the link colour ("Alle anzeigen", "Handbuch").
+    Link,
 }
 
 /// Fill a rect with the accent: flat, or Glas' diagonal gradient.
@@ -73,7 +73,7 @@ pub fn pill(ui: &mut Ui, t: &Tokens, kind: Pill, icon: Option<Icon>, label: &str
         Pill::Ghost => (t.surface, t.text2, if t.glass.is_some() { t.card_stroke } else { t.border }),
         Pill::Chip => (t.chip, t.chip_text, Color32::TRANSPARENT),
         Pill::Accent2 => (t.accent2_soft, t.accent2_ink, Color32::TRANSPARENT),
-        Pill::Plain => (Color32::TRANSPARENT, t.text2, Color32::TRANSPARENT),
+        Pill::Link => (Color32::TRANSPARENT, t.link, Color32::TRANSPARENT),
     };
     let text = (!label.is_empty()).then(|| line(ui, label, font(size, theme::SEMIBOLD), fg, 600.0));
     let isz = size + 3.0;

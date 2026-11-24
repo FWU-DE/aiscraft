@@ -664,7 +664,7 @@ impl AisCraftApp {
             ui.label(crate::theme::bold(title).size(18.0).color(t.text));
             if let Some(link) = link {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    clicked = crate::kit::pill(ui, &t, crate::kit::Pill::Plain, None, link, 14.0, Some(Icon::ChevronRight)).clicked();
+                    clicked = crate::kit::pill(ui, &t, crate::kit::Pill::Link, None, link, 14.0, Some(Icon::ChevronRight)).clicked();
                 });
             }
         });

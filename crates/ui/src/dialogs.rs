@@ -759,7 +759,7 @@ impl AisCraftApp {
                             }
                         }
                         ui.add_space((ui.available_height() - 30.0).max(8.0));
-                        if crate::kit::pill(ui, &t, crate::kit::Pill::Plain, Some(Icon::Help), &format!("Handbuch: {title}"), 13.5, None)
+                        if crate::kit::pill(ui, &t, crate::kit::Pill::Link, Some(Icon::Help), &format!("Handbuch: {title}"), 13.5, None)
                             .on_hover_text("Das passende Kapitel im Handbuch (F1)")
                             .clicked()
                         {
