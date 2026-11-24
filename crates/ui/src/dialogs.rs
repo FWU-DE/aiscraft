@@ -89,6 +89,10 @@ impl Dialog {
     }
 }
 
+/// How to contribute (bug reports, ideas, code), linked from the About tab and the manual.
+const CONTRIBUTING_URL: &str = "https://github.com/FWU-DE/aiscraft/blob/main/CONTRIBUTING.md";
+const ISSUES_URL: &str = "https://github.com/FWU-DE/aiscraft/issues/new";
+
 /// Space kept free between a dialog and the window edge, above and below.
 const DIALOG_SCREEN_GAP: f32 = 24.0;
 
@@ -574,7 +578,8 @@ impl AisCraftApp {
             SettingsTab::Vault => "Tresor",
             SettingsTab::Usage => "Nutzung",
             SettingsTab::Memory => "Gedächtnis",
-            SettingsTab::Appearance | SettingsTab::About => "Tastenkürzel",
+            SettingsTab::Appearance => "Tastenkürzel",
+            SettingsTab::About => "Mitmachen",
         };
         ui.horizontal(|ui| {
             ui.label(small_muted(&t, "Mehr dazu im Handbuch:"));
@@ -972,6 +977,12 @@ impl AisCraftApp {
                 ui.add_space(6.0);
                 ui.label(small_muted(&t, "Tastenkürzel: Strg+K Befehle · Strg+N neuer Chat · Strg+B Seitenleiste · Strg+Umschalt+F Suche · Strg+R neu erzeugen · Esc anhalten"));
                 ui.label(small_muted(&t, "Für Agenten: aiscraft --control startet den JSON-Steuerkanal; aiscraft-cli spricht dieselben Befehle."));
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.hyperlink_to("Mitmachen", CONTRIBUTING_URL).on_hover_text(CONTRIBUTING_URL);
+                    ui.label(small_muted(&t, "·"));
+                    ui.hyperlink_to("Fehler melden oder Idee vorschlagen", ISSUES_URL).on_hover_text(ISSUES_URL);
+                });
             }
         });
         keep

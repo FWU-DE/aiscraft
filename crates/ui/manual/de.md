@@ -155,3 +155,11 @@ Unter **Einstellungen › Nutzung** stehen die Tokens pro Monat, Backend und Mod
 - `aiscraft-cli mcp` ist ein MCP-Server mit allen Befehlen als Werkzeuge.
 - `aiscraft --control` startet einen JSON-Steuerkanal auf 127.0.0.1 (Token in der Datei `control-token` im Datenordner).
 - `aiscraft-cli manual` gibt dieses Handbuch aus.
+
+## Mitmachen
+
+AIS.ChatCraft ist offen: Fehler melden, Ideen einbringen oder Code beitragen geht über GitHub.
+
+- [So kannst du mitmachen](https://github.com/FWU-DE/aiscraft/blob/main/CONTRIBUTING.md)
+- [Fehler melden oder Idee vorschlagen](https://github.com/FWU-DE/aiscraft/issues/new)
+- Keine Zugangsdaten oder Schülerdaten in Fehlermeldungen: das Repository ist öffentlich.
