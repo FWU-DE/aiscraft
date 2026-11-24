@@ -665,7 +665,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("aiscraft-vault-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // Built with serde_json so Windows paths (backslashes) are escaped like Obsidian writes them.
-        let json = serde_json::json!({"vaults": {"a1": {"path": dir.display().to_string(), "ts": 1, "open": true}, "b2": {"path": "/does/not/exist"}}}).to_string();
+        let json =
+            serde_json::json!({"vaults": {"a1": {"path": dir.display().to_string(), "ts": 1, "open": true}, "b2": {"path": "/does/not/exist"}}}).to_string();
         assert_eq!(vaults_from_json(&json), vec![dir.display().to_string()]);
         assert!(vaults_from_json("kaputt").is_empty());
         let _ = std::fs::remove_dir_all(dir);
