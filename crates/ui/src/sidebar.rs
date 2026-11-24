@@ -384,9 +384,6 @@ impl AisCraftApp {
                     if icon_button(ui, &t, "⚙", "Einstellungen (Strg+,)").clicked() {
                         self.dialog = Some(Dialog::settings());
                     }
-                    if icon_button(ui, &t, "📌", "Gedächtnis").clicked() {
-                        self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Memory, new_note: String::new() });
-                    }
                 });
             })
             .response
