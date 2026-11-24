@@ -134,6 +134,7 @@ fn learning_app_from_an_html_block() {
     let engine = routed_engine();
     engine.call("settings.set", json!({"key": "tools", "value": false})).unwrap();
     assert!(engine.call("learning_app.request", json!({"topic": " "})).is_err(), "a topic is needed");
+    assert!(engine.call("worksheet.request", json!({"topic": "\""})).is_err(), "a stray quote is no topic");
     let out = engine.call("learning_app.request", json!({"topic": "Brüche vergleichen", "grade": "6"})).unwrap();
     assert_eq!(out["created"], true);
     let id = out["id"].as_str().unwrap().to_string();

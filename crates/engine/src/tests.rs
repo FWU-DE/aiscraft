@@ -1114,14 +1114,15 @@ fn per_chat_sources() {
     // Switched before the first message: the new chat takes them over.
     engine.call("chat.set_sources", json!({"memory": false, "history": false})).unwrap();
     engine.call("chat.send", json!({"text": "eins"})).unwrap();
-    let last = seen.lock().unwrap().last().cloned().unwrap();
+    // The chat request itself: a background request (title, skills) can be recorded after it.
+    let last = seen.lock().unwrap().iter().rev().find(|r| r.contains("eins")).cloned().unwrap();
     assert!(last.contains("PROJEKTREGEL") && !last.contains("MERKNOTIZ"), "memory off, project on");
     assert!(last.contains("document_create") && !last.contains("history_search"), "history search off, other tools on");
     let conv = engine.state().current.clone().unwrap();
     assert!(!engine.state().conversation(&conv).unwrap().sources.memory);
     engine.call("chat.set_sources", json!({"tools": false, "project": false, "memory": true})).unwrap();
     engine.call("chat.send", json!({"text": "zwei"})).unwrap();
-    let last = seen.lock().unwrap().last().cloned().unwrap();
+    let last = seen.lock().unwrap().iter().rev().find(|r| r.contains("zwei")).cloned().unwrap();
     assert!(!last.contains("\"tools\"") && !last.contains("PROJEKTREGEL") && last.contains("MERKNOTIZ"));
     // A model calling history_search anyway is refused.
     let call = aiscraft_core::ToolCall { id: "h".into(), name: "history_search".into(), arguments: json!({"query": "x"}), outcome: None };

@@ -147,7 +147,8 @@ pub fn with_csp(html: &str) -> String {
 
 fn topic_line(p: &Value) -> Result<String> {
     let topic: String = opt_str(p, "topic").or_else(|| opt_str(p, "text")).unwrap_or_default().trim().chars().take(MAX_TOPIC).collect();
-    if topic.is_empty() {
+    // A stray character (a quote, a dash) is no topic: the model would invent one.
+    if topic.chars().filter(|ch| ch.is_alphanumeric()).count() < 2 {
         return Err(Error::invalid("Schreib erst das Thema ins Eingabefeld, z. B. „Brüche vergleichen, Klasse 6“"));
     }
     let mut line = topic;

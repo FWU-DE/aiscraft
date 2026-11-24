@@ -195,17 +195,19 @@ impl AisCraftApp {
     /// worksheet request.
     pub(crate) fn create_menu(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
-        let topic = self.composer.trim().to_string();
         ui.menu_button(RichText::new("Erstellen  ⏷").color(t.muted), |ui| {
-            ui.set_min_width(260.0);
-            if topic.is_empty() {
-                ui.label(small_muted(&t, "Schreib erst das Thema ins Eingabefeld,\nz. B. „Brüche vergleichen, Klasse 6“."));
-            }
+            ui.set_min_width(300.0);
+            // The topic field is the composer itself, so text typed before opening the menu is there.
+            ui.label(small_muted(&t, "Thema"));
+            ui.add(egui::TextEdit::singleline(&mut self.composer).hint_text("z. B. Brüche vergleichen, Klasse 6").desired_width(f32::INFINITY));
+            let topic = self.composer.trim().to_string();
+            let usable = topic.chars().filter(|ch| ch.is_alphanumeric()).count() >= 2;
+            ui.add_space(4.0);
             for (label, cmd, tip) in [
                 ("🎮 Lern-App", "learning_app.request", "Eine interaktive Lern-App (eine HTML-Datei) zum Thema im Eingabefeld"),
                 ("📝 Arbeitsblatt", "worksheet.request", "Ein interaktives Arbeitsblatt zum Thema im Eingabefeld, zum Lösen am Rechner und zum Drucken"),
             ] {
-                if ui.add_enabled(!topic.is_empty(), egui::Button::new(label)).on_hover_text(tip).clicked() {
+                if ui.add_enabled(usable, egui::Button::new(label)).on_hover_text(tip).clicked() {
                     self.composer.clear();
                     self.run(cmd, json!({"topic": topic}));
                     ui.close();
