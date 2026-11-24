@@ -149,7 +149,7 @@ mod tests {
             "projekt",
             "im browser anmelden",
             "claude (abo)",
-            "figuren entdecken",
+            "dialogpartner",
             "lernszenarien",
         ] {
             assert!(all.contains(word), "handbook lacks {word}");

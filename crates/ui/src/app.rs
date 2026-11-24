@@ -66,7 +66,17 @@ pub struct AisCraftApp {
     pub(crate) images: std::collections::HashMap<String, Option<egui::TextureHandle>>,
     /// Numbers the start page reads from the engine, refreshed every few seconds.
     pub(crate) home: crate::home::HomeCache,
+    /// When each toast was first shown; plain information goes away on its own after a while.
+    toast_seen: std::collections::HashMap<u64, std::time::Instant>,
+    /// The window width at which the sidebar was last folded or unfolded automatically.
+    narrow: Option<bool>,
 }
+
+/// Information and success toasts disappear after this long (two and a half times as long with a
+/// button; not while the pointer rests on them); warnings and errors stay until closed.
+const TOAST_SECONDS: f32 = 6.0;
+/// Below this window width the sidebar folds away by itself (Strg+B brings it back).
+const NARROW_WINDOW: f32 = 1000.0;
 
 pub(crate) const CONTENT_WIDTH: f32 = 760.0;
 
@@ -116,6 +126,8 @@ impl AisCraftApp {
             manual: None,
             images: Default::default(),
             home: Default::default(),
+            toast_seen: Default::default(),
+            narrow: None,
         }
     }
 
@@ -257,46 +269,71 @@ impl AisCraftApp {
     fn toasts(&mut self, ctx: &egui::Context) {
         let t = self.tokens.clone();
         let notices = self.state.notices.clone();
+        self.toast_seen.retain(|id, _| notices.iter().any(|n| n.id == *id));
         if notices.is_empty() {
             return;
         }
-        egui::Area::new(Id::unique("toasts")).anchor(Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0)).order(egui::Order::Foreground).show(ctx, |ui| {
-            ui.set_max_width(380.0);
-            for n in notices.iter().rev() {
-                let color = match n.level {
-                    NoticeLevel::Info => t.muted,
-                    NoticeLevel::Success => t.success,
-                    NoticeLevel::Warning => t.warning,
-                    NoticeLevel::Error => t.danger,
-                };
-                Frame::new()
-                    .fill(t.surface)
-                    .stroke(Stroke::new(1.0, t.border))
-                    .corner_radius(CornerRadius::same(t.radius))
-                    .inner_margin(Margin::symmetric(12, 10))
-                    .shadow(ui.visuals().popup_shadow)
-                    .show(ui, |ui| {
-                        ui.set_width(340.0);
-                        ui.horizontal_top(|ui| {
-                            crate::widgets::status_dot(ui, color);
-                            ui.add(egui::Label::new(RichText::new(&n.text)).wrap());
+        let now = std::time::Instant::now();
+        let area =
+            egui::Area::new(Id::unique("toasts")).anchor(Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+                ui.set_max_width(360.0);
+                for n in notices.iter().rev() {
+                    let color = match n.level {
+                        NoticeLevel::Info => t.muted,
+                        NoticeLevel::Success => t.success,
+                        NoticeLevel::Warning => t.warning,
+                        NoticeLevel::Error => t.danger,
+                    };
+                    Frame::new()
+                        .fill(t.surface)
+                        .stroke(Stroke::new(1.0, t.border))
+                        .corner_radius(CornerRadius::same(t.radius))
+                        .inner_margin(Margin::symmetric(12, 10))
+                        .shadow(ui.visuals().popup_shadow)
+                        .show(ui, |ui| {
+                            ui.set_width(320.0);
+                            ui.horizontal_top(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.add_space(5.0);
+                                    crate::widgets::status_dot(ui, color);
+                                });
+                                ui.add(egui::Label::new(RichText::new(crate::widgets::plain(&n.text))).wrap());
+                            });
+                            ui.horizontal(|ui| {
+                                ui.add_space(14.0);
+                                if let Some(a) = &n.action
+                                    && ui.small_button(&a.label).clicked()
+                                {
+                                    self.run(&a.command, a.params.clone());
+                                    self.run("notice.dismiss", json!({"id": n.id}));
+                                }
+                                if ui.small_button("Schließen").clicked() {
+                                    self.run("notice.dismiss", json!({"id": n.id}));
+                                }
+                            });
                         });
-                        ui.horizontal(|ui| {
-                            ui.add_space(14.0);
-                            if let Some(a) = &n.action
-                                && ui.small_button(&a.label).clicked()
-                            {
-                                self.run(&a.command, a.params.clone());
-                                self.run("notice.dismiss", json!({"id": n.id}));
-                            }
-                            if ui.small_button("Schließen").clicked() {
-                                self.run("notice.dismiss", json!({"id": n.id}));
-                            }
-                        });
-                    });
-                ui.add_space(6.0);
+                    ui.add_space(6.0);
+                }
+            });
+        // Plain information fades out by itself, unless the pointer rests on the toasts.
+        let resting = area.response.contains_pointer();
+        for n in &notices {
+            let seen = self.toast_seen.entry(n.id).or_insert(now);
+            if resting {
+                *seen = now;
             }
-        });
+            // With a button ("Verlauf laden") it stays longer, so there is time to use it.
+            let after = if n.action.is_some() { TOAST_SECONDS * 2.5 } else { TOAST_SECONDS };
+            let transient = matches!(n.level, NoticeLevel::Info | NoticeLevel::Success);
+            if transient && now.saturating_duration_since(*seen).as_secs_f32() >= after {
+                // Asked once; the engine removes it with its next state.
+                *seen = now + std::time::Duration::from_secs(3600);
+                self.run("notice.dismiss", json!({"id": n.id}));
+            }
+        }
+        if notices.iter().any(|n| matches!(n.level, NoticeLevel::Info | NoticeLevel::Success)) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
     }
 
     fn dropped_files(&mut self, ctx: &egui::Context) {
@@ -434,6 +471,15 @@ impl eframe::App for AisCraftApp {
         let t = self.tokens.clone();
         // The panel needs its own copy to animate; a click inside the sidebar (its collapse
         // button) changes `self.sidebar_open` meanwhile and must win over that copy.
+        // A narrow window folds the sidebar away, a wide one brings it back; only when the width
+        // crosses the line, so Strg+B still wins in between.
+        let narrow = ctx.content_rect().width() < NARROW_WINDOW;
+        if self.narrow != Some(narrow) {
+            if self.narrow.is_some() || narrow {
+                self.sidebar_open = !narrow;
+            }
+            self.narrow = Some(narrow);
+        }
         let before = self.sidebar_open;
         let mut sidebar_open = before;
         egui::Panel::left("sidebar")

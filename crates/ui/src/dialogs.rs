@@ -4,7 +4,7 @@ use egui::{Id, RichText, Ui};
 use serde_json::{Value, json};
 
 use crate::app::AisCraftApp;
-use crate::widgets::{accent_button, card, muted, small_muted, status_dot};
+use crate::widgets::{accent_button, card, dialog_frame, link_button, muted, small_muted, status_dot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -100,9 +100,9 @@ impl AisCraftApp {
     pub(crate) fn dialogs(&mut self, ctx: &egui::Context) {
         let Some(mut dialog) = self.dialog.take() else { return };
         let mut keep = true;
-        let modal = egui::Modal::new(Id::unique("dialog")).show(ctx, |ui| {
+        let modal = egui::Modal::new(Id::unique("dialog")).frame(dialog_frame(ctx, &self.tokens)).show(ctx, |ui| {
             ui.set_width(match dialog {
-                Dialog::Settings { .. } => 780.0,
+                Dialog::Settings { .. } => 820.0,
                 Dialog::Login { .. } | Dialog::Welcome => 520.0,
                 _ => 460.0,
             });
@@ -122,9 +122,20 @@ impl AisCraftApp {
         match dialog {
             Dialog::Welcome => {
                 ui.heading("Willkommen bei AIS.ChatCraft");
-                ui.add_space(4.0);
-                ui.label(muted(&t, "Ein Chat-Programm für AIS.chat und andere KI-Dienste. Deine Chats liegen auf diesem Rechner und sind durchsuchbar; Projekte bündeln Chats mit eigenen Anweisungen; mit „Merke dir: …“ legst du Notizen an, die nur aus deinen eigenen Worten stammen."));
-                ui.add_space(12.0);
+                ui.add_space(6.0);
+                ui.label(muted(&t, "Chatten mit AIS.chat und anderen KI-Diensten."));
+                ui.add_space(10.0);
+                for line in [
+                    "Deine Chats bleiben auf diesem Rechner und sind durchsuchbar.",
+                    "Projekte bündeln Chats mit eigenen Anweisungen.",
+                    "Sag „Merke dir: …“, um Notizen anzulegen.",
+                ] {
+                    ui.horizontal_top(|ui| {
+                        ui.label(RichText::new("•").color(t.accent));
+                        ui.add(egui::Label::new(line).wrap());
+                    });
+                }
+                ui.add_space(20.0);
                 let ais = self.state.backends.iter().find(|b| b.config.kind == BackendKind::AisChat).map(|b| b.config.id.clone());
                 let mut next = None;
                 let mut keep = true;
@@ -134,12 +145,14 @@ impl AisCraftApp {
                     {
                         next = Some(Dialog::login(id));
                     }
-                    if ui.button("Anderes Backend").clicked() {
+                    if ui.button("Anderen Dienst nutzen").clicked() {
                         next = Some(Dialog::add_backend());
                     }
-                    if ui.button("Später").clicked() {
-                        keep = false;
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if link_button(ui, &t, "Später").clicked() {
+                            keep = false;
+                        }
+                    });
                 });
                 if let Some(n) = next {
                     *dialog = n;
@@ -148,7 +161,7 @@ impl AisCraftApp {
             }
             Dialog::Login { backend_id, secret, sent } => self.login_body(ui, backend_id, secret, sent),
             Dialog::AddBackend { preset, name, base_url, secret } => {
-                ui.heading("Backend hinzufügen");
+                ui.heading("Dienst hinzufügen");
                 ui.add_space(6.0);
                 egui::ComboBox::from_id_salt("preset").width(ui.available_width()).selected_text(PRESETS.get(*preset).map(|p| p.0).unwrap_or("")).show_ui(
                     ui,
@@ -207,7 +220,7 @@ impl AisCraftApp {
                         .desired_rows(6)
                         .desired_width(f32::INFINITY),
                 );
-                ui.label(small_muted(&t, "Gehen an Backends, die Kontext erlauben (nicht an AIS.chat über die Anmeldung)."));
+                ui.label(small_muted(&t, "Gehen an Dienste, die Kontext erlauben (nicht an AIS.chat über die Anmeldung)."));
                 ui.add_space(8.0);
                 let mut keep = true;
                 ui.horizontal(|ui| {
@@ -539,37 +552,12 @@ impl AisCraftApp {
     }
 
     fn settings_body(&mut self, ui: &mut Ui, tab: &mut SettingsTab, new_note: &mut String) -> bool {
-        let t = self.tokens.clone();
         // egui hands a modal's content the rect of its previous frame, so a tab that got taller (or
         // a first frame measured small) would stay clipped there: allow the screen's full height.
         // Set before anything is drawn, since changing the max rect resets the cursor.
-        let frame = ui.style().spacing.window_margin.sum().y + 2.0 * DIALOG_SCREEN_GAP;
+        let frame = 2.0 * f32::from(crate::widgets::DIALOG_MARGIN) + 2.0 * DIALOG_SCREEN_GAP;
         ui.set_max_height(ui.ctx().content_rect().height() - frame);
         let mut keep = true;
-        ui.horizontal(|ui| {
-            ui.heading("Einstellungen");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Schließen").clicked() {
-                    keep = false;
-                }
-            });
-        });
-        ui.horizontal_wrapped(|ui| {
-            for (k, label) in [
-                (SettingsTab::Backends, "Backends"),
-                (SettingsTab::Connectors, "Konnektoren"),
-                (SettingsTab::Schedules, "Zeitpläne"),
-                (SettingsTab::Skills, "Fähigkeiten & Hinweise"),
-                (SettingsTab::Vault, "Tresor"),
-                (SettingsTab::Usage, "Nutzung"),
-                (SettingsTab::Memory, "Gedächtnis"),
-                (SettingsTab::Appearance, "Darstellung"),
-                (SettingsTab::About, "Über"),
-            ] {
-                ui.selectable_value(tab, k, label);
-            }
-        });
-        ui.separator();
         let chapter = match tab {
             SettingsTab::Backends => "Anmelden",
             SettingsTab::Connectors => "Konnektoren und Freigaben",
@@ -582,17 +570,53 @@ impl AisCraftApp {
             SettingsTab::About => "Mitmachen",
         };
         ui.horizontal(|ui| {
-            ui.label(small_muted(&t, "Mehr dazu im Handbuch:"));
-            if ui.link(chapter).clicked() {
-                self.open_manual(chapter);
-            }
+            ui.heading("Einstellungen");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Schließen").clicked() {
+                    keep = false;
+                }
+                ui.add_space(8.0);
+                if ui.link(format!("Handbuch: {chapter}")).on_hover_text("Das passende Kapitel im Handbuch (F1)").clicked() {
+                    self.open_manual(chapter);
+                }
+            });
         });
+        ui.add_space(10.0);
         // Scroll only when the tab is taller than the screen: what is left below the header, minus the
         // modal frame's margins and a gap above and below the dialog.
         // The header's height: from the top of the dialog's content to where the tab body starts.
         // (`min_rect` would include the size the modal remembered from the last frame.)
         let header = ui.cursor().top() - ui.max_rect().top();
         let max_h = (ui.ctx().content_rect().height() - header - frame).max(200.0);
+        // The sections as a rail on the left: all nine fit without wrapping.
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(150.0);
+                for (k, label) in [
+                    (SettingsTab::Backends, "Dienste"),
+                    (SettingsTab::Connectors, "Konnektoren"),
+                    (SettingsTab::Schedules, "Zeitpläne"),
+                    (SettingsTab::Skills, "Fähigkeiten"),
+                    (SettingsTab::Vault, "Tresor"),
+                    (SettingsTab::Usage, "Nutzung"),
+                    (SettingsTab::Memory, "Gedächtnis"),
+                    (SettingsTab::Appearance, "Darstellung"),
+                    (SettingsTab::About, "Über"),
+                ] {
+                    if ui.add(egui::Button::selectable(*tab == k, label).min_size(egui::vec2(150.0, 30.0))).clicked() {
+                        *tab = k;
+                    }
+                }
+            });
+            ui.add_space(18.0);
+            ui.vertical(|ui| self.settings_tab(ui, tab, new_note, max_h));
+        });
+        keep
+    }
+
+    /// The content of one settings section.
+    fn settings_tab(&mut self, ui: &mut Ui, tab: &mut SettingsTab, new_note: &mut String, max_h: f32) {
+        let t = self.tokens.clone();
         egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| match tab {
             SettingsTab::Backends => {
                 for b in self.state.backends.clone() {
@@ -608,20 +632,22 @@ impl AisCraftApp {
                             ui.label(RichText::new(&b.config.name).strong());
                             ui.label(small_muted(&t, b.config.kind.label()));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("Entfernen").clicked() {
+                                // One width for all three, so the row does not shift between states.
+                                let action = |ui: &mut Ui, text: &str| ui.add(egui::Button::new(RichText::new(text).small()).min_size(egui::vec2(124.0, 0.0)));
+                                if action(ui, "Entfernen").clicked() {
                                     self.dialog = Some(Dialog::Confirm { text: format!("{} entfernen?", b.config.name), command: "backend.remove".into(), params: json!({"id": b.config.id}) });
                                 }
                                 let is_ais = b.config.kind == BackendKind::AisChat;
                                 if b.config.kind == BackendKind::ClaudeCli {
                                     // Signed in through `claude auth login`; nothing to store here.
                                 } else if b.has_secret {
-                                    if ui.small_button(if is_ais { "Abmelden" } else { "Schlüssel entfernen" }).clicked() {
+                                    if action(ui, if is_ais { "Abmelden" } else { "Schlüssel entfernen" }).clicked() {
                                         self.run("backend.logout", json!({"id": b.config.id}));
                                     }
-                                } else if ui.small_button(if is_ais { "Anmelden" } else { "Schlüssel …" }).clicked() {
+                                } else if action(ui, if is_ais { "Anmelden" } else { "Schlüssel eingeben" }).clicked() {
                                     self.dialog = Some(Dialog::login(&b.config.id));
                                 }
-                                if ui.small_button("Prüfen").clicked() {
+                                if action(ui, "Prüfen").clicked() {
                                     self.run("backend.check", json!({"id": b.config.id}));
                                 }
                             });
@@ -644,7 +670,7 @@ impl AisCraftApp {
                     });
                     ui.add_space(6.0);
                 }
-                if ui.button("+ Backend hinzufügen").clicked() {
+                if ui.button("+ Dienst hinzufügen").clicked() {
                     self.dialog = Some(Dialog::add_backend());
                 }
             }
@@ -866,7 +892,7 @@ impl AisCraftApp {
                             ui.label(muted(&t, "Noch keine Token-Zahlen. AIS.chat über die Anmeldung meldet keine."));
                         }
                         egui::Grid::new("usage").striped(true).num_columns(5).spacing([14.0, 6.0]).show(ui, |ui| {
-                            for h in ["Monat", "Backend", "Modell", "Tokens (ein/aus)", "Kosten"] {
+                            for h in ["Monat", "Dienst", "Modell", "Tokens (ein/aus)", "Kosten"] {
                                 ui.label(RichText::new(h).strong());
                             }
                             ui.end_row();
@@ -985,7 +1011,6 @@ impl AisCraftApp {
                 });
             }
         });
-        keep
     }
 }
 fn aiscraft_backends_cookie_name() -> &'static str {

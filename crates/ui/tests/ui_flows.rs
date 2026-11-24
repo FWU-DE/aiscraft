@@ -64,7 +64,7 @@ fn handbook_opens_closes_and_follows_settings_links() {
     // From the settings: the link opens the chapter of the tab.
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
     h.run_steps(6);
-    h.get_by_role_and_label(egui::accesskit::Role::Link, "Anmelden").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Link, "Handbuch: Anmelden").click();
     h.run_steps(6);
     assert!(h.query_by_label("Erste Schritte").is_some(), "settings link opens the handbook");
     assert!(h.query_by_label_contains("Im Browser anmelden").is_some(), "at the sign-in chapter");
@@ -80,7 +80,7 @@ fn explore_page_opens_and_esc_returns() {
     h.run_steps(4);
     h.event(egui::Event::Text("entdecken".into()));
     h.run_steps(4);
-    h.get_by_label("Assistenten, Figuren & Lernszenarien entdecken").click();
+    h.get_by_label("Assistenten, Dialogpartner & Lernszenarien entdecken").click();
     h.run_steps(6);
     assert!(h.query_by_label("Nicht bei AIS.chat angemeldet").is_some(), "the page explains the missing sign-in");
     assert!(h.query_by_label_contains("Zurück zum Chat").is_some());
@@ -214,12 +214,12 @@ fn bell_lists_notifications() {
     let mut h = harness(&engine);
     h.run_steps(6);
     assert!(h.query_by_label("Benachrichtigungen (1 neu)").is_some(), "the start page card");
-    h.get_by_label("🔔 1").click();
+    h.get_by_label("Benachrichtigungen: 1 neu").click();
     h.run_steps(6);
     assert!(h.query_by_label("Leeren").is_some(), "the popover is open");
     h.get_all_by_label("Alle gelesen").next().unwrap().click();
     h.run_steps(6);
     assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.inbox.iter().all(|i| i.read)), "marked read");
     h.run_steps(6);
-    assert!(h.query_by_label("🔔").is_some(), "no count any more");
+    assert!(h.query_by_label("Benachrichtigungen: 1 neu").is_none(), "no count any more");
 }
