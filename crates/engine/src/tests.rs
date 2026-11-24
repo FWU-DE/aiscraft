@@ -2175,3 +2175,86 @@ fn friendly_times_and_dates() {
     assert!(wd < 7 && (1..=31).contains(&day) && (1..=12).contains(&month) && hour < 24);
     assert!(crate::local_date_parts(i64::MAX).is_none());
 }
+
+/// A full disk while saving an artifact (export, Word file): the person reads that the disk is
+/// full, the details keep the path and the OS text, the old file stays and no half-written
+/// staging file is left behind. The disk is simulated (`disk::test_hook`), not filled.
+#[test]
+fn a_full_disk_while_saving_an_artifact_is_named_and_keeps_the_old_file() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let id = engine.call("artifact.create", json!({"content": "# Elternbrief\n\nWandertag am Freitag."})).unwrap()["id"].as_str().unwrap().to_string();
+    let dir = std::env::temp_dir().join(format!("aiscraft-full-{}-{}", std::process::id(), crate::new_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, format) in [("brief.md", "markdown"), ("brief.docx", "docx")] {
+        let path = dir.join(name);
+        std::fs::write(&path, "alt").unwrap();
+        crate::disk::test_hook::fill_disk_at(&path);
+        let e = engine.call("artifact.export", json!({"id": id, "format": format, "path": path.display().to_string()})).unwrap_err();
+        assert_eq!(e.kind, aiscraft_core::ErrorKind::Storage, "{format}");
+        assert!(e.message.starts_with(aiscraft_core::DISK_FULL), "{format}: {}", e.message);
+        assert!(e.message.contains(&path.display().to_string()), "details keep the path: {}", e.message);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "alt", "{format}: old file kept");
+    }
+    let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(left.len(), 2, "no staging files left: {left:?}");
+    assert!(!engine.state().notices.iter().any(|n| n.text.starts_with("Gespeichert")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The preview process (`aiscraft-preview`) that ends with an error is noticed once and named,
+/// with the next step; one that ended normally is not. Stand-ins: `sh -c "exit n"`, no window.
+#[cfg(unix)]
+#[test]
+fn a_preview_that_dies_is_named_with_the_next_step() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let ctx = engine.ctx().clone();
+    let mut pids = Vec::new();
+    for code in [4, 0] {
+        let mut child = std::process::Command::new("sh").args(["-c", &format!("exit {code}")]).spawn().unwrap();
+        while child.try_wait().unwrap().is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        pids.push(child.id());
+        ctx.0.previews.lock().unwrap().push(child);
+    }
+    assert_eq!(crate::learn::preview_failed(&ctx, pids[0]), Some(Some(4)));
+    assert_eq!(crate::learn::preview_failed(&ctx, pids[0]), None, "reported once");
+    assert_eq!(crate::learn::preview_failed(&ctx, pids[1]), None, "a normal end is no error");
+    let msg = crate::learn::preview_gone_message(Some(4));
+    assert!(msg.starts_with("Die Vorschau (aiscraft-preview) wurde unerwartet beendet (Exit-Code 4)."), "{msg}");
+    assert!(msg.contains("AIS.ChatCraft neu starten"), "{msg}");
+}
+
+/// Gate: every file the engine writes goes through `disk.rs`, so a full disk is named the same
+/// way everywhere. Inspects the sources (test modules excluded) for other ways to write files.
+#[test]
+fn every_engine_file_write_goes_through_disk() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+    assert!(files.len() > 10);
+    let mut offenders = Vec::new();
+    for f in files {
+        let name = f.file_name().unwrap().to_string_lossy().into_owned();
+        if name == "disk.rs" || name.ends_with("tests.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&f).unwrap();
+        let code = text.split("#[cfg(test)]\nmod tests").next().unwrap_or("");
+        for needle in ["craft_atomic::", "std::fs::write(", "fs::write(", "File::create(", "OpenOptions"] {
+            if code.contains(needle) {
+                offenders.push(format!("{}: {needle}", f.display()));
+            }
+        }
+    }
+    assert!(offenders.is_empty(), "write files through crate::disk: {offenders:#?}");
+}

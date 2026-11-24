@@ -315,7 +315,7 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
     if let Some(bytes) = crate::office::document_bytes(&format, &a.title, &text) {
         let bytes = bytes?;
         if let Some(path) = opt_str(&p, "path") {
-            craft_atomic::atomic_write(std::path::Path::new(&path), &bytes).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+            crate::disk::write(std::path::Path::new(&path), &bytes)?;
             c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
             return Ok(json!({"path": path}));
         }
@@ -333,7 +333,7 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
         }
     };
     if let Some(path) = opt_str(&p, "path") {
-        craft_atomic::atomic_write(std::path::Path::new(&path), out.as_bytes()).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+        crate::disk::write(std::path::Path::new(&path), out.as_bytes())?;
         c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
         return Ok(json!({"path": path}));
     }

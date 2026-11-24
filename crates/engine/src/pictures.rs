@@ -34,10 +34,8 @@ fn rebase(url: &str, origin: &str) -> String {
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().ok_or_else(|| Error::storage("Bildordner fehlt"))?;
-    std::fs::create_dir_all(dir).map_err(|e| Error::storage(format!("Bildordner {}: {e}", dir.display())))?;
-    let tmp = path.with_extension("part");
-    std::fs::write(&tmp, bytes).map_err(|e| Error::storage(format!("Bild speichern: {e}")))?;
-    std::fs::rename(&tmp, path).map_err(|e| Error::storage(format!("Bild speichern: {e}")))
+    crate::disk::create_dir(dir)?;
+    crate::disk::write(path, bytes)
 }
 
 fn record(c: &Ctx, key: &str, path: Option<&PathBuf>) {

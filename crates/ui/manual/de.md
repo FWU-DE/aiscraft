@@ -246,6 +246,14 @@ Andere Backends bekommen Dateien wie bisher; was sie gar nicht lesen könnten (e
 - `aiscraft --control` startet einen JSON-Steuerkanal auf 127.0.0.1 (Token in der Datei `control-token` im Datenordner).
 - `aiscraft-cli manual` gibt dieses Handbuch aus.
 
+## Wenn etwas nicht klappt
+
+- **Kein Speicherplatz mehr frei:** Ist die Festplatte voll, sagt AIS.ChatCraft das beim Speichern, Exportieren oder Anhängen, statt einen unerwarteten Fehler zu melden. Platz schaffen und noch einmal versuchen; eine vorhandene Datei bleibt dabei unverändert. Das ist kein Fehler der App, melden musst du ihn nicht.
+- **Ein lokaler Dienst antwortet nicht:** Läuft ein Modell auf diesem Rechner (Ollama, LM Studio) und das Programm ist beendet, nennt die Meldung Adresse und Port. Starte das Programm und sende noch einmal.
+- **Die Claude-CLI wurde beendet:** Sende die Nachricht noch einmal. Passiert es wieder, starte im Terminal `claude` und prüfe, ob sie läuft, dann AIS.ChatCraft neu.
+- **Ein Konnektor antwortet nicht mehr:** Unter **Einstellungen › Konnektoren** mit **Neu verbinden** wieder starten.
+- **Die Vorschau einer Lern-App schließt sich gleich wieder:** Die Lern-App noch einmal öffnen; wenn das wieder passiert, AIS.ChatCraft neu starten.
+
 ## Mitmachen
 
 AIS.ChatCraft ist offen: Fehler melden, Ideen einbringen oder Code beitragen geht über GitHub.

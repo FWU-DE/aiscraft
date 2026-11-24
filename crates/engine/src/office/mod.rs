@@ -131,7 +131,7 @@ async fn save_file(c: Ctx, p: Value) -> Result<Value> {
         return Err(Error::invalid("Die Datei ist größer als 25 MB"));
     }
     let bytes = std::fs::read(&real).map_err(|e| Error::storage(format!("{}: {e}", a.name)))?;
-    craft_atomic::atomic_write(std::path::Path::new(&path), &bytes).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+    crate::disk::write(std::path::Path::new(&path), &bytes)?;
     c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
     Ok(json!({"path": path}))
 }

@@ -379,7 +379,7 @@ fn normalize(h: &mut H5p) {
 
 fn write_out(c: &Ctx, bytes: &[u8], path: Option<String>) -> Result<Value> {
     if let Some(path) = path {
-        craft_atomic::atomic_write(Path::new(&path), bytes).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+        crate::disk::write(Path::new(&path), bytes)?;
         c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
         return Ok(json!({"path": path, "bytes": bytes.len()}));
     }

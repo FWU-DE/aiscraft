@@ -272,6 +272,46 @@ mod tests {
         assert!(matches!(chunk_events(r#"{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":4}}"#).unwrap()[0], StreamEvent::Usage { .. }));
     }
 
+    /// A local OpenAI-compatible server (Ollama, LM Studio) that is not running: the message names
+    /// it as a local service with host and port and says what to do, for the key check and chat.
+    #[tokio::test]
+    async fn a_stopped_local_server_is_named_with_host_and_port() {
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let config = BackendConfig {
+            id: "o".into(),
+            name: "Lokal".into(),
+            kind: aiscraft_core::BackendKind::OpenAi,
+            base_url: base.clone(),
+            default_model: None,
+            send_context: true,
+        };
+        let b = OpenAi::new(config, base, None).unwrap();
+        let e = b.check().await.unwrap_err();
+        assert_eq!(e.kind, aiscraft_core::ErrorKind::Network);
+        assert_eq!(
+            e.message,
+            format!(
+                "Der lokale Dienst unter 127.0.0.1:{port} antwortet nicht. Bitte das Programm starten, das dort läuft (zum Beispiel Ollama oder LM Studio), und noch einmal versuchen."
+            )
+        );
+        let req = ChatRequest {
+            conversation_id: "c".into(),
+            model: "m".into(),
+            system: None,
+            messages: vec![msg(Role::User, "Hallo")],
+            tools: vec![],
+            tool_bridge: None,
+            persona: None,
+            web: false,
+        };
+        let e = b.chat(req).await.err().expect("no server");
+        assert!(e.message.contains(&format!("lokale Dienst unter 127.0.0.1:{port} antwortet nicht")), "{}", e.message);
+    }
+
     /// Request headers per target host: OpenRouter and the Vercel AI Gateway get the attribution
     /// headers (model list = key check, and chat), others only the User-Agent; the key stays.
     /// The real hosts are resolved to a local server.

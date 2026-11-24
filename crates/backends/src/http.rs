@@ -24,8 +24,18 @@ pub fn attributed(rb: RequestBuilder, url: &str) -> RequestBuilder {
 
 pub fn net_err(e: reqwest::Error) -> Error {
     if e.is_timeout() {
-        Error::network("Zeitüberschreitung beim Server")
-    } else if e.is_connect() {
+        return Error::network("Zeitüberschreitung beim Server");
+    }
+    // A server on this computer that refuses or drops the connection has stopped (Ollama, LM
+    // Studio, the demo server): say which one and what to do.
+    if let Some(url) = e.url()
+        && let Some(host) = url.host_str()
+        && aiscraft_core::is_loopback_host(host)
+        && (e.is_connect() || aiscraft_core::is_connection_lost(&e))
+    {
+        return Error::local_service_gone(host.trim_start_matches('[').trim_end_matches(']'), url.port_or_known_default());
+    }
+    if e.is_connect() {
         Error::network(format!("Server nicht erreichbar: {}", e.url().map(|u| u.host_str().unwrap_or("").to_string()).unwrap_or_default()))
     } else {
         Error::network(e.to_string())

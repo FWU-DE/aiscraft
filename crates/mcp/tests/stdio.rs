@@ -143,6 +143,7 @@ async fn server_crash_fails_calls_with_its_output() {
     assert_eq!(e.kind, ErrorKind::Network);
     assert!(e.message.contains("wurde beendet"), "{}", e.message);
     assert!(e.message.contains("Exit-Code 7"), "{}", e.message);
+    assert!(e.message.contains("neu verbinden"), "names the next step: {}", e.message);
     assert!(e.message.contains("something went terribly wrong"), "{}", e.message);
     assert!(c.is_closed());
     let started = Instant::now();
