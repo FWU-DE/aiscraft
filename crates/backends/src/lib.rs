@@ -9,6 +9,7 @@ mod http;
 mod openai;
 pub mod picture;
 mod sse;
+pub mod web;
 
 use std::sync::Arc;
 

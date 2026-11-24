@@ -111,6 +111,9 @@ pub(crate) struct Inner {
     pub(crate) picture_origin: Mutex<Option<String>>,
     /// Only the real app (with a data folder) fetches pictures from the network.
     pub(crate) pictures_online: bool,
+    /// Test hook: the page reader may reach local addresses (the tests' scripted servers).
+    /// Never set outside tests; the real app refuses loopback and private addresses.
+    pub(crate) web_local_ok: std::sync::atomic::AtomicBool,
 }
 
 /// What commands and tasks hold. It never owns the runtime, so it can be dropped anywhere.
@@ -180,6 +183,7 @@ impl Engine {
                 .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-browser-{}", std::process::id()))),
             picture_origin: Mutex::new(None),
             pictures_online: opts.data_dir.is_some(),
+            web_local_ok: std::sync::atomic::AtomicBool::new(false),
             pictures_dir: opts
                 .data_dir
                 .clone()
@@ -269,6 +273,16 @@ impl Engine {
             None => None,
         };
         *self.ctx.0.picture_origin.lock().unwrap_or_else(PoisonError::into_inner) = origin;
+        Ok(())
+    }
+
+    /// Let the page reader reach local addresses (tests and the offscreen demo read pages from
+    /// their scripted servers). Only for engines in memory; the real app always refuses them.
+    pub fn allow_local_web(&self) -> Result<()> {
+        if self.ctx.0.pictures_online {
+            return Err(Error::refused("Nur ohne Datenordner (Tests, Vorschau) erlaubt"));
+        }
+        self.ctx.0.web_local_ok.store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 

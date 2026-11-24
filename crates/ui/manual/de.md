@@ -54,6 +54,7 @@ Chats von AIS.chat tragen in der Seitenleiste das AIS.chat-Zeichen. Über „AIS
 - **Projektanweisungen:** die Anweisungen des Projekts, in dem der Chat liegt.
 - **Werkzeuge:** Dokumente, Whiteboards, Zeitpläne, Aufgaben.
 - **Andere Chats durchsuchen.**
+- **Websuche:** Claude (API) sucht und liest selbst im Netz. Andere Backends mit Werkzeugen lesen Webseiten unter einer Adresse, nur lesend und nicht im lokalen Netz. Die genutzten Seiten stehen als **Quellen** unter der Antwort.
 - **Einzelne Konnektoren.**
 
 Für einen neuen Chat stellst du die Quellen vor der ersten Nachricht ein. Das Menü bleibt offen, bis du „Schließen“ klickst.

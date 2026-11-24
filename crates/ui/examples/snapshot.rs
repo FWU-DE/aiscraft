@@ -49,12 +49,29 @@ fn demo_server(engine: &Engine) -> String {
                     let mut buf = vec![0u8; 1 << 16];
                     let n = sock.read(&mut buf).await.unwrap_or(0);
                     let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    if req.starts_with("GET /ferien") {
+                        let body = "<html><head><title>Ferientermine Berlin 2027</title></head><body><p>Sommerferien: 8. Juli bis 21. August 2027.</p></body></html>";
+                        let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: text/html\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
+                        return;
+                    }
                     if req.starts_with("GET") {
                         let body = r#"{"data":[{"id":"demo-sonnet","name":"Demo Sonnet","context_length":200000},{"id":"demo-haiku","name":"Demo Haiku"}]}"#;
                         let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
                         return;
                     }
                     let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
+                    // "Ferien" + the page reader: read the demo's own page, then answer with it as the source.
+                    if req.contains("Ferien") && req.contains("\"web_fetch\"") {
+                        let c = if req.contains("\"role\":\"tool\"") {
+                            json!({"choices":[{"delta":{"content":"Die Sommerferien in Berlin dauern 2027 vom **8. Juli bis 21. August**."}}]}).to_string()
+                        } else {
+                            let args = json!({"url": format!("http://{addr}/ferien")}).to_string();
+                            let c1 = json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"w1","function":{"name":"web_fetch","arguments":args}}]}}]});
+                            format!("{c1}\n\ndata: {}", json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}))
+                        };
+                        let _ = sock.write_all(format!("data: {c}\n\ndata: [DONE]\n\n").as_bytes()).await;
+                        return;
+                    }
                     // "Kollegium" + a connector tool named *__notify: ask to call it (approval demo).
                     if req.contains("Kollegium") && !req.contains("\"role\":\"tool\"")
                         && let Some(name) = req.split('"').find(|p| p.ends_with("__notify"))
@@ -342,6 +359,7 @@ fn demo_ais(engine: &Engine) {
 
 fn seed(engine: &Engine) {
     let url = demo_server(engine);
+    engine.allow_local_web().unwrap();
     let id = engine.call("backend.add", json!({"kind": "openai", "name": "Demo", "base_url": url})).unwrap()["id"].as_str().unwrap().to_string();
     let bid = id.clone();
     assert!(engine.wait_for(Duration::from_secs(5), |s| s.backend(&bid).is_some_and(|b| !b.models.is_empty())));

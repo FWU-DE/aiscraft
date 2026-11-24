@@ -75,13 +75,58 @@ fn builtin_specs() -> Vec<ToolSpec> {
     ]
 }
 
+/// The built-in page reader, for backends with tool calling but no web tools of their own.
+pub(crate) const WEB_FETCH: &str = "web_fetch";
+
+pub(crate) fn web_fetch_spec() -> ToolSpec {
+    ToolSpec {
+        name: WEB_FETCH.into(),
+        description: "Liest eine Webseite (nur lesen) und liefert ihren Text. Für Adressen, die die Person nennt oder die du kennst; keine Suche. Gib die Seite in der Antwort als Quelle an.".into(),
+        input_schema: json!({"type": "object", "properties": {"url": {"type": "string", "description": "vollständige Adresse mit https://"}}, "required": ["url"], "additionalProperties": false}),
+    }
+}
+
+const PAGE_HEAD: &str = "Titel: ";
+
+/// The page a successful web_fetch call read, as a source link under the answer.
+pub(crate) fn fetched_link(call: &ToolCall, result: &str) -> Option<aiscraft_core::ActivityLink> {
+    if call.name != WEB_FETCH {
+        return None;
+    }
+    let mut lines = result.lines().skip_while(|l| !l.starts_with(PAGE_HEAD));
+    let title = lines.next()?.strip_prefix(PAGE_HEAD)?.trim().to_string();
+    let url = lines.next()?.strip_prefix("Adresse: ")?.trim().to_string();
+    Some(aiscraft_core::ActivityLink { title, url, failed: false, cited: true })
+}
+
+async fn web_fetch(c: &Ctx, a: &Value) -> Result<String> {
+    let url = a.get("url").and_then(Value::as_str).unwrap_or("").to_string();
+    let local_ok = c.0.web_local_ok.load(std::sync::atomic::Ordering::Relaxed);
+    let page = aiscraft_backends::web::fetch(&url, local_ok).await?;
+    let more = if page.truncated { "\n… (gekürzt)" } else { "" };
+    Ok(wrap_untrusted(
+        WEB_FETCH,
+        &format!(
+            "{PAGE_HEAD}{}\nAdresse: {}\n\n{}{more}",
+            page.title.replace('\n', " "),
+            page.url,
+            // A page cannot close the data block it is shown in.
+            page.text.replace("untrusted_tool_result", "untrusted-tool-result")
+        ),
+    ))
+}
+
 async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<String>> {
     let a = &call.arguments;
     let sources = c.state().conversation(conv).map(|x| x.sources.clone()).unwrap_or_default();
     if call.name == "history_search" && !sources.history {
         return Some(Err(Error::refused("Die Suche in anderen Chats ist in diesem Chat abgeschaltet.")));
     }
+    if call.name == WEB_FETCH && !(sources.web && sources.tools) {
+        return Some(Err(Error::refused("Webseiten lesen ist in diesem Chat abgeschaltet.")));
+    }
     Some(match call.name.as_str() {
+        WEB_FETCH => web_fetch(c, a).await,
         "history_search" => {
             let q = a.get("query").and_then(Value::as_str).unwrap_or("").to_string();
             c.store(|st| st.search(&q, 12)).map(|hits| {

@@ -89,6 +89,9 @@ pub struct ActivityLink {
     /// The server could not read this page.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub failed: bool,
+    /// The answer draws on this page (a citation or a page read for it): shown under the answer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cited: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -325,6 +328,9 @@ pub struct Sources {
     pub project: bool,
     /// Searching the other chats (the history_search tool).
     pub history: bool,
+    /// The web: the backend's own web search (Claude) or the built-in page reader (other
+    /// backends with tool calling).
+    pub web: bool,
     /// Connectors this chat may use: `None` = every enabled one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connectors: Option<Vec<String>>,
@@ -340,7 +346,7 @@ pub struct Sources {
 
 impl Default for Sources {
     fn default() -> Self {
-        Self { tools: true, memory: true, project: true, history: true, connectors: None, inline: false, inline_sent: None }
+        Self { tools: true, memory: true, project: true, history: true, web: true, connectors: None, inline: false, inline_sent: None }
     }
 }
 
@@ -562,6 +568,9 @@ pub struct Capabilities {
     /// The backend calls tools through an MCP server the app provides (the Claude CLI).
     #[serde(default)]
     pub tools_via_mcp: bool,
+    /// The backend searches and reads the web on its own servers (Claude's server tools).
+    #[serde(default)]
+    pub web_search: bool,
 }
 
 /// Everything a backend needs to answer the next turn.
@@ -581,6 +590,9 @@ pub struct ChatRequest {
     /// The assistant, character or learning scenario to answer as (AIS.chat).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<Persona>,
+    /// Let the backend search and read the web itself (see [`Capabilities::web_search`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub web: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
