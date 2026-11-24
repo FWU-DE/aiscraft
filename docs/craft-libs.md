@@ -39,8 +39,12 @@ Fork = needs the storytold egui fork (`[patch.crates-io]`, see below).
 | craft-font-catalog | Installed fonts on every platform, lookup by name | `fc-match` subprocess in `ui/theme.rs` (Linux only) | works, but the first lookup scans every font: 860 ms for 968 faces here vs 13 ms per `fc-match` | no | later (with a background scan) |
 | craft-ui | egui widgets, icons, tabs, docking, theme, `fonts::UiFonts` (suite font stack with system fallback) | `ui/widgets.rs`, `ui/theme.rs` | `UiFonts` could replace our DejaVu fallbacks; widgets would touch sidebar/conversation | builds on stock egui 0.37 too; fork recommended | later (`UiFonts` first) |
 | craft-menu, craft-keymap, craft-window | Menu bar, shortcuts, window frame | palette shortcuts in `commands.rs`, eframe frame | would restructure shortcuts and chrome | yes | later |
-| craft-markdown, craft-flow | Markdown to and from the craft-flow model | egui_commonmark (render), pulldown-cmark (HTML export) | export path for #38 | no | later (#38) |
-| craft-docx, craft-xlsx, craft-pptx, craft-pdf | Office and PDF read/write | — | Word/Excel/PowerPoint/PDF export (#38) | no | later (#38) |
+| craft-markdown + craft-docx | Markdown to a craft-wordmodel `Document`; DOCX written from it | — | exact: `import(md)` → `write(doc)` | no | **adopted** (#38: document export as Word, `document_file_create`) |
+| craft-xlsx | SpreadsheetML read and **write** (`Document::write`, a new workbook from fields) | — | exact: sheets, shared strings, styles, formulas, frozen header | no | **adopted** (#38: `spreadsheet_create`) |
+| craft-pptx | PresentationML read and **write** (`export`), `Plain` master | — | exact: text boxes, bullets, tables, notes | no | **adopted** (#38: `slides_create`) |
+| craft-opc | The OOXML ZIP package | — | tests open our .docx/.xlsx/.pptx with it | no | **adopted** (tests) |
+| craft-pdf | PDF read/render (hayro), write (Krilla), Standard-14 metrics | — | `write` needs the vendored Krilla through a `[patch.crates-io]` entry, an embedded font and our own text layout; feature `fonts` alone has the Standard-14 metrics and WinAnsi encoding without dependencies | no | **adopted, feature `fonts` only** (see below) |
+| craft-flow | The flow model behind craft-markdown | pulldown-cmark (HTML export, PDF layout) | comes with craft-markdown | no | indirect |
 | craft-math | Equations as one tree (OMML, MathML, LaTeX math, UnicodeMath), bounded readers | — | `math_latex::parse_latex` reads the formulas in answers and documents (#36); layout and drawing are ours (`ui/src/math.rs`) | no | **adopted** |
 | craft-latex | Whole LaTeX documents to and from the craft-flow model | — | answers hold formulas, not `.tex` documents | no | later (LaTeX export with #38) |
 | craft-ical, craft-dav, craft-vcard | iCalendar, CalDAV/CardDAV, vCard | — | calendar connectors (#26) | no | later (#26) |
@@ -54,3 +58,14 @@ consumer adds the same block. Checked on 2026-11-23: with the block, the workspa
 warnings, all tests (kittest included) pass, and the `--demo` snapshot is byte-identical to stock
 egui (the chat + settings snapshot differs only in the demo server's port). The switch is its own
 commit so it can be dropped. Not verified: interactive input on a real desktop (winit fork).
+
+## PDF (#38)
+
+Markdown becomes PDF in `crates/engine/src/office/pdf.rs`, a small writer of our own (about 600
+lines with tests): pulldown-cmark events, greedy line breaking with craft-pdf's Standard-14
+metrics (`craft_pdf::fonts::Std14::text_width`), WinAnsi text (`craft_pdf::fonts::win_ansi`), A4
+pages with Helvetica and Courier, which every viewer has, so no font is embedded. craft-pdf's
+`write` feature (Krilla) was not used: it requires the vendored Krilla patch in our workspace,
+a bundled font file and still leaves pagination and line breaking to the app. Limit: characters
+outside WinAnsi (emoji, Greek, CJK) print as a stand-in or `?`. Switch to `write` with an
+embedded Unicode font when that matters.

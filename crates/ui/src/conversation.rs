@@ -422,6 +422,7 @@ impl AisCraftApp {
                 }
             });
         }
+        self.download_cards(ui, m);
         if m.content.is_empty() && !m.tool_calls.is_empty() {
             return;
         }
@@ -815,6 +816,9 @@ impl AisCraftApp {
             "board_create" => "Whiteboard angelegt".into(),
             "task_start" => "Aufgabe gestartet".into(),
             "schedule_create" => "Nachfrage geplant".into(),
+            "spreadsheet_create" => "Tabelle erstellt".into(),
+            "slides_create" => "Folien erstellt".into(),
+            "document_file_create" => "Datei erstellt".into(),
             other => self
                 .state
                 .connectors

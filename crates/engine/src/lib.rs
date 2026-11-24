@@ -9,6 +9,7 @@ mod chat;
 mod collab;
 mod commands;
 mod files;
+pub mod office;
 mod pictures;
 mod proactive;
 mod schedules;

@@ -8,6 +8,13 @@ rust-version.workspace = true
 
 [dependencies]
 craft-atomic.workspace = true
+craft-markdown.workspace = true
+craft-docx.workspace = true
+craft-xlsx.workspace = true
+craft-pptx.workspace = true
+craft-opc.workspace = true
+craft-xml.workspace = true
+craft-pdf.workspace = true
 aiscraft-core.workspace = true
 aiscraft-store.workspace = true
 aiscraft-backends.workspace = true
@@ -37,6 +44,7 @@ default = ["collab"]
 collab = ["dep:aiscraft-collab"]
 
 [dev-dependencies]
+craft-wordmodel.workspace = true
 aiscraft-collab-server = { path = "../../apps/aiscraft-collab-server" }
 
 [lints]

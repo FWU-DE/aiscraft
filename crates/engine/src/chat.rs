@@ -657,6 +657,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
                     {
                         read_pages.push(link);
                     }
+                    answer.attachments.extend(crate::tools::take_files(&c, &conv_id));
                     if let Some(tc) = answer.tool_calls.iter_mut().find(|t| t.id == call.id) {
                         tc.outcome = Some(outcome.to_string());
                     }
@@ -696,6 +697,8 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         Err(e) => answer.error = Some(e.message.clone()),
         Ok(()) => {}
     }
+    // Files a tool created through the Claude CLI's tool bridge.
+    answer.attachments.extend(crate::tools::take_files(&c, &conv_id));
     if result.is_ok() && answer.content.trim().is_empty() && answer.tool_calls.is_empty() && answer.activity.iter().all(|s| s.document.is_none()) {
         answer.error = Some("Keine Antwort erhalten".into());
     }

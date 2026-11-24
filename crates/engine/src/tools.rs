@@ -26,6 +26,8 @@ const APPROVAL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 pub(crate) struct ToolRuntime {
     clients: Mutex<HashMap<String, Arc<McpClient>>>,
     waiters: Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
+    /// Files the file tools created, per conversation, until the chat loop puts them on the answer.
+    files: Mutex<HashMap<String, Vec<aiscraft_core::Attachment>>>,
 }
 
 // ---- built-in tools -------------------------------------------------------------------------
@@ -202,6 +204,23 @@ async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<Stri
     })
 }
 
+// ---- file tools (#38): spreadsheets, slides, Word and PDF; see office.rs --------------------
+
+/// Creating a file in the app's own data folder changes nothing of the person's, so it runs
+/// without asking; saving it elsewhere is the person's save dialog.
+fn run_file_tool(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<String>> {
+    let r = crate::office::run_tool(c, &call.name, &call.arguments)?;
+    Some(r.map(|(text, file)| {
+        c.0.tools.files.lock().unwrap_or_else(PoisonError::into_inner).entry(conv.to_string()).or_default().push(file);
+        text
+    }))
+}
+
+/// The files created for a conversation since the last call, for the answer that shows them.
+pub(crate) fn take_files(c: &Ctx, conv: &str) -> Vec<aiscraft_core::Attachment> {
+    c.0.tools.files.lock().unwrap_or_else(PoisonError::into_inner).remove(conv).unwrap_or_default()
+}
+
 fn chrono_fmt(ms: i64) -> String {
     use chrono::TimeZone;
     chrono::Local.timestamp_millis_opt(ms).single().map(|t| t.format("%d.%m.%Y %H:%M").to_string()).unwrap_or_default()
@@ -218,6 +237,7 @@ pub(crate) fn specs_for(c: &Ctx, sources: &aiscraft_core::Sources) -> Vec<ToolSp
         return Vec::new();
     }
     let mut out: Vec<ToolSpec> = builtin_specs().into_iter().filter(|t| sources.history || t.name != "history_search").collect();
+    out.extend(crate::office::tool_specs());
     // No tasks inside tasks.
     if c.state().current.as_deref().and_then(|id| c.state().conversation(id).map(|x| x.title.starts_with("▶ "))).unwrap_or(false) {
         out.retain(|t| t.name != "task_start");
@@ -247,6 +267,12 @@ fn wrap_untrusted(tool: &str, text: &str) -> String {
 pub(crate) async fn run(c: &Ctx, conv: &str, call: &ToolCall, owner_words: &str, interactive: bool) -> (String, bool, &'static str) {
     if call.arguments.get("_invalid_json").is_some() {
         return ("Die Argumente waren kein gültiges JSON. Bitte erneut mit gültigem JSON aufrufen.".into(), true, "error");
+    }
+    if let Some(r) = run_file_tool(c, conv, call) {
+        return match r {
+            Ok(t) => (t, false, "ok"),
+            Err(e) => (e.message, true, "error"),
+        };
     }
     if let Some(r) = run_builtin(c, conv, call).await {
         return match r {

@@ -70,9 +70,11 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 **Aus einer Antwort:** „Als Dokument“ oder „Als Whiteboard“ unter einer Antwort öffnet sie rechts neben dem Chat. Aus einer Gliederung wird auf dem Whiteboard eine Mindmap.
 
-**Dokumente** sind Markdown. Oben wechselst du zwischen Bearbeiten und Vorschau. „Mit KI überarbeiten“ schickt das Dokument mit deiner Anweisung an das gewählte Modell; die vorige Fassung bleibt unter **Versionen** (Pfeil-Symbol) erhalten. Exportieren als Markdown oder HTML (HTML lässt sich im Browser als PDF drucken).
+**Dokumente** sind Markdown. Oben wechselst du zwischen Bearbeiten und Vorschau. „Mit KI überarbeiten“ schickt das Dokument mit deiner Anweisung an das gewählte Modell; die vorige Fassung bleibt unter **Versionen** (Pfeil-Symbol) erhalten. Exportieren (Pfeil nach unten) als Markdown, HTML, Word (DOCX) oder PDF.
 
 **Whiteboards:** Doppelklick legt eine Notiz an. Eine ausgewählte Notiz zeigt „+“ an ihren Seiten für verbundene Notizen. Tab legt eine Unternotiz an. F1 oder „?“ auf dem Whiteboard zeigt alle Kürzel.
+
+**Dateien vom Modell:** Modelle mit Werkzeugen erstellen auf Wunsch Excel-Tabellen (mit Kopfzeile und Formeln), PowerPoint-Folien (Titel, Stichpunkte, Tabellen, Sprechernotizen) sowie Word-Dateien und PDFs, z. B. „Mach mir eine Notenliste als Excel-Datei“. Die Datei erscheint als Karte unter der Antwort; „Speichern …“ fragt, wohin sie soll. AIS.ChatCraft führt dafür keinen Code des Modells aus. PDFs nutzen die Standardschriften; Emojis und seltene Zeichen erscheinen dort als ?.
 
 **Im Chat:** Der Schalter „Im Chat“ schickt das geöffnete Dokument oder Whiteboard mit der nächsten Nachricht als Kontext mit. Modelle mit Werkzeugen ändern es dann direkt. AIS.chat schlägt Änderungen in einem Block vor; unter der Antwort übernimmst du sie mit „Ins Dokument übernehmen“ oder „Aufs Whiteboard“.
 
@@ -153,3 +155,11 @@ Unter **Einstellungen › Nutzung** stehen die Tokens pro Monat, Backend und Mod
 - `aiscraft-cli mcp` ist ein MCP-Server mit allen Befehlen als Werkzeuge.
 - `aiscraft --control` startet einen JSON-Steuerkanal auf 127.0.0.1 (Token in der Datei `control-token` im Datenordner).
 - `aiscraft-cli manual` gibt dieses Handbuch aus.
+
+## Mitmachen
+
+AIS.ChatCraft ist offen: Fehler melden, Ideen einbringen oder Code beitragen geht über GitHub.
+
+- [So kannst du mitmachen](https://github.com/FWU-DE/aiscraft/blob/main/CONTRIBUTING.md)
+- [Fehler melden oder Idee vorschlagen](https://github.com/FWU-DE/aiscraft/issues/new)
+- Keine Zugangsdaten oder Schülerdaten in Fehlermeldungen: das Repository ist öffentlich.

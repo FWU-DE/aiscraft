@@ -9,7 +9,7 @@ use egui::{Align, Frame, Layout, Margin, RichText, ScrollArea, Ui};
 use serde_json::json;
 
 use crate::app::AisCraftApp;
-use crate::widgets::{accent_button, icon_button, muted, small_muted};
+use crate::widgets::{accent_button, icon_button, muted};
 
 const SAVE_AFTER: Duration = Duration::from_millis(700);
 
@@ -179,10 +179,14 @@ impl AisCraftApp {
                         self.run("artifact.close", json!({}));
                     }
                     ui.menu_button(RichText::new("⬇").color(t.muted), |ui| {
-                        let formats: &[(&str, &str)] =
-                            if meta.kind == ArtifactKind::Board { &[("markdown", "md"), ("json", "json")] } else { &[("markdown", "md"), ("html", "html")] };
+                        let formats: &[(&str, &str)] = if meta.kind == ArtifactKind::Board {
+                            &[("markdown", "md"), ("json", "json")]
+                        } else {
+                            &[("markdown", "md"), ("html", "html"), ("docx", "docx"), ("pdf", "pdf")]
+                        };
                         for (f, ext) in formats {
-                            if ui.button(format!("Als {}", ext.to_uppercase())).clicked() {
+                            let label = if *ext == "docx" { "Als Word (DOCX)".to_string() } else { format!("Als {}", ext.to_uppercase()) };
+                            if ui.button(label).clicked() {
                                 let name: String = meta.title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
                                 if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.{ext}", name.trim())).save_file() {
                                     self.save_if_dirty();
@@ -190,9 +194,6 @@ impl AisCraftApp {
                                 }
                                 ui.close();
                             }
-                        }
-                        if meta.kind == ArtifactKind::Document {
-                            ui.label(small_muted(&t, "HTML lässt sich im Browser als PDF drucken."));
                         }
                     })
                     .response
