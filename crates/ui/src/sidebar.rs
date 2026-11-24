@@ -514,24 +514,27 @@ impl AisCraftApp {
                 let (av, _) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), Sense::hover());
                 crate::kit::avatar(ui.painter(), av.center(), 36.0, &crate::kit::initials(&line1));
                 ui.add_space(2.0);
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 1.0;
-                    ui.set_max_width((ui.available_width() - 40.0).max(40.0));
-                    ui.add(egui::Label::new(crate::theme::semibold(&line1).size(14.5).color(t.text)).truncate().selectable(false));
-                    if !line2.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 5.0;
-                            let (d, _) = ui.allocate_exact_size(egui::vec2(7.0, 14.0), Sense::hover());
-                            ui.painter().circle_filled(d.center(), 3.5, color);
-                            ui.add(egui::Label::new(RichText::new(&line2).size(12.5).color(t.muted)).truncate().selectable(false));
-                        });
-                    }
-                });
+                // The settings button first, from the right; name and status truncate into the rest.
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     if crate::kit::icon_button(ui, &t, Icon::Sliders, "Einstellungen (Strg+,)", t.text, 19.0, 34.0).clicked() {
                         self.dialog = Some(Dialog::settings());
                     }
+                    ui.add_space(8.0);
+                    let rest = egui::vec2(ui.available_width().max(40.0), 36.0);
+                    ui.allocate_ui_with_layout(rest, Layout::top_down(Align::Min), |ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        ui.set_width(rest.x);
+                        ui.add(egui::Label::new(crate::theme::semibold(&line1).size(14.5).color(t.text)).truncate().selectable(false));
+                        if !line2.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 5.0;
+                                let (d, _) = ui.allocate_exact_size(egui::vec2(7.0, 14.0), Sense::hover());
+                                ui.painter().circle_filled(d.center(), 3.5, color);
+                                ui.add(egui::Label::new(RichText::new(&line2).size(12.5).color(t.muted)).truncate().selectable(false));
+                            });
+                        }
+                    });
                 });
             })
             .response

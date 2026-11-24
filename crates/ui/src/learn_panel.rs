@@ -45,25 +45,33 @@ impl AisCraftApp {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(crate::icons::Icon::Sparkles.text(18.0).color(t.accent));
-                            let r = ui.add_enabled(
-                                !v.revising,
-                                egui::TextEdit::singleline(&mut v.revise)
-                                    .hint_text(RichText::new(hint).color(t.muted))
-                                    .frame(Frame::NONE)
-                                    .font(egui::FontId::proportional(14.0))
-                                    .margin(Margin::symmetric(0, 6))
-                                    .desired_width(ui.available_width() - 130.0),
+                            let revising = v.revising;
+                            let (r, clicked) = crate::widgets::field_then_buttons(
+                                ui,
+                                |ui| {
+                                    if revising {
+                                        ui.add(egui::Spinner::new().color(t.accent));
+                                        false
+                                    } else {
+                                        crate::kit::pill(ui, &t, crate::kit::Pill::Primary, None, "Überarbeiten", 13.5, None).clicked()
+                                    }
+                                },
+                                |ui, w| {
+                                    ui.add_enabled(
+                                        !revising,
+                                        egui::TextEdit::singleline(&mut v.revise)
+                                            .hint_text(RichText::new(hint).color(t.muted))
+                                            .frame(Frame::NONE)
+                                            .font(egui::FontId::proportional(14.0))
+                                            .margin(Margin::symmetric(0, 6))
+                                            .desired_width(w),
+                                    )
+                                },
                             );
                             let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if v.revising {
-                                    ui.add(egui::Spinner::new().color(t.accent));
-                                } else if (crate::kit::pill(ui, &t, crate::kit::Pill::Primary, None, "Überarbeiten", 13.5, None).clicked() || enter)
-                                    && !v.revise.trim().is_empty()
-                                {
-                                    go = Some(v.revise.trim().to_string());
-                                }
-                            });
+                            if !revising && (clicked || enter) && !v.revise.trim().is_empty() {
+                                go = Some(v.revise.trim().to_string());
+                            }
                         });
                     });
             });

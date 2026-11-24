@@ -1174,16 +1174,18 @@ impl AisCraftApp {
                 let mut done = false;
                 let mut cancel = false;
                 ui.horizontal(|ui| {
-                    let r = ui.add(egui::TextEdit::singleline(input).hint_text("https://… (Enter fügt hinzu)").desired_width(ui.available_width() - 90.0));
+                    let (r, cancelled) = crate::widgets::field_then_buttons(
+                        ui,
+                        |ui| ui.small_button("Abbrechen").clicked(),
+                        |ui, w| ui.add(egui::TextEdit::singleline(input).hint_text("https://… (Enter fügt hinzu)").desired_width(w)),
+                    );
                     if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                         done = true;
                     }
                     if !r.has_focus() && input.is_empty() && !r.gained_focus() {
                         r.request_focus();
                     }
-                    if ui.small_button("Abbrechen").clicked() {
-                        cancel = true;
-                    }
+                    cancel = cancelled;
                 });
                 if done {
                     let url = input.trim().to_string();

@@ -27,6 +27,19 @@ pub fn accent_button(ui: &mut Ui, t: &Tokens, text: &str) -> Response {
     crate::kit::pill(ui, t, crate::kit::Pill::Primary, None, text, 14.0, None)
 }
 
+/// A field followed by buttons in one row: `trailing` lays out the buttons first, from the right
+/// (so the first one it adds sits rightmost), and `field` gets the width they leave. A fixed
+/// reserve such as `available_width() - 90.0` overflowed once spacing or text grew (150 %, wider
+/// looks), and an overflowing row widened its panel a little every frame.
+pub fn field_then_buttons<F, R>(ui: &mut Ui, trailing: impl FnOnce(&mut Ui) -> R, field: impl FnOnce(&mut Ui, f32) -> F) -> (F, R) {
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let r = trailing(ui);
+        let w = ui.available_width().max(40.0);
+        (field(ui, w), r)
+    })
+    .inner
+}
+
 /// A secondary action that reads as a link ("Später"), so the main button stands out.
 pub fn link_button(ui: &mut Ui, t: &Tokens, text: &str) -> Response {
     ui.add(egui::Button::new(RichText::new(text).color(t.accent)).frame(false))
