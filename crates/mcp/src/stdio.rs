@@ -80,6 +80,16 @@ async fn write_loop(inner: Weak<Inner>, mut stdin: ChildStdin, mut rx: mpsc::Rec
         }
         .await;
         if let Err(e) = written {
+            // A server that dies right after starting closes stdin before we write. The read
+            // side then reports why it ended (exit code, its last stderr lines), which says more
+            // than "broken pipe": give it a moment to do that first.
+            for _ in 0..30 {
+                match inner.upgrade() {
+                    Some(i) if !i.is_closed() => {}
+                    _ => return,
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
             if let Some(inner) = inner.upgrade() {
                 let tail = crate::client::stderr_tail_of(&inner, 600);
                 inner.fail_all(Error::network(with_tail(format!("Der Konnektor „{}“ nimmt keine Eingaben mehr an ({e}).", inner.name), &tail)));

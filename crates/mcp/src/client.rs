@@ -71,6 +71,11 @@ impl Inner {
     }
 
     /// The connection is gone: remember why and fail every waiting request with it.
+    /// Whether the connection already ended with an error (the first one wins).
+    pub(crate) fn is_closed(&self) -> bool {
+        lock(&self.closed).is_some()
+    }
+
     pub(crate) fn fail_all(&self, err: Error) {
         let err = {
             let mut closed = lock(&self.closed);
