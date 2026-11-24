@@ -18,6 +18,16 @@ use crate::widgets::{bell_button, muted, plain, small_muted, status_dot};
 const GAP: f32 = 12.0;
 /// From this width on, cards sit in two columns.
 const TWO_COLUMNS: f32 = 640.0;
+/// The start page's text keyline: the inner left padding of the composer, the cards and the
+/// entries, and the indent of date, greeting and section titles, so every text block starts on
+/// the same x („Text auf Text“).
+pub(crate) const KEYLINE: f32 = 20.0;
+pub(crate) const KEYLINE_I8: i8 = 20;
+
+/// A card on the start page: the card surface with the keyline as horizontal padding.
+fn keyline_card(t: &crate::theme::Tokens, vertical: i8) -> egui::Frame {
+    crate::kit::card_frame(t).inner_margin(egui::Margin::symmetric(KEYLINE_I8, vertical))
+}
 
 /// Tokens this month per backend, from the usage ledger (`usage.report`), read at most every few
 /// seconds instead of every frame.
@@ -151,7 +161,7 @@ impl AisCraftApp {
     /// A card that fills the width it is given.
     fn home_card(&mut self, ui: &mut Ui, add: impl FnOnce(&mut Self, &mut Ui)) {
         let t = self.tokens.clone();
-        let frame = crate::kit::card_frame(&t).inner_margin(egui::Margin::same(16));
+        let frame = keyline_card(&t, 16);
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(self, ui);
@@ -416,17 +426,21 @@ impl AisCraftApp {
         let (date, hello) = date_and_greeting(now);
         let w = ui.available_width();
         let narrow = w < 640.0;
-        ui.label(crate::theme::semibold(date).size(14.0).color(if t.dark { t.link } else { t.accent_ink }));
-        ui.add_space(2.0);
         let greeting = match &first {
             Some(n) => format!("{hello}, {n}."),
             None => format!("{hello}."),
         };
-        ui.add(egui::Label::new(crate::theme::bold(greeting).size(if narrow { 36.0 } else { 44.0 }).color(t.text)).wrap());
-        ui.label(crate::theme::medium("Woran arbeiten wir heute?").size(if narrow { 19.0 } else { 22.0 }).color(t.text2));
-        if let Some(p) = self.state.selection.project_id.as_ref().and_then(|pid| self.state.projects.iter().find(|p| &p.id == pid)) {
-            ui.label(muted(&t, format!("Neuer Chat im Projekt {}", p.name)));
-        }
+        let project = self.state.selection.project_id.as_ref().and_then(|pid| self.state.projects.iter().find(|p| &p.id == pid)).map(|p| p.name.clone());
+        // Indented by the keyline: the greeting starts where the text inside the boxes starts.
+        egui::Frame::new().inner_margin(egui::Margin { left: KEYLINE_I8, ..Default::default() }).show(ui, |ui| {
+            ui.label(crate::theme::semibold(date).size(14.0).color(if t.dark { t.link } else { t.accent_ink }));
+            ui.add_space(2.0);
+            ui.add(egui::Label::new(crate::theme::bold(greeting).size(if narrow { 36.0 } else { 44.0 }).color(t.text)).wrap());
+            ui.label(crate::theme::medium("Woran arbeiten wir heute?").size(if narrow { 19.0 } else { 22.0 }).color(t.text2));
+            if let Some(name) = project {
+                ui.label(muted(&t, format!("Neuer Chat im Projekt {name}")));
+            }
+        });
         ui.add_space(20.0);
         self.not_connected_card(ui);
         self.composer_big = true;
@@ -472,7 +486,7 @@ impl AisCraftApp {
         if self.state.backends.iter().any(|b| matches!(b.status, BackendStatus::Ready { .. })) {
             return;
         }
-        let frame = crate::kit::card_frame(&t);
+        let frame = keyline_card(&t, 14);
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(crate::theme::bold("Noch nicht verbunden"));
@@ -498,6 +512,7 @@ impl AisCraftApp {
         let t = self.tokens.clone();
         let mut clicked = false;
         ui.horizontal(|ui| {
+            ui.add_space(KEYLINE);
             ui.label(icon.text(18.0).color(icon_color));
             ui.label(crate::theme::bold(title).size(18.0).color(t.text));
             if let Some(link) = link {
@@ -517,7 +532,7 @@ impl AisCraftApp {
             self.open_explore();
         }
         if ais.is_empty() {
-            crate::kit::card_frame(&t).show(ui, |ui| {
+            keyline_card(&t, 14).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.add(
                     egui::Label::new(muted(
@@ -539,7 +554,7 @@ impl AisCraftApp {
         let favorites: Vec<(String, PersonaInfo)> =
             ais.iter().flat_map(|b| b.personas.iter().flatten().filter(|p| p.favorite).map(|p| (b.config.id.clone(), p.clone()))).take(8).collect();
         if favorites.is_empty() {
-            crate::kit::card_frame(&t).show(ui, |ui| {
+            keyline_card(&t, 14).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if ais.iter().all(|b| b.personas.is_none() && b.personas_error.is_none()) {
                     ui.horizontal(|ui| {
@@ -581,7 +596,7 @@ impl AisCraftApp {
         let (rect, resp) = ui.allocate_exact_size(vec2(w, 78.0), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &p.name));
         paint_card(ui, &t, rect, resp.hovered() || resp.has_focus());
-        let pic = egui::Rect::from_min_size(egui::pos2(rect.left() + 12.0, rect.center().y - 21.0), vec2(42.0, 42.0));
+        let pic = egui::Rect::from_min_size(egui::pos2(rect.left() + KEYLINE, rect.center().y - 21.0), vec2(42.0, 42.0));
         self.paint_persona_picture(ui, pic, backend, p, 21, false);
         let text = egui::Rect::from_min_max(egui::pos2(pic.right() + 12.0, rect.top() + 10.0), egui::pos2(rect.right() - 10.0, rect.bottom() - 8.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text).layout(Layout::top_down(Align::Min)));
@@ -644,7 +659,7 @@ impl AisCraftApp {
                 let fill = if t.glass.is_some() || hovered { t.surface } else { egui::Color32::TRANSPARENT };
                 let stroke = if t.glass.is_some() { t.card_stroke } else { t.border };
                 p.rect(rect, CornerRadius::same(14), fill, egui::Stroke::new(1.0, if hovered { t.accent } else { stroke }), egui::StrokeKind::Inside);
-                let tile = egui::Rect::from_min_size(egui::pos2(rect.left() + 9.0, rect.center().y - 17.0), vec2(34.0, 34.0));
+                let tile = egui::Rect::from_min_size(egui::pos2(rect.left() + KEYLINE, rect.center().y - 17.0), vec2(34.0, 34.0));
                 let (tf, ti) = if t.glass.is_some() { (t.accent_soft, t.accent_ink) } else { (t.sunken, t.text2) };
                 crate::kit::icon_tile(p, tile, 10, tf, icon, 17.0, ti);
                 let tw = rect.right() - tile.right() - 22.0;
@@ -686,13 +701,13 @@ fn starter_card(ui: &mut Ui, t: &crate::theme::Tokens, icon: Icon, title: &str, 
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     paint_card(ui, t, rect, resp.hovered() || resp.has_focus());
     let p = ui.painter();
-    let tile = egui::Rect::from_min_size(rect.min + vec2(14.0, 14.0), vec2(36.0, 36.0));
+    let tile = egui::Rect::from_min_size(rect.min + vec2(KEYLINE, 14.0), vec2(36.0, 36.0));
     crate::kit::icon_tile(p, tile, 11, t.accent_soft, icon, 19.0, t.accent_ink);
     Icon::ChevronRight.paint(p, egui::pos2(rect.right() - 22.0, tile.center().y), 16.0, t.muted);
-    let g1 = crate::kit::line(ui, title, crate::kit::font(16.0, crate::theme::BOLD), t.text, w - 28.0);
-    let g2 = crate::kit::line(ui, line, crate::kit::font(13.5, ""), t.muted, w - 28.0);
-    p.galley(egui::pos2(rect.left() + 14.0, rect.bottom() - 52.0), g1, t.text);
-    p.galley(egui::pos2(rect.left() + 14.0, rect.bottom() - 30.0), g2, t.muted);
+    let g1 = crate::kit::line(ui, title, crate::kit::font(16.0, crate::theme::BOLD), t.text, w - 2.0 * KEYLINE);
+    let g2 = crate::kit::line(ui, line, crate::kit::font(13.5, ""), t.muted, w - 2.0 * KEYLINE);
+    p.galley(egui::pos2(rect.left() + KEYLINE, rect.bottom() - 52.0), g1, t.text);
+    p.galley(egui::pos2(rect.left() + KEYLINE, rect.bottom() - 30.0), g2, t.muted);
     resp
 }
 

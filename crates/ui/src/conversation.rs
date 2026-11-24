@@ -1137,7 +1137,10 @@ impl AisCraftApp {
             == aiscraft_core::ConversationKind::Image;
         let mut send = false;
         let big = std::mem::take(&mut self.composer_big);
-        let m = if big { Margin { left: 22, right: 16, top: 20, bottom: 14 } } else { Margin { left: 18, right: 14, top: 16, bottom: 12 } };
+        // The text starts on the start page's keyline (`home::KEYLINE`), in the chat too: the field
+        // itself has no margin of its own on the left.
+        let k = crate::home::KEYLINE_I8;
+        let m = if big { Margin { left: k, right: 16, top: 20, bottom: 14 } } else { Margin { left: k, right: 14, top: 16, bottom: 12 } };
         let frame = Frame::new()
             .fill(t.composer)
             .stroke(Stroke::new(1.0, t.composer_stroke))
@@ -1232,6 +1235,7 @@ impl AisCraftApp {
                 .desired_width(f32::INFINITY)
                 .frame(Frame::NONE)
                 .return_key(newline)
+                .margin(Margin::symmetric(0, 2))
                 .font(egui::FontId::proportional(if big { 17.5 } else { 16.0 }));
             let r = ScrollArea::vertical().id_salt("composer-scroll").max_height(220.0).show(ui, |ui| ui.add(edit)).inner;
             if self.focus_composer && self.dialog.is_none() && self.palette.is_none() {
