@@ -280,13 +280,23 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
     let state = state_of(&c, &id)?;
     let text = artifact_text(a.kind, &state)?;
     let format = opt_str(&p, "format").unwrap_or_else(|| "markdown".into());
+    // Word and PDF are binary: written to `path`, or returned as base64.
+    if let Some(bytes) = crate::office::document_bytes(&format, &a.title, &text) {
+        let bytes = bytes?;
+        if let Some(path) = opt_str(&p, "path") {
+            craft_atomic::atomic_write(std::path::Path::new(&path), &bytes).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+            c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
+            return Ok(json!({"path": path}));
+        }
+        return Ok(json!({"base64": base64::engine::general_purpose::STANDARD.encode(&bytes), "bytes": bytes.len()}));
+    }
     let out = match (a.kind, format.as_str()) {
         (_, "markdown" | "md") => text,
         (_, "html") => markdown_html(&a.title, &text),
         (ArtifactKind::Board, "json") => Board::from_state(&state).map(|b| b.to_json().to_string()).map_err(|e| Error::invalid(e.to_string()))?,
         (_, other) => {
             return Err(Error::invalid(format!(
-                "Format {other} gibt es hier nicht (markdown, html{})",
+                "Format {other} gibt es hier nicht (markdown, html, docx, pdf{})",
                 if a.kind == ArtifactKind::Board { ", json" } else { "" }
             )));
         }

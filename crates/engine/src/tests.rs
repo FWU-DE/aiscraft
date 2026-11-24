@@ -1589,3 +1589,136 @@ fn ais_chat_regenerate_ends_with_the_user_message() {
     assert!(!body.contains(r#""role":"assistant""#), "{body}");
     assert_eq!(engine.state().variants.len(), 1);
 }
+
+// ---- files (#38): Word and PDF export, spreadsheets and slides from the model ----------------
+
+fn zip_part(bytes: &[u8], name: &str) -> String {
+    let pkg = craft_opc::Package::open(bytes, &craft_opc::Limits::new(1000, 64 << 20, 256 << 20)).unwrap();
+    String::from_utf8(pkg.get(name).unwrap_or_else(|| panic!("no part {name}")).to_vec()).unwrap()
+}
+
+/// A document exports as Word and as PDF, to a path or as base64; `file.create` makes all four
+/// kinds in the attachments folder.
+#[test]
+fn documents_export_as_word_and_pdf_and_files_are_created() {
+    use base64::Engine as _;
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let id = engine
+        .call("artifact.create", json!({"content": "# Elternbrief\n\nLiebe Eltern, am **Freitag** ist Wandertag.\n\n- Rucksack\n- Trinkflasche"}))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let dir = std::env::temp_dir().join(format!("aiscraft-office-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let docx = dir.join("brief.docx");
+    engine.call("artifact.export", json!({"id": id, "format": "docx", "path": docx.display().to_string()})).unwrap();
+    let bytes = std::fs::read(&docx).unwrap();
+    let body = zip_part(&bytes, "word/document.xml");
+    assert!(body.contains("Elternbrief") && body.contains("Wandertag") && body.contains("Trinkflasche"), "{body}");
+    let pdf = engine.call("artifact.export", json!({"id": id, "format": "pdf"})).unwrap();
+    let pdf = base64::engine::general_purpose::STANDARD.decode(pdf["base64"].as_str().unwrap()).unwrap();
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.starts_with("%PDF-") && text.contains("/Count 1") && text.contains("(Elternbrief) Tj"));
+    assert!(engine.call("artifact.export", json!({"id": id, "format": "odt"})).is_err());
+
+    let xlsx =
+        engine.call("file.create", json!({"format": "xlsx", "title": "Noten", "sheets": [{"columns": ["Name", "Note"], "rows": [["Anna", 2]]}]})).unwrap();
+    assert_eq!(xlsx["name"], "Noten.xlsx");
+    let path = xlsx["local_path"].as_str().unwrap().to_string();
+    assert!(path.contains("aiscraft-attachments"), "in the attachments folder: {path}");
+    assert!(zip_part(&std::fs::read(&path).unwrap(), "xl/worksheets/sheet1.xml").contains("<v>2</v>"));
+    let pptx =
+        engine.call("file.create", json!({"format": "pptx", "title": "Wandertag", "slides": [{"title": "Packliste", "bullets": ["Rucksack"]}]})).unwrap();
+    assert!(zip_part(&std::fs::read(pptx["local_path"].as_str().unwrap()).unwrap(), "ppt/slides/slide2.xml").contains("Rucksack"));
+    let pdf = engine.call("file.create", json!({"format": "pdf", "title": "Blatt", "markdown": "# Aufgabe 1"})).unwrap();
+    assert_eq!(pdf["mime"], "application/pdf");
+    assert!(engine.call("file.create", json!({"format": "docx", "title": "x"})).is_err(), "markdown missing");
+    assert!(engine.call("file.create", json!({"format": "exe"})).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The model creates a spreadsheet and slides: the files run without a question, land on the
+/// answer as attachments, and `chat.save_file` copies one where the person chose.
+#[test]
+fn model_creates_spreadsheet_and_slides_and_the_person_saves_them() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let url = engine.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 1 << 18];
+                    let mut n = 0;
+                    loop {
+                        let k = sock.read(&mut buf[n..]).await.unwrap_or(0);
+                        n += k;
+                        let s = String::from_utf8_lossy(&buf[..n]).to_string();
+                        if k == 0 || (s.starts_with("GET") && s.contains("\r\n\r\n")) || s.contains("\"stream_options\"") {
+                            break;
+                        }
+                    }
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    if req.starts_with("GET") {
+                        let body = r#"{"data":[{"id":"m"}]}"#;
+                        let _ = sock
+                            .write_all(
+                                format!(
+                                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}",
+                                    body.len()
+                                )
+                                .as_bytes(),
+                            )
+                            .await;
+                        return;
+                    }
+                    let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
+                    if req.contains("\"role\":\"tool\"") {
+                        let ok = req.contains("Notenliste.xlsx") && req.contains("Elternabend.pptx");
+                        let c = json!({"choices":[{"delta":{"content": if ok { "Fertig." } else { "Fehler." }}}]});
+                        let _ = sock.write_all(format!("data: {c}\n\ndata: [DONE]\n\n").as_bytes()).await;
+                    } else {
+                        assert!(req.contains("spreadsheet_create") && req.contains("slides_create") && req.contains("document_file_create"));
+                        let sheet =
+                            json!({"title": "Notenliste", "sheets": [{"columns": ["Name", "Note"], "rows": [["Anna", 2], ["Schnitt", "=AVERAGE(B2:B2)"]]}]})
+                                .to_string();
+                        let deck = json!({"title": "Elternabend", "slides": [{"title": "Themen", "bullets": ["Noten"]}]}).to_string();
+                        let c1 = json!({"choices":[{"delta":{"tool_calls":[
+                            {"index":0,"id":"f1","function":{"name":"spreadsheet_create","arguments":sheet}},
+                            {"index":1,"id":"f2","function":{"name":"slides_create","arguments":deck}}
+                        ]}}]});
+                        let c2 = json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]});
+                        let _ = sock.write_all(format!("data: {c1}\n\ndata: {c2}\n\ndata: [DONE]\n\n").as_bytes()).await;
+                    }
+                });
+            }
+        });
+        format!("http://{addr}/v1")
+    });
+    let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    let out = engine.call("chat.send", json!({"text": "Mach mir eine Notenliste und Folien"})).unwrap();
+    assert_eq!(out["text"], "Fertig.");
+    let s = engine.state();
+    assert!(s.approvals.is_empty(), "creating a file in the data folder asks nothing");
+    let with_files = s.messages.iter().find(|m| m.attachments.len() == 2).expect("the files are on the answer");
+    assert_eq!(with_files.attachments[0].name, "Notenliste.xlsx");
+    assert_eq!(with_files.attachments[1].name, "Elternabend.pptx");
+    assert!(with_files.tool_calls.iter().all(|t| t.outcome.as_deref() == Some("ok")));
+    // Kept after a reload from the database.
+    let conv = s.current.clone().unwrap();
+    let stored = engine.ctx().store(|st| st.messages(&conv)).unwrap();
+    assert!(stored.iter().any(|m| m.attachments.iter().any(|a| a.name == "Elternabend.pptx")));
+
+    let target = std::env::temp_dir().join(format!("aiscraft-save-{}.xlsx", std::process::id()));
+    engine.call("chat.save_file", json!({"message_id": with_files.id, "index": 0, "path": target.display().to_string()})).unwrap();
+    let sheet = zip_part(&std::fs::read(&target).unwrap(), "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains("<f>AVERAGE(B2:B2)</f>"), "{sheet}");
+    assert!(engine.call("chat.save_file", json!({"message_id": with_files.id, "index": 5, "path": target.display().to_string()})).is_err());
+    assert!(engine.call("chat.save_file", json!({"message_id": "nope", "path": "/tmp/x"})).is_err());
+    let _ = std::fs::remove_file(&target);
+}

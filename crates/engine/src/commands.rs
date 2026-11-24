@@ -36,6 +36,7 @@ pub fn commands() -> &'static [CommandSpec] {
         let mut all: Vec<CommandSpec> = COMMANDS.iter().map(CommandSpec::copy).collect();
         #[cfg(feature = "collab")]
         all.extend(crate::collab::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::office::COMMANDS.iter().map(CommandSpec::copy));
         all
     })
 }
@@ -366,9 +367,9 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("artifact.revise", "Mit KI überarbeiten", "Artefakte", None, "id: string, instruction: string", false, |c, p| Box::pin(crate::artifacts::revise(
         c, p
     ))),
-    cmd!("artifact.export", "Artefakt exportieren", "Artefakte", None, "id: string, format?: markdown|html|json, path?: string", false, |c, p| Box::pin(
-        crate::artifacts::export(c, p)
-    )),
+    cmd!("artifact.export", "Artefakt exportieren", "Artefakte", None, "id: string, format?: markdown|html|docx|pdf|json, path?: string", false, |c, p| {
+        Box::pin(crate::artifacts::export(c, p))
+    }),
     cmd!("artifact.versions", "Versionen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::versions(c, p))),
     cmd!("artifact.restore", "Version wiederherstellen", "Artefakte", None, "id: string, version: number", false, |c, p| Box::pin(crate::artifacts::restore(
         c, p

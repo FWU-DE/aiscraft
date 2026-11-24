@@ -72,6 +72,21 @@ fn demo_server(engine: &Engine) -> String {
                         let _ = sock.write_all(format!("data: {c}\n\ndata: [DONE]\n\n").as_bytes()).await;
                         return;
                     }
+                    // "Notenliste": create a spreadsheet and a deck with the file tools (download cards).
+                    if req.contains("Notenliste") {
+                        let (c1, c2) = if req.contains("\"role\":\"tool\"") {
+                            (json!({"choices":[{"delta":{"content":"Hier sind die Notenliste und die Folien für den Elternabend."}}]}), json!({"choices":[{"delta":{},"finish_reason":"stop"}]}))
+                        } else {
+                            let sheet = json!({"title": "Notenliste 7b", "sheets": [{"name": "Mathe", "columns": ["Name", "Note"], "rows": [["Anna", 2], ["Ben", 1], ["Schnitt", "=AVERAGE(B2:B3)"]]}]}).to_string();
+                            let deck = json!({"title": "Elternabend 7b", "slides": [{"title": "Themen", "bullets": ["Noten", "Klassenfahrt"]}]}).to_string();
+                            (
+                                json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"f1","function":{"name":"spreadsheet_create","arguments":sheet}},{"index":1,"id":"f2","function":{"name":"slides_create","arguments":deck}}]}}]}),
+                                json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+                            )
+                        };
+                        let _ = sock.write_all(format!("data: {c1}\n\ndata: {c2}\n\ndata: [DONE]\n\n").as_bytes()).await;
+                        return;
+                    }
                     // "Kollegium" + a connector tool named *__notify: ask to call it (approval demo).
                     if req.contains("Kollegium") && !req.contains("\"role\":\"tool\"")
                         && let Some(name) = req.split('"').find(|p| p.ends_with("__notify"))
