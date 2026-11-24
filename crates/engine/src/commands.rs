@@ -339,7 +339,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Einstellung ändern",
         "Einstellungen",
         None,
-        "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|check_links|proactive|quiet_start|quiet_end|update_check, value: any",
+        "key: theme|transparency|look_chosen|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|check_links|proactive|quiet_start|quiet_end|update_check, value: any",
         false,
         |c, p| Box::pin(async move {
             let key = req_str(&p, "key")?;
@@ -350,6 +350,12 @@ static COMMANDS: &[CommandSpec] = &[
             };
             obj.insert(key.clone(), value);
             let mut parsed: Settings = serde_json::from_value(settings).map_err(|e| Error::invalid(format!("{key}: {e}")))?;
+            if key == "theme" && !crate::state::THEMES.contains(&parsed.theme.as_str()) {
+                return Err(Error::invalid(format!("Unbekanntes Erscheinungsbild {}; möglich: {}", parsed.theme, crate::state::THEMES.join(", "))));
+            }
+            if key == "transparency" && !matches!(parsed.transparency.as_str(), "gradient" | "off") {
+                return Err(Error::invalid("transparency: gradient oder off"));
+            }
             if !parsed.zoom.is_finite() {
                 parsed.zoom = 1.0;
             }

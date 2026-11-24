@@ -380,6 +380,10 @@ pub enum Action {
 /// Draw one segment (plots too, without the app's extras).
 pub fn show(ui: &mut Ui, md: &mut egui_commonmark::CommonMarkCache, t: &Tokens, seg: &Segment, salt: impl std::hash::Hash + std::fmt::Debug) -> Option<Action> {
     match seg {
+        Segment::Markdown(text) if t.designed() => {
+            ui.scope(|ui| crate::rich::show(ui, md, t, text, |ui, md, s| markdown_viewer(ui, md, t, s)));
+            None
+        }
         Segment::Markdown(text) => {
             ui.scope(|ui| {
                 // Tables are striped grids, and the stripe made a single row look selected: no stripes.

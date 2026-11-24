@@ -89,6 +89,26 @@ pub fn format_local(ms: i64) -> String {
     chrono::Local.timestamp_millis_opt(ms).single().map(|t| t.format("%d.%m. %H:%M").to_string()).unwrap_or_default()
 }
 
+/// Local weekday (0 = Monday), day of month, month (1–12) and hour of a moment.
+pub fn local_date_parts(ms: i64) -> Option<(u32, u32, u32, u32)> {
+    use chrono::{Datelike, TimeZone, Timelike};
+    let t = chrono::Local.timestamp_millis_opt(ms).single()?;
+    Some((t.weekday().num_days_from_monday(), t.day(), t.month(), t.hour()))
+}
+
+/// When something happened, as people say it: "heute, 10:42", "gestern" or "03.11.".
+pub fn friendly_time(ms: i64, now: i64) -> String {
+    use chrono::TimeZone;
+    let (Some(t), Some(n)) = (chrono::Local.timestamp_millis_opt(ms).single(), chrono::Local.timestamp_millis_opt(now).single()) else {
+        return String::new();
+    };
+    match (n.date_naive() - t.date_naive()).num_days() {
+        0 => format!("heute, {}", t.format("%H:%M")),
+        1 => "gestern".to_string(),
+        _ => t.format("%d.%m.").to_string(),
+    }
+}
+
 pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }

@@ -2115,3 +2115,34 @@ fn update_check_remembers_across_starts() {
 
 #[path = "learn_tests.rs"]
 mod learn_tests;
+
+/// The look: Mutig by default, every listed look accepted and kept, unknown ones refused;
+/// Glas' transparency and the "look chosen" flag are plain settings.
+#[test]
+fn theme_setting_accepts_only_known_looks() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    assert_eq!(engine.state().settings.theme, "mutig");
+    assert!(!engine.state().settings.look_chosen);
+    for theme in crate::state::THEMES {
+        engine.call("settings.set", json!({"key": "theme", "value": theme})).unwrap();
+        assert_eq!(engine.state().settings.theme, *theme);
+    }
+    assert!(engine.call("settings.set", json!({"key": "theme", "value": "neon"})).is_err());
+    assert_eq!(engine.state().settings.theme, "omarchy", "a refused value changes nothing");
+    engine.call("settings.set", json!({"key": "transparency", "value": "off"})).unwrap();
+    assert_eq!(engine.state().settings.transparency, "off");
+    assert!(engine.call("settings.set", json!({"key": "transparency", "value": "fenster"})).is_err());
+    engine.call("settings.set", json!({"key": "look_chosen", "value": true})).unwrap();
+    assert!(engine.state().settings.look_chosen);
+}
+
+#[test]
+fn friendly_times_and_dates() {
+    let now = crate::now_ms();
+    assert!(crate::friendly_time(now, now).starts_with("heute, "));
+    assert_eq!(crate::friendly_time(now - 86_400_000, now), "gestern");
+    assert!(crate::friendly_time(now - 10 * 86_400_000, now).ends_with('.'));
+    let (wd, day, month, hour) = crate::local_date_parts(now).unwrap();
+    assert!(wd < 7 && (1..=31).contains(&day) && (1..=12).contains(&month) && hour < 24);
+    assert!(crate::local_date_parts(i64::MAX).is_none());
+}

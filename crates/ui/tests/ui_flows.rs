@@ -13,9 +13,13 @@ fn harness(engine: &Engine) -> egui_kittest::Harness<'static, AisCraftApp> {
         .allow_missing_glyphs()
         .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
     h.run_steps(4);
-    // Close the welcome dialog a fresh profile shows.
+    // Close the welcome dialog a fresh profile shows ("Später"), or the look question a profile
+    // that is set up already shows once ("Fertig").
     if let Some(later) = h.query_by_label("Später") {
         later.click();
+        h.run_steps(4);
+    } else if let Some(done) = h.query_by_label("Fertig") {
+        done.click();
         h.run_steps(4);
     }
     h
@@ -43,7 +47,7 @@ fn sidebar_collapse_button_collapses() {
     let mut h = harness(&engine);
     assert!(h.query_by_label("Neuer Chat").is_some() || h.query_by_label_contains("Neuer Chat").is_some());
     // The ☰ button in the sidebar header hides the sidebar (regression: the click was lost).
-    h.get_all_by_label("☰").next().unwrap().click();
+    h.get_by_label("Seitenleiste ausblenden (Strg+B)").click();
     h.run_steps(30);
     assert!(h.query_by_label_contains("Neuer Chat").is_none(), "sidebar hidden");
 }
@@ -67,7 +71,7 @@ fn handbook_opens_closes_and_follows_settings_links() {
     // From the settings: the link opens the chapter of the tab.
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
     h.run_steps(6);
-    h.get_by_role_and_label(egui::accesskit::Role::Link, "Handbuch: Anmelden").click();
+    h.get_by_label("Handbuch: Dienste").click();
     h.run_steps(6);
     assert!(h.query_by_label("Erste Schritte").is_some(), "settings link opens the handbook");
     assert!(h.query_by_label_contains("Im Browser anmelden").is_some(), "at the sign-in chapter");
@@ -186,8 +190,8 @@ fn format_spec_is_folded_under_the_request() {
     assert!(h.query_by_label_contains("Etwa 8 Aufgaben").is_some(), "a click shows the spec");
 }
 
-/// The × in the header and Esc close the chat; the start page shows its cards, and its quick
-/// start opens a new document.
+/// "Chat schließen" in the header's menu and Esc close the chat; the start page shows its cards,
+/// a prompt starter fills the composer, and the sidebar's "+" opens a new document.
 #[test]
 fn close_chat_shows_the_start_page() {
     use serde_json::json;
@@ -200,14 +204,19 @@ fn close_chat_shows_the_start_page() {
     engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
     let mut h = harness(&engine);
     h.run_steps(6);
-    assert!(h.query_by_label("Neu starten").is_none(), "a chat is open, no start page");
-    h.get_by_label("×").click();
+    assert!(h.query_by_label("Woran arbeiten wir heute?").is_none(), "a chat is open, no start page");
+    h.get_by_label("Weitere Aktionen").click();
+    h.run_steps(4);
+    h.get_by_label("Chat schließen, zur Startseite (Esc)").click();
     h.run_steps(8);
     // chat.close runs on the engine's runtime; on a slow runner it lands after these frames.
     assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.current.is_none()), "× closed the chat");
     h.run_steps(4);
-    assert!(h.query_by_label("Neu starten").is_some() && h.query_by_label("Zeitpläne").is_some(), "the start page shows");
-    assert!(h.get_all_by_label_contains("Hallo").count() >= 2, "greeting, and recent chats list it");
+    assert!(h.query_by_label("Woran arbeiten wir heute?").is_some() && h.query_by_label("Zeitpläne").is_some(), "the start page shows");
+    assert!(
+        h.query_by_label("Zuletzt bearbeitet").is_some() && h.get_all_by_label_contains("Hallo").count() >= 2,
+        "recent work lists the chat (and the sidebar)"
+    );
 
     // Back into the chat, then Esc with an empty composer closes it again.
     engine.call("chat.open", json!({"id": engine.state().conversations[0].id})).unwrap();
@@ -217,8 +226,16 @@ fn close_chat_shows_the_start_page() {
     h.run_steps(8);
     assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.current.is_none()), "Esc closed the chat");
 
-    // A quick start on the start page.
-    h.get_by_label("📄  Dokument").click();
+    // A prompt starter fills the composer; a new document from the sidebar's "+".
+    h.get_by_label("Stundenentwurf").click();
+    h.run_steps(4);
+    assert!(
+        h.query_all(egui_kittest::kittest::By::new().predicate(|n| n.value().is_some_and(|v| v.contains("Stundenentwurf für Klasse 7")))).next().is_some(),
+        "the starter's prompt is in the composer"
+    );
+    h.get_by_label("Neues Dokument oder Whiteboard").click();
+    h.run_steps(4);
+    h.get_by_label("📄  Neues Dokument").click();
     h.run_steps(8);
     assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.open_artifact.is_some()), "a new document opens");
 }
@@ -287,4 +304,86 @@ fn worksheet_work_mode_checks_answers_and_app_panel_shows_source() {
     h.run_steps(8);
     assert!(h.query_by_label("▶ Öffnen").is_some());
     assert!(h.query_by_label("Speichern …").is_some());
+}
+
+/// The look question: a fresh profile gets the whole welcome (look, then sign-in), a profile that
+/// is set up already gets only the look step, once; with the flag set nothing opens. Picking a
+/// look applies it at once. Both say that AIS.ChatCraft is a community experiment.
+#[test]
+fn welcome_asks_for_the_look_once() {
+    use serde_json::json;
+    let notice = "kein offizielles Werkzeug des AIS.chat-Teams";
+    // Fresh: the full welcome, starting with the look.
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let e = engine.clone();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .allow_missing_glyphs()
+        .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
+    h.run_steps(4);
+    assert!(h.query_by_label("Willkommen bei AIS.ChatCraft").is_some(), "full welcome");
+    assert!(h.query_by_label_contains(notice).is_some(), "community notice");
+    assert!(h.query_by_label("Weiter").is_some(), "the sign-in step follows");
+    h.get_by_label("Glas").click();
+    h.run_steps(4);
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.theme == "glas"), "the choice applies at once");
+    h.get_by_label("Weiter").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("Mit einem Dienst verbinden").is_some(), "sign-in step");
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.look_chosen), "asked once");
+
+    // Set up already (two services, one signed in counts as set up), no flag: only the look.
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    engine.call("backend.add", json!({"kind": "openai", "name": "Lokal", "base_url": "http://127.0.0.1:9/v1"})).unwrap();
+    engine.call("settings.set", json!({"key": "theme", "value": "dark"})).unwrap();
+    let e = engine.clone();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .allow_missing_glyphs()
+        .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
+    h.run_steps(4);
+    assert!(h.query_by_label("AIS.ChatCraft sieht jetzt neu aus").is_some(), "look step only");
+    assert!(h.query_by_label("Willkommen bei AIS.ChatCraft").is_none());
+    assert!(h.query_by_label_contains(notice).is_some(), "community notice");
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.theme == "mutig-dark"), "starts on Mutig, scheme kept");
+    h.get_by_label("Klassisch").click();
+    h.run_steps(4);
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.theme == "dark"), "Klassisch is one click away");
+    h.get_by_label("Fertig").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("AIS.ChatCraft sieht jetzt neu aus").is_none(), "closed");
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.look_chosen));
+
+    // Flag set: nothing opens.
+    let e = engine.clone();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .allow_missing_glyphs()
+        .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
+    h.run_steps(4);
+    assert!(h.query_by_label("AIS.ChatCraft sieht jetzt neu aus").is_none() && h.query_by_label("Willkommen bei AIS.ChatCraft").is_none());
+}
+
+/// Every look renders the main views without trouble, and the look switch in Einstellungen
+/// applies live.
+#[test]
+fn every_look_renders_and_switches_live() {
+    use serde_json::json;
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let mut h = harness(&engine);
+    for theme in aiscraft_engine::THEMES {
+        engine.call("settings.set", json!({"key": "theme", "value": theme})).unwrap();
+        h.run_steps(3);
+        engine.call("artifact.create", json!({"kind": "board"})).unwrap();
+        h.run_steps(3);
+        engine.call("artifact.close", json!({})).unwrap();
+    }
+    engine.call("settings.set", json!({"key": "transparency", "value": "off"})).unwrap();
+    engine.call("settings.set", json!({"key": "theme", "value": "glas-dark"})).unwrap();
+    h.run_steps(3);
+    let (tx, _rx) = std::sync::mpsc::channel::<aiscraft_ui::UiRequest>();
+    drop(tx);
+    engine.call("settings.set", json!({"key": "theme", "value": "mutig"})).unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label("Neuer Chat").is_some(), "Mutig's sidebar");
 }

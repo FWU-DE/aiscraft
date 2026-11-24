@@ -25,36 +25,81 @@ impl AisCraftApp {
         let mut go = None;
         // Under the content, styled like the chat composer: a tonal pill (surface container)
         // with a frameless field and the main action spelled out ("Überarbeiten", not "Los").
-        egui::Panel::bottom("artifact-revise-bar")
-            .resizable(false)
-            .show_separator_line(false)
-            .frame(Frame::new().inner_margin(Margin { left: 12, right: 12, top: 6, bottom: 10 }))
-            .show(ui, |ui| {
-                Frame::new()
-                    .fill(t.surface_container)
-                    .corner_radius(egui::CornerRadius::same(22))
-                    .inner_margin(Margin { left: 16, right: 6, top: 4, bottom: 4 })
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let r = ui.add_enabled(
-                                !v.revising,
-                                egui::TextEdit::singleline(&mut v.revise)
-                                    .hint_text(hint)
-                                    .frame(Frame::NONE)
-                                    .margin(Margin::symmetric(0, 8))
-                                    .desired_width(ui.available_width() - 130.0),
-                            );
-                            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if v.revising {
-                                    ui.add(egui::Spinner::new().color(t.accent));
-                                } else if (accent_button(ui, &t, "Überarbeiten").clicked() || enter) && !v.revise.trim().is_empty() {
-                                    go = Some(v.revise.trim().to_string());
-                                }
+        if t.designed() {
+            egui::Panel::bottom("artifact-revise-bar")
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(Frame::new().inner_margin(Margin { left: 14, right: 14, top: 12, bottom: 14 }))
+                .show(ui, |ui| {
+                    let top = ui.max_rect().top() - 12.0;
+                    ui.painter().line_segment(
+                        [egui::pos2(ui.max_rect().left() - 14.0, top), egui::pos2(ui.max_rect().right() + 14.0, top)],
+                        egui::Stroke::new(1.0, t.border),
+                    );
+                    let stroke = if t.glass.is_some() { egui::Stroke::new(1.0, t.card_stroke) } else { egui::Stroke::new(1.5, t.accent) };
+                    Frame::new()
+                        .fill(t.surface)
+                        .stroke(stroke)
+                        .corner_radius(egui::CornerRadius::same(22))
+                        .shadow(if t.glass.is_some() { t.card_shadow } else { egui::epaint::Shadow::NONE })
+                        .inner_margin(Margin { left: 14, right: 6, top: 6, bottom: 6 })
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(crate::icons::Icon::Sparkles.text(18.0).color(t.accent));
+                                let r = ui.add_enabled(
+                                    !v.revising,
+                                    egui::TextEdit::singleline(&mut v.revise)
+                                        .hint_text(RichText::new(hint).color(t.muted))
+                                        .frame(Frame::NONE)
+                                        .font(egui::FontId::proportional(14.0))
+                                        .margin(Margin::symmetric(0, 6))
+                                        .desired_width(ui.available_width() - 130.0),
+                                );
+                                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if v.revising {
+                                        ui.add(egui::Spinner::new().color(t.accent));
+                                    } else if (crate::kit::pill(ui, &t, crate::kit::Pill::Primary, None, "Überarbeiten", 13.5, None).clicked() || enter)
+                                        && !v.revise.trim().is_empty()
+                                    {
+                                        go = Some(v.revise.trim().to_string());
+                                    }
+                                });
                             });
                         });
-                    });
-            });
+                });
+        } else {
+            egui::Panel::bottom("artifact-revise-bar")
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(Frame::new().inner_margin(Margin { left: 12, right: 12, top: 6, bottom: 10 }))
+                .show(ui, |ui| {
+                    Frame::new()
+                        .fill(t.surface_hi)
+                        .corner_radius(egui::CornerRadius::same(22))
+                        .inner_margin(Margin { left: 16, right: 6, top: 4, bottom: 4 })
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let r = ui.add_enabled(
+                                    !v.revising,
+                                    egui::TextEdit::singleline(&mut v.revise)
+                                        .hint_text(hint)
+                                        .frame(Frame::NONE)
+                                        .margin(Margin::symmetric(0, 8))
+                                        .desired_width(ui.available_width() - 130.0),
+                                );
+                                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if v.revising {
+                                        ui.add(egui::Spinner::new().color(t.accent));
+                                    } else if (accent_button(ui, &t, "Überarbeiten").clicked() || enter) && !v.revise.trim().is_empty() {
+                                        go = Some(v.revise.trim().to_string());
+                                    }
+                                });
+                            });
+                        });
+                });
+        }
         if v.revising && v.revise_done.load(std::sync::atomic::Ordering::Relaxed) {
             v.revising = false;
         }
@@ -227,12 +272,12 @@ impl AisCraftApp {
     /// worksheet request.
     pub(crate) fn create_menu(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
-        ui.menu_button(RichText::new("Erstellen  ⏷").color(t.muted), |ui| {
+        let body = |app: &mut Self, ui: &mut Ui| {
             ui.set_min_width(300.0);
             // The topic field is the composer itself, so text typed before opening the menu is there.
             ui.label(small_muted(&t, "Thema"));
-            ui.add(egui::TextEdit::singleline(&mut self.composer).hint_text("z. B. Brüche vergleichen, Klasse 6").desired_width(f32::INFINITY));
-            let topic = self.composer.trim().to_string();
+            ui.add(egui::TextEdit::singleline(&mut app.composer).hint_text("z. B. Brüche vergleichen, Klasse 6").desired_width(f32::INFINITY));
+            let topic = app.composer.trim().to_string();
             let usable = topic.chars().filter(|ch| ch.is_alphanumeric()).count() >= 2;
             ui.add_space(4.0);
             for (label, cmd, tip) in [
@@ -241,14 +286,19 @@ impl AisCraftApp {
                 ("📦 H5P-Quiz", "h5p.request", "Ein H5P-Quiz zum Thema im Eingabefeld, als .h5p-Datei für Moodle, Mebis, ByCS und andere Lernplattformen"),
             ] {
                 if ui.add_enabled(usable, egui::Button::new(label)).on_hover_text(tip).clicked() {
-                    self.composer.clear();
-                    self.run(cmd, json!({"topic": topic}));
+                    app.composer.clear();
+                    app.run(cmd, json!({"topic": topic}));
                     ui.close();
                 }
             }
-        })
-        .response
-        .on_hover_text("Lern-App, Arbeitsblatt oder H5P-Quiz erstellen lassen");
+        };
+        let tip = "Lern-App, Arbeitsblatt oder H5P-Quiz erstellen lassen";
+        if t.designed() {
+            let r = crate::kit::pill(ui, &t, crate::kit::Pill::Chip, None, "Erstellen", 13.5, Some(crate::icons::Icon::ChevronDown)).on_hover_text(tip);
+            egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| body(self, ui));
+        } else {
+            ui.menu_button(RichText::new("Erstellen  ⏷").color(t.muted), |ui| body(self, ui)).response.on_hover_text(tip);
+        }
     }
 }
 
@@ -337,6 +387,18 @@ pub fn highlight_html(src: &str, t: &Tokens) -> LayoutJob {
 }
 
 /// The label of a learning artifact for lists: (icon, kind label).
+/// The line icon of an artifact kind (Mutig, Glas).
+pub fn kind_lucide(kind: ArtifactKind) -> crate::icons::Icon {
+    use crate::icons::Icon;
+    match kind {
+        ArtifactKind::Board => Icon::Note,
+        ArtifactKind::App => Icon::App,
+        ArtifactKind::Worksheet => Icon::Table,
+        ArtifactKind::H5p => Icon::Puzzle,
+        ArtifactKind::Document => Icon::File,
+    }
+}
+
 pub fn kind_icon(kind: ArtifactKind) -> &'static str {
     match kind {
         ArtifactKind::Board => "▣",
