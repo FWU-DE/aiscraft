@@ -88,3 +88,75 @@ fn explore_page_opens_and_esc_returns() {
     h.run_steps(6);
     assert!(h.query_by_label("Nicht bei AIS.chat angemeldet").is_none(), "Esc closes the page");
 }
+
+/// A local OpenAI-compatible server whose answers count up: "Antwort 1", "Antwort 2", …
+fn counting_backend(engine: &Engine) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    engine.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let n = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let n = n.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = vec![0u8; 1 << 16];
+                    loop {
+                        let k = sock.read(&mut chunk).await.unwrap_or(0);
+                        if k == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..k]);
+                        let s = String::from_utf8_lossy(&buf).to_string();
+                        if let Some(h) = s.find("\r\n\r\n") {
+                            let len = s[..h]
+                                .lines()
+                                .find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                                .unwrap_or(0);
+                            if buf.len() >= h + 4 + len {
+                                break;
+                            }
+                        }
+                    }
+                    if buf.starts_with(b"GET") {
+                        let body = r#"{"data":[{"id":"m"}]}"#;
+                        let head = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", body.len());
+                        let _ = sock.write_all(format!("{head}{body}").as_bytes()).await;
+                        return;
+                    }
+                    let i = n.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    let c = serde_json::json!({"choices":[{"delta":{"content": format!("Antwort {i}")}}]});
+                    let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
+                    let _ = sock.write_all(format!("data: {c}\n\ndata: [DONE]\n\n").as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}/v1")
+    })
+}
+
+/// After "Neu erzeugen" the answer shows ‹ 2/2 ›; ‹ brings the first answer back.
+#[test]
+fn variant_switcher_shows_the_old_answer() {
+    use serde_json::json;
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let url = counting_backend(&engine);
+    let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    engine.call("chat.regenerate", json!({})).unwrap();
+    assert_eq!(engine.state().messages[1].content, "Antwort 2");
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    assert!(h.query_by_label("2/2").is_some(), "the switcher shows the version");
+    h.get_by_label("‹").click();
+    h.run_steps(6);
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.messages.get(1).is_some_and(|m| m.content == "Antwort 1")), "the old answer is back");
+    h.run_steps(6);
+    assert!(h.query_by_label("1/2").is_some());
+    assert!(h.query_by_label_contains("Antwort 1").is_some());
+}
