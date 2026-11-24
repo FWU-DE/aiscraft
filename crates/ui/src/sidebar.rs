@@ -372,13 +372,15 @@ impl AisCraftApp {
             let is_ais = self.state.backend(&c.backend_id).is_some_and(|b| b.config.kind == BackendKind::AisChat);
             // AIS.chat chats get a small AIS.chat logo; the spaces make room for it.
             let designed = t.designed();
-            let title = if is_ais && !designed { format!("      {}", c.title) } else { c.title.clone() };
+            // „Namen schützen“: the title keeps placeholders, shown with the names (#55).
+            let shown = self.engine.reveal(&c.id, &c.title);
+            let title = if is_ais && !designed { format!("      {shown}") } else { shown.clone() };
             let resp = if designed {
-                crate::kit::side_item(ui, &t, Icon::Chat, &c.title, selected)
+                crate::kit::side_item(ui, &t, Icon::Chat, &shown, selected)
             } else {
                 ui.add(egui::Button::selectable(selected, RichText::new(title)).truncate().min_size(egui::vec2(w, 26.0)))
             }
-            .on_hover_text(&c.title);
+            .on_hover_text(&shown);
             if is_ais && !designed {
                 let r = resp.rect;
                 let h = 10.0;
