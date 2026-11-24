@@ -280,47 +280,79 @@ impl AisCraftApp {
             });
         });
         Frame::new().inner_margin(Margin { left: 20, right: 14, top: 4, bottom: 12 }).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
+            // „Bearbeiten | Vorschau“ and „Im Chat“ on the left, the actions on the right. The
+            // actions are placed first; where the left group does not fit next to them (a narrow
+            // panel), it moves to a row of its own instead of lying on top of them.
+            let left = |app: &mut Self, ui: &mut Ui| {
                 if meta.kind == ArtifactKind::Document
-                    && let Some(v) = self.artifact.as_mut()
+                    && let Some(v) = app.artifact.as_mut()
                 {
                     crate::widgets::segmented_icons(ui, &t, &mut v.preview, [(false, Some(Icon::Pen), "Bearbeiten"), (true, Some(Icon::Eye), "Vorschau")]);
                 }
-                let kind = if self.attach_artifact { crate::kit::Pill::Soft } else { crate::kit::Pill::Ghost };
+                let kind = if app.attach_artifact { crate::kit::Pill::Soft } else { crate::kit::Pill::Ghost };
                 let icon = if meta.kind == ArtifactKind::Document { None } else { Some(Icon::Chat) };
                 if crate::kit::pill(ui, &t, kind, icon, "Im Chat", 13.0, None)
                     .on_hover_text("Inhalt bei der nächsten Nachricht als Kontext mitschicken")
                     .clicked()
                 {
-                    self.attach_artifact = !self.attach_artifact;
+                    app.attach_artifact = !app.attach_artifact;
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    if matches!(meta.kind, ArtifactKind::Document | ArtifactKind::Board) {
-                        let more = crate::kit::icon_button(ui, &t, Icon::More, "Weitere Aktionen", t.text2, 18.0, 32.0);
-                        if meta.kind != ArtifactKind::Board {
-                            egui::Popup::menu(&more).show(|ui| self.more_entries(ui, meta));
-                        } else {
-                            egui::Popup::menu(&more).show(|ui| {
-                                if ui.button("Umbenennen …").clicked() {
-                                    self.dialog = Some(crate::dialogs::Dialog::RenameArtifact { id: meta.id.clone(), title: meta.title.clone() });
-                                    ui.close();
-                                }
-                            });
-                        }
-                    }
-                    let export = crate::kit::icon_button(ui, &t, Icon::Download, "Exportieren", t.text2, 18.0, 32.0);
-                    egui::Popup::menu(&export).show(|ui| self.export_entries(ui, meta));
-                    let count = self.engine.call("artifact.versions", json!({"id": meta.id})).ok().and_then(|v| v.as_array().map(|a| a.len())).unwrap_or(0);
-                    let versions = if count > 0 {
-                        crate::kit::pill(ui, &t, crate::kit::Pill::Chip, Some(Icon::History), &format!("V{count}"), 13.0, None).on_hover_text("Versionen")
+            };
+            let need_id = ui.scope_id().with("toolbar-left-width");
+            let need = ui.ctx().data(|d| d.get_temp::<f32>(need_id)).unwrap_or(0.0);
+            let mut fits = true;
+            // One row as tall as the segmented control, so both groups centre on the same line.
+            let row = egui::vec2(ui.available_width(), 36.0);
+            ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if matches!(meta.kind, ArtifactKind::Document | ArtifactKind::Board) {
+                    let more = crate::kit::icon_button(ui, &t, Icon::More, "Weitere Aktionen", t.text2, 18.0, 32.0);
+                    if meta.kind != ArtifactKind::Board {
+                        egui::Popup::menu(&more).show(|ui| self.more_entries(ui, meta));
                     } else {
-                        crate::kit::icon_button(ui, &t, Icon::History, "Versionen", t.text2, 18.0, 32.0)
-                    };
-                    egui::Popup::menu(&versions).show(|ui| self.version_entries(ui, meta));
-                });
+                        egui::Popup::menu(&more).show(|ui| {
+                            if ui.button("Umbenennen …").clicked() {
+                                self.dialog = Some(crate::dialogs::Dialog::RenameArtifact { id: meta.id.clone(), title: meta.title.clone() });
+                                ui.close();
+                            }
+                        });
+                    }
+                }
+                let export = crate::kit::icon_button(ui, &t, Icon::Download, "Exportieren", t.text2, 18.0, 32.0);
+                egui::Popup::menu(&export).show(|ui| self.export_entries(ui, meta));
+                let count = self.engine.call("artifact.versions", json!({"id": meta.id})).ok().and_then(|v| v.as_array().map(|a| a.len())).unwrap_or(0);
+                let versions = if count > 0 {
+                    crate::kit::pill(ui, &t, crate::kit::Pill::Chip, Some(Icon::History), &format!("V{count}"), 13.0, None).on_hover_text("Versionen")
+                } else {
+                    crate::kit::icon_button(ui, &t, Icon::History, "Versionen", t.text2, 18.0, 32.0)
+                };
+                egui::Popup::menu(&versions).show(|ui| self.version_entries(ui, meta));
+                ui.add_space(8.0);
+                fits = ui.available_width() >= need;
+                if fits {
+                    let w = ui
+                        .with_layout(Layout::left_to_right(Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            left(self, ui);
+                        })
+                        .response
+                        .rect
+                        .width();
+                    ui.ctx().data_mut(|d| d.insert_temp(need_id, w));
+                }
             });
+            if !fits {
+                ui.add_space(6.0);
+                let w = ui
+                    .horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        left(self, ui);
+                    })
+                    .response
+                    .rect
+                    .width();
+                ui.ctx().data_mut(|d| d.insert_temp(need_id, w));
+            }
         });
         let r = ui.cursor();
         ui.painter().line_segment([egui::pos2(ui.max_rect().left(), r.top()), egui::pos2(ui.max_rect().right(), r.top())], egui::Stroke::new(1.0, t.border));

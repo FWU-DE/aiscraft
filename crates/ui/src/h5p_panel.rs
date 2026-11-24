@@ -28,7 +28,8 @@ impl AisCraftApp {
         let mut mode = v.sheet.mode;
         let (mut check, mut reset, mut save) = (false, false, false);
         Frame::new().inner_margin(Margin::symmetric(12, 4)).show(ui, |ui| {
-            ui.horizontal(|ui| {
+            // Wraps in a narrow panel: one long row made the panel wider than its default.
+            ui.horizontal_wrapped(|ui| {
                 if editable {
                     crate::widgets::segmented(ui, &t, &mut mode, [(Mode::Edit, "Bearbeiten"), (Mode::Work, "Ausprobieren")]);
                     ui.separator();

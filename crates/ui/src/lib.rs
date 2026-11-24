@@ -30,4 +30,4 @@ mod update;
 mod widgets;
 pub mod worksheet;
 
-pub use app::{AisCraftApp, UiRequest};
+pub use app::{AisCraftApp, PanelLayout, UiRequest};
