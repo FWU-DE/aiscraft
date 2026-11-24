@@ -67,7 +67,7 @@ pub trait Backend: Send + Sync {
     }
     /// Assistants, characters and learning scenarios the person may chat with (own and shared).
     fn personas(&self) -> BoxFuture<'_, Result<Vec<PersonaInfo>>> {
-        Box::pin(async { Err(Error::unsupported("Dieses Backend kennt keine Assistenten, Figuren oder Lernszenarien")) })
+        Box::pin(async { Err(Error::unsupported("Dieses Backend kennt keine Assistenten, Dialogpartner oder Lernszenarien")) })
     }
     /// Mark or unmark an assistant, character or learning scenario as a favourite.
     fn set_favorite(&self, _kind: aiscraft_core::PersonaKind, _id: String, _favorite: bool) -> BoxFuture<'_, Result<()>> {

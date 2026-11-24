@@ -110,7 +110,7 @@ fn action_label(name: &str) -> &'static str {
     match name {
         SEND_ACTION => "Die Chat-Funktion",
         "getAssistantsByFilterAction" => "Die Liste der Assistenten",
-        "getCharactersByFilterAction" => "Die Liste der Figuren",
+        "getCharactersByFilterAction" => "Die Liste der Dialogpartner",
         "getLearningScenariosByFilterAction" => "Die Liste der Lernszenarien",
         "generateImageAction" => "Die Bilderzeugung",
         FAVORITE_ACTION => "Das Markieren von Favoriten",
@@ -467,7 +467,7 @@ pub fn server_tools(toggles: Option<&Value>) -> Vec<aiscraft_core::ServerTool> {
         t("images", "Bilder erzeugen", on("isImageGenerationEnabled")),
         t("speech", "Sprachausgabe", on("isSpeechModelEnabled")),
         t("agentic", "Mehrschrittiges Arbeiten (Agent)", on("isAgenticChatEnabled")),
-        t("characters", "Figuren", on("isCharacterEnabled")),
+        t("characters", "Dialogpartner", on("isCharacterEnabled")),
         t("custom", "Eigene Assistenten", on("isCustomGptEnabled")),
     ]
 }
