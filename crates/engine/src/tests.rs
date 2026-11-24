@@ -1752,3 +1752,56 @@ fn model_creates_spreadsheet_and_slides_and_the_person_saves_them() {
     assert!(engine.call("chat.save_file", json!({"message_id": "nope", "path": "/tmp/x"})).is_err());
     let _ = std::fs::remove_file(&target);
 }
+
+/// Closing a chat goes back to the start page: no chat open, the same backend and model, no
+/// persona; the chat itself stays in the list.
+#[test]
+fn chat_close_returns_to_the_start_page() {
+    let (engine, _) = engine_with_recording("Antwort");
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let open = engine.state().current.clone().unwrap();
+    let model = engine.state().selection.model_id.clone();
+    let out = engine.call("chat.close", json!({})).unwrap();
+    assert_eq!(out["closed"], open.as_str());
+    let s = engine.state();
+    assert!(s.current.is_none() && s.messages.is_empty());
+    assert!(s.selection.persona.is_none());
+    assert_eq!(s.selection.kind, aiscraft_core::ConversationKind::Chat);
+    assert_eq!(s.selection.model_id, model, "model choice stays");
+    assert!(s.conversation(&open).is_some(), "the chat is kept");
+    // With nothing open it is a no-op.
+    assert!(engine.call("chat.close", json!({})).unwrap()["closed"].is_null());
+}
+
+/// What a schedule reports lands in the in-app list (toast too), can be marked read and cleared,
+/// and is kept in the store.
+#[test]
+fn notifications_list_read_and_clear() {
+    let (engine, _) = engine_with_recording("Heute: Mathe.");
+    let id = engine.call("schedule.create", json!({"title": "Morgenplan", "prompt": "Was steht an?", "cron": "0 7 * * 1-5"})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    engine.call("schedule.run", json!({"id": id})).unwrap();
+    let s = engine.state();
+    let item = s.inbox.first().unwrap().clone();
+    assert_eq!(item.title, "Morgenplan");
+    assert!(item.text.contains("Mathe") && !item.read);
+    assert_eq!(item.action.as_ref().unwrap().command, "chat.open");
+    assert!(s.notices.iter().any(|n| n.text.starts_with("Morgenplan:")), "a toast as before");
+    assert_eq!(crate::inbox::load(engine.ctx()), s.inbox, "kept in the store");
+    crate::inbox::notify(engine.ctx(), crate::NoticeLevel::Success, "Aufgabe", "„Entwürfe“ ist fertig", None);
+    assert_eq!(engine.state().inbox.len(), 2);
+    assert_eq!(engine.call("notice.read", json!({"id": item.id})).unwrap()["unread"], 1);
+    assert!(engine.call("notice.read", json!({"id": "gibt-es-nicht"})).is_err());
+    assert_eq!(engine.call("notice.read", json!({})).unwrap()["unread"], 0);
+    assert!(engine.state().inbox.iter().all(|i| i.read));
+    assert_eq!(engine.call("notice.clear", json!({"id": item.id})).unwrap()["removed"], 1);
+    assert!(engine.call("notice.clear", json!({"id": item.id})).is_err());
+    engine.call("notice.clear", json!({})).unwrap();
+    assert!(engine.state().inbox.is_empty() && crate::inbox::load(engine.ctx()).is_empty());
+    for k in 0..(crate::inbox::MAX + 5) {
+        crate::inbox::notify(engine.ctx(), crate::NoticeLevel::Info, "Hinweis", &format!("Nr. {k}"), None);
+    }
+    assert_eq!(engine.state().inbox.len(), crate::inbox::MAX, "capped");
+}

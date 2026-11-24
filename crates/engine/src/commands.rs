@@ -56,6 +56,7 @@ static COMMANDS: &[CommandSpec] = &[
         chat_new(c, p)
     )),
     cmd!("chat.open", "Chat öffnen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_open(c, p))),
+    cmd!("chat.close", "Chat schließen", "Chat", Some("Escape"), "", true, |c, _| Box::pin(chat_close(c))),
     cmd!(
         "chat.send",
         "Senden",
@@ -348,6 +349,8 @@ static COMMANDS: &[CommandSpec] = &[
         c.update(|s| s.notices.retain(|n| n.id != id));
         Ok(json!({}))
     })),
+    cmd!("notice.read", "Benachrichtigungen als gelesen markieren", "App", None, "id?: string (ohne: alle)", true, |c, p| Box::pin(crate::inbox::read(c, p))),
+    cmd!("notice.clear", "Benachrichtigungen leeren", "App", None, "id?: string (ohne: alle)", false, |c, p| Box::pin(crate::inbox::clear(c, p))),
     cmd!(
         "artifact.create",
         "Neues Dokument",
@@ -621,6 +624,22 @@ async fn chat_new(c: Ctx, p: Value) -> Result<Value> {
     });
     persist_selection(&c);
     Ok(json!({}))
+}
+
+/// Close the open chat: back to the start page. A running answer keeps going in the background.
+async fn chat_close(c: Ctx) -> Result<Value> {
+    let closed = c.state().current.clone();
+    // Like a new chat with the same backend and model, without persona or image mode.
+    if chat_new(c.clone(), json!({})).await.is_err() {
+        c.update(|s| {
+            s.current = None;
+            s.messages.clear();
+            s.variants.clear();
+            s.selection.persona = None;
+            s.selection.kind = ConversationKind::Chat;
+        });
+    }
+    Ok(json!({"closed": closed}))
 }
 
 async fn chat_open(c: Ctx, p: Value) -> Result<Value> {

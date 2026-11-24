@@ -27,6 +27,9 @@ pub struct State {
     pub remote: BTreeMap<String, Vec<RemoteConversation>>,
     pub search: Option<SearchState>,
     pub notices: Vec<Notice>,
+    /// Benachrichtigungen (schedules, watches, check-ins, hints, tasks), newest first, kept on disk.
+    #[serde(default)]
+    pub inbox: Vec<crate::inbox::InboxItem>,
     pub settings: Settings,
     pub artifacts: Vec<Artifact>,
     /// The artifact shown next to the chat.

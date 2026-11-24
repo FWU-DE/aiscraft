@@ -60,12 +60,13 @@ pub(crate) async fn check(c: &Ctx, force: bool) -> Result<Option<String>> {
     sent.drain(..keep);
     c.store(|st| st.set_setting(SENT_KEY, &json!(sent)))?;
     let conv = v.get("conversation_id").and_then(Value::as_str).filter(|id| c.state().conversation(id).is_some()).map(str::to_string);
-    c.notice_with(
+    crate::inbox::notify(
+        c,
         NoticeLevel::Info,
-        format!("Hinweis: {text}"),
+        "Hinweis",
+        &text,
         conv.map(|id| NoticeAction { label: "Chat öffnen".into(), command: "chat.open".into(), params: json!({"id": id}) }),
     );
-    crate::schedules::desktop_notify("AIS.ChatCraft", &text);
     Ok(Some(text))
 }
 

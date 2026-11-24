@@ -9,6 +9,7 @@ mod chat;
 mod collab;
 mod commands;
 mod files;
+mod inbox;
 pub mod office;
 mod pictures;
 mod proactive;
@@ -37,7 +38,8 @@ pub use aiscraft_backends::SESSION_COOKIE;
 pub use artifacts::{change_blocks, doc_replace, doc_text, markdown_html, merge_states};
 pub use commands::{CommandSpec, commands};
 pub use files::{MAX_FILE_BYTES, mime_of};
-pub use schedules::{Cron, Schedule, next_run as schedule_next_run};
+pub use inbox::InboxItem;
+pub use schedules::{Cron, Schedule, next_run as schedule_next_run, parse_when};
 pub use secrets::Secrets;
 pub use skills::Skill;
 pub use state::*;
@@ -207,9 +209,11 @@ impl Engine {
             tools::load(&engine.ctx);
             let schedules = schedules::load(&engine.ctx);
             let skills = skills::load(&engine.ctx);
+            let inbox = inbox::load(&engine.ctx);
             engine.ctx.update(|s| {
                 s.schedules = schedules;
                 s.skills = skills;
+                s.inbox = inbox;
             });
             schedules::start(&engine.ctx);
             vault::refresh(&engine.ctx);
@@ -349,6 +353,11 @@ impl Ctx {
         F: std::future::Future<Output = ()> + Send + 'static,
     {
         self.0.handle.spawn(fut);
+    }
+
+    /// Desktop notifications only from the real app; engines in memory (tests, scripts) stay quiet.
+    pub(crate) fn desktop_allowed(&self) -> bool {
+        self.0.browser_allowed
     }
 
     pub fn notice(&self, level: NoticeLevel, text: impl Into<String>) -> u64 {

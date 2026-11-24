@@ -64,6 +64,8 @@ pub struct AisCraftApp {
     pub(crate) dictated: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// Generated images by file, decoded once (`None`: could not be read).
     pub(crate) images: std::collections::HashMap<String, Option<egui::TextureHandle>>,
+    /// Numbers the start page reads from the engine, refreshed every few seconds.
+    pub(crate) home: crate::home::HomeCache,
 }
 
 pub(crate) const CONTENT_WIDTH: f32 = 760.0;
@@ -113,6 +115,7 @@ impl AisCraftApp {
             dictated: Default::default(),
             manual: None,
             images: Default::default(),
+            home: Default::default(),
         }
     }
 
@@ -202,6 +205,21 @@ impl AisCraftApp {
         if generating && pressed(sc(Modifiers::NONE, Key::Escape)) {
             self.run("chat.stop", json!({}));
         }
+        // Esc with an empty composer and nothing else open closes the chat: back to the start page.
+        let composer_or_nothing = ctx.memory(|m| m.focused()).is_none_or(|f| f == Id::unique("composer"));
+        if !generating
+            && self.state.current.is_some()
+            && self.composer.trim().is_empty()
+            && self.pending_files.is_empty()
+            && self.link_input.is_none()
+            && self.editing.is_none()
+            && self.state.open_artifact.is_none()
+            && composer_or_nothing
+            && !egui::Popup::is_any_open(ctx)
+            && pressed(sc(Modifiers::NONE, Key::Escape))
+        {
+            self.close_chat();
+        }
     }
 
     pub(crate) fn new_chat(&mut self) {
@@ -211,6 +229,15 @@ impl AisCraftApp {
         self.pending_files.clear();
         self.pending_links.clear();
         self.link_input = None;
+        self.editing = None;
+        self.focus_composer = true;
+    }
+
+    /// Back to the start page.
+    pub(crate) fn close_chat(&mut self) {
+        self.explore = None;
+        self.run("chat.close", json!({}));
+        self.composer.clear();
         self.editing = None;
         self.focus_composer = true;
     }

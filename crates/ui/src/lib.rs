@@ -8,6 +8,7 @@ mod conversation;
 mod dialogs;
 mod downloads;
 mod explore;
+mod home;
 pub mod manual;
 pub mod markup;
 pub mod math;
