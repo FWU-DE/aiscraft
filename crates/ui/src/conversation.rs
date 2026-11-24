@@ -46,6 +46,10 @@ impl AisCraftApp {
             let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y.max(22.0));
             ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
                 ui.set_max_width(row.x);
+                if self.state.current.is_some() && icon_button(ui, &t, "×", "Chat schließen, zur Startseite (Esc)").clicked() {
+                    self.close_chat();
+                }
+                self.inbox_button(ui);
                 if self.state.current.is_some() {
                     if self.state.selection.kind == aiscraft_core::ConversationKind::Chat {
                         self.context_meter(ui);
@@ -220,59 +224,67 @@ impl AisCraftApp {
             c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
         });
         let any_ready = self.state.backends.iter().any(|b| matches!(b.status, BackendStatus::Ready { .. }));
-        ui.add_space((ui.available_height() * 0.22).max(20.0));
-        centered(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                crate::widgets::ais_logo(ui, 46.0, t.accent);
-                ui.add_space(6.0);
-                let image_mode = self.state.selection.kind == aiscraft_core::ConversationKind::Image;
-                let greeting = match first {
-                    _ if image_mode => "Was soll das Bild zeigen?".to_string(),
-                    Some(n) => format!("Hallo, {n}. Woran arbeiten wir?"),
-                    None => "Woran arbeiten wir?".into(),
-                };
-                ui.label(RichText::new(greeting).size(26.0));
-                if let Some(p) = self.state.selection.project_id.as_ref().and_then(|pid| self.state.projects.iter().find(|p| &p.id == pid)) {
-                    ui.label(muted(&t, format!("Neuer Chat im Projekt {}", p.name)));
-                }
-            });
-            ui.add_space(18.0);
-            if !any_ready {
-                card(&t).show(ui, |ui| {
-                    ui.label(RichText::new("Noch nicht verbunden").strong());
-                    ui.label(muted(&t, "Melde dich bei AIS.chat an oder füge ein anderes Backend hinzu (OpenAI, Claude, Ollama, LM Studio …)."));
+        // The start page: below the composer come the cards (crate::home), so the whole page scrolls.
+        let home = self.state.selection.kind == aiscraft_core::ConversationKind::Chat;
+        let top = if home { (ui.available_height() * 0.07).clamp(12.0, 56.0) } else { (ui.available_height() * 0.22).max(20.0) };
+        ScrollArea::vertical().id_salt("start-page").auto_shrink([false, false]).show(ui, |ui| {
+            ui.add_space(top);
+            centered(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    crate::widgets::ais_logo(ui, if home { 34.0 } else { 46.0 }, t.accent);
                     ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        if let Some(ais) = self.state.backends.iter().find(|b| b.config.kind == BackendKind::AisChat)
-                            && accent_button(ui, &t, "Bei AIS.chat anmelden").clicked()
-                        {
-                            self.dialog = Some(Dialog::login(&ais.config.id));
-                        }
-                        if ui.button("Backend hinzufügen").clicked() {
-                            self.dialog = Some(Dialog::add_backend());
-                        }
-                    });
-                });
-                ui.add_space(12.0);
-            }
-            self.composer(ui);
-            ui.add_space(12.0);
-            ui.horizontal_wrapped(|ui| {
-                let ideas: &[&str] = if self.state.selection.kind == aiscraft_core::ConversationKind::Image {
-                    &["Ein Fuchs im verschneiten Wald, Aquarell", "Schaubild einer Pflanzenzelle für Klasse 7", "Comic: drei Kinder bauen ein Hochbeet"]
-                } else {
-                    &[
-                        "Stundenentwurf für Klasse 7 zum Thema Photosynthese",
-                        "Erkläre Bruchrechnung mit Pizzastücken",
-                        "Formuliere eine freundliche Elternmail",
-                        "Erstelle ein Quiz mit 5 Fragen",
-                    ]
-                };
-                for s in ideas.iter().copied() {
-                    if ui.add(egui::Button::new(small_muted(&t, s)).corner_radius(CornerRadius::same(t.radius))).clicked() {
-                        self.composer = s.to_string();
-                        self.focus_composer = true;
+                    let image_mode = self.state.selection.kind == aiscraft_core::ConversationKind::Image;
+                    let greeting = match first {
+                        _ if image_mode => "Was soll das Bild zeigen?".to_string(),
+                        Some(n) => format!("Hallo, {n}. Woran arbeiten wir?"),
+                        None => "Woran arbeiten wir?".into(),
+                    };
+                    ui.label(RichText::new(greeting).size(26.0));
+                    if let Some(p) = self.state.selection.project_id.as_ref().and_then(|pid| self.state.projects.iter().find(|p| &p.id == pid)) {
+                        ui.label(muted(&t, format!("Neuer Chat im Projekt {}", p.name)));
                     }
+                });
+                ui.add_space(18.0);
+                if !any_ready {
+                    card(&t).show(ui, |ui| {
+                        ui.label(RichText::new("Noch nicht verbunden").strong());
+                        ui.label(muted(&t, "Melde dich bei AIS.chat an oder füge ein anderes Backend hinzu (OpenAI, Claude, Ollama, LM Studio …)."));
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if let Some(ais) = self.state.backends.iter().find(|b| b.config.kind == BackendKind::AisChat)
+                                && accent_button(ui, &t, "Bei AIS.chat anmelden").clicked()
+                            {
+                                self.dialog = Some(Dialog::login(&ais.config.id));
+                            }
+                            if ui.button("Backend hinzufügen").clicked() {
+                                self.dialog = Some(Dialog::add_backend());
+                            }
+                        });
+                    });
+                    ui.add_space(12.0);
+                }
+                self.composer(ui);
+                ui.add_space(12.0);
+                ui.horizontal_wrapped(|ui| {
+                    let ideas: &[&str] = if self.state.selection.kind == aiscraft_core::ConversationKind::Image {
+                        &["Ein Fuchs im verschneiten Wald, Aquarell", "Schaubild einer Pflanzenzelle für Klasse 7", "Comic: drei Kinder bauen ein Hochbeet"]
+                    } else {
+                        &[
+                            "Stundenentwurf für Klasse 7 zum Thema Photosynthese",
+                            "Erkläre Bruchrechnung mit Pizzastücken",
+                            "Formuliere eine freundliche Elternmail",
+                            "Erstelle ein Quiz mit 5 Fragen",
+                        ]
+                    };
+                    for s in ideas.iter().copied() {
+                        if ui.add(egui::Button::new(small_muted(&t, s)).corner_radius(CornerRadius::same(t.radius))).clicked() {
+                            self.composer = s.to_string();
+                            self.focus_composer = true;
+                        }
+                    }
+                });
+                if home {
+                    self.home_cards(ui);
                 }
             });
         });

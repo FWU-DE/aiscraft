@@ -10,6 +10,19 @@ AIS.ChatCraft ist ein Programm für den Rechner, mit dem du mit AIS.chat und and
 
 Weitere Dienste (Claude, OpenAI, Ollama, LM Studio …) fügst du unter **Einstellungen › Backends** hinzu.
 
+### Startseite
+
+Ist kein Chat offen, zeigt AIS.ChatCraft die Startseite: oben das Eingabefeld (Schreiben beginnt einen neuen Chat), darunter Karten.
+
+- **Favoriten:** deine mit Stern markierten Assistenten, Figuren und Lernszenarien aus AIS.chat; ein Klick startet einen Chat. „Alle entdecken“ öffnet die Übersicht.
+- **Neu starten:** neuer Chat, neues Bild (wenn ein Backend Bildmodelle hat), neues Dokument oder Whiteboard.
+- **Zuletzt:** die fünf zuletzt benutzten Chats.
+- **Zeitpläne:** die nächsten Läufe; „+ Zeitplan anlegen“ legt einen neuen an.
+- **Kontingent & Verbrauch:** die AIS.chat-Token-Punkte (sind sie aufgebraucht, nimmt AIS.chat bis zum nächsten Zeitraum keine Nachrichten an), die Tokens dieses Monats pro Backend, die Monatsgrenze und wie lange Anmeldungen (etwa das Claude-Abo) noch gelten. Es steht nur da, was die Dienste melden.
+- **Benachrichtigungen:** was Zeitpläne, Beobachtungen, Nachfragen, Hinweise und Aufgaben gemeldet haben, neue zuerst. Ein Klick öffnet den Chat dazu; „Alle gelesen“ markiert alles. Dieselbe Liste öffnet die Glocke 🔔 oben rechts, mit der Zahl der neuen. Die letzten 50 bleiben gespeichert; die Meldung ans System kommt weiterhin.
+
+**Chat schließen:** das × oben rechts im Chat, Esc bei leerem Eingabefeld oder „Chat schließen“ in den Befehlen (Strg+K). Der Chat bleibt in der Seitenleiste.
+
 ## Anmelden
 
 **AIS.chat.** „Im Browser anmelden“ öffnet ein eigenes Browserfenster mit der AIS.chat-Anmeldung (VIDIS, Schulkonto oder Microsoft 365). Nach der Anmeldung übernimmt AIS.ChatCraft die Sitzung und schließt das Fenster. Dafür braucht es Chrome, Chromium, Edge, Brave oder Vivaldi. Die Sitzung gilt einige Stunden; ist sie abgelaufen, meldet AIS.ChatCraft dich beim nächsten Start ohne Fenster neu an, solange die VIDIS-Sitzung noch gilt.
@@ -134,7 +147,7 @@ Unter **Einstellungen › Nutzung** stehen die Tokens pro Monat, Backend und Mod
 | Strg+Umschalt+F | Alle Chats durchsuchen |
 | Strg+F | Auf der Seite „Entdecken“: suchen |
 | Strg+R | Antwort neu erzeugen |
-| Esc | Antwort anhalten |
+| Esc | Antwort anhalten; bei leerem Eingabefeld: Chat schließen |
 | Strg+, | Einstellungen |
 | Strg+Umschalt+E | Chat exportieren |
 | F1 | Dieses Handbuch |

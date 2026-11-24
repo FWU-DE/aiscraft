@@ -80,12 +80,13 @@ pub(crate) async fn start(c: Ctx, p: Value) -> Result<Value> {
                 }
             });
         }
-        ctx.notice_with(
+        crate::inbox::notify(
+            &ctx,
             if ok { NoticeLevel::Success } else { NoticeLevel::Error },
-            format!("Aufgabe „{title}“ {}", if ok { "ist fertig" } else { "ist gescheitert" }),
+            "Aufgabe",
+            &format!("„{title}“ {}", if ok { "ist fertig" } else { "ist gescheitert" }),
             Some(NoticeAction { label: "Öffnen".into(), command: "chat.open".into(), params: json!({"id": tid}) }),
         );
-        crate::schedules::desktop_notify("AIS.ChatCraft", &format!("Aufgabe „{title}“ {}", if ok { "ist fertig" } else { "ist gescheitert" }));
     });
     Ok(json!({"id": task_id}))
 }

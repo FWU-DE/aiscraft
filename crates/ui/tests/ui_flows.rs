@@ -160,3 +160,66 @@ fn variant_switcher_shows_the_old_answer() {
     assert!(h.query_by_label("1/2").is_some());
     assert!(h.query_by_label_contains("Antwort 1").is_some());
 }
+
+/// The × in the header and Esc close the chat; the start page shows its cards, and its quick
+/// start opens a new document.
+#[test]
+fn close_chat_shows_the_start_page() {
+    use serde_json::json;
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let url = counting_backend(&engine);
+    let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    assert!(h.query_by_label("Neu starten").is_none(), "a chat is open, no start page");
+    h.get_by_label("×").click();
+    h.run_steps(8);
+    assert!(engine.state().current.is_none(), "× closed the chat");
+    assert!(h.query_by_label("Neu starten").is_some() && h.query_by_label("Zeitpläne").is_some(), "the start page shows");
+    assert!(h.get_all_by_label_contains("Hallo").count() >= 2, "greeting, and recent chats list it");
+
+    // Back into the chat, then Esc with an empty composer closes it again.
+    engine.call("chat.open", json!({"id": engine.state().conversations[0].id})).unwrap();
+    h.run_steps(8);
+    assert!(engine.state().current.is_some());
+    h.key_press(egui::Key::Escape);
+    h.run_steps(8);
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.current.is_none()), "Esc closed the chat");
+
+    // A quick start on the start page.
+    h.get_by_label("📄  Dokument").click();
+    h.run_steps(8);
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.open_artifact.is_some()), "a new document opens");
+}
+
+/// Notifications: the bell shows the unread count and opens the list; "Alle gelesen" marks them.
+#[test]
+fn bell_lists_notifications() {
+    use serde_json::json;
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let url = counting_backend(&engine);
+    let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
+    let sid = engine.call("schedule.create", json!({"title": "Morgenplan", "prompt": "Was steht an?", "cron": "0 7 * * 1-5"})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    engine.call("schedule.run", json!({"id": sid})).unwrap();
+    engine.call("chat.close", json!({})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    assert!(h.query_by_label("Benachrichtigungen (1 neu)").is_some(), "the start page card");
+    h.get_by_label("🔔 1").click();
+    h.run_steps(6);
+    assert!(h.query_by_label("Leeren").is_some(), "the popover is open");
+    h.get_all_by_label("Alle gelesen").next().unwrap().click();
+    h.run_steps(6);
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.inbox.iter().all(|i| i.read)), "marked read");
+    h.run_steps(6);
+    assert!(h.query_by_label("🔔").is_some(), "no count any more");
+}

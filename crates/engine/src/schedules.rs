@@ -272,12 +272,13 @@ async fn run(c: &Ctx, mut s: Schedule) -> Result<Value> {
         s.last_result = Some(text.chars().take(4000).collect());
         update_one(c, &s)?;
         let summary: String = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(140).collect();
-        c.notice_with(
+        crate::inbox::notify(
+            c,
             if out.is_ok() { NoticeLevel::Info } else { NoticeLevel::Error },
-            format!("⏰ {}: {summary}", s.title),
+            &s.title,
+            &summary,
             Some(NoticeAction { label: "Öffnen".into(), command: "chat.open".into(), params: json!({"id": conv_id}) }),
         );
-        desktop_notify(&format!("AIS.ChatCraft · {}", s.title), &summary);
     }
     out
 }
