@@ -77,6 +77,9 @@ pub struct SearchHit {
     pub title: String,
     /// Text around the match, with `«` `»` around matched words.
     pub snippet: String,
+    /// The backend (service) of the chat the hit is in; empty when the chat is gone.
+    #[serde(default)]
+    pub backend_id: String,
 }
 
 /// Conversation fields that live in one JSON column (added in schema 3).
@@ -536,14 +539,14 @@ impl Store {
         let mut st = self
             .db
             .prepare(
-                "SELECT f.conversation_id, f.message_id, COALESCE(c.title, ''), snippet(messages_fts, 0, '«', '»', '…', 12)
+                "SELECT f.conversation_id, f.message_id, COALESCE(c.title, ''), snippet(messages_fts, 0, '«', '»', '…', 12), COALESCE(c.backend_id, '')
                  FROM messages_fts f LEFT JOIN conversations c ON c.id = f.conversation_id
                  WHERE messages_fts MATCH ?1 ORDER BY rank LIMIT ?2",
             )
             .map_err(db_err)?;
         let rows = st
             .query_map(params![fts, limit as i64], |r| {
-                Ok(SearchHit { conversation_id: r.get(0)?, message_id: r.get(1)?, title: r.get(2)?, snippet: r.get(3)? })
+                Ok(SearchHit { conversation_id: r.get(0)?, message_id: r.get(1)?, title: r.get(2)?, snippet: r.get(3)?, backend_id: r.get(4)? })
             })
             .map_err(db_err)?;
         rows.collect::<rusqlite::Result<_>>().map_err(db_err)
@@ -762,14 +765,14 @@ impl Store {
         let mut st = self
             .db
             .prepare(
-                "SELECT f.conversation_id, f.message_id, COALESCE(c.title, ''), snippet(messages_fts, 0, '«', '»', '…', 14)
+                "SELECT f.conversation_id, f.message_id, COALESCE(c.title, ''), snippet(messages_fts, 0, '«', '»', '…', 14), COALESCE(c.backend_id, '')
                  FROM messages_fts f LEFT JOIN conversations c ON c.id = f.conversation_id
                  WHERE messages_fts MATCH ?1 AND f.conversation_id != ?2 ORDER BY rank LIMIT ?3",
             )
             .map_err(db_err)?;
         let rows = st
             .query_map(params![terms.join(" OR "), exclude_conversation.unwrap_or(""), limit as i64], |r| {
-                Ok(SearchHit { conversation_id: r.get(0)?, message_id: r.get(1)?, title: r.get(2)?, snippet: r.get(3)? })
+                Ok(SearchHit { conversation_id: r.get(0)?, message_id: r.get(1)?, title: r.get(2)?, snippet: r.get(3)?, backend_id: r.get(4)? })
             })
             .map_err(db_err)?;
         rows.collect::<rusqlite::Result<_>>().map_err(db_err)
@@ -937,6 +940,9 @@ mod tests {
         let hits = s.search("photosynth klasse", 10).unwrap();
         assert_eq!(hits.len(), 1);
         assert!(hits[0].snippet.contains('«'));
+        assert_eq!(hits[0].backend_id, conv("a", 1).backend_id, "hits name their chat's service");
+        let any = s.search_any(&["photosynthese".into()], Some("b"), 3).unwrap();
+        assert_eq!(any[0].backend_id, conv("a", 1).backend_id);
         assert_eq!(s.search("zucker", 10).unwrap()[0].message_id, "2");
         assert!(s.search("\"); DROP TABLE x; --", 10).unwrap().is_empty());
         assert!(s.search("", 10).unwrap().is_empty());

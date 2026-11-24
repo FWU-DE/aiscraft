@@ -346,6 +346,11 @@ pub struct Sources {
     /// history): each goes along once per chat. Newest last, capped.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inline_recalled: Vec<String>,
+    /// Recall may also send excerpts from chats with another service (another backend) to this
+    /// chat's service. Off by default: chats with Claude never reach AIS.chat unasked, and the
+    /// other way round.
+    #[serde(default)]
+    pub other_services: bool,
 }
 
 impl Default for Sources {
@@ -360,6 +365,7 @@ impl Default for Sources {
             inline: false,
             inline_sent: None,
             inline_recalled: Vec::new(),
+            other_services: false,
         }
     }
 }

@@ -5,7 +5,7 @@
 //! permission. Before each answer, the skills that fit the request and a few excerpts from
 //! earlier chats go into the context.
 
-use aiscraft_core::{Error, MemoryNote, Message, Result, Role};
+use aiscraft_core::{Conversation, Error, MemoryNote, Message, Result, Role};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -89,8 +89,21 @@ pub(crate) struct Recalled {
     pub text: String,
 }
 
-/// Fitting skills and excerpts from earlier chats for a request (chats only with `history`).
-pub(crate) fn recall(c: &Ctx, conv_id: &str, request: &str, history: bool) -> Vec<Recalled> {
+/// What recall found for a request.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Recall {
+    pub items: Vec<Recalled>,
+    /// Chats with another service that would have gone along, left out because the person did not
+    /// agree to that (`Sources::other_services`); as people read them ("Chat „…“").
+    pub withheld: Vec<String>,
+}
+
+/// Excerpts from earlier chats per request at most.
+const MAX_EXCERPTS: usize = 3;
+
+/// Fitting skills and excerpts from earlier chats for a request in `conv` (chats only with
+/// `history`; chats with another service only with `other_services`).
+pub(crate) fn recall(c: &Ctx, conv: &Conversation, request: &str) -> Recall {
     let mut out: Vec<Recalled> = relevant(c, request, 3)
         .into_iter()
         .map(|s| Recalled {
@@ -100,19 +113,35 @@ pub(crate) fn recall(c: &Ctx, conv_id: &str, request: &str, history: bool) -> Ve
             text: format!("### {}\nWann: {}\n{}\n", s.title, s.when, s.steps),
         })
         .collect();
-    if history {
+    let mut withheld = Vec::new();
+    if conv.sources.history {
         let req = words(request);
-        for h in c.store(|st| st.search_any(&req, Some(conv_id), 3)).unwrap_or_default() {
+        // Ask for more than fit, so chats with other services left out do not crowd out fitting ones.
+        let hits = c.store(|st| st.search_any(&req, Some(&conv.id), MAX_EXCERPTS * 4)).unwrap_or_default();
+        let mut taken = 0;
+        for (rank, h) in hits.into_iter().enumerate() {
+            if taken == MAX_EXCERPTS {
+                break;
+            }
             let title = if h.title.is_empty() { "Ohne Titel".to_string() } else { h.title.clone() };
+            let label = format!("Chat „{}“", title.chars().take(60).collect::<String>());
+            if h.backend_id != conv.backend_id && !conv.sources.other_services {
+                // Only what would have gone along without the rule counts as left out.
+                if rank < MAX_EXCERPTS && !withheld.contains(&label) {
+                    withheld.push(label);
+                }
+                continue;
+            }
+            taken += 1;
             out.push(Recalled {
                 key: format!("c:{}", h.message_id),
-                label: format!("Chat „{}“", title.chars().take(60).collect::<String>()),
+                label,
                 skill_id: None,
                 text: format!("- {title}: {}\n", h.snippet.replace(['«', '»'], "")),
             });
         }
     }
-    out
+    Recall { items: out, withheld }
 }
 
 /// Count the skills among `items` as used.
@@ -152,8 +181,8 @@ pub(crate) fn render(items: &[Recalled]) -> Option<String> {
 }
 
 /// The context block for skills and earlier chats, for backends that take a system prompt.
-pub(crate) fn context_for(c: &Ctx, conv_id: &str, request: &str, history: bool) -> Option<String> {
-    let items = recall(c, conv_id, request, history);
+pub(crate) fn context_for(c: &Ctx, conv: &Conversation, request: &str) -> Option<String> {
+    let items = recall(c, conv, request).items;
     mark_used(c, &items);
     render(&items)
 }

@@ -352,6 +352,11 @@ impl AisCraftApp {
                 ui.add(egui::Label::new(small_muted(&t, format!("Mitgeschickt: {along}"))).wrap())
                     .on_hover_text("Stand oben in deiner Nachricht; der Server behält es im Verlauf, darum geht es in diesem Chat nur einmal mit.");
             }
+            if let Some(left) = m.activity.iter().find(|s| s.label == aiscraft_engine::LEFT_OUT).and_then(|s| s.detail.as_deref()) {
+                ui.add(egui::Label::new(small_muted(&t, format!("Nicht mitgeschickt (anderer Dienst): {left}"))).wrap()).on_hover_text(
+                    "Passt, stammt aber aus einem Chat mit einem anderen Dienst. Unter „Quellen“ kannst du erlauben, dass solche Ausschnitte mitgehen.",
+                );
+            }
             let hovered = ui.rect_contains_pointer(r.response.rect.expand(24.0));
             ui.horizontal_wrapped(|ui| {
                 ui.set_min_height(18.0);
@@ -773,6 +778,18 @@ impl AisCraftApp {
             let mut history = src.history;
             if ui.add_enabled(src.tools, egui::Checkbox::new(&mut history, "Andere Chats durchsuchen")).changed() {
                 set("history", history);
+            }
+            // Recall stays within the chat's service unless the person agrees: chats with Claude do not
+            // reach AIS.chat unasked, nor the other way round.
+            let mut others = src.other_services;
+            let service = self.state.backend(&self.state.selection.backend_id).map(|b| b.config.name.clone()).unwrap_or_else(|| "diesen Dienst".to_string());
+            let others_label = format!("Auch Chats mit anderen Diensten an {service} geben");
+            if ui
+                .add_enabled(src.tools && src.history, egui::Checkbox::new(&mut others, others_label))
+                .on_hover_text("Passende Ausschnitte aus Chats mit anderen Diensten (etwa Claude oder AIS.chat) gehen sonst nicht mit.")
+                .changed()
+            {
+                set("other_services", others);
             }
             if caps.web_search || caps.tools {
                 let mut web = src.web && (caps.web_search || src.tools);
