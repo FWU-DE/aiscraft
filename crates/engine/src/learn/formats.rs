@@ -19,6 +19,9 @@ pub struct OutputFormat {
     pub kind: ArtifactKind,
     /// The tool that creates it on backends with tool calling.
     pub tool: &'static str,
+    /// First words of the request sent for this format, followed by the topic. The chat shows
+    /// only the topic and folds the rest away as „Formatvorgabe“ (see [`split_request`]).
+    pub request_intro: &'static str,
     /// What the model is told, with an example, when the format is asked for.
     pub prompt_description: fn() -> String,
     /// The blocks of this format in an answer (whole, closed blocks only).
@@ -43,6 +46,9 @@ fn worksheet_check(src: &str) -> Result<Vec<String>, String> {
     worksheet::parse_lenient(src).map(|(_, problems)| problems)
 }
 
+pub const APP_INTRO: &str = "Erstelle eine interaktive Lern-App zum Thema: ";
+pub const WORKSHEET_INTRO: &str = "Erstelle ein interaktives Arbeitsblatt zum Thema: ";
+
 static FORMATS: &[OutputFormat] = &[
     OutputFormat {
         id: "learning_app",
@@ -50,6 +56,7 @@ static FORMATS: &[OutputFormat] = &[
         fences: &["html", "htm", "xhtml"],
         kind: ArtifactKind::App,
         tool: "learning_app_create",
+        request_intro: APP_INTRO,
         prompt_description: app_description,
         find: super::html_documents,
         check: app_check,
@@ -60,6 +67,7 @@ static FORMATS: &[OutputFormat] = &[
         fences: &[worksheet::FENCE, "aiscraft-arbeitsblatt"],
         kind: ArtifactKind::Worksheet,
         tool: "worksheet_create",
+        request_intro: WORKSHEET_INTRO,
         prompt_description: worksheet_description,
         find: super::worksheet_blocks,
         check: worksheet_check,
@@ -77,6 +85,45 @@ pub fn by_id(id: &str) -> Option<&'static OutputFormat> {
 /// Every block of a known format in an answer, in format order.
 pub fn blocks(answer: &str) -> Vec<(&'static OutputFormat, &str)> {
     FORMATS.iter().flat_map(|f| (f.find)(answer).into_iter().map(move |b| (f, b))).collect()
+}
+
+/// A format request as the chat shows it: the teacher's own words and the format spec that
+/// went along with them. The message keeps the whole text (the backend needs it, also when the
+/// chat continues); only the view and the exports split it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormatRequest<'a> {
+    pub format: &'static OutputFormat,
+    /// What the teacher asked for (topic, subject, grade), one line.
+    pub topic: &'a str,
+    /// Everything after the topic line: task rules, format description, delivery.
+    pub spec: &'a str,
+}
+
+impl std::fmt::Debug for OutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id)
+    }
+}
+
+impl PartialEq for OutputFormat {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for OutputFormat {}
+
+/// Recognises a request made by `learning_app.request`, `worksheet.request` or any other entry
+/// of the registry, also in messages saved before the split existed (the intro never changed).
+/// Plain messages that only start like a request, without a spec after the topic, stay whole.
+pub fn split_request(text: &str) -> Option<FormatRequest<'_>> {
+    let text = text.trim_start();
+    FORMATS.iter().find_map(|f| {
+        let rest = text.strip_prefix(f.request_intro)?;
+        let (topic, spec) = rest.split_once("\n\n")?;
+        let (topic, spec) = (topic.trim(), spec.trim());
+        (!topic.is_empty() && !spec.is_empty()).then_some(FormatRequest { format: f, topic, spec })
+    })
 }
 
 #[cfg(test)]
@@ -98,5 +145,23 @@ mod tests {
         }
         assert!((by_id("worksheet").unwrap().check)("{kaputt").is_err());
         assert!(by_id("board").is_none());
+    }
+
+    #[test]
+    fn split_request_recognises_every_format_and_old_messages() {
+        for f in formats() {
+            let text = format!("{}Brüche (Klasse: 6)\n\nRegeln\n\nmehr", f.request_intro);
+            let r = split_request(&text).unwrap();
+            assert_eq!((r.format.id, r.topic, r.spec), (f.id, "Brüche (Klasse: 6)", "Regeln\n\nmehr"));
+            // Only the intro, no spec: the message stays whole.
+            assert!(split_request(&format!("{}Brüche", f.request_intro)).is_none());
+            assert!(split_request(&format!("{}\n\nRegeln", f.request_intro)).is_none());
+        }
+        // Saved before the split existed (older schema wording): still recognised.
+        let old = "Erstelle ein interaktives Arbeitsblatt zum Thema: Photosynthese\n\nEtwa 8 Aufgaben, verschiedene Aufgabentypen.\n\nFormat aiscraft-worksheet (JSON): {\"tasks\": []}\n\nAntworte mit genau einem ```aiscraft-worksheet-Codeblock.";
+        let r = split_request(old).unwrap();
+        assert_eq!((r.format.id, r.topic), ("worksheet", "Photosynthese"));
+        assert!(r.spec.starts_with("Etwa 8 Aufgaben") && r.spec.ends_with("Codeblock."));
+        assert!(split_request("Wie erstelle ich ein Arbeitsblatt?").is_none());
     }
 }

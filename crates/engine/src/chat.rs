@@ -51,7 +51,11 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
     let now = now_ms();
     let conv = Conversation {
         id: new_id(),
-        title: title_from(first_text),
+        // A format request is named after the teacher's topic, not the request's intro (#56).
+        title: match crate::learn::formats::split_request(first_text) {
+            Some(r) => title_from(&format!("{}: {}", r.format.label, r.topic)),
+            None => title_from(first_text),
+        },
         backend_id: sel.backend_id.clone(),
         model_id: sel.model_id.clone(),
         project_id: sel.project_id.clone(),

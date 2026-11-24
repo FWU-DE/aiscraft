@@ -60,6 +60,13 @@ fn route(req: &str) -> Vec<Value> {
 }
 
 fn routed_engine() -> Engine {
+    routed_engine_logged().0
+}
+
+/// The routed engine and the JSON bodies of the chat requests it sent.
+fn routed_engine_logged() -> (Engine, std::sync::Arc<std::sync::Mutex<Vec<Value>>>) {
+    let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sent = log.clone();
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
     let url = engine.block_on(async {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -67,6 +74,7 @@ fn routed_engine() -> Engine {
         tokio::spawn(async move {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else { return };
+                let sent = sent.clone();
                 tokio::spawn(async move {
                     let mut buf = Vec::new();
                     let mut chunk = vec![0u8; 1 << 16];
@@ -101,6 +109,9 @@ fn routed_engine() -> Engine {
                             .await;
                         return;
                     }
+                    if let Some(body) = req.split_once("\r\n\r\n").and_then(|(_, b)| serde_json::from_str::<Value>(b).ok()) {
+                        sent.lock().unwrap().push(body);
+                    }
                     // JSON-escaped in the request body: unescape quotes so routes match plain text.
                     let plain = req.replace("\\\"", "\"").replace("\\n", "\n");
                     let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
@@ -117,7 +128,47 @@ fn routed_engine() -> Engine {
     engine.call("backend.check", json!({"id": id})).unwrap();
     engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
     engine.call("chat.new", json!({})).unwrap();
-    engine
+    (engine, log)
+}
+
+/// Format requests (#56): the backend gets the whole format spec, exactly as before; the chat
+/// and the Markdown export show the teacher's words with the spec folded away, for every
+/// format in the registry.
+#[test]
+fn format_requests_send_the_spec_but_show_only_the_topic() {
+    use crate::learn::{app_prompt, formats, worksheet_prompt};
+    let (engine, log) = routed_engine_logged();
+    engine.call("settings.set", json!({"key": "tools", "value": false})).unwrap();
+    let cases = [
+        ("worksheet.request", "worksheet", worksheet_prompt("Bruchrechnung (Klasse: 6)", 8, false)),
+        ("learning_app.request", "learning_app", app_prompt("Bruchrechnung (Klasse: 6)", false)),
+    ];
+    assert_eq!(cases.len(), formats::formats().len(), "every format in the registry is covered");
+    for (command, format, expected) in cases {
+        engine.call("chat.new", json!({})).unwrap();
+        log.lock().unwrap().clear();
+        let out = engine.call(command, json!({"topic": "Bruchrechnung", "grade": "6"})).unwrap();
+        assert_eq!(out["created"], true, "{command}: {out}");
+        // Sent payload unchanged: the last user message the server got is the whole prompt.
+        let bodies = log.lock().unwrap().clone();
+        let sent = bodies[0]["messages"].as_array().unwrap().iter().rev().find(|m| m["role"] == "user").unwrap()["content"].clone();
+        let sent = sent.as_str().map(str::to_string).unwrap_or_else(|| sent.to_string());
+        assert_eq!(sent, expected, "{command}: the backend gets the full format spec");
+        // Stored whole, shown split.
+        let s = engine.state();
+        let user = s.messages.iter().find(|m| m.role == aiscraft_core::Role::User).unwrap();
+        let title = &s.conversations.iter().find(|c| Some(&c.id) == s.current.as_ref()).unwrap().title;
+        assert!(title.ends_with(": Bruchrechnung (Klasse: 6)"), "{command}: the chat is named after the topic, got {title}");
+        assert_eq!(user.content, expected);
+        let r = formats::split_request(&user.content).unwrap();
+        assert_eq!(r.format.id, format);
+        assert_eq!(r.topic, "Bruchrechnung (Klasse: 6)");
+        assert!(r.spec.contains(&(r.format.prompt_description)()), "{command}: the folded part is the spec");
+        // The export carries a one-line note, not the spec.
+        let md = engine.call("chat.export", json!({})).unwrap()["text"].as_str().unwrap().to_string();
+        assert!(md.contains("Bruchrechnung (Klasse: 6)") && md.contains(&format!("_Mit Formatvorgabe: {}_", r.format.label)), "{md}");
+        assert!(!md.contains(&(r.format.prompt_description)()), "{command}: no spec in the export");
+    }
 }
 
 fn tmp_dir(name: &str) -> std::path::PathBuf {

@@ -343,7 +343,20 @@ impl AisCraftApp {
                             }
                         });
                     }
-                    if !m.content.is_empty() {
+                    // A format request (Erstellen → Arbeitsblatt, Lern-App, …): only the teacher's
+                    // words; the format spec that went along is folded away (#56).
+                    if let Some(r) = aiscraft_engine::learn::formats::split_request(&m.content) {
+                        ui.add(egui::Label::new(r.topic).wrap().selectable(true));
+                        ui.add_space(2.0);
+                        egui::CollapsingHeader::new(small_muted(&t, format!("Formatvorgabe: {}", r.format.label)))
+                            .id_salt(("format-spec", &m.id))
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.add(egui::Label::new(RichText::new(r.spec).small()).wrap().selectable(true));
+                            })
+                            .header_response
+                            .on_hover_text("Diese Beschreibung des Formats hat AIS.ChatCraft mit deiner Nachricht geschickt, damit das Modell weiß, wie es antworten soll.");
+                    } else if !m.content.is_empty() {
                         ui.add(egui::Label::new(&m.content).wrap().selectable(true));
                     }
                 });
