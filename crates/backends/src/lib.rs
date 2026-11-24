@@ -48,6 +48,12 @@ pub trait Backend: Send + Sync {
     fn capabilities(&self) -> Capabilities;
     /// Who is signed in, or an `Auth` error.
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>>;
+    /// Ids of server functions found so far (AIS.chat), to keep across restarts.
+    fn known_actions(&self) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::new()
+    }
+    /// Ids remembered from an earlier run. A stale one is found again on its first use.
+    fn seed_actions(&self, _ids: std::collections::BTreeMap<String, String>) {}
     fn models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>>>;
     fn chat(&self, req: ChatRequest) -> BoxFuture<'_, Result<EventStream>>;
     /// Upload a file the server keeps; returns its id for [`aiscraft_core::Attachment::remote_id`].

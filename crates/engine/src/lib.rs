@@ -124,6 +124,9 @@ pub(crate) struct Inner {
     pub(crate) previews: Mutex<Vec<std::process::Child>>,
     /// Cached pictures of assistants, characters and scenarios (`<data>/personas`).
     pub(crate) pictures_dir: PathBuf,
+    /// Per-backend cache kept across restarts (AIS.chat action ids, the persona list), so the
+    /// app does not search the web app's JS and reload all lists on every start. None in tests.
+    pub(crate) cache_dir: Option<PathBuf>,
     /// Engines in memory fetch pictures only from this local server (tests, the demo).
     pub(crate) picture_origin: Mutex<Option<String>>,
     /// Only the real app (with a data folder) fetches pictures from the network.
@@ -208,6 +211,7 @@ impl Engine {
             } else {
                 update::Feed::Off
             }),
+            cache_dir: opts.data_dir.clone().map(|d| d.join("cache")),
             pictures_dir: opts
                 .data_dir
                 .clone()
@@ -446,12 +450,16 @@ impl Ctx {
         let secret = self.0.secrets.get(&config.id)?;
         let has_secret = secret.is_some();
         let backend = aiscraft_backends::build(config.clone(), secret, self.secret_sink())?;
+        let cached = self.read_backend_cache(&config.id);
+        if let Some(actions) = cached.actions {
+            backend.seed_actions(actions);
+        }
         let caps = backend.capabilities();
         self.0.backends.lock().unwrap_or_else(PoisonError::into_inner).insert(config.id.clone(), backend);
         self.update(|s| {
             let models = s.backend(&config.id).map(|b| b.models.clone()).unwrap_or_default();
             let quota = s.backend(&config.id).and_then(|b| b.quota);
-            let personas = s.backend(&config.id).and_then(|b| b.personas.clone());
+            let personas = s.backend(&config.id).and_then(|b| b.personas.clone()).or(cached.personas);
             let image_models = s.backend(&config.id).map(|b| b.image_models.clone()).unwrap_or_default();
             let view = BackendView {
                 config: config.clone(),
@@ -470,6 +478,59 @@ impl Ctx {
             }
         });
         Ok(())
+    }
+
+    fn cache_file(&self, backend: &str, what: &str) -> Option<PathBuf> {
+        let safe: String = backend.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+        self.0.cache_dir.as_ref().map(|d| d.join(format!("{safe}.{what}.json")))
+    }
+
+    /// What an earlier run remembered for a backend; nothing when missing, too big or unreadable.
+    fn read_backend_cache(&self, backend: &str) -> BackendCache {
+        fn read<T: serde::de::DeserializeOwned>(path: Option<PathBuf>, cap: u64) -> Option<T> {
+            let path = path?;
+            if std::fs::metadata(&path).ok()?.len() > cap {
+                return None;
+            }
+            serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+        }
+        BackendCache {
+            actions: read::<std::collections::BTreeMap<String, String>>(self.cache_file(backend, "actions"), 256 * 1024)
+                .map(|m| m.into_iter().take(200).filter(|(k, v)| k.len() <= 100 && v.len() <= 100).collect()),
+            personas: read(self.cache_file(backend, "personas"), 16 * 1024 * 1024),
+        }
+    }
+
+    /// Keep a backend's action ids and persona list for the next start. Failures only log: the
+    /// cache is a speed-up, never needed.
+    pub(crate) fn save_backend_cache(&self, backend: &str) {
+        let Some(dir) = &self.0.cache_dir else { return };
+        let Ok(b) = self.backend(backend) else { return };
+        let actions = b.known_actions();
+        let personas = self.state().backend(backend).and_then(|v| v.personas.clone());
+        let mut files: Vec<(Option<PathBuf>, Vec<u8>)> = Vec::new();
+        if !actions.is_empty() {
+            files.push((self.cache_file(backend, "actions"), serde_json::to_vec(&actions).unwrap_or_default()));
+        }
+        if let Some(list) = personas {
+            files.push((self.cache_file(backend, "personas"), serde_json::to_vec(&list).unwrap_or_default()));
+        }
+        if files.is_empty() {
+            return;
+        }
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            log::warn!("Zwischenspeicher {}: {e}", dir.display());
+            return;
+        }
+        for (path, bytes) in files {
+            if let Some(path) = path
+                && !bytes.is_empty()
+                && std::fs::read(&path).ok().as_deref() != Some(&bytes[..])
+                && let Err(e) = craft_atomic::atomic_write(&path, &bytes)
+            {
+                log::warn!("Zwischenspeicher {}: {e}", path.display());
+            }
+        }
     }
 
     fn load(&self) -> Result<()> {
@@ -547,4 +608,11 @@ mod tests;
 #[cfg(test)]
 pub(crate) fn chat_system_prompt_for_test(c: &Ctx, conv: &aiscraft_core::Conversation, send: bool, takes: bool) -> Option<String> {
     chat::system_prompt_pub(c, conv, send, takes)
+}
+
+/// What an earlier run remembered for one backend.
+#[derive(Default)]
+struct BackendCache {
+    actions: Option<std::collections::BTreeMap<String, String>>,
+    personas: Option<Vec<aiscraft_core::PersonaInfo>>,
 }

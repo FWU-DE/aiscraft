@@ -145,7 +145,26 @@ Not adopted on purpose: Nod's own sandbox computer and browser (AIS.ChatCraft ru
 apps run only in the locked-down preview process or the browser), WhatsApp/Telegram channels (out of scope for a school client). Nod's repo (`n8n-io/nod`, Apache-2.0) is a reference for behaviour, not for
 code; it is Node/Electron, AIS.ChatCraft is Rust.
 
-## 6. Before you finish
+## 6. Non-functional requirements and quality gates
+
+Budgets a person notices. Each one has a gate, a test that fails when the budget breaks. Gates
+count requests, file reads and pages, never wall-clock time, so they are stable in CI. A fix for
+a slow path comes with such a gate.
+
+| Requirement | Budget | Gate |
+|---|---|---|
+| Start-up shows what the last run knew | Persona list (favourites) and AIS.chat action ids come from `<data>/cache/<backend>.{personas,actions}.json` before any request; a broken cache file is ignored | `persona_list_and_action_ids_survive_a_restart` (engine) |
+| Finding AIS.chat action ids | Each JS chunk loaded at most once per run, even when pages share it; with remembered ids no page or chunk is loaded | `action_discovery_loads_each_chunk_once_and_remembered_ids_load_none` (backends) |
+| Persona lists | The three lists and the session load in parallel | none yet (code review) |
+| Never crash on hostile input | Caps on every size, no panics | workspace lints, panic hunt |
+| Tests stay off the desktop | No windows, browser, mic or speakers | rule 2.4, `browser_allowed` |
+
+Live check against the real AIS.chat (signed in): cold, with no cache, `persona.refresh` takes
+about 25 s; warm, with cached ids, about 3 s. The app shows the cached list at once. Measure with
+`time aiscraft-cli call persona.refresh '{"backend":"ais-chat"}'`; delete `<data>/cache/` for the
+cold number. If the warm number grows past 5 s, look for a missing cache before blaming AIS.chat.
+
+## 7. Before you finish
 
 ```sh
 cargo test --workspace --exclude aiscraft

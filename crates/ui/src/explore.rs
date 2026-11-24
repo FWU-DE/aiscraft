@@ -153,10 +153,11 @@ impl AisCraftApp {
         self.state.backends.iter().filter(|b| b.config.kind == BackendKind::AisChat && matches!(b.status, BackendStatus::Ready { .. })).cloned().collect()
     }
 
-    /// Load the lists once per backend (quietly: the page shows errors itself).
+    /// Load the lists once per backend and run (quietly: the page shows errors itself). The list
+    /// remembered from the last run shows meanwhile.
     pub(crate) fn prefetch_personas(&mut self, _visible: bool) {
         for b in self.persona_backends() {
-            if b.personas.is_none() && b.personas_error.is_none() && self.personas_requested.insert(b.config.id.clone()) {
+            if b.personas_error.is_none() && self.personas_requested.insert(b.config.id.clone()) {
                 self.engine.dispatch_quiet("persona.refresh", json!({"backend": b.config.id}));
             }
         }

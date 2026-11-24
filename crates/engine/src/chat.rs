@@ -600,6 +600,8 @@ async fn stream_round(
         s = backend.chat(req) => s?,
         _ = cancel_rx.changed() => return Err(Error::cancelled()),
     };
+    // A newly found AIS.chat action id is kept for the next start.
+    c.save_backend_cache(&backend.config().id);
     let mut last_flush = Instant::now();
     let mut dirty = false;
     let mut usage = answer.usage.unwrap_or_default();

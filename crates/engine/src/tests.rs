@@ -798,6 +798,32 @@ pub(crate) fn ais_engine() -> (Engine, std::sync::Arc<std::sync::Mutex<Vec<Strin
     (engine, posted)
 }
 
+/// Quality gate (start-up speed): the persona list and AIS.chat's action ids survive a restart,
+/// so the next start shows the favourites at once and does not search the web app's JS again.
+#[test]
+fn persona_list_and_action_ids_survive_a_restart() {
+    let dir = std::env::temp_dir().join(format!("aiscraft-cache-{}", crate::new_id()));
+    let open = || Engine::open(Options { data_dir: Some(dir.clone()), secrets: Some(crate::Secrets::memory()) }).unwrap();
+    let first = open();
+    let (base, _posted) = scripted_ais(&first);
+    first.call("backend.update", json!({"id": "ais-chat", "base_url": base})).unwrap();
+    first.call("backend.login", json!({"id": "ais-chat", "secret": "good"})).unwrap();
+    first.call("persona.refresh", json!({"backend": "ais-chat"})).unwrap();
+    assert!(dir.join("cache/ais-chat.personas.json").exists() && dir.join("cache/ais-chat.actions.json").exists());
+
+    let second = open();
+    let list = second.state().backend("ais-chat").and_then(|b| b.personas.clone()).unwrap_or_default();
+    assert_eq!(list.len(), 3, "the list from the last run shows before any request");
+    let known = second.ctx().backend("ais-chat").unwrap().known_actions();
+    assert!(known.contains_key("getAssistantsByFilterAction"), "{known:?}");
+
+    // A broken or oversized cache file is ignored, never an error.
+    std::fs::write(dir.join("cache/ais-chat.personas.json"), b"{kaputt").unwrap();
+    assert!(open().state().backend("ais-chat").is_some_and(|b| b.personas.is_none()));
+    drop((first, second));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Favourites: toggling marks at once and asks AIS.chat; a refusal puts the mark back.
 #[test]
 fn ais_chat_persona_favorite() {

@@ -7,7 +7,7 @@
 //! chunks. The answer is a React Flight response carrying a `ReadableStream<string>` of text
 //! deltas and `\x1e`-prefixed activity events.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Mutex, PoisonError};
 
 use aiscraft_core::{
@@ -89,6 +89,9 @@ pub struct AisChat {
     /// Editor pages of the person's own assistants, characters and scenarios: the only pages
     /// whose JS carries `ingestWebContentAction`.
     editor_pages: Mutex<Vec<String>>,
+    /// JS chunks already searched for action ids: the overview pages share most of theirs, so
+    /// each is fetched once, not once per page.
+    scanned: Mutex<HashSet<String>>,
 }
 
 /// Pages whose JS carries an action, in the order to look. Every page also loads the shared
@@ -134,6 +137,7 @@ impl AisChat {
             on_secret,
             actions: tokio::sync::Mutex::new(BTreeMap::new()),
             editor_pages: Mutex::new(Vec::new()),
+            scanned: Mutex::new(HashSet::new()),
         })
     }
 
@@ -197,20 +201,33 @@ impl AisChat {
                     continue;
                 }
             };
-            let paths = scrape::chunk_paths(&html);
-            let fetched: Vec<Option<String>> = stream::iter(paths.into_iter().take(MAX_CHUNKS))
+            let paths: Vec<String> = {
+                let mut scanned = self.scanned.lock().unwrap_or_else(PoisonError::into_inner);
+                scrape::chunk_paths(&html).into_iter().take(MAX_CHUNKS).filter(|p| scanned.insert(p.clone())).collect()
+            };
+            let fetched: Vec<(String, Option<String>)> = stream::iter(paths)
                 .map(|p| async move {
-                    let resp = self.http.get(format!("{}{p}", self.base)).send().await.ok()?;
-                    if !resp.status().is_success() {
-                        return None;
+                    let js = async {
+                        let resp = self.http.get(format!("{}{p}", self.base)).send().await.ok()?;
+                        if !resp.status().is_success() {
+                            return None;
+                        }
+                        read_capped(resp, PAGE_CAP).await.ok()
                     }
-                    read_capped(resp, PAGE_CAP).await.ok()
+                    .await;
+                    (p, js)
                 })
                 .buffer_unordered(8)
                 .collect()
                 .await;
-            for js in fetched.into_iter().flatten() {
-                found.extend(scrape::action_ids(&js));
+            for (path, js) in fetched {
+                match js {
+                    Some(js) => found.extend(scrape::action_ids(&js)),
+                    // Not read: try it again next time.
+                    None => {
+                        self.scanned.lock().unwrap_or_else(PoisonError::into_inner).remove(&path);
+                    }
+                }
             }
             if let Some(id) = found.get(name) {
                 return Ok(id.clone());
@@ -228,6 +245,7 @@ impl AisChat {
         let mut guard = self.actions.lock().await;
         if refresh {
             guard.clear();
+            self.scanned.lock().unwrap_or_else(PoisonError::into_inner).clear();
         } else if let Some(id) = guard.get(name) {
             return Ok(id.clone());
         }
@@ -760,19 +778,37 @@ impl Backend for AisChat {
         })
     }
 
+    fn known_actions(&self) -> BTreeMap<String, String> {
+        self.actions.try_lock().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    fn seed_actions(&self, ids: BTreeMap<String, String>) {
+        if let Ok(mut g) = self.actions.try_lock() {
+            for (name, id) in ids {
+                g.entry(name).or_insert(id);
+            }
+        }
+    }
+
     fn personas(&self) -> BoxFuture<'_, Result<Vec<PersonaInfo>>> {
         Box::pin(async move {
-            let me = self.session_user_id().await;
-            let mut out = Vec::new();
-            let mut errors = Vec::new();
-            for (kind, action) in [
+            let kinds = [
                 (PersonaKind::Assistant, "getAssistantsByFilterAction"),
                 (PersonaKind::Character, "getCharactersByFilterAction"),
                 (PersonaKind::LearningScenario, "getLearningScenariosByFilterAction"),
-            ] {
-                // "all": own, school, community and official ones (`OverviewFilter`).
-                match self.call_action(action, &self.pages_for(action), &[json!("all")]).await.and_then(server_result) {
-                    Ok(v) => out.extend(parse_personas(kind, &v, me.as_deref())),
+            ];
+            // The three lists and the session at the same time: AIS.chat takes a second or two
+            // for each list.
+            // "all": own, school, community and official ones (`OverviewFilter`).
+            let lists = futures::future::join_all(
+                kinds.iter().map(|(_, action)| async move { self.call_action(action, &self.pages_for(action), &[json!("all")]).await.and_then(server_result) }),
+            );
+            let (me, results) = futures::join!(self.session_user_id(), lists);
+            let mut out = Vec::new();
+            let mut errors = Vec::new();
+            for ((kind, _), result) in kinds.iter().zip(results) {
+                match result {
+                    Ok(v) => out.extend(parse_personas(*kind, &v, me.as_deref())),
                     Err(e) if e.kind == aiscraft_core::ErrorKind::Auth => return Err(e),
                     // A kind the state switched off (its page redirects) is simply absent.
                     Err(e) => errors.push(e),
@@ -1170,6 +1206,11 @@ mod tests {
 
     /// A scripted AIS.chat: action ids live in page-specific chunks, as in the real app.
     async fn scripted_ais(posted: std::sync::Arc<Mutex<Vec<String>>>) -> String {
+        scripted_ais_logged(posted, std::sync::Arc::new(Mutex::new(Vec::new()))).await
+    }
+
+    /// The scripted AIS.chat that also records the path of every GET.
+    async fn scripted_ais_logged(posted: std::sync::Arc<Mutex<Vec<String>>>, gets: std::sync::Arc<Mutex<Vec<String>>>) -> String {
         use tokio::io::AsyncWriteExt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1177,8 +1218,12 @@ mod tests {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else { return };
                 let posted = posted.clone();
+                let gets = gets.clone();
                 tokio::spawn(async move {
                     let req = read_request(&mut sock).await;
+                    if let Some(path) = req.strip_prefix("GET ").and_then(|r| r.split(' ').next()) {
+                        gets.lock().unwrap().push(path.to_string());
+                    }
                     let id = |n: u8| format!("{:02x}", n).repeat(21);
                     let chunk = |path: &str| format!(r#"<script src="/_next/static/chunks/{path}.js"></script>"#);
                     let reference = |n: u8, name: &str| format!(r#"(0,a.createServerReference)("{}",a.callServer,void 0,a.findSourceMapURL,"{name}");"#, id(n));
@@ -1187,9 +1232,11 @@ mod tests {
                     let (ctype, body) = if req.starts_with("GET /api/auth/session") {
                         ("application/json", r#"{"user":{"id":"me","firstName":"Ada"}}"#.to_string())
                     } else if req.starts_with("GET /assistants ") {
-                        ("text/html", chunk("assistants"))
+                        ("text/html", chunk("shared") + &chunk("assistants"))
                     } else if req.starts_with("GET /characters ") {
-                        ("text/html", chunk("characters"))
+                        ("text/html", chunk("shared") + &chunk("characters"))
+                    } else if req.starts_with("GET /_next/static/chunks/shared.js") {
+                        ("application/javascript", reference(0x44, "someOtherAction"))
                     } else if req.starts_with("GET /learning-scenarios ") {
                         // Switched off for this person: the page redirects, the kind is absent.
                         ("text/html", "<p>nichts</p>".to_string())
@@ -1253,6 +1300,29 @@ mod tests {
             default_model: None,
             send_context: false,
         }
+    }
+
+    /// Quality gate (start-up speed): finding the action ids loads each JS chunk once, even when
+    /// several pages share it, and a backend seeded with remembered ids loads no page or chunk.
+    #[tokio::test]
+    async fn action_discovery_loads_each_chunk_once_and_remembered_ids_load_none() {
+        let gets = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let base = scripted_ais_logged(std::sync::Arc::new(Mutex::new(Vec::new())), gets.clone()).await;
+        let first = crate::build(ais_config(base.clone()), Some("tok".into()), std::sync::Arc::new(|_, _| {})).unwrap();
+        assert_eq!(first.personas().await.unwrap().len(), 3);
+        let count = |path: &str| gets.lock().unwrap().iter().filter(|g| g.as_str() == path).count();
+        assert_eq!(count("/_next/static/chunks/shared.js"), 1, "{:?}", gets.lock().unwrap());
+        assert_eq!(count("/_next/static/chunks/assistants.js"), 1);
+        assert_eq!(count("/_next/static/chunks/characters.js"), 1);
+
+        gets.lock().unwrap().clear();
+        let second = crate::build(ais_config(base), Some("tok".into()), std::sync::Arc::new(|_, _| {})).unwrap();
+        second.seed_actions(first.known_actions());
+        assert_eq!(second.personas().await.unwrap().len(), 3);
+        let loaded = gets.lock().unwrap().clone();
+        // Only the session; the switched-off learning scenarios still look once for their action.
+        assert!(loaded.iter().all(|g| !g.starts_with("/_next/") || g.contains("learning")), "{loaded:?}");
+        assert!(!loaded.iter().any(|g| g == "/assistants" || g == "/characters"), "{loaded:?}");
     }
 
     /// Listing assistants and characters, then chatting as one, against a scripted server.

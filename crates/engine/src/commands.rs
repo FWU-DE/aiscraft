@@ -942,6 +942,9 @@ async fn persona_refresh(c: Ctx, p: Value) -> Result<Value> {
             }
         }
     });
+    if result.is_ok() {
+        c.save_backend_cache(&id);
+    }
     Ok(serde_json::to_value(result?)?)
 }
 
@@ -980,6 +983,7 @@ async fn persona_favorite(c: Ctx, p: Value) -> Result<Value> {
         }
         return Err(Error { message: format!("Der Favorit konnte nicht gespeichert werden: {}", e.message), ..e });
     }
+    c.save_backend_cache(&backend_id);
     Ok(json!({"kind": kind.as_str(), "id": id, "favorite": favorite}))
 }
 
