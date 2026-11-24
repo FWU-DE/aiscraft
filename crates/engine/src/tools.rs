@@ -442,6 +442,7 @@ async fn ask(c: &Ctx, conv: &str, conn: &ConnectorView, tool: &ConnectorTool, ar
         arguments: args.clone(),
         destructive: tool.destructive,
         trust,
+        highlights: crate::highlights::highlights(&crate::privacy::reveal_value(c, conv, args), &tool.input_schema),
     };
     c.update(|s| s.approvals.push(approval));
     let answer = tokio::time::timeout(APPROVAL_TIMEOUT, rx).await.ok().and_then(Result::ok).unwrap_or(false);

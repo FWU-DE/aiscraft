@@ -1136,42 +1136,14 @@ impl AisCraftApp {
         }
     }
 
-    /// Questions from the tool rule: allow this exact call once, or not.
+    /// Questions from the tool rule: allow this exact call once, or not (#67).
     fn approval_cards(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let Some(conv) = self.state.current.clone() else { return };
         for a in self.state.approvals.iter().filter(|a| a.conversation_id == conv).cloned().collect::<Vec<_>>() {
-            Frame::new()
-                .fill(t.surface)
-                .stroke(Stroke::new(1.5, if a.destructive { t.danger } else { t.accent }))
-                .corner_radius(CornerRadius::same(t.radius))
-                .inner_margin(Margin::same(14))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(format!("Darf ich das ausführen? {}", a.label)).strong());
-                    if a.destructive {
-                        ui.label(RichText::new("Der Konnektor kennzeichnet das als verändernd oder löschend.").color(t.danger).small());
-                    }
-                    let args = serde_json::to_string_pretty(&a.arguments).unwrap_or_default();
-                    Frame::new().fill(t.code_bg).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(8)).show(ui, |ui| {
-                        ui.add(egui::Label::new(RichText::new(args.chars().take(4000).collect::<String>()).monospace().small()).wrap());
-                    });
-                    if let Some(tr) = &a.trust {
-                        if tr.covered {
-                            ui.label(RichText::new(format!("Deine Worte decken das: „{}“", tr.quote)).color(t.success).small());
-                        } else {
-                            ui.label(RichText::new(format!("Nicht von deinen Worten gedeckt: {}", tr.reason)).color(t.warning).small());
-                        }
-                    }
-                    ui.horizontal(|ui| {
-                        if accent_button(ui, &t, "Einmal erlauben").clicked() {
-                            self.run("tool.answer", json!({"id": a.id, "allow": true}));
-                        }
-                        if ui.button("Ablehnen").clicked() {
-                            self.run("tool.answer", json!({"id": a.id, "allow": false}));
-                        }
-                        ui.label(small_muted(&t, "Gilt nur für genau diese Angaben."));
-                    });
-                });
+            if let Some(allow) = crate::approval::card(ui, &t, &a) {
+                self.run("tool.answer", json!({"id": a.id, "allow": allow}));
+            }
             ui.add_space(8.0);
         }
     }

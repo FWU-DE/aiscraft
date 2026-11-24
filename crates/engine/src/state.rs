@@ -177,6 +177,17 @@ pub struct Approval {
     /// The trust check's verdict, when it ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trust: Option<TrustVerdict>,
+    /// The few values to check, shown in bold on the card (#67); the yes still covers exactly
+    /// `arguments`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub highlights: Vec<Highlight>,
+}
+
+/// One value worth checking before a yes: „An“ kollegium@schule.de.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Highlight {
+    pub label: String,
+    pub value: String,
 }
 
 /// Whether the owner's own words cover an action (Nod's trust check).

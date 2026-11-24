@@ -11,6 +11,7 @@ mod collab;
 mod commands;
 mod disk;
 mod files;
+pub mod highlights;
 mod inbox;
 pub mod learn;
 mod links;
