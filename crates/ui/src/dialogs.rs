@@ -89,6 +89,9 @@ impl Dialog {
     }
 }
 
+/// Space kept free between a dialog and the window edge, above and below.
+const DIALOG_SCREEN_GAP: f32 = 24.0;
+
 impl AisCraftApp {
     pub(crate) fn dialogs(&mut self, ctx: &egui::Context) {
         let Some(mut dialog) = self.dialog.take() else { return };
@@ -533,6 +536,11 @@ impl AisCraftApp {
 
     fn settings_body(&mut self, ui: &mut Ui, tab: &mut SettingsTab, new_note: &mut String) -> bool {
         let t = self.tokens.clone();
+        // egui hands a modal's content the rect of its previous frame, so a tab that got taller (or
+        // a first frame measured small) would stay clipped there: allow the screen's full height.
+        // Set before anything is drawn, since changing the max rect resets the cursor.
+        let frame = ui.style().spacing.window_margin.sum().y + 2.0 * DIALOG_SCREEN_GAP;
+        ui.set_max_height(ui.ctx().content_rect().height() - frame);
         let mut keep = true;
         ui.horizontal(|ui| {
             ui.heading("Einstellungen");
@@ -574,7 +582,13 @@ impl AisCraftApp {
                 self.open_manual(chapter);
             }
         });
-        egui::ScrollArea::vertical().max_height((ui.ctx().content_rect().height() * 0.8 - 160.0).max(300.0)).show(ui, |ui| match tab {
+        // Scroll only when the tab is taller than the screen: what is left below the header, minus the
+        // modal frame's margins and a gap above and below the dialog.
+        // The header's height: from the top of the dialog's content to where the tab body starts.
+        // (`min_rect` would include the size the modal remembered from the last frame.)
+        let header = ui.cursor().top() - ui.max_rect().top();
+        let max_h = (ui.ctx().content_rect().height() - header - frame).max(200.0);
+        egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| match tab {
             SettingsTab::Backends => {
                 for b in self.state.backends.clone() {
                     card(&t).show(ui, |ui| {
