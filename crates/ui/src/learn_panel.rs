@@ -448,7 +448,7 @@ mod tests {
 
     #[test]
     fn highlighting_keeps_every_character() {
-        let t = crate::theme::Tokens::dark();
+        let t = crate::theme::Tokens::modern_dark();
         for src in ["", "<", "<!--", "<a href=\"x\">ä</a>", "<p class='x' data-y=\"<\">text</p><!-- c --> rest", "\"'<<>>"] {
             let job = highlight_html(src, &t);
             assert_eq!(job.text, src, "{src}");

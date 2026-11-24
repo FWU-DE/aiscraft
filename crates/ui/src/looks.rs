@@ -10,10 +10,9 @@ use crate::icons::Icon;
 use crate::theme::{self, Look, Mode, Tokens};
 
 /// The looks offered, with their names and one line each.
-pub(crate) const LOOKS: [(Look, &str, &str); 4] = [
+pub(crate) const LOOKS: [(Look, &str, &str); 3] = [
     (Look::Modern, "Modern", "Nachtblaue Seitenleiste, kräftige Schrift"),
     (Look::Glas, "Glas", "Leichte Glasflächen auf weichem Verlauf"),
-    (Look::Classic, "Klassisch", "Das bisherige, schlichte Aussehen"),
     (Look::Omarchy, "Omarchy", "Farben deines Omarchy-Desktops"),
 ];
 

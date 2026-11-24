@@ -359,9 +359,10 @@ fn welcome_asks_for_the_look_once() {
     assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.theme == "modern"), "starts on Modern, like the system");
     h.run_steps(4);
     assert!(chosen(&h, "Wie das System"), "scheme: like the system");
-    h.get_by_label("Klassisch").click();
+    assert!(h.query_by_label("Klassisch").is_none(), "Klassisch is gone");
+    h.get_by_label("Glas").click();
     h.run_steps(4);
-    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.theme == "system"), "Klassisch is one click away");
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.theme == "glas"), "a look is one click away");
     h.get_by_label("Fertig").click();
     h.run_steps(4);
     assert!(h.query_by_label("AIS.ChatCraft sieht jetzt neu aus").is_none(), "closed");

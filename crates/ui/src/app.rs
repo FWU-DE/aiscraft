@@ -138,12 +138,6 @@ impl PanelFrames {
                 panel: Frame::new().fill(t.panel).inner_margin(Margin::ZERO),
                 main: Frame::new().fill(t.main),
             },
-            theme::Look::Classic => Self {
-                sidebar: Frame::new().fill(t.sidebar).inner_margin(Margin::symmetric(10, 12)),
-                sidebar_width: 272.0,
-                panel: Frame::new().fill(t.surface).inner_margin(Margin::ZERO),
-                main: Frame::new().fill(t.bg),
-            },
         }
     }
 }
@@ -163,9 +157,9 @@ impl AisCraftApp {
         let welcome = if first_run {
             Some(Dialog::Welcome { look_only: false })
         } else if !state.settings.look_chosen {
-            // The question starts on Modern, like the system's scheme; Omarchy stays, it was a
-            // deliberate choice. One click on "Klassisch" brings the earlier look back.
-            if let (theme::Look::Classic, _) = theme::parse(&state.settings.theme) {
+            // The question starts on Modern like the system's scheme; the old Klassisch values
+            // ("system", "light", "dark") are moved there. Omarchy stays, a deliberate choice.
+            if matches!(state.settings.theme.as_str(), "system" | "light" | "dark") || state.settings.theme.starts_with("classic") {
                 engine.dispatch("settings.set", json!({"key": "theme", "value": theme::setting(theme::Look::Modern, theme::Mode::System)}));
             }
             Some(Dialog::Welcome { look_only: true })

@@ -1,6 +1,6 @@
-//! Design tokens. Four looks: "Modern" (night-blue sidebar, bold type), "Glas" (frosted panels on
-//! a soft gradient), "Klassisch" (the earlier flat AIS look) and "Omarchy" (colours from the
-//! desktop theme, followed live). Each has a light and a dark set; widgets never hard-code
+//! Design tokens. Three looks: "Modern" (night-blue sidebar, bold type), "Glas" (frosted panels on
+//! a soft gradient) and "Omarchy" (Modern's structure in the desktop theme's colours, followed
+//! live). Each has a light and a dark set; widgets never hard-code
 //! colours. The values of Modern and Glas come from `design/build/themes.py`.
 
 use std::path::PathBuf;
@@ -9,13 +9,12 @@ use std::time::{Duration, Instant, SystemTime};
 use egui::epaint::Shadow;
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Stroke, TextStyle, Visuals};
 
-/// Which design the tokens belong to. Modern and Glas share one anatomy (sidebar with icons,
-/// greeting and cards on the start page, pill actions); Klassisch and Omarchy keep the earlier one.
+/// Which design the tokens belong to. All share one anatomy (sidebar with icons, greeting and
+/// cards on the start page, pill actions); Omarchy is Modern's structure in the desktop's colours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Look {
     Modern,
     Glas,
-    Classic,
     Omarchy,
 }
 
@@ -208,183 +207,6 @@ fn shadow(y: i8, blur: u8, color: Color32) -> Shadow {
 }
 
 impl Tokens {
-    /// Klassisch, light: white, the ais.schule blue (`#0e74a0`, a shade darker so text in it
-    /// passes WCAG AA on the tinted sidebar too), slate text; card radius 12 and control radius 8
-    /// as in AIS.chat (`packages/ui/src/styles/globals.css`).
-    pub fn light() -> Self {
-        let mut t = Self {
-            look: Look::Classic,
-            dark: false,
-            bg: rgb(0xf7fafc),
-            sidebar: rgb(0xedf3f8),
-            surface: Color32::WHITE,
-            surface_hi: rgb(0xe7eff5),
-            border: rgb(0xd3dfe8),
-            text: rgb(0x171c20),
-            muted: rgb(0x4a5863),
-            accent: rgb(0x0e74a0),
-            on_accent: Color32::WHITE,
-            selection: rgb(0xcfe5f7),
-            user_bubble: rgb(0xd9eefe),
-            danger: rgb(0xd63329),
-            success: rgb(0x1f8a5b),
-            warning: rgb(0xb7791f),
-            code_bg: rgb(0xedf3f8),
-            radius: 12,
-            ..Self::base()
-        };
-        t.derive_flat();
-        t
-    }
-
-    /// Klassisch, dark: deep slate with a lighter AIS blue for contrast.
-    pub fn dark() -> Self {
-        let mut t = Self {
-            look: Look::Classic,
-            dark: true,
-            bg: rgb(0x0e1418),
-            sidebar: rgb(0x171c20),
-            surface: rgb(0x1b2025),
-            surface_hi: rgb(0x252b2f),
-            border: rgb(0x3b4852),
-            text: rgb(0xdce3e9),
-            muted: rgb(0xbac8d4),
-            accent: rgb(0x83cffe),
-            on_accent: rgb(0x02344a),
-            selection: rgb(0x354957),
-            user_bubble: rgb(0x024c6a),
-            danger: rgb(0xf24439),
-            success: rgb(0x4cc08a),
-            warning: rgb(0xe8b050),
-            code_bg: rgb(0x070f14),
-            radius: 12,
-            ..Self::base()
-        };
-        t.derive_flat();
-        t
-    }
-
-    /// Neutral defaults every look starts from.
-    fn base() -> Self {
-        let z = Color32::TRANSPARENT;
-        Self {
-            look: Look::Classic,
-            dark: false,
-            bg: z,
-            sidebar: z,
-            surface: z,
-            surface_hi: z,
-            border: z,
-            text: z,
-            muted: z,
-            accent: z,
-            on_accent: z,
-            selection: z,
-            user_bubble: z,
-            danger: z,
-            success: z,
-            warning: z,
-            code_bg: z,
-            radius: 12,
-            text2: z,
-            link: z,
-            accent_end: z,
-            accent_soft: z,
-            accent_ink: z,
-            accent2: z,
-            accent2_soft: z,
-            accent2_ink: z,
-            user_text: z,
-            sunken: z,
-            card_stroke: z,
-            main: z,
-            panel: z,
-            panel_stroke: z,
-            side_top: z,
-            side_bottom: z,
-            side_text: z,
-            side_text2: z,
-            side_muted: z,
-            side_line: z,
-            side_active: z,
-            side_active_text: z,
-            side_search: z,
-            side_search_text: z,
-            side_new: z,
-            side_new_text: z,
-            side_stroke: z,
-            th_fill: z,
-            th_text: z,
-            row_line: z,
-            code_head: z,
-            code_text: z,
-            code_muted: z,
-            composer: z,
-            composer_stroke: z,
-            chip: z,
-            chip_text: z,
-            overlay: z,
-            modal: z,
-            r_card: 12,
-            r_composer: 18,
-            r_bubble: 16,
-            r_panel: 0,
-            card_shadow: Shadow::NONE,
-            composer_shadow: Shadow::NONE,
-            modal_shadow: Shadow::NONE,
-            glass: None,
-        }
-    }
-
-    /// The design roles of a flat look (Klassisch, Omarchy), from its base colours.
-    fn derive_flat(&mut self) {
-        self.text2 = self.text;
-        self.link = self.accent;
-        self.accent_end = self.accent;
-        self.accent_soft = mix(self.bg, self.accent, 0.18);
-        self.accent_ink = if self.dark { mix(self.accent, self.text, 0.3) } else { mix(self.accent, self.text, 0.35) };
-        self.accent2 = self.warning;
-        self.accent2_soft = mix(self.bg, self.warning, 0.18);
-        self.accent2_ink = self.text;
-        self.user_text = self.text;
-        self.sunken = self.surface_hi;
-        self.card_stroke = self.border;
-        self.main = self.bg;
-        self.panel = self.surface;
-        self.panel_stroke = self.border;
-        self.side_top = self.sidebar;
-        self.side_bottom = self.sidebar;
-        self.side_text = self.text;
-        self.side_text2 = self.text;
-        self.side_muted = self.muted;
-        self.side_line = self.border;
-        self.side_active = self.selection;
-        self.side_active_text = self.text;
-        self.side_search = self.surface;
-        self.side_search_text = self.muted;
-        self.side_new = self.surface_hi;
-        self.side_new_text = self.text;
-        self.side_stroke = Color32::TRANSPARENT;
-        self.th_fill = self.surface_hi;
-        self.th_text = self.text;
-        self.row_line = self.border;
-        self.code_head = self.surface_hi;
-        self.code_text = self.text;
-        self.code_muted = self.muted;
-        self.composer = self.surface;
-        self.composer_stroke = self.border;
-        self.chip = self.surface_hi;
-        self.chip_text = self.muted;
-        self.overlay = Color32::from_black_alpha(if self.dark { 120 } else { 70 });
-        self.modal = self.surface;
-        self.r_card = self.radius;
-        self.r_composer = self.radius.saturating_add(6);
-        self.r_bubble = self.radius.saturating_add(4);
-        let shade = if self.dark { Color32::from_black_alpha(90) } else { Color32::from_rgba_unmultiplied(0, 41, 102, 26) };
-        self.composer_shadow = shadow(2, 12, Color32::from_black_alpha(if self.dark { 60 } else { 18 }));
-        self.modal_shadow = shadow(8, 28, shade);
-    }
-
     /// "Modern", light: a night-blue sidebar, a calm light work area, Barlow Bold titles.
     pub fn modern_light() -> Self {
         let navy = rgba(0x0b2a45ff);
@@ -822,6 +644,8 @@ impl Tokens {
     }
 
     /// Modern, Glas and Omarchy: the new anatomy (icons, greeting, cards, pills).
+    /// Always true since Klassisch is gone; the flat branches behind `!designed()` are dead and
+    /// get removed in a follow-up cleanup.
     pub fn designed(&self) -> bool {
         matches!(self.look, Look::Modern | Look::Glas | Look::Omarchy)
     }
@@ -957,8 +781,8 @@ impl Tokens {
     }
 }
 
-/// The `theme` setting split into look and mode. Older values ("system", "light", "dark") are
-/// Klassisch; unknown values fall back to Modern like the system.
+/// The `theme` setting split into look and mode. Older values of the removed Klassisch look
+/// ("system", "light", "dark", "classic…") and unknown values become Modern.
 pub fn parse(setting: &str) -> (Look, Mode) {
     let (look, mode) = setting.split_once('-').unwrap_or((setting, ""));
     let mode = match mode {
@@ -967,10 +791,8 @@ pub fn parse(setting: &str) -> (Look, Mode) {
         _ => Mode::System,
     };
     match look {
-        "system" => (Look::Classic, Mode::System),
-        "light" => (Look::Classic, Mode::Light),
-        "dark" => (Look::Classic, Mode::Dark),
-        "classic" => (Look::Classic, mode),
+        "light" => (Look::Modern, Mode::Light),
+        "dark" => (Look::Modern, Mode::Dark),
         "omarchy" => (Look::Omarchy, Mode::System),
         "glas" => (Look::Glas, mode),
         _ => (Look::Modern, mode),
@@ -985,11 +807,6 @@ pub fn setting(look: Look, mode: Mode) -> String {
         Mode::Dark => "-dark",
     };
     match look {
-        Look::Classic => match mode {
-            Mode::System => "system".into(),
-            Mode::Light => "light".into(),
-            Mode::Dark => "dark".into(),
-        },
         Look::Omarchy => "omarchy".into(),
         Look::Modern => format!("modern{suffix}"),
         Look::Glas => format!("glas{suffix}"),
@@ -1003,8 +820,8 @@ pub fn tokens(look: Look, dark: bool) -> Tokens {
         (Look::Modern, true) => Tokens::modern_dark(),
         (Look::Glas, false) => Tokens::glas_light(),
         (Look::Glas, true) => Tokens::glas_dark(),
-        (Look::Classic | Look::Omarchy, false) => Tokens::light(),
-        (Look::Classic | Look::Omarchy, true) => Tokens::dark(),
+        (Look::Omarchy, false) => Tokens::modern_light(),
+        (Look::Omarchy, true) => Tokens::modern_dark(),
     }
 }
 
@@ -1018,7 +835,7 @@ pub fn resolve(setting: &str, system_dark: bool, solid: bool) -> Tokens {
         Mode::Dark => true,
     };
     let t = match look {
-        Look::Omarchy => omarchy_colors().and_then(|c| Tokens::from_omarchy(&c)).unwrap_or_else(|| tokens(Look::Classic, dark)),
+        Look::Omarchy => omarchy_colors().and_then(|c| Tokens::from_omarchy(&c)).unwrap_or_else(|| tokens(Look::Modern, dark)),
         look => tokens(look, dark),
     };
     if solid { t.solid() } else { t }
@@ -1176,7 +993,7 @@ pub fn bold(text: impl Into<String>) -> egui::RichText {
     egui::RichText::new(text).family(FontFamily::Name(BOLD.into()))
 }
 
-/// Titles: Bold in Modern and Glas, SemiBold in Klassisch and Omarchy.
+/// Titles: Bold in Modern and Glas, SemiBold in Omarchy.
 pub fn title(t: &Tokens, text: impl Into<String>) -> egui::RichText {
     if t.designed() { bold(text) } else { semibold(text) }
 }
@@ -1207,14 +1024,15 @@ mod tests {
 
     #[test]
     fn theme_settings_round_trip() {
-        for look in [Look::Modern, Look::Glas, Look::Classic] {
+        for look in [Look::Modern, Look::Glas] {
             for mode in [Mode::System, Mode::Light, Mode::Dark] {
                 assert_eq!(parse(&setting(look, mode)), (look, mode), "{look:?} {mode:?}");
             }
         }
         assert_eq!(parse("omarchy"), (Look::Omarchy, Mode::System));
-        assert_eq!(parse("system"), (Look::Classic, Mode::System));
-        assert_eq!(parse("dark"), (Look::Classic, Mode::Dark));
+        assert_eq!(parse("system"), (Look::Modern, Mode::System), "Klassisch is gone: its values become Modern");
+        assert_eq!(parse("dark"), (Look::Modern, Mode::Dark));
+        assert_eq!(parse("classic-light"), (Look::Modern, Mode::Light));
         assert_eq!(parse("whatever"), (Look::Modern, Mode::System));
         assert_eq!(parse("mutig-dark"), (Look::Modern, Mode::Dark), "the early name still works");
         assert_eq!(parse(""), (Look::Modern, Mode::System));
@@ -1246,7 +1064,6 @@ mod tests {
             let mut md = egui_commonmark::CommonMarkCache::default();
             md.add_syntax_theme_from_bytes(t.code_theme(), xml.as_bytes()).unwrap();
         }
-        assert!(Tokens::light().code_theme_xml().is_none());
     }
 
     /// "Transparenz: Aus" leaves no translucent surface.
@@ -1277,7 +1094,7 @@ mod tests {
         }
         let odd = Tokens::from_omarchy("background = \"#808080\"\nforeground = \"#8a8a8a\"\naccent = \"#ffee00\"").unwrap();
         let pale = Tokens::from_omarchy("background = \"#fdf6e3\"\nforeground = \"#93a1a1\"\naccent = \"#b58900\"").unwrap();
-        for t in [Tokens::modern_light(), Tokens::modern_dark(), Tokens::glas_light(), Tokens::glas_dark(), Tokens::light(), Tokens::dark(), odd, pale] {
+        for t in [Tokens::modern_light(), Tokens::modern_dark(), Tokens::glas_light(), Tokens::glas_dark(), odd, pale] {
             let main = t.opaque(t.main);
             assert!(ratio(t.text, main) >= 4.5, "{:?} text", t.look);
             assert!(ratio(t.muted, main) >= 4.5, "{:?} muted {}", t.look, ratio(t.muted, main));

@@ -7,7 +7,7 @@ AIS.ChatCraft ist kein offizielles Werkzeug des AIS.chat-Teams, sondern ein Comm
 ## Erste Schritte
 
 1. **Anmelden.** Unten links auf das Konto klicken oder im Startbildschirm „Bei AIS.chat anmelden“ wählen.
-2. **Modell wählen.** Im Eingabefeld auf das Modell klicken (in „Klassisch“: „Dienst · Modell“).
+2. **Modell wählen.** Im Eingabefeld auf das Modell klicken.
 3. **Schreiben.** Enter sendet, Umschalt+Enter macht eine neue Zeile.
 
 Weitere Dienste (Claude, OpenAI, Ollama, LM Studio …) fügst du unter **Einstellungen › Dienste** hinzu.
@@ -19,8 +19,6 @@ Ist kein Chat offen, zeigt AIS.ChatCraft die Startseite: oben das Eingabefeld (S
 - **Vorschläge** (Modern, Glas, Omarchy): Stundenentwurf, Arbeitsblatt, Elternbrief und Quiz; ein Klick schreibt einen Anfang ins Eingabefeld, den du anpasst und abschickst.
 - **Zuletzt bearbeitet** (Modern, Glas, Omarchy): die drei Chats, Dokumente oder Whiteboards, an denen du zuletzt gearbeitet hast.
 - **Favoriten:** deine mit Stern markierten Assistenten, Dialogpartner und Lernszenarien aus AIS.chat; ein Klick startet einen Chat. „Alle entdecken“ öffnet die Übersicht.
-- **Neu starten** (Klassisch): neuer Chat, neues Bild (wenn ein Dienst Bildmodelle hat), neues Dokument oder Whiteboard.
-- **Zuletzt** (Klassisch): die fünf zuletzt benutzten Chats.
 - **Zeitpläne:** die nächsten Läufe; „+ Zeitplan anlegen“ legt einen neuen an.
 - **Kontingent & Verbrauch:** die AIS.chat-Token-Punkte (sind sie aufgebraucht, nimmt AIS.chat bis zum nächsten Zeitraum keine Nachrichten an), die Tokens dieses Monats pro Dienst, die Monatsgrenze und wie lange Anmeldungen (etwa das Claude-Abo) noch gelten. Es steht nur da, was die Dienste melden.
 - **Benachrichtigungen:** was Zeitpläne, Beobachtungen, Nachfragen, Hinweise und Aufgaben gemeldet haben, neue zuerst. Ein Klick öffnet den Chat dazu; „Alle gelesen“ markiert alles. Dieselbe Liste öffnet die Glocke oben rechts; die Zahl daran zählt die neuen. Die letzten 50 bleiben gespeichert; die Meldung ans System kommt weiterhin.
@@ -193,7 +191,6 @@ Unter **Einstellungen › Darstellung** wählst du, wie AIS.ChatCraft aussieht. 
 
 - **Modern** (Standard): nachtblaue Seitenleiste, kräftige Schrift, Karten auf heller Fläche. Koralle markiert den aktiven Eintrag, Favoriten und Hinweise.
 - **Glas**: leichte, lichtdurchlässige Flächen auf einem weichen Farbverlauf. Lavendel ist der Zweitakzent.
-- **Klassisch**: das bisherige, schlichte Aussehen.
 - **Omarchy**: sieht aus wie „Modern“, nimmt aber die Farben des Desktop-Themes und folgt ihm, wenn du es wechselst. Wo ein Theme zu wenig Kontrast hätte, hellt AIS.ChatCraft die Schrift auf oder dunkelt sie ab, damit alles lesbar bleibt.
 
 **Farbschema:** Hell, Dunkel oder wie das System. Bei Omarchy bestimmt das Desktop-Theme hell oder dunkel.

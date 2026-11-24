@@ -279,8 +279,8 @@ pub struct NoticeAction {
 #[serde(default)]
 pub struct Settings {
     /// The look, one of [`THEMES`]: "modern", "glas" (each also "-light" or "-dark", else like the
-    /// system), "system", "light", "dark" (Klassisch, the earlier look) or "omarchy" (follow the
-    /// desktop theme).
+    /// system) or "omarchy" (follow the desktop theme). "system", "light" and "dark" are the
+    /// values of the removed Klassisch look, still accepted and shown as Modern.
     pub theme: String,
     /// Glas: "gradient" (translucent panels over the gradient) or "off" (opaque panels).
     pub transparency: String,
