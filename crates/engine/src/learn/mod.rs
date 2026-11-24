@@ -171,7 +171,7 @@ pub fn app_prompt(topic: &str, tools: bool) -> String {
     } else {
         "Gib die Datei vollständig in genau einem ```html-Codeblock aus, ohne weitere Codeblöcke. Sag danach in zwei Sätzen, wie die App funktioniert."
     };
-    format!("Erstelle eine interaktive Lern-App zum Thema: {topic}\n\n{APP_RULES}\n\n{deliver}")
+    format!("{}{topic}\n\n{APP_RULES}\n\n{deliver}", formats::APP_INTRO)
 }
 
 /// The request for a worksheet.
@@ -182,7 +182,8 @@ pub fn worksheet_prompt(topic: &str, count: usize, tools: bool) -> String {
         "Antworte mit genau einem ```aiscraft-worksheet-Codeblock (gültiges JSON) und danach höchstens zwei Sätzen."
     };
     format!(
-        "Erstelle ein interaktives Arbeitsblatt zum Thema: {topic}\n\nEtwa {count} Aufgaben, verschiedene Aufgabentypen, vom Leichten zum Schweren. Jede Aufgabe mit Lösung und Punkten, wo es hilft mit Tipp (hint) und Erklärung (feedback). Deutsch, Du-Form.\n\n{}\n\n{deliver}",
+        "{}{topic}\n\nEtwa {count} Aufgaben, verschiedene Aufgabentypen, vom Leichten zum Schweren. Jede Aufgabe mit Lösung und Punkten, wo es hilft mit Tipp (hint) und Erklärung (feedback). Deutsch, Du-Form.\n\n{}\n\n{deliver}",
+        formats::WORKSHEET_INTRO,
         worksheet::prompt_schema()
     )
 }

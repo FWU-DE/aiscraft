@@ -782,7 +782,11 @@ pub(crate) fn markdown_export(title: &str, messages: &[Message]) -> String {
             Role::System => "System",
             Role::Tool => continue,
         };
-        out.push_str(&format!("## {who}\n\n{}\n\n", m.content.trim()));
+        // A format request: the teacher's words and one line instead of the whole spec.
+        match crate::learn::formats::split_request(&m.content).filter(|_| m.role == Role::User) {
+            Some(r) => out.push_str(&format!("## {who}\n\n{}\n\n_Mit Formatvorgabe: {}_\n\n", r.topic, r.format.label)),
+            None => out.push_str(&format!("## {who}\n\n{}\n\n", m.content.trim())),
+        }
         for a in &m.attachments {
             out.push_str(&format!("_Anhang: {}_\n\n", a.name));
         }

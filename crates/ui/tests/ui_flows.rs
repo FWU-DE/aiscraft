@@ -164,6 +164,28 @@ fn variant_switcher_shows_the_old_answer() {
     assert!(h.query_by_label_contains("Antwort 1").is_some());
 }
 
+/// A format request (#56) shows the teacher's topic; the format spec sits folded under
+/// „Formatvorgabe“ and opens with a click.
+#[test]
+fn format_spec_is_folded_under_the_request() {
+    use serde_json::json;
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let url = counting_backend(&engine);
+    let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    let prompt = aiscraft_engine::learn::worksheet_prompt("Photosynthese (Klasse: 7)", 8, false);
+    engine.call("chat.send", json!({"text": prompt})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    assert!(h.query_by_label("Photosynthese (Klasse: 7)").is_some(), "the topic stands alone");
+    assert!(h.query_by_label_contains("Etwa 8 Aufgaben").is_none(), "the spec is folded away");
+    h.get_by_label_contains("Formatvorgabe: Arbeitsblatt").click();
+    h.run_steps(6);
+    assert!(h.query_by_label_contains("Etwa 8 Aufgaben").is_some(), "a click shows the spec");
+}
+
 /// The × in the header and Esc close the chat; the start page shows its cards, and its quick
 /// start opens a new document.
 #[test]
