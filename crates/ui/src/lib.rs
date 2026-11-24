@@ -8,6 +8,7 @@ mod conversation;
 mod dialogs;
 mod downloads;
 mod explore;
+mod h5p_panel;
 mod home;
 mod learn_panel;
 pub mod manual;

@@ -520,6 +520,7 @@ impl AisCraftApp {
                     crate::markup::Segment::Plot(src) => self.plot_block(ui, &m.id, k, src),
                     crate::markup::Segment::App(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::App, src),
                     crate::markup::Segment::Worksheet(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::Worksheet, src),
+                    crate::markup::Segment::H5p(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::H5p, src),
                     seg => {
                         if let Some(crate::markup::Action::Board(outline)) = crate::markup::show(ui, &mut self.md, &t, &seg, (&m.id, k)) {
                             self.run("artifact.create", json!({"kind": "board", "content": outline}));
@@ -572,7 +573,7 @@ impl AisCraftApp {
                         }
                     }
                     // Learning apps and worksheets have their own cards (crate::learn_panel).
-                    (aiscraft_core::ArtifactKind::App | aiscraft_core::ArtifactKind::Worksheet, Some(_)) => {}
+                    (aiscraft_core::ArtifactKind::App | aiscraft_core::ArtifactKind::Worksheet | aiscraft_core::ArtifactKind::H5p, Some(_)) => {}
                     (kind, None) => {
                         let label = if kind == aiscraft_core::ArtifactKind::Board { "Als neues Whiteboard öffnen" } else { "Als neues Dokument öffnen" };
                         if ui.button(label).clicked() {
@@ -1158,7 +1159,7 @@ impl AisCraftApp {
                                 && icon_button(ui, &t, "📎", "Dateien anhängen (oder hineinziehen)").clicked()
                                 && let Some(files) = rfd::FileDialog::new().pick_files()
                             {
-                                self.pending_files.extend(files);
+                                self.take_files(files);
                             }
                             if !image_mode && self.link_input.is_none() && icon_button(ui, &t, "🌐", "Webseite anhängen (bis zu 5 Links)").clicked() {
                                 self.link_input = Some(String::new());

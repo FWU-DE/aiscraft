@@ -303,7 +303,7 @@ async fn join(c: Ctx, p: Value) -> Result<Value> {
         Err(_) => {
             let now = now_ms();
             let state = match kind {
-                ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet => artifacts::doc_new("")?,
+                ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet | ArtifactKind::H5p => artifacts::doc_new("")?,
                 ArtifactKind::Board => Vec::new(),
             };
             let title = if info.title.trim().is_empty() { kind.label().to_string() } else { info.title.chars().take(200).collect() };

@@ -23,6 +23,18 @@ fn sheet_json() -> Value {
     })
 }
 
+fn h5p_json() -> Value {
+    json!({
+        "format": "aiscraft-h5p", "version": 1, "title": "Igel", "intro": "Teste dein Wissen.",
+        "tasks": [
+            {"type": "choice", "prompt": "Was frisst der Igel?", "options": [{"text": "Insekten", "correct": true}, {"text": "Gras", "feedback": "Igel fressen Tiere"}]},
+            {"type": "true_false", "prompt": "Igel halten Winterschlaf.", "answer": true},
+            {"type": "cloze", "prompt": "Ergänze.", "text": "Der Igel hat [[Stacheln]]."},
+            {"type": "cloze", "prompt": "Ziehe.", "text": "Igel sind [[nachtaktiv]].", "word_bank": true, "distractors": ["tagaktiv"]}
+        ]
+    })
+}
+
 /// What the scripted model answers, by what the request contains.
 fn route(req: &str) -> Vec<Value> {
     let text = |t: &str| vec![json!({"choices": [{"delta": {"content": t}}]})];
@@ -33,6 +45,17 @@ fn route(req: &str) -> Vec<Value> {
         ]
     };
     let has_tool_result = req.contains("\"role\":\"tool\"");
+    if req.contains("Werkzeug h5p_create") && !has_tool_result {
+        return tool("h5p_create", json!({"h5p": h5p_json()}));
+    }
+    if req.contains("überarbeitest H5P-Inhalt") {
+        let mut h = h5p_json();
+        h["title"] = json!("Igel leicht");
+        return text(&format!("```aiscraft-h5p\n{h}\n```"));
+    }
+    if req.contains("reparierst H5P-Inhalt") || (req.contains("H5P-Quiz zum Thema") && !has_tool_result) {
+        return text(&format!("Hier dein Quiz:\n```aiscraft-h5p\n{}\n```", h5p_json()));
+    }
     if req.contains("Werkzeug worksheet_create") && !has_tool_result {
         return tool("worksheet_create", json!({"worksheet": sheet_json()}));
     }
@@ -142,6 +165,7 @@ fn format_requests_send_the_spec_but_show_only_the_topic() {
     let cases = [
         ("worksheet.request", "worksheet", worksheet_prompt("Bruchrechnung (Klasse: 6)", 8, false)),
         ("learning_app.request", "learning_app", app_prompt("Bruchrechnung (Klasse: 6)", false)),
+        ("h5p.request", "h5p", crate::learn::h5p::h5p_prompt("Bruchrechnung (Klasse: 6)", 6, false)),
     ];
     assert_eq!(cases.len(), formats::formats().len(), "every format in the registry is covered");
     for (command, format, expected) in cases {
@@ -376,4 +400,267 @@ fn worksheet_groups_hints_feedback_and_word_bank() {
     assert!(a.contains("Saeugetiere") && a.contains("Fisch") && a.contains("Wie atmet er?") && !a.contains("Er hat Lungen"));
     assert!(l.contains("Haie haben Kiemen") && l.contains("Er hat Lungen"));
     assert!(!a.contains("Haie haben Kiemen"));
+}
+
+// ---- H5P (#59) -------------------------------------------------------------------------------
+
+/// Reads a package the way an LMS would start to: the zip, `h5p.json` and `content.json`.
+fn unzip_h5p(bytes: &[u8]) -> (Value, Value, Vec<String>) {
+    let mut zip = craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: 1000, max_total_bytes: 50 << 20 }).unwrap();
+    assert!(!zip.has_duplicate_names());
+    let names: Vec<String> = zip.names().map(|n| n.to_string()).collect();
+    let meta: Value = serde_json::from_slice(&zip.read("h5p.json", 1 << 20).unwrap().unwrap()).unwrap();
+    let content: Value = serde_json::from_slice(&zip.read("content/content.json", 4 << 20).unwrap().unwrap()).unwrap();
+    // What H5P's validator demands of h5p.json.
+    let title = meta["title"].as_str().unwrap();
+    assert!(!title.is_empty() && title.chars().count() <= 255);
+    assert!(meta["language"].as_str().unwrap().chars().all(|c| c.is_ascii_alphabetic() || c == '-'));
+    let main = meta["mainLibrary"].as_str().unwrap();
+    let deps = meta["preloadedDependencies"].as_array().unwrap();
+    assert!(deps.iter().any(|d| d["machineName"] == main), "the main library is a dependency");
+    for d in deps {
+        assert!(d["machineName"].as_str().unwrap().starts_with("H5P.") || d["machineName"].as_str().unwrap() == "FontAwesome");
+        assert!(d["majorVersion"].as_u64().is_some() || d["majorVersion"].as_str().is_some());
+    }
+    assert!(meta["embedTypes"].as_array().unwrap().iter().all(|e| e == "iframe" || e == "div"));
+    // Every sub-content's library is listed.
+    for q in content["questions"].as_array().into_iter().flatten() {
+        let lib = q["library"].as_str().unwrap();
+        let (name, ver) = lib.split_once(' ').unwrap();
+        let (major, minor) = ver.split_once('.').unwrap();
+        assert!(
+            deps.iter().any(|d| d["machineName"] == name
+                && d["majorVersion"].to_string().trim_matches('"') == major
+                && d["minorVersion"].to_string().trim_matches('"') == minor),
+            "{lib} is in preloadedDependencies"
+        );
+        assert_eq!(q["subContentId"].as_str().unwrap().len(), 36);
+    }
+    (meta, content, names)
+}
+
+fn decode(v: &Value) -> Vec<u8> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.decode(v["base64"].as_str().unwrap()).unwrap()
+}
+
+/// H5P without tools: requested as a block, validated, edited as a task list, saved as a
+/// package that has what an LMS needs, revised by the model.
+#[test]
+fn h5p_from_a_block_edited_and_saved() {
+    let engine = routed_engine();
+    engine.call("settings.set", json!({"key": "tools", "value": false})).unwrap();
+    let out = engine.call("h5p.request", json!({"topic": "Igel", "grade": "3"})).unwrap();
+    assert_eq!(out["created"], true, "{out}");
+    let id = out["id"].as_str().unwrap().to_string();
+    let a = engine.state().artifacts.iter().find(|a| a.id == id).unwrap().clone();
+    assert_eq!((a.kind, a.title.as_str()), (aiscraft_core::ArtifactKind::H5p, "Igel"));
+    assert!(engine.state().messages[0].content.contains("```aiscraft-h5p"));
+
+    let v = engine.call("h5p.validate", json!({"content": h5p_json().to_string()})).unwrap();
+    assert_eq!((v["ok"].clone(), v["tasks"].clone()), (json!(true), json!(4)), "{v}");
+    let v = engine.call("h5p.validate", json!({"content": "{\"tasks\": [{\"type\": \"matching\", \"pairs\": []}]}"})).unwrap();
+    assert_eq!(v["ok"], false);
+
+    // Saved: a QuestionSet with the four content types.
+    let dir = tmp_dir("h5p");
+    let path = dir.join("igel.h5p");
+    let saved = engine.call("h5p.export", json!({"id": id, "path": path.display().to_string()})).unwrap();
+    assert_eq!(saved["path"], path.display().to_string());
+    let (meta, content, names) = unzip_h5p(&std::fs::read(&path).unwrap());
+    assert_eq!(names, vec!["h5p.json", "content/content.json"]);
+    assert_eq!(meta["mainLibrary"], "H5P.QuestionSet");
+    assert_eq!(meta["title"], "Igel");
+    assert_eq!(content["introPage"]["introduction"], "<p>Teste dein Wissen.</p>");
+    let libs: Vec<&str> = content["questions"].as_array().unwrap().iter().map(|q| q["library"].as_str().unwrap()).collect();
+    assert_eq!(libs, vec!["H5P.MultiChoice 1.16", "H5P.TrueFalse 1.8", "H5P.Blanks 1.14", "H5P.DragText 1.10"]);
+    assert_eq!(content["questions"][2]["params"]["questions"][0], "<p>Der Igel hat *Stacheln*.</p>");
+    assert_eq!(content["questions"][3]["params"]["textField"], "Igel sind *nachtaktiv*.");
+    // The same through artifact.export, and the editable JSON.
+    let again = decode(&engine.call("artifact.export", json!({"id": id, "format": "h5p"})).unwrap());
+    assert_eq!(again, std::fs::read(&path).unwrap(), "deterministic packages");
+    let as_json = engine.call("artifact.export", json!({"id": id, "format": "json"})).unwrap();
+    assert!(as_json["text"].as_str().unwrap().contains("aiscraft-h5p"));
+    assert!(engine.call("artifact.export", json!({"id": id, "format": "pdf"})).is_err());
+
+    // Task list: add, change, move, remove; types H5P has not are refused.
+    engine.call("h5p.update_task", json!({"id": id, "task": {"type": "true_false", "prompt": "Igel sind Säugetiere.", "answer": true}})).unwrap();
+    engine.call("h5p.update_task", json!({"id": id, "index": 1, "task": {"type": "true_false", "prompt": "Igel können fliegen.", "answer": false}})).unwrap();
+    let out = engine.call("h5p.update_task", json!({"id": id, "index": 4, "move_to": 0})).unwrap();
+    assert_eq!(out["tasks"], 5);
+    engine.call("h5p.update_task", json!({"id": id, "index": 2, "remove": true})).unwrap();
+    let e = engine.call("h5p.update_task", json!({"id": id, "task": {"type": "ordering", "prompt": "x", "items": ["a", "b"]}})).unwrap_err();
+    assert!(e.message.contains("ordering"), "{}", e.message);
+    assert!(engine.call("h5p.update_task", json!({"id": id, "index": 99, "remove": true})).is_err());
+    let text = engine.call("artifact.get", json!({"id": id})).unwrap()["text"].as_str().unwrap().to_string();
+    let (h, _) = aiscraft_core::h5p::parse_stored(&text).unwrap();
+    assert_eq!(h.tasks.len(), 4);
+    assert_eq!(h.tasks[0].prompt, "Igel sind Säugetiere.");
+    assert!(!h.tasks.iter().any(|t| t.prompt == "Igel halten Winterschlaf."));
+    let (_, content, _) = unzip_h5p(&decode(&engine.call("h5p.export", json!({"id": id})).unwrap()));
+    assert_eq!(content["questions"].as_array().unwrap().len(), 4);
+
+    // Revised by the model: a new version.
+    engine.call("artifact.revise", json!({"id": id, "instruction": "leichter"})).unwrap();
+    assert!(engine.call("artifact.get", json!({"id": id})).unwrap()["text"].as_str().unwrap().contains("Igel leicht"));
+    // From an answer into the open artifact, and as a new one through artifact.create.
+    let mid = engine.state().messages.iter().find(|m| m.role == aiscraft_core::Role::Assistant && m.content.contains("```aiscraft-h5p")).unwrap().id.clone();
+    let out = engine.call("h5p.create", json!({"from_message": mid, "id": id})).unwrap();
+    assert_eq!(out["id"], id);
+    assert!(engine.call("artifact.create", json!({"kind": "h5p", "content": h5p_json().to_string()})).is_ok());
+    for bad in
+        [json!({}), json!({"content": "kein json"}), json!({"h5p": {"tasks": [{"type": "free_text", "prompt": "x"}]}}), json!({"content": "{}", "id": "nope"})]
+    {
+        assert!(engine.call("h5p.create", bad.clone()).is_err(), "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// With tools, the model calls h5p_create; h5p_update keeps the artifact.
+#[test]
+fn h5p_with_tools() {
+    let engine = routed_engine();
+    let out = engine.call("h5p.request", json!({"topic": "Igel", "count": 4})).unwrap();
+    assert_eq!(out["created"], true, "{out}");
+    let s = engine.state();
+    assert!(s.messages.iter().any(|m| m.tool_calls.iter().any(|t| t.name == "h5p_create")));
+    let id = s.artifacts.iter().find(|a| a.kind == aiscraft_core::ArtifactKind::H5p).unwrap().id.clone();
+    let mut h = h5p_json();
+    h["title"] = json!("Igel neu");
+    let r = crate::learn::run_tool(engine.ctx(), "h5p_update", &json!({"id": id, "h5p": h})).unwrap().unwrap();
+    assert!(r.contains("aktualisiert"));
+    assert!(engine.call("artifact.get", json!({"id": id})).unwrap()["text"].as_str().unwrap().contains("Igel neu"));
+    assert!(crate::learn::run_tool(engine.ctx(), "h5p_update", &json!({"id": "nope", "h5p": h})).unwrap().is_err());
+    assert!(crate::learn::run_tool(engine.ctx(), "h5p_create", &json!({"h5p": "{\"tasks\": []}"})).unwrap().is_err());
+}
+
+/// A worksheet becomes H5P: the tasks H5P has, the others named; as an artifact or a file.
+#[test]
+fn worksheet_saved_as_h5p() {
+    let engine = routed_engine();
+    let ws = engine.call("worksheet.create", json!({"worksheet": sheet_json()})).unwrap()["id"].as_str().unwrap().to_string();
+    let out = engine.call("h5p.from_worksheet", json!({"id": ws})).unwrap();
+    let not_mapped: Vec<String> = serde_json::from_value(out["not_mapped"].clone()).unwrap();
+    // choice, true_false, numeric map; the cloze has only answers with a slash ("2/4" and "0,5"
+    // stays), free text does not.
+    assert_eq!(out["tasks"], 4, "{out}");
+    assert_eq!(not_mapped.len(), 1, "{not_mapped:?}");
+    assert!(not_mapped[0].starts_with("Aufgabe 5 (Freier Text)"));
+    let h5p_id = out["id"].as_str().unwrap();
+    assert_eq!(engine.state().artifacts.iter().find(|a| a.id == h5p_id).unwrap().title, "Bruchrechnung");
+    let dir = tmp_dir("ws-h5p");
+    let path = dir.join("a.h5p");
+    let out = engine.call("h5p.from_worksheet", json!({"id": ws, "path": path.display().to_string()})).unwrap();
+    assert_eq!(out["tasks"], 4);
+    let (meta, content, _) = unzip_h5p(&std::fs::read(&path).unwrap());
+    assert_eq!(meta["mainLibrary"], "H5P.QuestionSet");
+    assert_eq!(content["questions"][2]["params"]["questions"][0], "<p>1/2 = *0,5*</p>", "only the answer H5P can check");
+    assert_eq!(content["questions"][3]["params"]["questions"][0], "<p>Kehrwert von 4 als Dezimalzahl *0,25/0.25*</p>");
+    assert!(!decode(&engine.call("artifact.export", json!({"id": ws, "format": "h5p"})).unwrap()).is_empty());
+    let doc = engine.call("artifact.create", json!({"kind": "document", "content": "x"})).unwrap()["id"].as_str().unwrap().to_string();
+    assert!(engine.call("h5p.from_worksheet", json!({"id": doc})).is_err());
+    let only_free = engine.call("worksheet.create", json!({"worksheet": {"tasks": [{"type": "free_text", "prompt": "Erkläre"}]}})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(engine.call("h5p.from_worksheet", json!({"id": only_free})).unwrap_err().message.contains("Freier Text"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+fn package(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut w = craft_zip::Writer::new();
+    for (n, d) in entries {
+        w.add(n, d, craft_zip::Compression::Deflated).unwrap();
+    }
+    w.finish().unwrap()
+}
+
+/// Opening `.h5p` files: a quiz of known types becomes editable and keeps its pictures and
+/// library versions; unchanged it saves byte for byte; other content types are kept and saved
+/// unchanged; hostile files are refused. The package lives in the attachments folder.
+#[test]
+fn h5p_files_open_edit_and_save_back() {
+    let engine = routed_engine();
+    let dir = tmp_dir("h5p-open");
+    let meta = json!({"title": "Vom LMS", "language": "de", "mainLibrary": "H5P.QuestionSet", "embedTypes": ["iframe"], "license": "CC BY",
+        "authors": [{"name": "Frau K.", "role": "Author"}],
+        "preloadedDependencies": [{"machineName": "H5P.QuestionSet", "majorVersion": "1", "minorVersion": "17"}, {"machineName": "H5P.MultiChoice", "majorVersion": "1", "minorVersion": "14"}, {"machineName": "FontAwesome", "majorVersion": "4", "minorVersion": "5"}]});
+    let content = json!({"introPage": {"showIntroPage": true, "introduction": "<p>Los &amp; viel Gl&uuml;ck</p>"}, "questions": [
+        {"library": "H5P.MultiChoice 1.14", "params": {"media": {"type": {"library": "H5P.Image 1.1", "params": {"file": {"path": "images/igel.png"}}}}, "question": "<p>Was frisst der Igel?</p>", "answers": [{"text": "<div>Insekten</div>", "correct": true, "tipsAndFeedback": {"chosenFeedback": "<p>Ja!</p>"}}, {"text": "<div>Gras</div>", "correct": false}]}, "subContentId": "x"}
+    ]});
+    let bytes = package(&[
+        ("h5p.json", meta.to_string().as_bytes()),
+        ("content/content.json", content.to_string().as_bytes()),
+        ("content/images/igel.png", b"\x89PNG bild"),
+        ("H5P.MultiChoice-1.14/library.json", b"{}"),
+        ("H5P.MultiChoice-1.14/js/multichoice.js", b"/* code */"),
+    ]);
+    let file = dir.join("vom-lms.h5p");
+    std::fs::write(&file, &bytes).unwrap();
+    let out = engine.call("h5p.open", json!({"path": file.display().to_string()})).unwrap();
+    assert_eq!((out["editable"].clone(), out["tasks"].clone(), out["main_library"].clone()), (json!(true), json!(1), json!("H5P.QuestionSet 1.17")), "{out}");
+    let id = out["id"].as_str().unwrap().to_string();
+    let a = engine.state().artifacts.iter().find(|a| a.id == id).unwrap().clone();
+    assert_eq!((a.kind, a.title.as_str()), (aiscraft_core::ArtifactKind::H5p, "Vom LMS"));
+    let text = engine.call("artifact.get", json!({"id": id})).unwrap()["text"].as_str().unwrap().to_string();
+    let (h, _) = aiscraft_core::h5p::parse_stored(&text).unwrap();
+    assert_eq!(h.intro, "Los & viel Glück");
+    assert_eq!(h.tasks[0].prompt, "Was frisst der Igel?");
+    let pkg = h.package.clone().unwrap();
+    assert!(pkg.notes.iter().any(|n| n.contains("Bilder")), "{:?}", pkg.notes);
+    // The bytes are in the attachments folder, not in the database.
+    assert!(engine.ctx().0.attachments_dir.join(&pkg.file).is_file());
+    assert!(!text.contains("PNG"));
+
+    // Unchanged: saved byte for byte.
+    assert_eq!(decode(&engine.call("h5p.export", json!({"id": id})).unwrap()), bytes);
+    // Edited: rebuilt, pictures and libraries kept, the package's versions and fields kept.
+    engine.call("h5p.update_task", json!({"id": id, "task": {"type": "choice", "prompt": "Wann schläft der Igel?", "options": [{"text": "Im Winter", "correct": true}, {"text": "Im Sommer"}]}})).unwrap();
+    let (meta2, content2, names) = unzip_h5p(&decode(&engine.call("h5p.export", json!({"id": id})).unwrap()));
+    assert!(names.contains(&"content/images/igel.png".to_string()) && names.contains(&"H5P.MultiChoice-1.14/js/multichoice.js".to_string()), "{names:?}");
+    assert_eq!(content2["questions"].as_array().unwrap().len(), 2);
+    assert_eq!(content2["questions"][1]["library"], "H5P.MultiChoice 1.14");
+    assert_eq!(meta2["authors"][0]["name"], "Frau K.");
+    assert_eq!(meta2["license"], "CC BY");
+    assert_eq!(meta2["preloadedDependencies"][0]["minorVersion"], 17);
+
+    // Another content type: shown, kept, saved unchanged, not editable.
+    let video = package(&[
+        ("h5p.json", br#"{"title":"Film","mainLibrary":"H5P.InteractiveVideo","preloadedDependencies":[{"machineName":"H5P.InteractiveVideo","majorVersion":1,"minorVersion":26}]}"#),
+        ("content/content.json", br#"{"interactiveVideo":{}}"#),
+        ("content/videos/film.mp4", b"mp4"),
+    ]);
+    let vfile = dir.join("film.h5p");
+    std::fs::write(&vfile, &video).unwrap();
+    let out = engine.call("h5p.open", json!({"path": vfile.display().to_string()})).unwrap();
+    assert_eq!((out["editable"].clone(), out["main_library"].clone()), (json!(false), json!("H5P.InteractiveVideo 1.26")));
+    let vid = out["id"].as_str().unwrap().to_string();
+    assert_eq!(decode(&engine.call("h5p.export", json!({"id": vid})).unwrap()), video);
+    assert_eq!(decode(&engine.call("artifact.export", json!({"id": vid})).unwrap()), video);
+    assert_eq!(
+        engine.call("h5p.update_task", json!({"id": vid, "task": {"type": "true_false", "prompt": "x", "answer": true}})).unwrap_err().kind,
+        aiscraft_core::ErrorKind::Unsupported
+    );
+    assert!(engine.call("artifact.revise", json!({"id": vid, "instruction": "x"})).is_err());
+    assert!(engine.call("h5p.create", json!({"id": vid, "content": h5p_json().to_string()})).is_err());
+
+    // Hostile files.
+    let evil = dir.join("evil.h5p");
+    for entries in [
+        vec![("h5p.json", meta.to_string().into_bytes()), ("content/content.json", content.to_string().into_bytes()), ("../../.bashrc", b"x".to_vec())],
+        vec![("h5p.json", meta.to_string().into_bytes()), ("content/content.json", content.to_string().into_bytes()), ("content/x.exe", b"MZ".to_vec())],
+        vec![("content/content.json", content.to_string().into_bytes())],
+    ] {
+        let refs: Vec<(&str, &[u8])> = entries.iter().map(|(n, d)| (*n, d.as_slice())).collect();
+        std::fs::write(&evil, package(&refs)).unwrap();
+        assert_eq!(engine.call("h5p.open", json!({"path": evil.display().to_string()})).unwrap_err().kind, aiscraft_core::ErrorKind::Invalid);
+    }
+    std::fs::write(&evil, b"kein zip").unwrap();
+    assert!(engine.call("h5p.open", json!({"path": evil.display().to_string()})).is_err());
+    assert!(engine.call("h5p.open", json!({"path": dir.join("gibt-es-nicht.h5p").display().to_string()})).is_err());
+    assert!(engine.call("h5p.open", json!({"path": dir.display().to_string()})).is_err());
+    // A stored package that vanished: a message, no crash.
+    std::fs::remove_file(engine.ctx().0.attachments_dir.join(&pkg.file)).unwrap();
+    assert_eq!(engine.call("h5p.export", json!({"id": id})).unwrap_err().kind, aiscraft_core::ErrorKind::NotFound);
+    let _ = std::fs::remove_dir_all(dir);
 }
