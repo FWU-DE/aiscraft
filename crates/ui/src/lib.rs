@@ -17,6 +17,7 @@ pub mod plot;
 mod share;
 mod sidebar;
 pub mod theme;
+mod update;
 mod widgets;
 
 pub use app::{AisCraftApp, UiRequest};

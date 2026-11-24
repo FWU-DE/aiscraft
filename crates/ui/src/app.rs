@@ -316,6 +316,10 @@ impl AisCraftApp {
                             self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Memory, new_note: String::new() });
                             true
                         }
+                        "about" => {
+                            self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::About, new_note: String::new() });
+                            true
+                        }
                         "appearance" => {
                             self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Appearance, new_note: String::new() });
                             true

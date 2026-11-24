@@ -15,6 +15,8 @@
 //! prompts with "Parabel"), with a catalogue of placeholder portraits for the "Entdecken" page
 //! (`["ui.show", {"what": "personas"}]`, `{"what": "persona:character:c1"}` for one entry;
 //! `["ui.wait", {"ms": 1500}]` lets the pictures arrive). `--theme light|dark|omarchy`.
+//! `--demo-update` hands the update check a made-up newer release (no request to GitHub) and
+//! checks, so the hint shows (`["ui.show", {"what": "about"}]` for the settings part).
 //! The engine runs in memory; nothing touches your real data.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
@@ -408,6 +410,12 @@ fn main() {
     }
     if args.iter().any(|a| a == "--demo-ais") {
         demo_ais(&engine);
+    }
+    if args.iter().any(|a| a == "--demo-update") {
+        let release = json!([{"tag_name": "v0.2.0", "name": "AIS.ChatCraft 0.2.0", "draft": false, "prerelease": false,
+            "html_url": "https://github.com/FWU-DE/aiscraft/releases/tag/v0.2.0", "body": "- Startseite\n- Bilder in AIS.chat", "assets": []}]);
+        engine.set_update_feed(Ok(release.to_string())).unwrap();
+        engine.call("app.check_update", json!({})).unwrap();
     }
     let (tx, rx) = mpsc::channel::<UiRequest>();
     let app_engine = engine.clone();

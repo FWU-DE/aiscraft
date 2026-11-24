@@ -314,7 +314,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Einstellung ändern",
         "Einstellungen",
         None,
-        "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|proactive|quiet_start|quiet_end, value: any",
+        "key: theme|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|proactive|quiet_start|quiet_end|update_check, value: any",
         false,
         |c, p| Box::pin(async move {
             let key = req_str(&p, "key")?;
@@ -469,6 +469,22 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("hints.check", "Jetzt auf offene Punkte prüfen", "Hinweise", None, "", true, |c, _| Box::pin(async move {
         Ok(json!({"hint": crate::proactive::check(&c, true).await?}))
     })),
+    cmd!(
+        "app.check_update",
+        "Nach Updates suchen",
+        "App",
+        None,
+        "background?: bool (nur wenn eingeschaltet und höchstens einmal am Tag, Fehler still)",
+        true,
+        |c, p| Box::pin(async move { crate::update::check(&c, p.get("background").and_then(Value::as_bool).unwrap_or(false)).await })
+    ),
+    cmd!("app.update_open", "Neue Version im Browser öffnen", "App", None, "what?: notes|download", false, |c, p| Box::pin(async move {
+        crate::update::open(&c, &p)
+    })),
+    cmd!("app.update_skip", "Diese Version überspringen", "App", None, "version?: string (sonst die angebotene)", false, |c, p| Box::pin(async move {
+        crate::update::skip(&c, &p)
+    })),
+    cmd!("app.update_dismiss", "Update-Hinweis ausblenden", "App", None, "", false, |c, _| Box::pin(async move { crate::update::dismiss(&c) })),
     cmd!("app.state", "Zustand lesen", "App", None, "", false, |c, _| Box::pin(async move { Ok(serde_json::to_value(&*c.state())?) })),
     cmd!("app.commands", "Befehle auflisten", "App", None, "", false, |_, _| Box::pin(async move {
         Ok(Value::Array(

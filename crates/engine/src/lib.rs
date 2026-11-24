@@ -18,6 +18,7 @@ mod skills;
 mod state;
 mod tasks;
 pub mod tools;
+mod update;
 mod usage;
 mod vault;
 mod voice;
@@ -42,6 +43,7 @@ pub use secrets::Secrets;
 pub use skills::Skill;
 pub use state::*;
 pub use tools::{obsidian_vaults, presets as connector_presets};
+pub use update::CURRENT_VERSION;
 pub use vault::{EntryInfo as VaultEntry, totp_at};
 
 pub fn now_ms() -> i64 {
@@ -115,6 +117,8 @@ pub(crate) struct Inner {
     /// Test hook: the page reader may reach local addresses (the tests' scripted servers).
     /// Never set outside tests; the real app refuses loopback and private addresses.
     pub(crate) web_local_ok: std::sync::atomic::AtomicBool,
+    /// Where the update check reads releases from; off for engines in memory.
+    pub(crate) update_feed: Mutex<update::Feed>,
 }
 
 /// What commands and tasks hold. It never owns the runtime, so it can be dropped anywhere.
@@ -185,6 +189,11 @@ impl Engine {
             picture_origin: Mutex::new(None),
             pictures_online: opts.data_dir.is_some(),
             web_local_ok: std::sync::atomic::AtomicBool::new(false),
+            update_feed: Mutex::new(if opts.data_dir.is_some() && !cfg!(test) && std::env::var_os("AISCRAFT_NO_UPDATE_CHECK").is_none() {
+                update::Feed::GitHub
+            } else {
+                update::Feed::Off
+            }),
             pictures_dir: opts
                 .data_dir
                 .clone()
@@ -213,6 +222,7 @@ impl Engine {
             });
             schedules::start(&engine.ctx);
             vault::refresh(&engine.ctx);
+            update::start(&engine.ctx);
             #[cfg(feature = "collab")]
             collab::load(&engine.ctx);
         }
@@ -284,6 +294,17 @@ impl Engine {
             return Err(Error::refused("Nur ohne Datenordner (Tests, Vorschau) erlaubt"));
         }
         self.ctx.0.web_local_ok.store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Hand the update check a release list (JSON as GitHub's `/releases` sends it) or the error
+    /// it should report, instead of asking GitHub (tests and the offscreen demo). Only for
+    /// engines in memory; the real app always asks GitHub.
+    pub fn set_update_feed(&self, feed: std::result::Result<String, String>) -> Result<()> {
+        if self.ctx.0.pictures_online {
+            return Err(Error::refused("Nur ohne Datenordner (Tests, Vorschau) erlaubt"));
+        }
+        *self.ctx.0.update_feed.lock().unwrap_or_else(PoisonError::into_inner) = update::Feed::Scripted(feed);
         Ok(())
     }
 

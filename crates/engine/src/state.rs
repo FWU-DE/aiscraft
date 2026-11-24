@@ -49,6 +49,51 @@ pub struct State {
     /// `backend/kind/id`: the cached file, or `None` when there is none (or it failed).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub persona_pictures: BTreeMap<String, Option<String>>,
+    /// The update check: running version, what the last check found.
+    #[serde(default)]
+    pub update: UpdateState,
+}
+
+/// The update check (`app.check_update`). No download, no install: a hint with a link.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateState {
+    /// The running version (`0.1.0`).
+    pub current: String,
+    /// A newer published release to point out; `None` when there is none, it was skipped or
+    /// dismissed for this run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available: Option<UpdateInfo>,
+    pub checking: bool,
+    /// Last check (ms since 1970), 0 = never.
+    pub last_check: i64,
+    /// The result of the last manual check, for the settings ("Du hast die neueste Version").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// "Diese Version überspringen".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
+    /// Hidden until the next start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dismissed: Option<String>,
+}
+
+/// A published release newer than the running version.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateInfo {
+    /// `0.2.0`
+    pub version: String,
+    pub tag: String,
+    pub name: String,
+    /// The release page ("Was ist neu").
+    pub url: String,
+    /// This computer's download, else the release page.
+    pub download: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<i64>,
+    /// Release notes (Markdown, shortened).
+    pub notes: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -252,6 +297,8 @@ pub struct Settings {
     pub quiet_start: u8,
     /// … until this hour.
     pub quiet_end: u8,
+    /// Look for a new version on GitHub once a day (one anonymous request).
+    pub update_check: bool,
 }
 
 impl Default for Settings {
@@ -270,6 +317,7 @@ impl Default for Settings {
             proactive: false,
             quiet_start: 22,
             quiet_end: 7,
+            update_check: true,
         }
     }
 }
