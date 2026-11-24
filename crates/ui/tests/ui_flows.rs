@@ -181,7 +181,9 @@ fn close_chat_shows_the_start_page() {
     assert!(h.query_by_label("Neu starten").is_none(), "a chat is open, no start page");
     h.get_by_label("×").click();
     h.run_steps(8);
-    assert!(engine.state().current.is_none(), "× closed the chat");
+    // chat.close runs on the engine's runtime; on a slow runner it lands after these frames.
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.current.is_none()), "× closed the chat");
+    h.run_steps(4);
     assert!(h.query_by_label("Neu starten").is_some() && h.query_by_label("Zeitpläne").is_some(), "the start page shows");
     assert!(h.get_all_by_label_contains("Hallo").count() >= 2, "greeting, and recent chats list it");
 

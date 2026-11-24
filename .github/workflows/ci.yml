@@ -44,10 +44,15 @@ jobs:
       - name: Install Linux system packages
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          # A runner sometimes gets only some package lists (2026-11-24: only Microsoft's), and
+          # every install then fails with "Unable to locate package"; retry the whole step.
+          for i in 1 2 3; do
+            sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y --no-install-recommends \
             pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev \
-            libgl1-mesa-dev libgtk-3-dev libasound2-dev libdbus-1-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev mesa-vulkan-drivers
+            libgl1-mesa-dev libgtk-3-dev libasound2-dev libdbus-1-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev mesa-vulkan-drivers && break
+            echo "apt failed, retry $i"; sleep 15
+          done
+          dpkg -s libwebkit2gtk-4.1-dev libgtk-3-dev >/dev/null
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -88,10 +93,15 @@ jobs:
       - name: Install Linux system packages
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          # A runner sometimes gets only some package lists (2026-11-24: only Microsoft's), and
+          # every install then fails with "Unable to locate package"; retry the whole step.
+          for i in 1 2 3; do
+            sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y --no-install-recommends \
             pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev \
-            libgl1-mesa-dev libgtk-3-dev libasound2-dev libdbus-1-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+            libgl1-mesa-dev libgtk-3-dev libasound2-dev libdbus-1-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev && break
+            echo "apt failed, retry $i"; sleep 15
+          done
+          dpkg -s libwebkit2gtk-4.1-dev libgtk-3-dev >/dev/null
 
       - uses: dtolnay/rust-toolchain@stable
         with:
