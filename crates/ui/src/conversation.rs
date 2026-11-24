@@ -16,12 +16,12 @@ impl AisCraftApp {
             return;
         }
         egui::Panel::bottom("composer-panel")
-            .show_separator_line(!self.tokens.designed())
+            .show_separator_line(false)
             .frame(Frame::new().inner_margin(Margin { left: 0, right: 0, top: 6, bottom: 10 }))
             .show(ui, |ui| {
                 centered(ui, |ui| self.composer(ui));
             });
-        let fade = self.tokens.designed().then(|| if self.tokens.glass.is_some() { self.tokens.main.gamma_multiply(0.6) } else { self.tokens.main });
+        let main = if self.tokens.glass.is_some() { self.tokens.main.gamma_multiply(0.6) } else { self.tokens.main };
         let out = ScrollArea::vertical().id_salt(("messages", self.state.current.clone())).stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
             centered(ui, |ui| {
                 ui.add_space(12.0);
@@ -35,86 +35,20 @@ impl AisCraftApp {
                         Role::Tool => continue,
                         _ => self.assistant_message(ui, m, Some(i) == last_assistant),
                     }
-                    ui.add_space(if self.tokens.designed() { 18.0 } else { 14.0 });
+                    ui.add_space(18.0);
                 }
                 self.approval_cards(ui);
                 ui.add_space(20.0);
             });
         });
-        // Mutig, Glas, Omarchy: lines scrolled to the top and bottom edge fade out instead of
-        // being cut, so nothing sharp sits right under the header or above the composer.
-        if let Some(main) = fade {
-            let r = out.inner_rect;
-            let clear = egui::Color32::TRANSPARENT;
-            let top = egui::Rect::from_min_size(r.min, egui::vec2(r.width() - 12.0, 26.0));
-            crate::backdrop::vertical_gradient(ui.painter(), top, egui::CornerRadius::ZERO, main, clear);
-            let bottom = egui::Rect::from_min_max(egui::pos2(r.left(), r.bottom() - 26.0), egui::pos2(r.right() - 12.0, r.bottom()));
-            crate::backdrop::vertical_gradient(ui.painter(), bottom, egui::CornerRadius::ZERO, clear, main);
-        }
-    }
-
-    fn header(&mut self, ui: &mut Ui) {
-        if self.tokens.designed() {
-            self.header_designed(ui);
-            return;
-        }
-        let t = self.tokens.clone();
-        Frame::new().inner_margin(Margin::symmetric(14, 8)).show(ui, |ui| {
-            // The buttons on the right are placed first; title and persona truncate into what is left, so a long
-            // name never makes the row (and with it the whole chat column) wider than the window.
-            let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y.max(22.0));
-            ui.allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
-                ui.set_max_width(row.x);
-                if self.state.current.is_some() && icon_button(ui, &t, "×", "Chat schließen, zur Startseite (Esc)").clicked() {
-                    self.close_chat();
-                }
-                self.inbox_button(ui);
-                if self.state.current.is_some() {
-                    if self.state.selection.kind == aiscraft_core::ConversationKind::Chat {
-                        self.context_meter(ui);
-                    }
-                    if icon_button(ui, &t, EXPORT_ICON, "Chat als Datei speichern (Strg+Umschalt+E)").clicked() {
-                        self.export_dialog();
-                    }
-                    if let Some(url) = self.state.current.as_ref().and_then(|id| {
-                        let c = self.state.conversation(id)?;
-                        let b = self.state.backend(&c.backend_id).filter(|b| b.config.kind == BackendKind::AisChat)?;
-                        let path = if c.kind == aiscraft_core::ConversationKind::Image {
-                            format!("/image-generation/d/{}", c.remote_id.as_deref().unwrap_or(&c.id))
-                        } else {
-                            aiscraft_core::ais_conversation_path(c.persona.as_ref(), &c.id)
-                        };
-                        Some(format!("{}{path}", b.config.base_url.trim_end_matches('/')))
-                    }) && icon_button(ui, &t, "↗", "In AIS.chat öffnen").clicked()
-                    {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-                    }
-                }
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    if !self.sidebar_open && icon_button(ui, &t, "☰", "Seitenleiste (Strg+B)").clicked() {
-                        self.sidebar_open = true;
-                    }
-                    let title = self.state.current.as_ref().and_then(|id| self.state.conversation(id)).map(|c| self.engine.reveal(&c.id, &c.title));
-                    if let Some(title) = &title {
-                        let r = ui
-                            .add(egui::Label::new(RichText::new(title).strong()).truncate().sense(egui::Sense::click()))
-                            .on_hover_text("Doppelklick zum Umbenennen");
-                        if r.double_clicked()
-                            && let Some(id) = self.state.current.clone()
-                        {
-                            self.dialog = Some(Dialog::Rename { id, title: title.clone() });
-                        }
-                    }
-                    if let Some(p) = self.state.selection.project_id.as_ref().and_then(|pid| self.state.projects.iter().find(|p| &p.id == pid)) {
-                        ui.add(egui::Label::new(small_muted(&t, format!("▣ {}", p.name))).truncate());
-                    }
-                    if let Some(p) = self.state.selection.persona.as_ref().filter(|_| self.state.current.is_some()) {
-                        let text = format!("{}: {}", p.kind.label(), p.name);
-                        ui.add(egui::Label::new(small_muted(&t, text.clone())).truncate()).on_hover_text(text);
-                    }
-                });
-            });
-        });
+        // Lines scrolled to the top and bottom edge fade out instead of being cut, so nothing
+        // sharp sits right under the header or above the composer.
+        let r = out.inner_rect;
+        let clear = egui::Color32::TRANSPARENT;
+        let top = egui::Rect::from_min_size(r.min, egui::vec2(r.width() - 12.0, 26.0));
+        crate::backdrop::vertical_gradient(ui.painter(), top, egui::CornerRadius::ZERO, main, clear);
+        let bottom = egui::Rect::from_min_max(egui::pos2(r.left(), r.bottom() - 26.0), egui::pos2(r.right() - 12.0, r.bottom()));
+        crate::backdrop::vertical_gradient(ui.painter(), bottom, egui::CornerRadius::ZERO, clear, main);
     }
 
     /// The link to this chat in AIS.chat, for chats there.
@@ -130,9 +64,9 @@ impl AisCraftApp {
         Some(format!("{}{path}", b.config.base_url.trim_end_matches('/')))
     }
 
-    /// Modern and Glas: the title in Bold with project chip and model · time underneath; on the
+    /// The title in Bold with project chip and model · time underneath; on the
     /// right the context pill, export, notifications and a menu with the rarer actions.
-    fn header_designed(&mut self, ui: &mut Ui) {
+    fn header(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let conv = self.state.current.as_ref().and_then(|id| self.state.conversation(id)).cloned();
         Frame::new().inner_margin(Margin { left: 28, right: 22, top: 16, bottom: 10 }).show(ui, |ui| {
@@ -281,13 +215,9 @@ impl AisCraftApp {
                 ui.close();
             }
         };
-        if t.designed() {
-            let model = if sel.model_id.is_empty() { label.clone() } else { self.state.model_name(&sel.backend_id, &sel.model_id) };
-            let r = model_chip(ui, &t, &model).on_hover_text(label);
-            egui::Popup::menu(&r).show(|ui| body(self, ui));
-        } else {
-            ui.menu_button(RichText::new(format!("{label}  ⏷")).color(t.muted), |ui| body(self, ui));
-        }
+        let model = if sel.model_id.is_empty() { label.clone() } else { self.state.model_name(&sel.backend_id, &sel.model_id) };
+        let r = model_chip(ui, &t, &model).on_hover_text(label);
+        egui::Popup::menu(&r).show(|ui| body(self, ui));
     }
 
     /// A new chat with an assistant, character or learning scenario: who it is, the task, the
@@ -360,19 +290,18 @@ impl AisCraftApp {
         let any_ready = self.state.backends.iter().any(|b| matches!(b.status, BackendStatus::Ready { .. }));
         // The start page: below the composer come the cards (crate::home), so the whole page scrolls.
         let home = self.state.selection.kind == aiscraft_core::ConversationKind::Chat;
-        let top = if home { (ui.available_height() * 0.07).clamp(12.0, 56.0) } else { (ui.available_height() * 0.22).max(20.0) };
-        if home && t.designed() {
+        if home {
             ScrollArea::vertical().id_salt("start-page").auto_shrink([false, false]).show(ui, |ui| {
                 ui.add_space(18.0);
-                centered_w(ui, 820.0, |ui| self.home_designed(ui, first));
+                centered_w(ui, 820.0, |ui| self.home_page(ui, first));
             });
             return;
         }
         ScrollArea::vertical().id_salt("start-page").auto_shrink([false, false]).show(ui, |ui| {
-            ui.add_space(top);
+            ui.add_space((ui.available_height() * 0.22).max(20.0));
             centered(ui, |ui| {
                 ui.vertical_centered(|ui| {
-                    crate::widgets::ais_logo(ui, if home { 34.0 } else { 46.0 }, t.accent);
+                    crate::widgets::ais_logo(ui, 46.0, t.accent);
                     ui.add_space(6.0);
                     let image_mode = self.state.selection.kind == aiscraft_core::ConversationKind::Image;
                     let greeting = match first {
@@ -424,9 +353,6 @@ impl AisCraftApp {
                         }
                     }
                 });
-                if home {
-                    self.home_cards(ui);
-                }
             });
         });
     }
@@ -459,17 +385,10 @@ impl AisCraftApp {
             return;
         }
         ui.with_layout(Layout::top_down(Align::Max), |ui| {
-            let designed = t.designed();
-            let max_w = if designed { (ui.available_width() * 0.8).min(470.0 - 36.0) } else { (ui.available_width() * 0.8).min(600.0) };
-            let (radius, margin) = if designed {
-                (CornerRadius { nw: t.r_bubble, ne: 6, sw: t.r_bubble, se: t.r_bubble }, Margin::symmetric(18, 12))
-            } else {
-                (CornerRadius::same(t.radius.saturating_add(4)), Margin::symmetric(14, 10))
-            };
+            let max_w = (ui.available_width() * 0.8).min(470.0 - 36.0);
+            let (radius, margin) = (CornerRadius { nw: t.r_bubble, ne: 6, sw: t.r_bubble, se: t.r_bubble }, Margin::symmetric(18, 12));
             let r = Frame::new().fill(t.user_bubble).corner_radius(radius).inner_margin(margin).show(ui, |ui| {
-                if designed {
-                    ui.visuals_mut().override_text_color = Some(t.user_text);
-                }
+                ui.visuals_mut().override_text_color = Some(t.user_text);
                 ui.set_max_width(max_w);
                 if !m.attachments.is_empty() {
                     ui.horizontal_wrapped(|ui| {
@@ -540,52 +459,30 @@ impl AisCraftApp {
             .usage
             .filter(|u| u.output_tokens > 0)
             .map(|u| format!("Tokens: {} Eingabe, {} Antwort", crate::home::thousands(u.input_tokens), crate::home::thousands(u.output_tokens)));
-        let model_label = |ui: &mut Ui, model: &str| {
-            let r = ui.label(small_muted(&t, model));
-            if let Some(tk) = &tokens {
-                r.on_hover_text(tk);
+        // Sender row: the logo tile, the service in Bold, the model.
+        let service =
+            self.state.current.as_ref().and_then(|c| self.state.conversation(c)).and_then(|c| self.state.backend(&c.backend_id)).map(|b| b.config.name.clone());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 9.0;
+            let (tile, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
+            let p = ui.painter();
+            p.rect(
+                tile,
+                CornerRadius::same(8),
+                egui::Color32::WHITE,
+                Stroke::new(1.0, if t.dark { egui::Color32::TRANSPARENT } else { t.border }),
+                egui::StrokeKind::Inside,
+            );
+            crate::kit::paint_logo(p, egui::Rect::from_center_size(tile.center(), egui::vec2(15.0, 12.8)), egui::Color32::from_rgb(0x10, 0x7f, 0xad));
+            ui.label(crate::theme::bold(service.unwrap_or_else(|| "AIS.ChatCraft".into())).size(14.0).color(t.text));
+            if let Some(model) = &m.model {
+                let r = ui.label(RichText::new(model).size(13.5).color(t.muted));
+                if let Some(tk) = &tokens {
+                    r.on_hover_text(tk);
+                }
             }
-        };
-        if t.designed() {
-            // Sender row: the logo tile, the service in Bold, the model.
-            let service = self
-                .state
-                .current
-                .as_ref()
-                .and_then(|c| self.state.conversation(c))
-                .and_then(|c| self.state.backend(&c.backend_id))
-                .map(|b| b.config.name.clone());
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 9.0;
-                let (tile, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
-                let p = ui.painter();
-                p.rect(
-                    tile,
-                    CornerRadius::same(8),
-                    egui::Color32::WHITE,
-                    Stroke::new(1.0, if t.dark { egui::Color32::TRANSPARENT } else { t.border }),
-                    egui::StrokeKind::Inside,
-                );
-                crate::kit::paint_logo(p, egui::Rect::from_center_size(tile.center(), egui::vec2(15.0, 12.8)), egui::Color32::from_rgb(0x10, 0x7f, 0xad));
-                ui.label(crate::theme::bold(service.unwrap_or_else(|| "AIS.ChatCraft".into())).size(14.0).color(t.text));
-                if let Some(model) = &m.model {
-                    let r = ui.label(RichText::new(model).size(13.5).color(t.muted));
-                    if let Some(tk) = &tokens {
-                        r.on_hover_text(tk);
-                    }
-                }
-                self.variant_switcher(ui, &m.id);
-            });
-        } else if self.state.variants.contains_key(&m.id) {
-            ui.horizontal(|ui| {
-                self.variant_switcher(ui, &m.id);
-                if let Some(model) = &m.model {
-                    model_label(ui, model);
-                }
-            });
-        } else if let Some(model) = &m.model {
-            model_label(ui, model);
-        }
+            self.variant_switcher(ui, &m.id);
+        });
         if !m.activity.is_empty() {
             let open_default = generating;
             egui::CollapsingHeader::new(small_muted(&t, format!("Arbeitsschritte ({})", m.activity.len())))
@@ -759,7 +656,7 @@ impl AisCraftApp {
                 });
             }
         }
-        if !generating && !m.content.is_empty() && t.designed() {
+        if !generating && !m.content.is_empty() {
             ui.add_space(2.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
@@ -931,38 +828,25 @@ impl AisCraftApp {
                 };
                 // One control: label, numbers and bar share a tooltip (the row is right to left).
                 let tip = format!("{tip}. {:.0} % von {} Tokens belegt.", frac * 100.0, fmt(w));
-                if t.designed() {
-                    let pct = format!("{prefix}{:.0} %", (frac * 100.0).max(if used > 0 { 1.0 } else { 0.0 }));
-                    let g1 = crate::kit::line(ui, "Kontext", crate::kit::font(12.5, crate::theme::SEMIBOLD), t.muted, 100.0);
-                    let g2 = crate::kit::line(ui, &pct, crate::kit::font(12.5, crate::theme::SEMIBOLD), t.text2, 100.0);
-                    let wdt = 12.0 + g1.size().x + 8.0 + 44.0 + 8.0 + g2.size().x + 12.0;
-                    let (rect, r) = ui.allocate_exact_size(egui::vec2(wdt, 30.0), egui::Sense::hover());
-                    let p = ui.painter();
-                    let stroke = if t.glass.is_some() { t.card_stroke } else { t.border };
-                    p.rect(rect, CornerRadius::same(15), t.surface, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
-                    let mut x = rect.left() + 12.0;
-                    let g1w = g1.size().x;
-                    p.galley(egui::pos2(x, rect.center().y - g1.size().y / 2.0), g1, t.muted);
-                    x += g1w + 8.0;
-                    let track = egui::Rect::from_min_size(egui::pos2(x, rect.center().y - 3.0), egui::vec2(44.0, 6.0));
-                    p.rect_filled(track, CornerRadius::same(3), if t.glass.is_some() { t.border } else { t.sunken });
-                    let mut fill = track;
-                    fill.set_width((44.0 * frac).max(6.0));
-                    p.rect_filled(fill, CornerRadius::same(3), color);
-                    p.galley(egui::pos2(track.right() + 8.0, rect.center().y - g2.size().y / 2.0), g2, t.text2);
-                    r.on_hover_text(format!("Kontext {prefix}{} / {}. {tip}", fmt(used), fmt(w)));
-                    return;
-                }
-                let group = ui.scope(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let (rect, _) = ui.allocate_exact_size(egui::vec2(56.0, 6.0), egui::Sense::hover());
-                    ui.painter().rect_filled(rect, CornerRadius::same(3), t.surface_hi);
-                    let mut fill = rect;
-                    fill.set_width((rect.width() * frac).max(2.0));
-                    ui.painter().rect_filled(fill, CornerRadius::same(3), color);
-                    ui.label(small_muted(t, format!("Kontext {prefix}{} / {}", fmt(used), fmt(w))));
-                });
-                group.response.interact(egui::Sense::hover()).on_hover_text(tip);
+                let pct = format!("{prefix}{:.0} %", (frac * 100.0).max(if used > 0 { 1.0 } else { 0.0 }));
+                let g1 = crate::kit::line(ui, "Kontext", crate::kit::font(12.5, crate::theme::SEMIBOLD), t.muted, 100.0);
+                let g2 = crate::kit::line(ui, &pct, crate::kit::font(12.5, crate::theme::SEMIBOLD), t.text2, 100.0);
+                let wdt = 12.0 + g1.size().x + 8.0 + 44.0 + 8.0 + g2.size().x + 12.0;
+                let (rect, r) = ui.allocate_exact_size(egui::vec2(wdt, 30.0), egui::Sense::hover());
+                let p = ui.painter();
+                let stroke = if t.glass.is_some() { t.card_stroke } else { t.border };
+                p.rect(rect, CornerRadius::same(15), t.surface, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+                let mut x = rect.left() + 12.0;
+                let g1w = g1.size().x;
+                p.galley(egui::pos2(x, rect.center().y - g1.size().y / 2.0), g1, t.muted);
+                x += g1w + 8.0;
+                let track = egui::Rect::from_min_size(egui::pos2(x, rect.center().y - 3.0), egui::vec2(44.0, 6.0));
+                p.rect_filled(track, CornerRadius::same(3), if t.glass.is_some() { t.border } else { t.sunken });
+                let mut fill = track;
+                fill.set_width((44.0 * frac).max(6.0));
+                p.rect_filled(fill, CornerRadius::same(3), color);
+                p.galley(egui::pos2(track.right() + 8.0, rect.center().y - g2.size().y / 2.0), g2, t.text2);
+                r.on_hover_text(format!("Kontext {prefix}{} / {}. {tip}", fmt(used), fmt(w)));
             }
             _ => {
                 ui.label(small_muted(t, format!("Kontext {prefix}{}", fmt(used))))
@@ -980,11 +864,7 @@ impl AisCraftApp {
         let on = [src.tools, src.memory_for(takes_label), src.project_for(takes_label), src.history].iter().filter(|x| **x).count();
         let label = if on == 4 && src.connectors.is_none() { "Quellen".to_string() } else { format!("Quellen ({on}/4)") };
         // Stays open while switching; closes with its button, the toggle button or Esc.
-        let toggle = if t.designed() {
-            crate::kit::pill(ui, &t, crate::kit::Pill::Chip, None, &label, 13.5, Some(crate::icons::Icon::ChevronDown))
-        } else {
-            ui.button(RichText::new(format!("{label}  ⏷")).color(t.muted))
-        };
+        let toggle = crate::kit::pill(ui, &t, crate::kit::Pill::Chip, None, &label, 13.5, Some(crate::icons::Icon::ChevronDown));
         let popup_id = egui::Popup::default_response_id(&toggle);
         egui::Popup::from_toggle_button_response(&toggle).close_behavior(egui::PopupCloseBehavior::IgnoreClicks).show(|ui| {
             ui.set_min_width(280.0);
@@ -1256,24 +1136,14 @@ impl AisCraftApp {
         let image_mode = self.state.current.as_ref().and_then(|c| self.state.conversation(c)).map(|c| c.kind).unwrap_or(self.state.selection.kind)
             == aiscraft_core::ConversationKind::Image;
         let mut send = false;
-        let designed = t.designed();
         let big = std::mem::take(&mut self.composer_big);
-        let frame = if designed {
-            let m = if big { Margin { left: 22, right: 16, top: 20, bottom: 14 } } else { Margin { left: 18, right: 14, top: 16, bottom: 12 } };
-            Frame::new()
-                .fill(t.composer)
-                .stroke(Stroke::new(1.0, t.composer_stroke))
-                .corner_radius(CornerRadius::same(t.r_composer))
-                .inner_margin(m)
-                .shadow(t.composer_shadow)
-        } else {
-            Frame::new()
-                .fill(t.surface)
-                .stroke(Stroke::new(1.0, t.border))
-                .corner_radius(CornerRadius::same(t.radius.saturating_add(6)))
-                .inner_margin(Margin::symmetric(14, 10))
-                .shadow(egui::epaint::Shadow { offset: [0, 2], blur: 12, spread: 0, color: egui::Color32::from_black_alpha(if t.dark { 60 } else { 18 }) })
-        };
+        let m = if big { Margin { left: 22, right: 16, top: 20, bottom: 14 } } else { Margin { left: 18, right: 14, top: 16, bottom: 12 } };
+        let frame = Frame::new()
+            .fill(t.composer)
+            .stroke(Stroke::new(1.0, t.composer_stroke))
+            .corner_radius(CornerRadius::same(t.r_composer))
+            .inner_margin(m)
+            .shadow(t.composer_shadow);
         frame.show(ui, |ui| {
             if !self.pending_files.is_empty() {
                 let remove = self.attachment_chips(ui);
@@ -1353,16 +1223,14 @@ impl AisCraftApp {
             } else {
                 "Schreib eine Nachricht …"
             };
-            let mut edit = egui::TextEdit::multiline(&mut self.composer)
+            let edit = egui::TextEdit::multiline(&mut self.composer)
                 .id(egui::Id::unique("composer"))
                 .hint_text(RichText::new(hint).color(t.muted))
-                .desired_rows(if designed && big { 3 } else { 2 })
+                .desired_rows(if big { 3 } else { 2 })
                 .desired_width(f32::INFINITY)
                 .frame(Frame::NONE)
-                .return_key(newline);
-            if designed {
-                edit = edit.font(egui::FontId::proportional(if big { 17.5 } else { 16.0 }));
-            }
+                .return_key(newline)
+                .font(egui::FontId::proportional(if big { 17.5 } else { 16.0 }));
             let r = ScrollArea::vertical().id_salt("composer-scroll").max_height(220.0).show(ui, |ui| ui.add(edit)).inner;
             if self.focus_composer && self.dialog.is_none() && self.palette.is_none() {
                 r.request_focus();
@@ -1375,86 +1243,10 @@ impl AisCraftApp {
                 self.composer.push_str(text.trim());
                 self.focus_composer = true;
             }
-            if designed {
-                ui.add_space(if big { 10.0 } else { 4.0 });
-                self.composer_tools_designed(ui, generating, image_mode, &mut send);
-                return;
-            }
-            // Send button first, on the right; the rest wraps into what is left, so a narrow window never
-            // pushes the composer (and the chat column) past its edge.
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if generating {
-                        if accent_button(ui, &t, "■").on_hover_text("Anhalten (Esc)").clicked() {
-                            self.run("chat.stop", json!({}));
-                        }
-                    } else {
-                        let ok = !self.composer.trim().is_empty() || !self.pending_files.is_empty() || !self.pending_links.is_empty();
-                        let b = ui.add_enabled(
-                            ok,
-                            egui::Button::new(RichText::new("⬆").strong().color(t.on_accent)).fill(t.accent).corner_radius(CornerRadius::same(t.radius)),
-                        );
-                        if b.on_hover_text("Senden").clicked() {
-                            send = true;
-                        }
-                    }
-                    ui.with_layout(Layout::left_to_right(Align::Center).with_main_wrap(true), |ui| {
-                        if self.state.recording {
-                            let level = self.engine.mic_level();
-                            let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 10.0), egui::Sense::hover());
-                            ui.painter().rect_filled(rect, CornerRadius::same(4), t.surface_hi);
-                            let mut fill = rect;
-                            fill.set_width((rect.width() * (level * 3.0).clamp(0.05, 1.0)).max(2.0));
-                            ui.painter().rect_filled(fill, CornerRadius::same(4), t.danger);
-                            if ui.add(egui::Button::new(RichText::new("■ Diktat beenden").color(t.danger))).clicked() {
-                                let engine = self.engine.clone();
-                                let out = self.dictated.clone();
-                                std::thread::spawn(move || match engine.call("voice.record_stop", json!({})) {
-                                    Ok(v) => {
-                                        if let (Some(t), Ok(mut slot)) = (v.get("text").and_then(|x| x.as_str()), out.lock()) {
-                                            *slot = Some(t.to_string());
-                                        }
-                                    }
-                                    Err(e) => {
-                                        engine.ctx().notice(aiscraft_engine::NoticeLevel::Error, e.message);
-                                    }
-                                });
-                            }
-                            ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
-                        } else if icon_button(ui, &t, "🎤", "Diktieren").clicked() {
-                            self.run("voice.record_start", json!({}));
-                        }
-                        if !image_mode
-                            && icon_button(ui, &t, "📎", "Dateien anhängen (oder hineinziehen)").clicked()
-                            && let Some(files) = rfd::FileDialog::new().pick_files()
-                        {
-                            self.take_files(files);
-                        }
-                        if !image_mode && self.link_input.is_none() && icon_button(ui, &t, "🌐", "Webseite anhängen (bis zu 5 Links)").clicked() {
-                            self.link_input = Some(String::new());
-                        }
-                        self.model_picker(ui);
-                        if image_mode {
-                            let cur = self.state.selection.aspect_ratio.clone();
-                            let label = aiscraft_core::ASPECT_RATIOS.iter().find(|(k, _)| *k == cur).map(|(_, l)| *l).unwrap_or("Quadratisch");
-                            ui.menu_button(RichText::new(format!("{label}  ⏷")).color(t.muted), |ui| {
-                                for (k, l) in aiscraft_core::ASPECT_RATIOS {
-                                    if ui.add(egui::Button::selectable(k == cur || (cur.is_empty() && k == "quadratic"), l)).clicked() {
-                                        self.run("chat.set_aspect", json!({"ratio": k}));
-                                        ui.close();
-                                    }
-                                }
-                            });
-                        } else {
-                            self.sources_menu(ui);
-                            self.privacy_switch(ui);
-                            self.create_menu(ui);
-                        }
-                    });
-                });
-            });
+            ui.add_space(if big { 10.0 } else { 4.0 });
+            self.composer_tools(ui, generating, image_mode, &mut send);
         });
-        if !(designed && big) {
+        if !big {
             self.context_hint(ui);
         }
         if send && !generating {
@@ -1473,9 +1265,9 @@ impl AisCraftApp {
         }
     }
 
-    /// Modern and Glas: attach and link icons, the model, "Quellen" and "Erstellen" as filled
+    /// Attach and link icons, the model, "Quellen" and "Erstellen" as filled
     /// chips, the microphone and the round send button.
-    fn composer_tools_designed(&mut self, ui: &mut Ui, generating: bool, image_mode: bool, send: &mut bool) {
+    fn composer_tools(&mut self, ui: &mut Ui, generating: bool, image_mode: bool, send: &mut bool) {
         let t = self.tokens.clone();
         // A narrow composer (next to a panel, small window): "Erstellen" becomes the sparkle icon.
         let compact = ui.available_width() < 560.0;
@@ -1669,9 +1461,6 @@ fn short_url(url: &str) -> String {
     let s = url.split_once("://").map(|(_, r)| r).unwrap_or(url).trim_end_matches('/');
     if s.chars().count() > 48 { format!("{}…", s.chars().take(47).collect::<String>()) } else { s.to_string() }
 }
-
-/// Saving the chat as a file (Markdown or JSON).
-pub(crate) const EXPORT_ICON: &str = "📤";
 
 /// A login handle ("uds2027", "j.renz") is no name to greet someone with.
 fn looks_like_a_name(word: &str) -> bool {

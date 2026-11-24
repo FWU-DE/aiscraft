@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::app::AisCraftApp;
 use crate::dialogs::{Dialog, SettingsTab};
 use crate::icons::Icon;
-use crate::widgets::{bell_button, card, muted, plain, small_muted, status_dot};
+use crate::widgets::{bell_button, muted, plain, small_muted, status_dot};
 
 /// Gap between cards.
 const GAP: f32 = 12.0;
@@ -101,7 +101,7 @@ fn bar(ui: &mut Ui, t: &crate::theme::Tokens, used: f32) -> egui::Response {
 fn card_head(ui: &mut Ui, t: &crate::theme::Tokens, title: &str, link: Option<&str>) -> bool {
     let mut clicked = false;
     ui.horizontal(|ui| {
-        ui.label(if t.designed() { crate::theme::bold(title).size(16.0) } else { RichText::new(title).strong() });
+        ui.label(crate::theme::bold(title).size(16.0));
         if let Some(link) = link {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 clicked = ui.add(egui::Button::new(RichText::new(link).color(t.accent).small()).frame(false)).clicked();
@@ -125,29 +125,6 @@ impl AisCraftApp {
 
     fn ais_ready(&self) -> Vec<aiscraft_engine::BackendView> {
         self.state.backends.iter().filter(|b| b.config.kind == BackendKind::AisChat && matches!(b.status, BackendStatus::Ready { .. })).cloned().collect()
-    }
-
-    /// The cards under the composer on the start page.
-    pub(crate) fn home_cards(&mut self, ui: &mut Ui) {
-        self.refresh_home_usage();
-        self.decode_budget = self.decode_budget.max(4);
-        let two = ui.available_width() >= TWO_COLUMNS;
-        ui.add_space(24.0);
-        let unread = self.state.inbox.iter().any(|i| !i.read);
-        if unread {
-            self.inbox_card(ui);
-            ui.add_space(GAP);
-        }
-        self.favorites_card(ui);
-        ui.add_space(GAP);
-        self.card_row(ui, two, Self::quick_card, Self::recent_card);
-        ui.add_space(GAP);
-        self.card_row(ui, two, Self::schedules_card, Self::usage_card);
-        if !unread && !self.state.inbox.is_empty() {
-            ui.add_space(GAP);
-            self.inbox_card(ui);
-        }
-        ui.add_space(24.0);
     }
 
     fn card_row(&mut self, ui: &mut Ui, two: bool, a: fn(&mut Self, &mut Ui), b: fn(&mut Self, &mut Ui)) {
@@ -174,149 +151,10 @@ impl AisCraftApp {
     /// A card that fills the width it is given.
     fn home_card(&mut self, ui: &mut Ui, add: impl FnOnce(&mut Self, &mut Ui)) {
         let t = self.tokens.clone();
-        let frame = if t.designed() { crate::kit::card_frame(&t).inner_margin(egui::Margin::same(16)) } else { card(&t) };
+        let frame = crate::kit::card_frame(&t).inner_margin(egui::Margin::same(16));
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(self, ui);
-        });
-    }
-
-    fn favorites_card(&mut self, ui: &mut Ui) {
-        self.home_card(ui, |app, ui| {
-            let t = app.tokens.clone();
-            let ais = app.ais_ready();
-            if card_head(ui, &t, "Favoriten", (!ais.is_empty()).then_some("Alle entdecken")) {
-                app.open_explore();
-            }
-            if ais.is_empty() {
-                ui.add(egui::Label::new(muted(&t, "Deine Lieblings-Assistenten, -Dialogpartner und -Lernszenarien aus AIS.chat stehen hier, sobald du angemeldet bist.")).wrap());
-                if let Some(id) = app.state.backends.iter().find(|b| b.config.kind == BackendKind::AisChat).map(|b| b.config.id.clone()) {
-                    ui.add_space(6.0);
-                    if ui.button("Bei AIS.chat anmelden").clicked() {
-                        app.dialog = Some(Dialog::login(&id));
-                    }
-                }
-                return;
-            }
-            app.prefetch_personas(false);
-            let favorites: Vec<(String, PersonaInfo)> =
-                ais.iter().flat_map(|b| b.personas.iter().flatten().filter(|p| p.favorite).map(|p| (b.config.id.clone(), p.clone()))).take(8).collect();
-            if favorites.is_empty() {
-                if ais.iter().all(|b| b.personas.is_none() && b.personas_error.is_none()) {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Spinner::new().size(12.0));
-                        ui.label(small_muted(&t, "Lädt …"));
-                    });
-                } else if let Some(e) = ais.iter().find_map(|b| b.personas_error.clone()) {
-                    ui.add(egui::Label::new(small_muted(&t, e)).wrap());
-                } else {
-                    ui.add(
-                        egui::Label::new(muted(&t, "Noch keine Favoriten. Markiere Assistenten, Dialogpartner oder Lernszenarien mit einem Stern, dann startest du sie hier mit einem Klick."))
-                            .wrap(),
-                    );
-                    ui.add_space(6.0);
-                    if ui.button("👥  Entdecken").clicked() {
-                        app.open_explore();
-                    }
-                }
-                return;
-            }
-            let w = ui.available_width();
-            let n = (((w + 8.0) / (190.0 + 8.0)).floor() as usize).clamp(1, 4);
-            let tile_w = ((w - 8.0 * (n as f32 - 1.0)) / n as f32).max(60.0);
-            for chunk in favorites.chunks(n) {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    for (backend, p) in chunk {
-                        if app.favorite_tile(ui, backend, p, tile_w).clicked() {
-                            app.start_persona(backend, p.kind, &p.id, None);
-                        }
-                    }
-                });
-                ui.add_space(4.0);
-            }
-        });
-    }
-
-    fn favorite_tile(&mut self, ui: &mut Ui, backend: &str, p: &PersonaInfo, w: f32) -> egui::Response {
-        let t = self.tokens.clone();
-        let (rect, resp) = ui.allocate_exact_size(vec2(w, 52.0), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &p.name));
-        let hovered = resp.hovered() || resp.has_focus();
-        ui.painter().rect(
-            rect,
-            CornerRadius::same(t.radius),
-            if hovered { t.surface_hi } else { t.surface },
-            egui::Stroke::new(1.0, if hovered { t.accent } else { t.border }),
-            egui::StrokeKind::Inside,
-        );
-        let pic = egui::Rect::from_min_size(rect.min + vec2(8.0, 8.0), vec2(36.0, 36.0));
-        self.paint_persona_picture(ui, pic, backend, p, 8, false);
-        let text = egui::Rect::from_min_max(egui::pos2(pic.right() + 10.0, rect.top() + 7.0), egui::pos2(rect.right() - 8.0, rect.bottom() - 6.0));
-        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text).layout(Layout::top_down(Align::Min)));
-        child.spacing_mut().item_spacing.y = 1.0;
-        child.add(egui::Label::new(RichText::new(&p.name).strong()).truncate().selectable(false));
-        child.add(egui::Label::new(small_muted(&t, p.kind.label())).truncate().selectable(false));
-        resp.on_hover_text(format!("Neuer Chat: {} {}", p.kind.label(), p.name))
-    }
-
-    fn quick_card(&mut self, ui: &mut Ui) {
-        self.home_card(ui, |app, ui| {
-            let t = app.tokens.clone();
-            card_head(ui, &t, "Neu starten", None);
-            let w = ui.available_width();
-            let row = |ui: &mut Ui, text: &str, tip: &str| {
-                ui.add(egui::Button::new(text).min_size(vec2(w, 28.0)).corner_radius(CornerRadius::same(t.radius.saturating_sub(2)))).on_hover_text(tip)
-            };
-            if row(ui, "+  Chat", "Neuer Chat (Strg+N); Modell wählst du unten im Eingabefeld").clicked() {
-                app.new_chat();
-            }
-            let sel = app.state.selection.backend_id.clone();
-            let image = app
-                .state
-                .backends
-                .iter()
-                .filter(|b| matches!(b.status, BackendStatus::Ready { .. }) && !b.image_models.is_empty())
-                .min_by_key(|b| b.config.id != sel)
-                .map(|b| (b.config.id.clone(), b.config.name.clone()));
-            if let Some((id, name)) = image
-                && row(ui, "+  Bild", &format!("Bild-Chat mit {name}")).clicked()
-            {
-                app.explore = None;
-                app.run("chat.new_image", json!({"backend": id}));
-                app.focus_composer = true;
-            }
-            if row(ui, "📄  Dokument", "Ein neues, leeres Dokument neben dem Chat").clicked() {
-                app.run("artifact.create", json!({"kind": "document"}));
-            }
-            if row(ui, "▣  Whiteboard", "Ein neues, leeres Whiteboard neben dem Chat").clicked() {
-                app.run("artifact.create", json!({"kind": "board"}));
-            }
-        });
-    }
-
-    fn recent_card(&mut self, ui: &mut Ui) {
-        self.home_card(ui, |app, ui| {
-            let t = app.tokens.clone();
-            card_head(ui, &t, "Zuletzt", None);
-            let recent: Vec<_> = {
-                let mut all: Vec<_> = app.state.conversations.iter().collect();
-                all.sort_by_key(|c| std::cmp::Reverse(c.updated_at));
-                all.into_iter().take(5).map(|c| (c.id.clone(), c.title.clone(), c.updated_at)).collect()
-            };
-            if recent.is_empty() {
-                ui.label(muted(&t, "Noch keine Chats. Schreib oben einfach los."));
-                return;
-            }
-            let now = aiscraft_engine::now_ms();
-            let w = ui.available_width();
-            for (id, title, at) in recent {
-                let title = if title.trim().is_empty() { "Ohne Titel".to_string() } else { title };
-                let r = ui.add(egui::Button::new(title).right_text(small_muted(&t, when(at, now))).frame(false).truncate().min_size(vec2(w, 24.0)));
-                if r.clicked() {
-                    app.run("chat.open", json!({"id": id}));
-                }
-            }
         });
     }
 
@@ -570,7 +408,7 @@ pub(crate) fn date_and_greeting(now: i64) -> (String, &'static str) {
 impl AisCraftApp {
     /// The start page of Modern and Glas: date, greeting, the large composer, prompt starters,
     /// favourites from AIS.chat, what was worked on last, then schedules, usage and notices.
-    pub(crate) fn home_designed(&mut self, ui: &mut Ui, first: Option<String>) {
+    pub(crate) fn home_page(&mut self, ui: &mut Ui, first: Option<String>) {
         let t = self.tokens.clone();
         self.refresh_home_usage();
         self.decode_budget = self.decode_budget.max(4);
@@ -610,9 +448,9 @@ impl AisCraftApp {
             ui.add_space(GAP);
         }
         ui.add_space(16.0);
-        self.favorites_designed(ui, w);
+        self.favorites_section(ui, w);
         ui.add_space(24.0);
-        self.recent_designed(ui, w);
+        self.recent_section(ui, w);
         ui.add_space(24.0);
         let unread = self.state.inbox.iter().any(|i| !i.read);
         if unread {
@@ -634,10 +472,10 @@ impl AisCraftApp {
         if self.state.backends.iter().any(|b| matches!(b.status, BackendStatus::Ready { .. })) {
             return;
         }
-        let frame = if t.designed() { crate::kit::card_frame(&t) } else { card(&t) };
+        let frame = crate::kit::card_frame(&t);
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(crate::theme::title(&t, "Noch nicht verbunden"));
+            ui.label(crate::theme::bold("Noch nicht verbunden"));
             ui.label(muted(&t, "Melde dich bei AIS.chat an oder füge einen anderen Dienst hinzu (OpenAI, Claude, Ollama, LM Studio …)."));
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -672,7 +510,7 @@ impl AisCraftApp {
         clicked
     }
 
-    fn favorites_designed(&mut self, ui: &mut Ui, w: f32) {
+    fn favorites_section(&mut self, ui: &mut Ui, w: f32) {
         let t = self.tokens.clone();
         let ais = self.ais_ready();
         if self.section_title(ui, Icon::Star, t.accent2, "Favoriten aus AIS.chat", (!ais.is_empty()).then_some("Alle anzeigen")) {
@@ -766,7 +604,7 @@ impl AisCraftApp {
     }
 
     /// The three things worked on last: chats, documents and whiteboards by their last change.
-    fn recent_designed(&mut self, ui: &mut Ui, w: f32) {
+    fn recent_section(&mut self, ui: &mut Ui, w: f32) {
         let t = self.tokens.clone();
         self.section_title(ui, Icon::History, t.text2, "Zuletzt bearbeitet", None);
         enum Item {
@@ -900,13 +738,6 @@ mod tests {
             for c in ['×', '📄', '▣', '★', '☆', '+', '•', '?', '⚙', '☰', '⌘', '⟳', '🗐', '🔊', '🎤', '📎', '🌐'] {
                 if !ui.fonts_mut(|f| f.has_glyph(&font, c)) {
                     missing.push(c);
-                }
-            }
-            for s in [crate::sidebar::EXPLORE_ICON, crate::conversation::EXPORT_ICON] {
-                for c in s.chars() {
-                    if !ui.fonts_mut(|f| f.has_glyph(&font, c)) {
-                        missing.push(c);
-                    }
                 }
             }
         });

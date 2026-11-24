@@ -627,9 +627,6 @@ impl Tokens {
     /// The tokens inside the sidebar: its own text, muted and line colours (Modern's sidebar is
     /// dark in the light scheme too), so plain widgets there stay readable.
     pub fn for_sidebar(&self) -> Tokens {
-        if !self.designed() {
-            return self.clone();
-        }
         let mut t = self.clone();
         t.text = self.side_text2;
         t.muted = self.side_muted;
@@ -643,11 +640,10 @@ impl Tokens {
         t
     }
 
-    /// Modern, Glas and Omarchy: the new anatomy (icons, greeting, cards, pills).
-    /// Always true since Klassisch is gone; the flat branches behind `!designed()` are dead and
-    /// get removed in a follow-up cleanup.
+    /// Always true since Klassisch is gone. Only kept for `worksheet.rs` until the worksheet
+    /// branch is merged; new code must not call it.
     pub fn designed(&self) -> bool {
-        matches!(self.look, Look::Modern | Look::Glas | Look::Omarchy)
+        true
     }
 
     /// Modern and Omarchy: panels flush to each other (no floating glass).
@@ -657,29 +653,20 @@ impl Tokens {
 
     /// Corners of buttons, fields and menus (AIS.chat: `--radius` 0.5rem); cards use `radius`.
     pub fn control_radius(&self) -> u8 {
-        if self.designed() { 12 } else { self.radius.saturating_sub(4) }
+        12
     }
 
     /// The syntax theme for code blocks: one whose colours stay readable on `code_bg`
     /// (`base16-ocean.light` has strings at about 1.9:1 on a light background). Modern and Glas
     /// put code on a dark block in both schemes.
     pub fn code_theme(&self) -> String {
-        if self.designed() {
-            let c = self.opaque(self.code_bg);
-            format!("aiscraft-{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
-        } else if self.dark {
-            "base16-ocean.dark".into()
-        } else {
-            "InspiredGitHub".into()
-        }
+        let c = self.opaque(self.code_bg);
+        format!("aiscraft-{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
     }
 
     /// Modern and Glas: a syntax theme (tmTheme) on the code block's own background, with the
     /// designs' colours for comments, keywords, strings and numbers.
     pub fn code_theme_xml(&self) -> Option<String> {
-        if !self.designed() {
-            return None;
-        }
         let h = |c: Color32| format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b());
         let rule = |scope: &str, color: &str| {
             format!("<dict><key>scope</key><string>{scope}</string><key>settings</key><dict><key>foreground</key><string>{color}</string></dict></dict>")
@@ -709,21 +696,20 @@ impl Tokens {
 
     pub fn visuals(&self) -> Visuals {
         let mut v = if self.dark { Visuals::dark() } else { Visuals::light() };
-        let designed = self.designed();
-        v.panel_fill = if designed { self.opaque(self.main) } else { self.bg };
-        v.window_fill = if designed { self.opaque(self.modal) } else { self.surface };
-        v.extreme_bg_color = if designed { self.opaque(self.surface) } else { self.surface };
+        v.panel_fill = self.opaque(self.main);
+        v.window_fill = self.opaque(self.modal);
+        v.extreme_bg_color = self.opaque(self.surface);
         v.faint_bg_color = self.opaque(self.surface_hi);
-        v.code_bg_color = if designed { self.opaque(self.sunken) } else { self.code_bg };
+        v.code_bg_color = self.opaque(self.sunken);
         v.hyperlink_color = self.link;
         v.override_text_color = Some(self.text);
         v.selection.bg_fill = self.opaque(self.selection);
         v.selection.stroke = Stroke::new(1.0, self.accent);
-        v.window_corner_radius = CornerRadius::same(if designed { 24 } else { self.radius.saturating_add(4) });
+        v.window_corner_radius = CornerRadius::same(24);
         v.menu_corner_radius = CornerRadius::same(self.control_radius());
         let shade = if self.dark { Color32::from_black_alpha(90) } else { Color32::from_rgba_unmultiplied(0, 41, 102, 26) };
         v.popup_shadow = Shadow { offset: [0, 4], blur: 12, spread: 0, color: shade };
-        v.window_shadow = if designed { self.modal_shadow } else { Shadow { offset: [0, 8], blur: 28, spread: 0, color: shade } };
+        v.window_shadow = self.modal_shadow;
         v.window_stroke = Stroke::NONE;
         v.error_fg_color = self.danger;
         v.warn_fg_color = self.warning;
@@ -741,10 +727,10 @@ impl Tokens {
             w.weak_bg_fill = fill;
             w.fg_stroke = Stroke::new(1.0, self.text);
         }
-        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, if designed { self.opaque(self.border) } else { self.border });
+        v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, self.opaque(self.border));
         v.widgets.inactive.bg_stroke = Stroke::NONE;
         v.widgets.hovered.bg_stroke = Stroke::NONE;
-        let r = if designed { 12 } else { 10 };
+        let r = 12;
         v.widgets.inactive.corner_radius = CornerRadius::same(r);
         v.widgets.hovered.corner_radius = CornerRadius::same(r);
         v.widgets.active.corner_radius = CornerRadius::same(r);
@@ -753,24 +739,21 @@ impl Tokens {
 
     pub fn apply(&self, ctx: &egui::Context, zoom: f32) {
         ctx.set_visuals(self.visuals());
-        let designed = self.designed();
         ctx.global_style_mut(|s| {
             s.spacing.item_spacing = egui::vec2(8.0, 6.0);
             s.spacing.button_padding = egui::vec2(12.0, 6.0);
             s.spacing.menu_margin = Margin::same(8);
             s.spacing.window_margin = Margin::same(16);
             s.spacing.interact_size.y = 30.0;
-            // Type scale on Barlow (design/README.md): body 15.5 (16 in Klassisch), UI 14.5,
-            // small 13, titles in Bold (SemiBold in Klassisch). install_fonts registers the
-            // families before the first apply.
-            let medium = FontFamily::Name(MEDIUM.into());
-            let heading = FontFamily::Name(if designed { BOLD } else { SEMIBOLD }.into());
-            let button = FontFamily::Name(if designed { SEMIBOLD } else { MEDIUM }.into());
+            // Type scale on Barlow (design/README.md): body 15.5, UI 14.5, small 13, titles in
+            // Bold. install_fonts registers the families before the first apply.
+            let heading = FontFamily::Name(BOLD.into());
+            let button = FontFamily::Name(SEMIBOLD.into());
             s.text_styles = [
                 (TextStyle::Small, FontId::new(13.0, FontFamily::Proportional)),
-                (TextStyle::Body, FontId::new(if designed { 15.5 } else { 16.0 }, FontFamily::Proportional)),
-                (TextStyle::Button, FontId::new(14.5, if designed { button } else { medium })),
-                (TextStyle::Heading, FontId::new(if designed { 23.0 } else { 24.0 }, heading)),
+                (TextStyle::Body, FontId::new(15.5, FontFamily::Proportional)),
+                (TextStyle::Button, FontId::new(14.5, button)),
+                (TextStyle::Heading, FontId::new(23.0, heading)),
                 (TextStyle::Monospace, FontId::new(13.5, FontFamily::Monospace)),
             ]
             .into();
@@ -993,11 +976,6 @@ pub fn bold(text: impl Into<String>) -> egui::RichText {
     egui::RichText::new(text).family(FontFamily::Name(BOLD.into()))
 }
 
-/// Titles: Bold in Modern and Glas, SemiBold in Omarchy.
-pub fn title(t: &Tokens, text: impl Into<String>) -> egui::RichText {
-    if t.designed() { bold(text) } else { semibold(text) }
-}
-
 fn fc_match(query: &str) -> Option<PathBuf> {
     let out = std::process::Command::new("fc-match").args(["-f", "%{file}", query]).output().ok()?;
     let path = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
@@ -1014,7 +992,7 @@ mod tests {
         let t = Tokens::from_omarchy("mode = \"dark\"\naccent = \"#e96429\"\nbackground = \"#1d1a18\"\nforeground = \"#fff3e9\"\nred = \"#f55050\"").unwrap();
         assert!(t.dark);
         assert_eq!(t.look, Look::Omarchy);
-        assert!(t.designed() && t.flush_modern(), "Omarchy has Modern's structure");
+        assert!(t.flush_modern(), "Omarchy has Modern's structure");
         assert_eq!(t.r_composer, Tokens::modern_dark().r_composer);
         assert_eq!(t.accent, Color32::from_rgb(0xe9, 0x64, 0x29));
         assert!(contrast(t.danger, t.bg) >= 4.5);

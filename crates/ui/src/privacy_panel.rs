@@ -66,11 +66,7 @@ impl AisCraftApp {
         } else {
             "Für diesen Chat ausgeschaltet. Klicken schaltet es wieder ein."
         };
-        let r = if t.designed() {
-            crate::kit::pill(ui, &t, if on { crate::kit::Pill::Soft } else { crate::kit::Pill::Chip }, Some(crate::icons::Icon::Lock), label, 13.5, None)
-        } else {
-            ui.add(egui::Button::selectable(on, RichText::new(label).color(if on { t.accent } else { t.muted })))
-        };
+        let r = crate::kit::pill(ui, &t, if on { crate::kit::Pill::Soft } else { crate::kit::Pill::Chip }, Some(crate::icons::Icon::Lock), label, 13.5, None);
         if r.on_hover_text(hint).clicked() {
             self.run("chat.set_sources", json!({"protect": !on}));
         }

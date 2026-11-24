@@ -86,8 +86,8 @@ const NARROW_WINDOW: f32 = 1000.0;
 
 pub(crate) const CONTENT_WIDTH: f32 = 760.0;
 
-/// The frames of sidebar, artifact panel and chat area for a look: flush panels (Klassisch,
-/// Modern) or floating glass surfaces 12 px apart with radius 24 (Glas).
+/// The frames of sidebar, artifact panel and chat area for a look: flush panels (Modern,
+/// Omarchy) or floating glass surfaces 12 px apart with radius 24 (Glas).
 struct PanelFrames {
     sidebar: Frame,
     sidebar_width: f32,
@@ -608,7 +608,7 @@ impl eframe::App for AisCraftApp {
         let mut sidebar_open = before;
         egui::Panel::left("sidebar")
             .resizable(true)
-            .show_separator_line(!t.designed())
+            .show_separator_line(false)
             .default_size(frames.sidebar_width)
             .size_range(200.0..=420.0)
             .frame(frames.sidebar)
@@ -622,8 +622,8 @@ impl eframe::App for AisCraftApp {
             let w = ui.available_width();
             egui::Panel::right("artifact")
                 .resizable(true)
-                .show_separator_line(!t.designed())
-                .default_size(if t.designed() { (w * 0.46).clamp(380.0, 760.0) } else { (w * 0.45).clamp(360.0, 760.0) })
+                .show_separator_line(false)
+                .default_size((w * 0.46).clamp(380.0, 760.0))
                 .size_range(320.0..=(w - 360.0).max(340.0))
                 .frame(frames.panel)
                 .show(ui, |ui| {
