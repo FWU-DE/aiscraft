@@ -11,7 +11,7 @@ use reqwest::header::{CONTENT_TYPE, LOCATION};
 use reqwest::{RequestBuilder, Response};
 use serde_json::{Value, json};
 
-use crate::http::{base, client, net_err, status_error};
+use crate::http::{attributed, base, client, net_err, status_error};
 
 /// Audio chunks as they arrive from the server.
 pub type AudioStream = BoxStream<'static, Result<Bytes>>;
@@ -89,7 +89,8 @@ pub async fn speak_openai(base_url: &str, api_key: Option<&str>, model: &str, vo
     if model.trim().is_empty() || voice.trim().is_empty() {
         return Err(Error::invalid("Modell und Stimme für die Sprachausgabe angeben."));
     }
-    let mut rb = client(true)?.post(format!("{base}/audio/speech")).json(&openai_speech_body(model.trim(), voice.trim(), text)).header("Accept", "audio/mpeg");
+    let url = format!("{base}/audio/speech");
+    let mut rb = attributed(client(true)?.post(&url), &url).json(&openai_speech_body(model.trim(), voice.trim(), text)).header("Accept", "audio/mpeg");
     if let Some(k) = api_key.map(str::trim).filter(|k| !k.is_empty()) {
         rb = rb.bearer_auth(k);
     }

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use aiscraft_core::{Error, Result};
 use futures::StreamExt;
-use reqwest::{Response, StatusCode};
+use reqwest::{RequestBuilder, Response, StatusCode};
 
 pub const USER_AGENT: &str = concat!("AIS.ChatCraft/", env!("CARGO_PKG_VERSION"));
 
@@ -15,6 +15,12 @@ pub fn client(follow_redirects: bool) -> Result<reqwest::Client> {
         .redirect(if follow_redirects { reqwest::redirect::Policy::limited(5) } else { reqwest::redirect::Policy::none() })
         .build()
         .map_err(|e| Error::network(format!("HTTP-Client: {e}")))
+}
+
+/// Adds the headers OpenRouter and the Vercel AI Gateway use to name AIS.ChatCraft, when `url`
+/// points there ([`aiscraft_core::attribution_headers`]). Other providers get only the User-Agent.
+pub fn attributed(rb: RequestBuilder, url: &str) -> RequestBuilder {
+    aiscraft_core::attribution_headers(url).iter().fold(rb, |rb, (k, v)| rb.header(*k, *v))
 }
 
 pub fn net_err(e: reqwest::Error) -> Error {
@@ -73,4 +79,27 @@ pub async fn read_capped(resp: Response, cap: usize) -> Result<Vec<u8>> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Speech requests (`/audio/speech`, `/audio/transcriptions`) carry the attribution headers
+    /// for OpenRouter and the Vercel AI Gateway, next to the key; other providers do not.
+    #[test]
+    fn speech_requests_name_the_app_where_the_provider_reads_it() {
+        let http = client(true).unwrap();
+        for (url, expected) in [
+            ("https://openrouter.ai/api/v1/audio/speech", true),
+            ("https://ai-gateway.vercel.sh/v1/audio/transcriptions", true),
+            ("https://api.openai.com/v1/audio/speech", false),
+        ] {
+            let req = attributed(http.post(url), url).bearer_auth("sk-test").build().unwrap();
+            let h = req.headers();
+            assert_eq!(h.get("authorization").and_then(|v| v.to_str().ok()), Some("Bearer sk-test"), "{url}");
+            assert_eq!(h.get("http-referer").and_then(|v| v.to_str().ok()), expected.then_some("https://github.com/FWU-DE/aiscraft"), "{url}");
+            assert_eq!(h.get("x-title").and_then(|v| v.to_str().ok()), expected.then_some("AIS.ChatCraft"), "{url}");
+        }
+    }
 }

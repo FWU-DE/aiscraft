@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use aiscraft_core::{Error, Result};
 use futures::StreamExt;
-use reqwest::{Response, StatusCode};
+use reqwest::{RequestBuilder, Response, StatusCode};
 
 pub const USER_AGENT: &str = concat!("AIS.ChatCraft/", env!("CARGO_PKG_VERSION"));
 
@@ -14,6 +14,12 @@ pub fn client(follow_redirects: bool) -> Result<reqwest::Client> {
         .redirect(if follow_redirects { reqwest::redirect::Policy::limited(5) } else { reqwest::redirect::Policy::none() })
         .build()
         .map_err(|e| Error::network(format!("HTTP-Client: {e}")))
+}
+
+/// Adds the headers OpenRouter and the Vercel AI Gateway use to name AIS.ChatCraft, when `url`
+/// points there ([`aiscraft_core::attribution_headers`]). Other providers get only the User-Agent.
+pub fn attributed(rb: RequestBuilder, url: &str) -> RequestBuilder {
+    aiscraft_core::attribution_headers(url).iter().fold(rb, |rb, (k, v)| rb.header(*k, *v))
 }
 
 pub fn net_err(e: reqwest::Error) -> Error {

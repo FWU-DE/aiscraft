@@ -5,7 +5,7 @@ use aiscraft_core::{AccountInfo, BackendConfig, Capabilities, ChatRequest, Error
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
 
-use crate::http::{client, json as read_json, net_err, status_error};
+use crate::http::{attributed, client, json as read_json, net_err, status_error};
 use crate::sse::event_stream;
 use crate::{Backend, EventStream};
 
@@ -22,7 +22,8 @@ impl OpenAi {
     }
 
     fn req(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        let r = self.http.request(method, format!("{}{path}", self.base));
+        let url = format!("{}{path}", self.base);
+        let r = attributed(self.http.request(method, &url), &url);
         match &self.key {
             Some(k) => r.bearer_auth(k.trim()),
             None => r,
@@ -269,5 +270,89 @@ mod tests {
         assert_eq!(chunk_events("[DONE]").unwrap(), vec![StreamEvent::Done]);
         assert!(chunk_events(r#"{"error":{"message":"quota"}}"#).is_err());
         assert!(matches!(chunk_events(r#"{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":4}}"#).unwrap()[0], StreamEvent::Usage { .. }));
+    }
+
+    /// Request headers per target host: OpenRouter and the Vercel AI Gateway get the attribution
+    /// headers (model list = key check, and chat), others only the User-Agent; the key stays.
+    /// The real hosts are resolved to a local server.
+    #[tokio::test]
+    async fn attribution_headers_go_to_openrouter_and_vercel_only() {
+        use std::sync::{Arc, Mutex};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen2 = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 8192];
+                while !String::from_utf8_lossy(&buf).contains("\r\n\r\n") {
+                    let n = sock.read(&mut chunk).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                let req = String::from_utf8_lossy(&buf).to_string();
+                let is_chat = req.starts_with("POST");
+                seen2.lock().unwrap().push(req.split("\r\n\r\n").next().unwrap_or("").to_ascii_lowercase());
+                let (ctype, body) = if is_chat {
+                    ("text/event-stream", "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\ndata: [DONE]\n\n".to_string())
+                } else {
+                    ("application/json", r#"{"data":[{"id":"m1"}]}"#.to_string())
+                };
+                let head = format!("HTTP/1.1 200 OK\r\ncontent-type: {ctype}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+                let _ = sock.write_all(head.as_bytes()).await;
+                let _ = sock.write_all(body.as_bytes()).await;
+            }
+        });
+        let http = reqwest::Client::builder()
+            .user_agent(crate::http::USER_AGENT)
+            .resolve("openrouter.ai", addr)
+            .resolve("ai-gateway.vercel.sh", addr)
+            .resolve("api.example.org", addr)
+            .build()
+            .unwrap();
+        let port = addr.port();
+        for (base, attributed) in [
+            (format!("http://openrouter.ai:{port}/api/v1"), true),
+            (format!("http://ai-gateway.vercel.sh:{port}/v1"), true),
+            (format!("http://api.example.org:{port}/v1"), false),
+        ] {
+            seen.lock().unwrap().clear();
+            let config = BackendConfig {
+                id: "o".into(),
+                name: "O".into(),
+                kind: aiscraft_core::BackendKind::OpenAi,
+                base_url: base.clone(),
+                default_model: None,
+                send_context: true,
+            };
+            let b = OpenAi { config, base: base.clone(), key: Some("sk-test".into()), http: http.clone() };
+            b.check().await.unwrap();
+            let req = ChatRequest {
+                conversation_id: "c".into(),
+                model: "m1".into(),
+                system: None,
+                messages: vec![msg(Role::User, "Hallo")],
+                tools: vec![],
+                tool_bridge: None,
+                persona: None,
+                web: false,
+            };
+            let mut stream = b.chat(req).await.unwrap();
+            use futures::StreamExt;
+            while stream.next().await.is_some() {}
+            let seen = seen.lock().unwrap().clone();
+            assert_eq!(seen.len(), 2, "{base}: model list and chat");
+            for head in &seen {
+                assert!(head.contains("authorization: bearer sk-test"), "{base}: {head}");
+                assert!(head.contains("user-agent: ais.chatcraft/"), "{base}: {head}");
+                assert_eq!(head.contains("http-referer: https://github.com/fwu-de/aiscraft"), attributed, "{base}: {head}");
+                assert_eq!(head.contains("x-title: ais.chatcraft"), attributed, "{base}: {head}");
+            }
+        }
     }
 }
