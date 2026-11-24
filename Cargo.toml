@@ -32,6 +32,8 @@ craft-opc = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd93
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a" }
 craft-wordmodel = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a" }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a", features = ["fonts"] }
+# Release check only (`check_for_update`); no egui dialogs, no self-update yet.
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a" }
 
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

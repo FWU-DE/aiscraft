@@ -974,7 +974,9 @@ impl AisCraftApp {
             SettingsTab::About => {
                 ui.label(RichText::new(format!("AIS.ChatCraft {}", env!("CARGO_PKG_VERSION"))).strong());
                 ui.label(muted(&t, "Nativer Client für AIS.chat und andere KI-Dienste. Rust und egui, ohne Webview."));
-                ui.add_space(6.0);
+                ui.add_space(10.0);
+                self.update_settings(ui);
+                ui.add_space(10.0);
                 ui.label(small_muted(&t, "Tastenkürzel: Strg+K Befehle · Strg+N neuer Chat · Strg+B Seitenleiste · Strg+Umschalt+F Suche · Strg+R neu erzeugen · Esc anhalten"));
                 ui.label(small_muted(&t, "Für Agenten: aiscraft --control startet den JSON-Steuerkanal; aiscraft-cli spricht dieselben Befehle."));
                 ui.add_space(6.0);

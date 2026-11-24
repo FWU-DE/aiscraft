@@ -141,6 +141,12 @@ Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats
 
 Unter **Einstellungen › Nutzung** stehen die Tokens pro Monat, Backend und Modell, bei Claude über API auch die Kosten. Mit einer **Monatsgrenze** fragt AIS.ChatCraft vor dem Senden nach, sobald sie erreicht ist.
 
+## Updates
+
+Einmal am Tag schaut AIS.ChatCraft nach, ob es eine neue Version gibt. Gibt es eine, steht über deinem Konto ein Hinweis: **Herunterladen** öffnet den Download im Browser, **Was ist neu** die Seite mit den Änderungen. **Diese Version überspringen** blendet den Hinweis für diese Version dauerhaft aus, **Später** bis zum nächsten Start. Installiert wird nichts von selbst.
+
+Dafür geht eine anonyme Anfrage an `api.github.com` (die Releases von FWU-DE/aiscraft), ohne Konto und ohne Daten aus deinen Chats. Unter **Einstellungen › Über** schaltest du das ab, prüfst mit **Jetzt prüfen** sofort und siehst deine Version.
+
 ## Tastenkürzel
 
 | Kürzel | Was |
@@ -163,6 +169,7 @@ Unter **Einstellungen › Nutzung** stehen die Tokens pro Monat, Backend und Mod
 - Zugangsdaten, Konnektoren und der Tresor liegen im Schlüsselbund des Systems.
 - Was du an ein Backend schickst, verarbeitet dieses Backend. Bei AIS.chat gelten dessen Regeln für Schulen.
 - Angehängte Dateien kopiert AIS.ChatCraft in seinen Datenordner, damit sie auch später noch mitgehen.
+- Die Update-Prüfung fragt einmal am Tag anonym bei GitHub nach der neuesten Version (abschaltbar, siehe „Updates“).
 
 ## Für Agenten und Skripte
 

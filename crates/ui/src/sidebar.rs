@@ -10,9 +10,10 @@ use crate::widgets::{age_group, icon_button, muted, small_muted, status_dot};
 impl AisCraftApp {
     pub(crate) fn sidebar(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
-        egui::Panel::bottom("sidebar-account")
-            .frame(egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 2 }))
-            .show(ui, |ui| self.account_row(ui));
+        egui::Panel::bottom("sidebar-account").frame(egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 2 })).show(ui, |ui| {
+            self.update_banner(ui);
+            self.account_row(ui);
+        });
         ui.horizontal(|ui| {
             crate::widgets::ais_logo(ui, 18.0, t.accent);
             ui.label(RichText::new("AIS.ChatCraft").strong().size(17.0));

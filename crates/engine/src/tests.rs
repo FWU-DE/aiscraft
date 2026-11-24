@@ -1805,3 +1805,123 @@ fn notifications_list_read_and_clear() {
     }
     assert_eq!(engine.state().inbox.len(), crate::inbox::MAX, "capped");
 }
+
+/// A release list as GitHub's `/repos/FWU-DE/aiscraft/releases` sends it: a draft (CI makes
+/// those) and a pre-release that must not count, and the published 99.0.0 with the CI assets.
+fn release_list() -> String {
+    let asset = |name: &str| json!({"name": name, "size": 1000, "browser_download_url": format!("https://github.com/FWU-DE/aiscraft/releases/download/v99.0.0/{name}")});
+    json!([
+        {"tag_name": "v100.0.0", "draft": true, "prerelease": false, "assets": []},
+        {"tag_name": "v99.1.0-rc.1", "draft": false, "prerelease": true, "assets": []},
+        {"tag_name": "v99.0.0", "name": "AIS.ChatCraft 99.0.0", "draft": false, "prerelease": false,
+         "html_url": "https://github.com/FWU-DE/aiscraft/releases/tag/v99.0.0", "published_at": "2026-11-24T10:00:00Z",
+         "body": "## Neu\n\n- Startseite", "assets": [asset("aischatcraft-linux-x86_64.tar.gz"), asset("aischatcraft-macos-arm64.tar.gz"),
+         asset("aischatcraft-macos-x86_64.tar.gz"), asset("aischatcraft-windows-x86_64.zip")]},
+        {"tag_name": "v0.0.1", "draft": false, "prerelease": false, "assets": []}
+    ])
+    .to_string()
+}
+
+/// The update check: found, skipped, dismissed, background once a day and silent, the off
+/// switch, errors on the manual check, and the browser refused in tests.
+#[test]
+fn update_check_offers_skips_and_stays_quiet() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    assert_eq!(engine.state().update.current, crate::CURRENT_VERSION);
+    assert!(engine.state().settings.update_check, "on by default");
+    // Engines in memory never ask GitHub.
+    assert!(engine.call("app.check_update", json!({})).is_err());
+    assert_eq!(engine.state().update.last_check, 0);
+
+    engine.set_update_feed(Ok(release_list())).unwrap();
+    let r = engine.call("app.check_update", json!({})).unwrap();
+    assert_eq!(r["available"], true, "{r}");
+    assert_eq!(r["version"], "99.0.0", "draft and pre-release don't count");
+    let u = engine.state().update.clone();
+    let a = u.available.clone().unwrap();
+    assert_eq!(a.url, "https://github.com/FWU-DE/aiscraft/releases/tag/v99.0.0");
+    assert!(a.download.starts_with("https://github.com/FWU-DE/aiscraft/releases/download/v99.0.0/aischatcraft-"), "{}", a.download);
+    assert!(a.notes.contains("Startseite"));
+    assert!(u.message.unwrap().contains("99.0.0"));
+    assert!(u.last_check > 0);
+
+    // Background: a day has not passed, so no second request.
+    engine.set_update_feed(Err("GitHub's request limit was reached".into())).unwrap();
+    assert_eq!(engine.call("app.check_update", json!({"background": true})).unwrap()["checked"], false);
+
+    // The browser stays closed in tests; links are checked first.
+    let e = engine.call("app.update_open", json!({"what": "download"})).unwrap_err();
+    assert_eq!(e.kind, aiscraft_core::ErrorKind::Unsupported, "{e}");
+    assert!(engine.call("app.update_open", json!({"what": "notes"})).is_err());
+    assert!(engine.call("app.update_open", json!({"what": "sonstwas"})).is_err());
+
+    // Dismiss: gone for this run.
+    assert_eq!(engine.call("app.update_dismiss", json!({})).unwrap()["dismissed"], true);
+    assert!(engine.state().update.available.is_none());
+
+    // Manual check with a rate limit: a short German message, the hint is unchanged.
+    let e = engine.call("app.check_update", json!({})).unwrap_err();
+    assert!(e.message.contains("Anfragelimit"), "{e}");
+    assert!(engine.state().update.message.as_deref().unwrap_or("").contains("Anfragelimit"));
+
+    // A manual check brings a dismissed hint back; skipping remembers the version.
+    engine.set_update_feed(Ok(release_list())).unwrap();
+    engine.call("app.check_update", json!({})).unwrap();
+    assert!(engine.state().update.available.is_some());
+    assert_eq!(engine.call("app.update_skip", json!({})).unwrap()["skipped"], "99.0.0");
+    assert!(engine.state().update.available.is_none());
+    let r = engine.call("app.check_update", json!({})).unwrap();
+    assert_eq!(r["available"], false);
+    assert!(r["message"].as_str().unwrap().contains("übersprungen"));
+    assert!(engine.call("app.update_skip", json!({"version": "kein; rm -rf"})).is_err());
+    assert!(engine.call("app.update_dismiss", json!({})).is_ok());
+
+    // Off switch: the background check does nothing.
+    engine.call("settings.set", json!({"key": "update_check", "value": false})).unwrap();
+    assert_eq!(engine.call("app.check_update", json!({"background": true})).unwrap()["reason"], "ausgeschaltet");
+
+    // Nothing newer: the manual check says so.
+    let fresh = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    fresh.set_update_feed(Ok(json!([{"tag_name": "v0.0.1", "draft": false, "prerelease": false}]).to_string())).unwrap();
+    let r = fresh.call("app.check_update", json!({})).unwrap();
+    assert_eq!(r["available"], false);
+    assert!(r["message"].as_str().unwrap().contains("neueste Version"));
+    // Background errors stay silent.
+    let quiet = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    quiet.set_update_feed(Ok("kein json".into())).unwrap();
+    let r = quiet.call("app.check_update", json!({"background": true})).unwrap();
+    assert_eq!(r["checked"], false);
+    assert!(quiet.state().update.message.is_none() && quiet.state().notices.is_empty());
+}
+
+/// What was found and skipped survives a restart (store key `update`).
+#[test]
+fn update_check_remembers_across_starts() {
+    let dir = std::env::temp_dir().join(format!("aiscraft-update-{}", crate::new_id()));
+    let open = || {
+        // Engines built for tests never ask GitHub, even with a data folder (`cfg!(test)`).
+        Engine::open(Options { data_dir: Some(dir.clone()), secrets: Some(crate::Secrets::memory()) }).unwrap()
+    };
+    let engine = open();
+    // A real data folder: no scripted feed allowed, so put the remembered result in directly.
+    assert!(engine.set_update_feed(Ok(release_list())).is_err());
+    engine
+        .ctx()
+        .store(|st| {
+            st.set_setting(
+                "update",
+                &json!({"last_check": crate::now_ms(), "latest": {"version": "99.0.0", "tag": "v99.0.0", "url": "https://github.com/FWU-DE/aiscraft/releases/tag/v99.0.0", "download": "https://github.com/FWU-DE/aiscraft/releases/tag/v99.0.0"}}),
+            )
+        })
+        .unwrap();
+    drop(engine);
+    let engine = open();
+    assert_eq!(engine.state().update.available.as_ref().map(|a| a.version.as_str()), Some("99.0.0"));
+    engine.call("app.update_skip", json!({})).unwrap();
+    drop(engine);
+    let engine = open();
+    assert!(engine.state().update.available.is_none());
+    assert_eq!(engine.state().update.skipped.as_deref(), Some("99.0.0"));
+    drop(engine);
+    let _ = std::fs::remove_dir_all(&dir);
+}

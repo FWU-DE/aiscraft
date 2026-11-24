@@ -34,7 +34,7 @@ Fork = needs the storytold egui fork (`[patch.crates-io]`, see below).
 | craft-dialogs | Non-blocking native file dialogs (rfd), fixes the macOS re-entrancy abort | blocking `rfd::FileDialog` in `ui` (6 call sites) | good, no egui dep; answers arrive on a later frame, so each call site needs state | no | later (after the collab and persona branches merge: touches `conversation.rs`, `artifact_panel.rs`) |
 | craft-platform | Dialog lifecycle, XDG appearance (light/dark) | rfd, our Omarchy `ThemeWatcher` | partial | optional | later, with craft-dialogs |
 | craft-quit | macOS quit and app menu | — | no unsaved documents, Linux first | no | no |
-| craft-update | Release check and self-update | PKGBUILD / `install.sh` | no release feed yet | no | later |
+| craft-update | Release check and self-update | — | `check_for_update` reads FWU-DE/aiscraft's GitHub releases (published, stable only; drafts and pre-releases skipped), links and assets checked; its egui `StartupPrompt` is a modal with ArtCraft branding, so the hint is our own (`ui/src/update.rs`) | no (without feature `egui`) | **adopted, check only** (see below) |
 | craft-i18n | Translation catalogs, plurals, locale | German strings in code | UI is German only | no | no |
 | craft-font-catalog | Installed fonts on every platform, lookup by name | `fc-match` subprocess in `ui/theme.rs` (Linux only) | works, but the first lookup scans every font: 860 ms for 968 faces here vs 13 ms per `fc-match` | no | later (with a background scan) |
 | craft-ui | egui widgets, icons, tabs, docking, theme, `fonts::UiFonts` (suite font stack with system fallback) | `ui/widgets.rs`, `ui/theme.rs` | `UiFonts` could replace our DejaVu fallbacks; widgets would touch sidebar/conversation | builds on stock egui 0.37 too; fork recommended | later (`UiFonts` first) |
@@ -69,3 +69,25 @@ pages with Helvetica and Courier, which every viewer has, so no font is embedded
 a bundled font file and still leaves pagination and line breaking to the app. Limit: characters
 outside WinAnsi (emoji, Greek, CJK) print as a stand-in or `?`. Switch to `write` with an
 embedded Unicode font when that matters.
+
+## Update check
+
+`crates/engine/src/update.rs`: `craft_update::check_for_update(&APP, &Http, CARGO_PKG_VERSION)`
+on a blocking task, at start (5 s after, at most once in 24 h, silent on errors) and with
+`app.check_update`. The answer (last check, newest release, skipped version) is stored under the
+settings key `update`; `update_check` in `Settings` switches it off. Engines in memory and
+`cfg!(test)` builds never ask GitHub; tests hand them release JSON (`Engine::set_update_feed`),
+which goes through craft-update's `parse_github_release_list` and `version::offers_update`, the
+same as `check_for_update` (its own HTTP client is HTTPS-only outside craft-update's tests, so a
+local scripted server can't stand in). `App` id `aischatcraft` (the CI asset stem),
+`bundle_id_override` `ai.uds.aischatcraft`. craft-update brings its own HTTP stack (ureq, rustls
+with ring, platform verifier) next to reqwest.
+
+Not adopted yet: the self-update (`self_update::prepare_update`, `Updater`). It would need asset
+names `pick_asset` reads, `<stem>-<version>-<os>-<arch>.<ext>`: our CI's
+`aischatcraft-linux-x86_64.tar.gz` lacks the version (→ `aischatcraft-0.2.0-linux-x86_64.tar.gz`),
+and Windows is `windows-x64` with the portable zip named `…-windows-x64-portable.zip`. Further
+release assets in the forms it installs (AppImage, `.deb`/`.rpm`, `.dmg` for a macOS `.app`, MSI
+or the Windows portable zip with `portable.txt`; a standalone `.tar.gz` only where the program
+and its `share` files are writable), `SHA256SUMS.txt` in the release, a restart helper wired
+into `main` (`self_update::finish`), and signed Windows builds.

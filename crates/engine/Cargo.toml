@@ -15,6 +15,7 @@ craft-pptx.workspace = true
 craft-opc.workspace = true
 craft-xml.workspace = true
 craft-pdf.workspace = true
+craft-update.workspace = true
 aiscraft-core.workspace = true
 aiscraft-store.workspace = true
 aiscraft-backends.workspace = true
@@ -32,6 +33,7 @@ hmac = "0.12"
 sha1 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 notify-rust = { version = "4", default-features = false, features = ["z"] }
+webbrowser = "1"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 aiscraft-board = { path = "../board" }
 aiscraft-mcp = { path = "../mcp" }
