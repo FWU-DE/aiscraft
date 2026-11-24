@@ -15,6 +15,57 @@ fn chosen(h: &egui_kittest::Harness<'static, AisCraftApp>, label: &str) -> bool 
     .is_some()
 }
 
+/// Draws frames until `done` holds (at most about 10 s). Engine commands run in the background,
+/// so under load a fixed number of frames is sometimes not enough.
+fn step_until(h: &mut egui_kittest::Harness<'static, AisCraftApp>, what: &str, done: impl Fn(&egui_kittest::Harness<'static, AisCraftApp>) -> bool) {
+    for _ in 0..500 {
+        if done(h) {
+            return;
+        }
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("timed out waiting for: {what}");
+}
+
+/// Draws frames until a widget with this label is there and has stopped moving, so a click hits
+/// it and not where it was a frame earlier.
+fn settled(h: &mut egui_kittest::Harness<'static, AisCraftApp>, label: &str) {
+    let mut last = None;
+    for _ in 0..500 {
+        let now = h.query_by_label(label).map(|n| n.rect());
+        if now.is_some() && now == last {
+            return;
+        }
+        last = now;
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("„{label}“ did not settle");
+}
+
+/// Clicks `label` until `done` holds. Under heavy load (many test processes at once) a simulated
+/// click is now and then not taken; what the click must achieve is still checked.
+fn click_until(
+    h: &mut egui_kittest::Harness<'static, AisCraftApp>,
+    label: &str,
+    what: &str,
+    done: impl Fn(&egui_kittest::Harness<'static, AisCraftApp>) -> bool,
+) {
+    for _ in 0..5 {
+        settled(h, label);
+        h.get_by_label(label).click();
+        for _ in 0..100 {
+            h.step();
+            if done(h) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    panic!("clicking „{label}“ did not lead to: {what}");
+}
+
 fn harness(engine: &Engine) -> egui_kittest::Harness<'static, AisCraftApp> {
     let e = engine.clone();
     let mut h = egui_kittest::Harness::builder()
@@ -40,7 +91,7 @@ fn sources_popup_stays_open_until_closed() {
     let mut h = harness(&engine);
     let before = engine.state().selection.sources.clone();
     h.get_by_label_contains("Quellen").click();
-    h.run_steps(4);
+    settled(&mut h, "Gedächtnis (deine Notizen)");
     h.get_by_label("Gedächtnis (deine Notizen)").click();
     h.run_steps(6);
     assert!(h.query_by_label("Gedächtnis (deine Notizen)").is_some(), "the popup stays open after a switch");
@@ -72,8 +123,7 @@ fn handbook_opens_closes_and_follows_settings_links() {
     h.get_by_label("Tresor").scroll_to_me();
     h.run_steps(4);
     h.get_by_label("Tresor").click();
-    h.run_steps(6);
-    assert!(h.query_by_label_contains("{{vault:").is_some(), "a chapter opens");
+    step_until(&mut h, "a chapter opens", |h| h.query_by_label_contains("{{vault:").is_some());
     h.key_press(egui::Key::F1);
     h.run_steps(6);
     assert!(h.query_by_label("Erste Schritte").is_none(), "F1 closes it again");
@@ -267,9 +317,7 @@ fn bell_lists_notifications() {
     let mut h = harness(&engine);
     h.run_steps(6);
     assert!(h.query_by_label("Benachrichtigungen (1 neu)").is_some(), "the start page card");
-    h.get_by_label("Benachrichtigungen: 1 neu").click();
-    h.run_steps(6);
-    assert!(h.query_by_label("Leeren").is_some(), "the popover is open");
+    click_until(&mut h, "Benachrichtigungen: 1 neu", "the popover is open", |h| h.query_by_label("Leeren").is_some());
     h.get_all_by_label("Alle gelesen").next().unwrap().click();
     h.run_steps(6);
     assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.inbox.iter().all(|i| i.read)), "marked read");
@@ -291,7 +339,7 @@ fn worksheet_work_mode_checks_answers_and_app_panel_shows_source() {
     h.run_steps(6);
     assert!(h.query_by_label("+ Aufgabe hinzufügen  ⏷").is_some(), "edit mode first");
     h.get_by_label("Lösen").click();
-    h.run_steps(6);
+    settled(&mut h, "drei Viertel");
     h.get_by_label("drei Viertel").click();
     h.run_steps(4);
     h.get_by_label("Prüfen").click();
@@ -335,12 +383,9 @@ fn welcome_asks_for_the_look_once() {
     assert!(chosen(&h, "Wie das System"), "scheme: like the system");
     assert!(h.query_by_label_contains(notice).is_some(), "community notice");
     assert!(h.query_by_label("Weiter").is_some(), "the sign-in step follows");
-    h.get_by_label("Glas").click();
-    h.run_steps(4);
-    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.theme == "glas"), "the choice applies at once");
-    h.get_by_label("Weiter").click();
-    h.run_steps(4);
-    assert!(h.query_by_label("Mit einem Dienst verbinden").is_some(), "sign-in step");
+    let e2 = engine.clone();
+    click_until(&mut h, "Glas", "the choice applies at once", move |_| e2.state().settings.theme == "glas");
+    click_until(&mut h, "Weiter", "sign-in step", |h| h.query_by_label("Mit einem Dienst verbinden").is_some());
     assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.look_chosen), "asked once");
 
     // Set up already (two services, one signed in counts as set up), no flag: only the look.

@@ -164,7 +164,7 @@ static COMMANDS: &[CommandSpec] = &[
     )),
     cmd!("search", "Alle Chats durchsuchen", "Suche", Some("Ctrl+Shift+F"), "query: string", true, |c, p| Box::pin(async move {
         let query = opt_str(&p, "query").unwrap_or_default();
-        let hits = c.store(|st| st.search(&query, 50))?;
+        let hits = search_chats(&c, &query)?;
         let out = serde_json::to_value(&hits)?;
         c.update(|s| s.search = (!query.trim().is_empty()).then_some(SearchState { query, hits }));
         Ok(out)
@@ -979,6 +979,48 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
         s.conversations.insert(0, conv);
     });
     chat_open(c, json!({"id": id})).await
+}
+
+/// Chats whose title contains every word of the query (as people see the title, names shown
+/// again where „Namen schützen“ stored placeholders), newest first; then hits in the messages, one
+/// list. A chat found by its title is not listed again for its messages.
+fn search_chats(c: &Ctx, query: &str) -> Result<Vec<aiscraft_store::SearchHit>> {
+    const LIMIT: usize = 50;
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).filter(|w| !w.is_empty()).take(12).collect();
+    let mut hits = Vec::new();
+    if !words.is_empty() {
+        let mut convs = c.state().conversations.clone();
+        convs.sort_by_key(|x| std::cmp::Reverse(x.updated_at));
+        for conv in convs {
+            let title = crate::privacy::reveal(c, &conv.id, &conv.title);
+            let lower = title.to_lowercase();
+            if words.iter().all(|w| lower.contains(w.as_str())) {
+                hits.push(aiscraft_store::SearchHit {
+                    conversation_id: conv.id.clone(),
+                    message_id: String::new(),
+                    title,
+                    snippet: "Treffer im Titel".into(),
+                    backend_id: conv.backend_id.clone(),
+                });
+                if hits.len() >= LIMIT {
+                    return Ok(hits);
+                }
+            }
+        }
+    }
+    let by_title: std::collections::HashSet<String> = hits.iter().map(|h| h.conversation_id.clone()).collect();
+    for mut h in c.store(|st| st.search(query, LIMIT))? {
+        if by_title.contains(&h.conversation_id) {
+            continue;
+        }
+        h.title = crate::privacy::reveal(c, &h.conversation_id, &h.title);
+        h.snippet = crate::privacy::reveal(c, &h.conversation_id, &h.snippet);
+        hits.push(h);
+        if hits.len() >= LIMIT {
+            break;
+        }
+    }
+    Ok(hits)
 }
 
 // ---- assistants, characters, learning scenarios -----------------------------------------

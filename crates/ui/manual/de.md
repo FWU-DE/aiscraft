@@ -190,7 +190,7 @@ Für Zeugnisbemerkungen, Elternbriefe und Förderpläne: Vor dem Senden ersetzt 
 
 ## Suche und Verlauf
 
-Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats. Rechtsklick auf einen Chat: umbenennen, anheften, in ein Projekt verschieben, exportieren, löschen.
+Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats: zuerst die Titel (alle Wörter müssen darin vorkommen), dann die Nachrichten. Rechtsklick auf einen Chat: umbenennen, anheften, in ein Projekt verschieben, exportieren, löschen.
 
 ## Nutzung
 

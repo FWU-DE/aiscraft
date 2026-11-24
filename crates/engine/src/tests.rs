@@ -79,6 +79,32 @@ fn default_ais_backend_exists_and_is_signed_out() {
     assert_eq!(err.kind, aiscraft_core::ErrorKind::Invalid);
 }
 
+/// The chat search finds chats by their title too (as people see it), not only by the messages;
+/// a chat found by its title is listed once.
+#[test]
+fn search_finds_chats_by_title() {
+    let (engine, _) = engine_with_backend();
+    engine.call("chat.send", json!({"text": "Bitte einen Ablaufplan"})).unwrap();
+    let id = engine.state().current.clone().unwrap();
+    engine.call("chat.rename", json!({"id": id, "title": "Elternabend 7b im März"})).unwrap();
+    for q in ["elternabend", "7B MÄRZ", "März Elternabend"] {
+        let hits = engine.call("search", json!({"query": q})).unwrap();
+        let hits = hits.as_array().unwrap();
+        assert_eq!(hits.len(), 1, "{q}: {hits:?}");
+        assert_eq!(hits[0]["conversation_id"], id.as_str());
+        assert_eq!(hits[0]["title"], "Elternabend 7b im März");
+    }
+    // Every word must be in the title; the messages are still searched.
+    assert!(engine.call("search", json!({"query": "Elternabend Sommer"})).unwrap().as_array().unwrap().is_empty());
+    let hits = engine.call("search", json!({"query": "Ablaufplan"})).unwrap();
+    assert_eq!(hits.as_array().unwrap().len(), 1, "content hit");
+    // Title and messages both match: one entry.
+    engine.call("chat.rename", json!({"id": id, "title": "Ablaufplan Elternabend"})).unwrap();
+    let hits = engine.call("search", json!({"query": "ablaufplan"})).unwrap();
+    assert_eq!(hits.as_array().unwrap().len(), 1);
+    assert_eq!(hits[0]["snippet"], "Treffer im Titel");
+}
+
 #[test]
 fn send_streams_saves_searches_and_regenerates() {
     let (engine, _) = engine_with_backend();
@@ -1790,7 +1816,9 @@ fn variants_keep_old_versions_and_steer_the_history() {
     assert_eq!(s.variants.get(&q2), Some(&Variant { index: 2, count: 2 }));
     let md = engine.call("chat.export", json!({})).unwrap()["text"].as_str().unwrap().to_string();
     assert!(md.contains("## Du\n\nGeänderte Frage") && !md.contains("## Du\n\nErste Frage"), "export follows the shown branch: {md}");
-    assert!(engine.call("search", json!({"query": "erste"})).unwrap().as_array().unwrap().is_empty(), "search follows the shown branch");
+    // The chat's title still says "Erste Frage" and may match; no message of the hidden branch does.
+    let hits = engine.call("search", json!({"query": "erste"})).unwrap();
+    assert!(hits.as_array().unwrap().iter().all(|h| h["message_id"] == ""), "search follows the shown branch: {hits}");
 
     // Back to the first question: the next message builds on it, not on the edit.
     engine.call("chat.variant", json!({"message_id": q2, "index": 1})).unwrap();
