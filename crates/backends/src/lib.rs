@@ -69,6 +69,10 @@ pub trait Backend: Send + Sync {
     fn personas(&self) -> BoxFuture<'_, Result<Vec<PersonaInfo>>> {
         Box::pin(async { Err(Error::unsupported("Dieses Backend kennt keine Assistenten, Figuren oder Lernszenarien")) })
     }
+    /// Mark or unmark an assistant, character or learning scenario as a favourite.
+    fn set_favorite(&self, _kind: aiscraft_core::PersonaKind, _id: String, _favorite: bool) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async { Err(Error::unsupported("Dieses Backend kennt keine Favoriten")) })
+    }
     /// Models that draw images instead of writing text.
     fn image_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>>> {
         Box::pin(async { Ok(Vec::new()) })

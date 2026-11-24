@@ -99,6 +99,8 @@ fn action_pages(name: &str) -> &'static [&'static str] {
         "getCharactersByFilterAction" => &["/characters"],
         "getLearningScenariosByFilterAction" => &["/learning-scenarios"],
         "generateImageAction" => &["/image-generation"],
+        // Ships with the overview pages (the favourite button on cards).
+        FAVORITE_ACTION => &["/assistants", "/characters", "/learning-scenarios"],
         _ => &["/"],
     }
 }
@@ -111,12 +113,14 @@ fn action_label(name: &str) -> &'static str {
         "getCharactersByFilterAction" => "Die Liste der Figuren",
         "getLearningScenariosByFilterAction" => "Die Liste der Lernszenarien",
         "generateImageAction" => "Die Bilderzeugung",
+        FAVORITE_ACTION => "Das Markieren von Favoriten",
         INGEST_ACTION => "Das Einlesen von Webseiten",
         _ => "Diese Funktion",
     }
 }
 
 const INGEST_ACTION: &str = "ingestWebContentAction";
+const FAVORITE_ACTION: &str = "setFavoriteAction";
 const IMAGE_CAP: usize = 25 * 1024 * 1024;
 
 impl AisChat {
@@ -797,6 +801,22 @@ impl Backend for AisChat {
         })
     }
 
+    fn set_favorite(&self, kind: PersonaKind, id: String, favorite: bool) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            // AIS.chat wants a UUID; refuse anything that could not be an id before asking it.
+            if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                return Err(Error::invalid("Ungültige ID"));
+            }
+            let entity_type = match kind {
+                PersonaKind::Assistant => "assistant",
+                PersonaKind::Character => "character",
+                PersonaKind::LearningScenario => "learningScenario",
+            };
+            let arg = json!({"entityType": entity_type, "entityId": id, "isFavorite": favorite});
+            server_result(self.call_action(FAVORITE_ACTION, &self.pages_for(FAVORITE_ACTION), &[arg]).await?).map(|_| ())
+        })
+    }
+
     fn image_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>>> {
         Box::pin(async move {
             // The page redirects to "/" when the state has image generation switched off.
@@ -1177,8 +1197,17 @@ mod tests {
                         ("text/html", chunk("app"))
                     } else if req.starts_with("GET /_next/static/chunks/app.js") {
                         ("application/javascript", reference(0x7f, "sendChatMessageAction"))
+                    } else if req.starts_with("GET /image-generation ") {
+                        // Shape of 2026-11-24: `defaultImageModel` repeats the model with
+                        // back-references and sorts before `models`.
+                        let payload = concat!(
+                            r#"1f:[["$","$L3e","k",{"models":[{"id":"img-1","name":"gpt-image-1.5","displayName":"GPT-Image-1.5","priceMetadata":{"type":"image"},"isDeleted":false},{"id":"txt-1","name":"gpt-5","displayName":"GPT-5","priceMetadata":{"type":"text"}}],"#,
+                            r#""defaultImageModel":{"id":"img-1","name":"gpt-image-1.5","displayName":"GPT-Image-1.5","priceMetadata":"$1f:0:props:models:0:priceMetadata"}}]]"#,
+                            "\n"
+                        );
+                        ("text/html", format!("<script>self.__next_f.push([1,{}])</script>", serde_json::to_string(payload).unwrap()))
                     } else if req.starts_with("GET /_next/static/chunks/assistants.js") {
-                        ("application/javascript", reference(0x11, "getAssistantsByFilterAction"))
+                        ("application/javascript", reference(0x11, "getAssistantsByFilterAction") + &reference(0x33, "setFavoriteAction"))
                     } else if req.starts_with("GET /_next/static/chunks/characters.js") {
                         ("application/javascript", reference(0x22, "getCharactersByFilterAction"))
                     } else if req.starts_with("POST / ") {
@@ -1193,6 +1222,9 @@ mod tests {
                             )
                         } else if action == id(0x22) {
                             ("text/x-component", flight(r#"[{"id":"c1","name":"Goethe","userId":"x","initialMessage":"Seid gegrüßt!"}]"#))
+                        } else if action == id(0x33) {
+                            assert!(req.ends_with(r#"[{"entityId":"0a1b-2c","entityType":"learningScenario","isFavorite":true}]"#), "{req}");
+                            ("text/x-component", flight(r#"{"success":true}"#))
                         } else if action == id(0x7f) {
                             (
                                 "text/x-component",
@@ -1286,6 +1318,20 @@ mod tests {
         assert_eq!(text, "Gern.");
         let last = posted.lock().unwrap().last().cloned().unwrap();
         assert!(last.contains(r#""characterId":"c1""#) && last.contains("Seid gegrüßt!"), "{last}");
+    }
+
+    /// Image models from the image page (current payload shape) and toggling a favourite.
+    #[tokio::test]
+    async fn image_models_and_favorites_against_scripted_server() {
+        let posted = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let base = scripted_ais(posted.clone()).await;
+        let backend = crate::build(ais_config(base), Some("tok".into()), std::sync::Arc::new(|_, _| {})).unwrap();
+        let models = backend.image_models().await.unwrap();
+        assert_eq!(models.iter().map(|m| (m.id.as_str(), m.name.as_str())).collect::<Vec<_>>(), [("img-1", "GPT-Image-1.5")]);
+        backend.set_favorite(PersonaKind::LearningScenario, "0a1b-2c".into(), true).await.unwrap();
+        assert_eq!(posted.lock().unwrap().len(), 1);
+        assert!(backend.set_favorite(PersonaKind::Assistant, "../x".into(), true).await.is_err());
+        assert_eq!(posted.lock().unwrap().len(), 1, "bad ids are refused before asking the server");
     }
 
     #[tokio::test]

@@ -107,7 +107,8 @@ What to check, in this order (paths in `FWU-DE/ais-chat`):
 | `sendChatMessageAction(conversationId, messages, modelId, fileIds, …)` and its result `{stream, messageId, error}` | `apps/chat-bot/src/app/api/chat/actions.ts`, `src/types/chat.ts` | `backends/src/aischat.rs` (`action_payload`, `map_action_event`) |
 | Stream format: text deltas, `\x1e`-prefixed `ai_activity` events | `src/utils/streaming.ts`, `src/types/ai-activity.ts` (`aiActivityStepSchema`, tool names) | `aischat.rs` (`activity_steps`, `tool_label`) |
 | Session cookie name, Auth.js config, 8 h lifetime | `src/auth/cookies.ts`, `src/auth/index.ts` | `SESSION_COOKIE`, `browser_login.rs` |
-| Models in the page payload (`llm_model` fields, `priceMetadata.type`) | `packages/shared/src/db/schema.ts`, `llm-model-provider.tsx` | `rsc/src/scrape.rs` (`page_models`) |
+| Models in the page payload (`llm_model` fields, `priceMetadata.type`); repeated objects come as back-references (`"$1f:0:props:models:0:priceMetadata"`), e.g. `defaultImageModel` on `/image-generation` | `packages/shared/src/db/schema.ts`, `llm-model-provider.tsx`, `image-generation/page.tsx`, `image-model-provider.tsx` | `rsc/src/scrape.rs` (`page_models`, `resolve_ref`) |
+| Favourites: `setFavoriteAction({entityType: assistant\|character\|learningScenario, entityId, isFavorite})`, shipped with the overview pages' JS | `(chat-bot)/actions/favorite-actions.ts`, `packages/shared/src/favorites/favorite-service.ts` | `AisChat::set_favorite`, `persona.favorite` |
 | Token points (`usedBudget`, `maxBudget`) | `components/navigation/sidebar/app-sidebar.tsx` | `scrape::page_budget`, `AisChat::quota` |
 | Conversation list and page (`/api/conversations`, `/d/<id>`) | `src/app/api/conversations/route.ts`, `(chat-bot)/d/[conversationId]` | `remote_conversations`, `remote_messages` |
 | Uploads, speech | `src/app/api/v1/files`, `src/app/api/v1/speech/*` | `AisChat::upload`, `voice` crate (`speak_ais`) |

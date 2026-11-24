@@ -172,6 +172,13 @@ impl AisCraftApp {
                 if let Some(d) = info.as_ref().and_then(|i| i.description.clone()) {
                     ui.add(egui::Label::new(muted(&t, d)).wrap());
                 }
+                if let Some(i) = &info {
+                    let (label, hint) =
+                        if i.favorite { ("★ Favorit", "Favorit entfernen") } else { ("☆ Als Favorit markieren", "Erscheint dann in der Seitenleiste") };
+                    if ui.add(egui::Button::new(small_muted(&t, label)).frame(false)).on_hover_text(hint).clicked() {
+                        self.toggle_favorite(&self.state.selection.backend_id, i.kind, &i.id, !i.favorite);
+                    }
+                }
             });
             ui.add_space(12.0);
             if let Some(ex) = info.as_ref().and_then(|i| i.exercise.clone()) {

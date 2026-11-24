@@ -295,8 +295,23 @@ impl AisCraftApp {
                 self.open_explore();
             }
         }
+        // Image generation, where AIS.chat offers it (it hides it, too, when the state switched
+        // it off).
+        if let Some(b) = ais.iter().find(|b| !b.image_models.is_empty()) {
+            let active = self.explore.is_none() && self.state.current.is_none() && self.state.selection.kind == aiscraft_core::ConversationKind::Image;
+            let r = ui.add(egui::Button::selectable(active, RichText::new("🖼  Bild erzeugen")).truncate().min_size(egui::vec2(ui.available_width(), 28.0)));
+            if r.on_hover_text("Neuer Bild-Chat: beschreibe, was das Bild zeigen soll").clicked() {
+                self.explore = None;
+                self.run("chat.new_image", json!({"backend": b.config.id}));
+                self.focus_composer = true;
+            }
+        }
         let favorites: Vec<(String, aiscraft_core::PersonaInfo)> =
             ais.iter().flat_map(|b| b.personas.iter().flatten().filter(|p| p.favorite).map(|p| (b.config.id.clone(), p.clone()))).take(5).collect();
+        if favorites.is_empty() && loaded && count > 0 {
+            ui.add(egui::Label::new(small_muted(&t, "☆ Favoriten markierst du in „Entdecken“")).wrap())
+                .on_hover_text("Öffne „Assistenten & Figuren entdecken“ und klicke auf den Stern einer Karte");
+        }
         for (backend, p) in favorites {
             let active = self.explore.is_none()
                 && self.state.current.is_none()

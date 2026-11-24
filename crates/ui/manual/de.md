@@ -32,13 +32,15 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 - **Diktieren:** Mikrofon im Eingabefeld. Der Text landet im Eingabefeld, du schickst ihn selbst ab. Braucht ein OpenAI-kompatibles Backend mit Transkription.
 - **Vorlesen:** „Vorlesen“ unter einer Antwort. Nutzt AIS.chat, wenn du dort angemeldet bist.
 - **Kontextfenster:** oben rechts im Chat, wie viel vom Kontext des Modells belegt ist. „≈“ heißt geschätzt.
+- **Bilder erzeugen:** „🖼 Bild erzeugen“ in der Seitenleiste (oder ein Bildmodell im Modellmenü) startet einen Bild-Chat bei AIS.chat: beschreibe, was das Bild zeigen soll, und wähle das Format. Fehlt der Eintrag, hat dein Land die Bilderzeugung in AIS.chat ausgeschaltet.
 - **AIS.chat-Kontingent:** unten links, wie viele Token-Punkte noch übrig sind.
 - **Formeln und Diagramme:** Formeln in LaTeX (`$…$` und `\(…\)` im Text, `$$…$$` und `\[…\]` als eigene Zeile) und Mermaid-Flussdiagramme und -Mindmaps (```` ```mermaid ````) erscheinen gezeichnet, in Antworten wie in der Dokument-Vorschau. Fährst du über eine Formel, siehst du ihren Quelltext; ein Rechtsklick kopiert ihn. Eine Mindmap öffnest du mit „Als Whiteboard“ zum Weiterbearbeiten. Andere Mermaid-Arten zeigt AIS.ChatCraft als Quelltext.
 
 **Assistenten, Figuren und Lernszenarien.** „Assistenten & Figuren entdecken“ in der Seitenleiste (oder Strg+K) öffnet eine Seite mit allem, was AIS.chat dir anbietet: eigene, an der Schule geteilte und offizielle Einträge, mit Bild und Beschreibung.
 
 - **Suchen:** Strg+F, dann Name oder Beschreibung. Groß- und Kleinschreibung und Umlaute spielen keine Rolle („uebung“ findet „Übung“). Bleibt genau ein Treffer, öffnet Enter ihn.
-- **Eingrenzen:** Alle, Assistenten, Figuren, Lernszenarien; dazu „★ Favoriten“ und „Eigene“. Favoriten markierst du in AIS.chat.
+- **Eingrenzen:** Alle, Assistenten, Figuren, Lernszenarien; dazu „★ Favoriten“ und „Eigene“.
+- **Favoriten:** Zeige auf eine Karte und klicke auf den Stern oben rechts, oder auf „☆ Als Favorit markieren“ in den Details und im neuen Chat. Favoriten gelten auch in AIS.chat im Browser.
 - **Details:** Ein Klick auf eine Karte zeigt Beschreibung, Begrüßung, Aufgabe, ob die Websuche an ist, und Gesprächsanfänge. „Chat starten“ (oder Enter) beginnt einen neuen Chat; ein Gesprächsanfang startet ihn und schickt den Satz gleich ab.
 - **Zurück:** Esc, erst zur Übersicht, dann zum Chat.
 
