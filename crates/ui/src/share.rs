@@ -30,7 +30,7 @@ impl AisCraftApp {
         let t = self.tokens.clone();
         let share = self.state.share(&meta.id).cloned();
         let label = if share.is_some() { RichText::new("Geteilt").color(t.accent) } else { RichText::new("Teilen").color(t.muted) };
-        ui.menu_button(label, |ui| {
+        let body = |app: &mut Self, ui: &mut Ui| {
             ui.set_min_width(280.0);
             if let Some(v) = &share {
                 ui.label(small_muted(&t, "Code zum Beitreten"));
@@ -46,36 +46,43 @@ impl AisCraftApp {
                 ui.label(small_muted(&t, &v.detail));
                 ui.separator();
                 if ui.button("Nicht mehr teilen").on_hover_text("Hier nicht mehr abgleichen; die Kopie bleibt").clicked() {
-                    self.run("collab.leave", json!({"id": meta.id}));
+                    app.run("collab.leave", json!({"id": meta.id}));
                     ui.close();
                 }
                 if v.owner && ui.button(RichText::new("Raum für alle beenden").color(t.danger)).clicked() {
-                    self.run("collab.leave", json!({"id": meta.id, "end": true}));
+                    app.run("collab.leave", json!({"id": meta.id, "end": true}));
                     ui.close();
                 }
                 return;
             }
-            if self.state.collab.server.is_empty() {
+            if app.state.collab.server.is_empty() {
                 ui.label(small_muted(&t, "Für gemeinsames Bearbeiten braucht es einen Server."));
-                ui.add(egui::TextEdit::singleline(&mut self.collab_url).hint_text("https://collab.example.org").desired_width(260.0));
+                ui.add(egui::TextEdit::singleline(&mut app.collab_url).hint_text("https://collab.example.org").desired_width(260.0));
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.collab_key).password(true).hint_text("Schlüssel (falls der Server einen will)").desired_width(260.0),
+                    egui::TextEdit::singleline(&mut app.collab_key).password(true).hint_text("Schlüssel (falls der Server einen will)").desired_width(260.0),
                 );
-                if accent_button(ui, &t, "Speichern").clicked() && !self.collab_url.trim().is_empty() {
-                    let key = std::mem::take(&mut self.collab_key);
-                    self.run("collab.set_server", json!({"url": self.collab_url.trim(), "key": key}));
+                if accent_button(ui, &t, "Speichern").clicked() && !app.collab_url.trim().is_empty() {
+                    let key = std::mem::take(&mut app.collab_key);
+                    app.run("collab.set_server", json!({"url": app.collab_url.trim(), "key": key}));
                 }
             } else {
-                ui.label(small_muted(&t, format!("Server: {}", self.state.collab.server)));
+                ui.label(small_muted(&t, format!("Server: {}", app.state.collab.server)));
                 if accent_button(ui, &t, "Teilen starten").clicked() {
-                    self.save_if_dirty();
-                    self.run("collab.share", json!({"id": meta.id}));
+                    app.save_if_dirty();
+                    app.run("collab.share", json!({"id": meta.id}));
                     ui.close();
                 }
             }
             ui.separator();
-            self.collab_join_row(ui);
-        });
+            app.collab_join_row(ui);
+        };
+        if t.designed() {
+            let text = if share.is_some() { "Geteilt" } else { "Teilen" };
+            let r = crate::kit::pill(ui, &t, crate::kit::Pill::Primary, Some(crate::icons::Icon::Share), text, 13.5, None);
+            egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| body(self, ui));
+        } else {
+            ui.menu_button(label, |ui| body(self, ui));
+        }
     }
 
     /// Code and connection under the header of a shared artifact.

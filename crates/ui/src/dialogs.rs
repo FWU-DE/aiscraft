@@ -21,18 +21,74 @@ pub enum SettingsTab {
 
 #[derive(Debug, Clone)]
 pub enum Dialog {
-    Welcome,
-    Login { backend_id: String, secret: String, sent: bool },
-    AddBackend { preset: usize, name: String, base_url: String, secret: String },
-    Settings { tab: SettingsTab, new_note: String },
-    AddSchedule { title: String, prompt: String, when: String, recurring: bool, watch: bool },
-    EditSkill { id: Option<String>, title: String, when: String, steps: String },
-    AddVault { name: String, username: String, password: String, totp: String, url: String },
-    AddConnector { name: String, command: String, env: String, url: String, headers: String, http: bool },
-    Project { id: Option<String>, name: String, instructions: String },
-    Rename { id: String, title: String },
-    RenameArtifact { id: String, title: String },
-    Confirm { text: String, command: String, params: Value },
+    /// First the look; `look_only` for people who are set up already (shown once after the
+    /// update that brought the new looks), else the sign-in follows.
+    Welcome {
+        look_only: bool,
+    },
+    /// The welcome's second step: sign in to AIS.chat or add another service.
+    WelcomeSignIn,
+    Login {
+        backend_id: String,
+        secret: String,
+        sent: bool,
+    },
+    AddBackend {
+        preset: usize,
+        name: String,
+        base_url: String,
+        secret: String,
+    },
+    Settings {
+        tab: SettingsTab,
+        new_note: String,
+    },
+    AddSchedule {
+        title: String,
+        prompt: String,
+        when: String,
+        recurring: bool,
+        watch: bool,
+    },
+    EditSkill {
+        id: Option<String>,
+        title: String,
+        when: String,
+        steps: String,
+    },
+    AddVault {
+        name: String,
+        username: String,
+        password: String,
+        totp: String,
+        url: String,
+    },
+    AddConnector {
+        name: String,
+        command: String,
+        env: String,
+        url: String,
+        headers: String,
+        http: bool,
+    },
+    Project {
+        id: Option<String>,
+        name: String,
+        instructions: String,
+    },
+    Rename {
+        id: String,
+        title: String,
+    },
+    RenameArtifact {
+        id: String,
+        title: String,
+    },
+    Confirm {
+        text: String,
+        command: String,
+        params: Value,
+    },
 }
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
@@ -93,6 +149,32 @@ impl Dialog {
 const CONTRIBUTING_URL: &str = "https://github.com/FWU-DE/aiscraft/blob/main/CONTRIBUTING.md";
 const ISSUES_URL: &str = "https://github.com/FWU-DE/aiscraft/issues/new";
 
+/// AIS.ChatCraft is not made by the AIS.chat team: said in the welcome, under "Über" and in the
+/// handbook.
+pub(crate) const COMMUNITY_NOTICE: &str = "AIS.ChatCraft ist kein offizielles Werkzeug des AIS.chat-Teams, sondern ein Community-Experiment. Es nutzt AIS.chat über die Web-App; Funktionen können sich ändern oder ausfallen.";
+
+/// The notice as a calm info box with the link for feedback.
+pub(crate) fn community_notice(ui: &mut Ui, t: &crate::theme::Tokens) {
+    egui::Frame::new()
+        .fill(t.opaque(t.accent_soft))
+        .corner_radius(egui::CornerRadius::same(t.control_radius()))
+        .inner_margin(egui::Margin::symmetric(14, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_top(|ui| {
+                if t.designed() {
+                    ui.label(crate::icons::Icon::Info.text(17.0).color(t.accent_ink));
+                } else {
+                    ui.label(RichText::new("i").strong().color(t.accent_ink));
+                }
+                ui.vertical(|ui| {
+                    ui.add(egui::Label::new(RichText::new(COMMUNITY_NOTICE).color(t.accent_ink)).wrap());
+                    ui.hyperlink_to(RichText::new("Rückmeldung und Ideen auf GitHub").color(t.link), ISSUES_URL).on_hover_text(ISSUES_URL);
+                });
+            });
+        });
+}
+
 /// Space kept free between a dialog and the window edge, above and below.
 const DIALOG_SCREEN_GAP: f32 = 24.0;
 
@@ -100,10 +182,14 @@ impl AisCraftApp {
     pub(crate) fn dialogs(&mut self, ctx: &egui::Context) {
         let Some(mut dialog) = self.dialog.take() else { return };
         let mut keep = true;
-        let modal = egui::Modal::new(Id::unique("dialog")).frame(dialog_frame(ctx, &self.tokens)).show(ctx, |ui| {
+        let designed_settings = self.tokens.designed() && matches!(dialog, Dialog::Settings { .. });
+        let frame = if designed_settings { dialog_frame(ctx, &self.tokens).inner_margin(egui::Margin::ZERO) } else { dialog_frame(ctx, &self.tokens) };
+        let modal = egui::Modal::new(Id::unique("dialog")).frame(frame).backdrop_color(self.tokens.overlay).show(ctx, |ui| {
             ui.set_width(match dialog {
+                Dialog::Settings { .. } if designed_settings => (ctx.content_rect().width() - 48.0).clamp(600.0, 940.0),
                 Dialog::Settings { .. } => 820.0,
-                Dialog::Login { .. } | Dialog::Welcome => 520.0,
+                Dialog::Welcome { .. } => 640.0,
+                Dialog::Login { .. } | Dialog::WelcomeSignIn => 520.0,
                 _ => 460.0,
             });
             keep = self.dialog_body(ui, &mut dialog);
@@ -111,8 +197,19 @@ impl AisCraftApp {
         if modal.should_close() {
             keep = false;
         }
+        // The look question shows once: picking, going on or closing all count.
+        if matches!(dialog, Dialog::WelcomeSignIn | Dialog::Login { .. }) || (!keep && matches!(dialog, Dialog::Welcome { .. })) {
+            self.mark_look_chosen();
+        }
         if keep && self.dialog.is_none() {
             self.dialog = Some(dialog);
+        }
+    }
+
+    /// Remember that the look was chosen, so the question does not come again.
+    pub(crate) fn mark_look_chosen(&self) {
+        if !self.state.settings.look_chosen {
+            self.run("settings.set", json!({"key": "look_chosen", "value": true}));
         }
     }
 
@@ -120,8 +217,54 @@ impl AisCraftApp {
     fn dialog_body(&mut self, ui: &mut Ui, dialog: &mut Dialog) -> bool {
         let t = self.tokens.clone();
         match dialog {
-            Dialog::Welcome => {
-                ui.heading("Willkommen bei AIS.ChatCraft");
+            Dialog::Welcome { look_only } => {
+                let look_only = *look_only;
+                ui.label(crate::theme::title(&t, if look_only { "AIS.ChatCraft sieht jetzt neu aus" } else { "Willkommen bei AIS.ChatCraft" }).size(26.0));
+                ui.add_space(4.0);
+                ui.label(muted(
+                    &t,
+                    if look_only {
+                        "Such dir aus, wie es aussehen soll. Du kannst es jederzeit unter Einstellungen → Darstellung ändern."
+                    } else {
+                        "Chatten mit AIS.chat und anderen KI-Diensten. Zuerst: Wie soll AIS.ChatCraft aussehen? Das lässt sich später unter Einstellungen → Darstellung ändern."
+                    },
+                ));
+                ui.add_space(12.0);
+                community_notice(ui, &t);
+                ui.add_space(16.0);
+                self.look_cards(ui, true);
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    ui.label(crate::theme::semibold("Farbschema"));
+                    ui.add_space(8.0);
+                    self.mode_picker(ui);
+                });
+                ui.add_space(20.0);
+                let mut keep = true;
+                let mut next = None;
+                ui.horizontal(|ui| {
+                    if look_only {
+                        if accent_button(ui, &t, "Fertig").clicked() {
+                            keep = false;
+                        }
+                    } else {
+                        if accent_button(ui, &t, "Weiter").clicked() {
+                            next = Some(Dialog::WelcomeSignIn);
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if link_button(ui, &t, "Später").clicked() {
+                                keep = false;
+                            }
+                        });
+                    }
+                });
+                if let Some(n) = next {
+                    *dialog = n;
+                }
+                keep
+            }
+            Dialog::WelcomeSignIn => {
+                ui.label(crate::theme::title(&t, "Mit einem Dienst verbinden").size(24.0));
                 ui.add_space(6.0);
                 ui.label(muted(&t, "Chatten mit AIS.chat und anderen KI-Diensten."));
                 ui.add_space(10.0);
@@ -551,7 +694,119 @@ impl AisCraftApp {
         keep
     }
 
+    /// Modern and Glas: a rail with icons on a recessed surface, the section's title in Bold with
+    /// a line under it, and a round close button.
+    fn settings_body_designed(&mut self, ui: &mut Ui, tab: &mut SettingsTab, new_note: &mut String) -> bool {
+        use crate::icons::Icon;
+        let t = self.tokens.clone();
+        let screen_h = ui.ctx().content_rect().height();
+        let h = (screen_h - 2.0 * DIALOG_SCREEN_GAP).clamp(300.0, 640.0);
+        ui.set_max_height(h);
+        ui.set_min_height(h);
+        let mut keep = true;
+        let (chapter, title, sub) = match tab {
+            SettingsTab::Backends => ("Anmelden", "Dienste", "AIS.chat und andere KI-Dienste, mit denen AIS.ChatCraft spricht."),
+            SettingsTab::Connectors => ("Konnektoren und Freigaben", "Konnektoren", "Werkzeuge, die Modelle aufrufen dürfen, und was sie dafür fragen."),
+            SettingsTab::Schedules => ("Zeitpläne und Aufgaben", "Zeitpläne", "Aufträge, die regelmäßig oder einmal zu einer Zeit laufen."),
+            SettingsTab::Skills => ("Fähigkeiten und Hinweise", "Fähigkeiten", "Gelernte Vorgehen und Hinweise zur rechten Zeit."),
+            SettingsTab::Vault => ("Tresor", "Tresor", "Zugangsdaten, die Werkzeuge nutzen dürfen, ohne sie zu sehen."),
+            SettingsTab::Usage => ("Nutzung", "Nutzung", "Verbrauch je Dienst und eine Monatsgrenze."),
+            SettingsTab::Memory => ("Gedächtnis", "Gedächtnis", "Was AIS.ChatCraft sich von dir gemerkt hat."),
+            SettingsTab::Appearance => ("Erscheinungsbild", "Darstellung", "So sieht AIS.ChatCraft auf diesem Gerät aus."),
+            SettingsTab::About => ("Mitmachen", "Über", "Version, Aktualisierungen und wie du mitmachen kannst."),
+        };
+        let rail_fill =
+            if t.glass.is_some() { if t.dark { egui::Color32::from_white_alpha(8) } else { egui::Color32::from_white_alpha(102) } } else { t.sunken };
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let rail = egui::Frame::new()
+                .fill(rail_fill)
+                .corner_radius(egui::CornerRadius { nw: 24, sw: 24, ne: 0, se: 0 })
+                .inner_margin(egui::Margin { left: 14, right: 12, top: 22, bottom: 16 })
+                .show(ui, |ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width(206.0);
+                        ui.set_min_height(h - 38.0);
+                        ui.label(crate::theme::bold("Einstellungen").size(22.0).color(t.text));
+                        ui.add_space(14.0);
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        for (k, icon, label) in [
+                            (SettingsTab::Backends, Icon::Cloud, "Dienste"),
+                            (SettingsTab::Connectors, Icon::Plug, "Konnektoren"),
+                            (SettingsTab::Schedules, Icon::Calendar, "Zeitpläne"),
+                            (SettingsTab::Skills, Icon::Bulb, "Fähigkeiten"),
+                            (SettingsTab::Vault, Icon::Lock, "Tresor"),
+                            (SettingsTab::Usage, Icon::Chart, "Nutzung"),
+                            (SettingsTab::Memory, Icon::Memory, "Gedächtnis"),
+                            (SettingsTab::Appearance, Icon::Palette, "Darstellung"),
+                            (SettingsTab::About, Icon::Info, "Über"),
+                        ] {
+                            let on = *tab == k;
+                            let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
+                            r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, on, label));
+                            let p = ui.painter();
+                            if on {
+                                crate::kit::accent_fill(p, rect, egui::CornerRadius::same(12), &t);
+                            } else if r.hovered() {
+                                p.rect_filled(rect, egui::CornerRadius::same(12), t.text.gamma_multiply(0.06));
+                            }
+                            let fg = if on { t.on_accent } else { t.text2 };
+                            icon.paint(p, egui::pos2(rect.left() + 21.0, rect.center().y), 18.0, fg);
+                            let g = crate::kit::line(ui, label, crate::kit::font(15.0, if on { crate::theme::SEMIBOLD } else { "" }), fg, 160.0);
+                            p.galley(egui::pos2(rect.left() + 41.0, rect.center().y - g.size().y / 2.0), g, fg);
+                            if r.clicked() {
+                                *tab = k;
+                            }
+                        }
+                        ui.add_space((ui.available_height() - 30.0).max(8.0));
+                        if crate::kit::pill(ui, &t, crate::kit::Pill::Link, Some(Icon::Help), &format!("Handbuch: {title}"), 13.5, None)
+                            .on_hover_text("Das passende Kapitel im Handbuch (F1)")
+                            .clicked()
+                        {
+                            self.open_manual(chapter);
+                        }
+                    })
+                });
+            let line_x = rail.response.rect.right();
+            ui.painter().line_segment(
+                [egui::pos2(line_x, rail.response.rect.top()), egui::pos2(line_x, rail.response.rect.bottom())],
+                egui::Stroke::new(1.0, t.border),
+            );
+            egui::Frame::new().inner_margin(egui::Margin { left: 32, right: 22, top: 20, bottom: 18 }).show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.label(crate::theme::bold(title).size(28.0).color(t.text));
+                            ui.label(RichText::new(sub).size(14.5).color(t.muted));
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                            let (rect, r) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::click());
+                            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Schließen"));
+                            ui.painter().circle_filled(
+                                rect.center(),
+                                18.0,
+                                if r.hovered() { crate::theme::mix(t.opaque(t.chip), t.text, 0.08) } else { t.opaque(t.chip) },
+                            );
+                            Icon::X.paint(ui.painter(), rect.center(), 20.0, t.text2);
+                            if r.on_hover_text("Schließen (Esc)").clicked() {
+                                keep = false;
+                            }
+                        });
+                    });
+                    ui.add_space(14.0);
+                    let max_h = (ui.available_height() - 8.0).max(160.0);
+                    self.settings_tab(ui, tab, new_note, max_h);
+                });
+            });
+        });
+        keep
+    }
+
     fn settings_body(&mut self, ui: &mut Ui, tab: &mut SettingsTab, new_note: &mut String) -> bool {
+        if self.tokens.designed() {
+            return self.settings_body_designed(ui, tab, new_note);
+        }
         // egui hands a modal's content the rect of its previous frame, so a tab that got taller (or
         // a first frame measured small) would stay clipped there: allow the screen's full height.
         // Set before anything is drawn, since changing the max rect resets the cursor.
@@ -566,7 +821,7 @@ impl AisCraftApp {
             SettingsTab::Vault => "Tresor",
             SettingsTab::Usage => "Nutzung",
             SettingsTab::Memory => "Gedächtnis",
-            SettingsTab::Appearance => "Tastenkürzel",
+            SettingsTab::Appearance => "Erscheinungsbild",
             SettingsTab::About => "Mitmachen",
         };
         ui.horizontal(|ui| {
@@ -986,27 +1241,38 @@ impl AisCraftApp {
                 }
             }
             SettingsTab::Appearance => {
-                ui.label("Farben");
-                ui.horizontal(|ui| {
-                    for (k, label) in [("system", "AIS (wie System)"), ("light", "AIS hell"), ("dark", "AIS dunkel"), ("omarchy", "Wie Omarchy")] {
-                        if ui.selectable_label(self.state.settings.theme == k, label).clicked() {
-                            self.run("settings.set", json!({"key": "theme", "value": k}));
-                        }
+                ui.label(crate::kit::caps_text(&t, "Erscheinungsbild"));
+                ui.add_space(6.0);
+                self.look_cards(ui, true);
+                ui.add_space(6.0);
+                let (look, _) = crate::theme::parse(&self.state.settings.theme);
+                setting_row(ui, &t, "Farbschema", "Hell, dunkel oder wie das System eingestellt ist.", |ui| self.mode_picker(ui));
+                if look == crate::theme::Look::Glas {
+                    setting_row(ui, &t, "Transparenz", "Glas über dem Verlauf, oder deckende Flächen: ruhiger und auf schwachen Rechnern schneller.", |ui| {
+                        self.transparency_picker(ui)
+                    });
+                }
+                setting_row(ui, &t, "Zoom", "Größe von Schrift und Bedienelementen, für Chats, Dokumente und die Seitenleiste.", |ui| {
+                    let mut zoom = self.state.settings.zoom;
+                    let r = ui.add(egui::Slider::new(&mut zoom, 0.7..=2.0).step_by(0.05).custom_formatter(|v, _| format!("{:.0} %", v * 100.0)));
+                    if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                        self.run("settings.set", json!({"key": "zoom", "value": zoom}));
                     }
                 });
-                ui.add_space(8.0);
-                let mut zoom = self.state.settings.zoom;
-                if ui.add(egui::Slider::new(&mut zoom, 0.7..=2.0).text("Zoom").step_by(0.05)).drag_stopped() {
-                    self.run("settings.set", json!({"key": "zoom", "value": zoom}));
-                }
-                let mut enter = self.state.settings.enter_sends;
-                if ui.checkbox(&mut enter, "Enter sendet (Umschalt+Enter für neue Zeile)").changed() {
-                    self.run("settings.set", json!({"key": "enter_sends", "value": enter}));
-                }
+                setting_row(ui, &t, "Enter sendet", "Sonst sendet Strg+Enter, und Enter beginnt eine neue Zeile.", |ui| {
+                    let mut enter = self.state.settings.enter_sends;
+                    if crate::widgets::toggle(ui, &t, &mut enter, "Enter sendet").changed() {
+                        self.run("settings.set", json!({"key": "enter_sends", "value": enter}));
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label(small_muted(&t, "Die Akzentfarbe bleibt das AIS-Blau, damit AIS.ChatCraft überall gleich erkennbar ist."));
             }
             SettingsTab::About => {
                 ui.label(RichText::new(format!("AIS.ChatCraft {}", env!("CARGO_PKG_VERSION"))).strong());
                 ui.label(muted(&t, "Nativer Client für AIS.chat und andere KI-Dienste. Rust und egui, ohne Webview."));
+                ui.add_space(8.0);
+                community_notice(ui, &t);
                 ui.add_space(10.0);
                 self.update_settings(ui);
                 ui.add_space(10.0);
@@ -1022,6 +1288,24 @@ impl AisCraftApp {
         });
     }
 }
+/// One row of a settings section: title and line on the left, the control on the right, a
+/// hairline under it.
+fn setting_row(ui: &mut Ui, t: &crate::theme::Tokens, title: &str, sub: &str, control: impl FnOnce(&mut Ui)) {
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        let w = ui.available_width();
+        ui.allocate_ui_with_layout(egui::vec2((w * 0.55).max(160.0), 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.label(crate::theme::semibold(title).size(15.0).color(t.text));
+            ui.add(egui::Label::new(RichText::new(sub).size(13.0).color(t.muted)).wrap());
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), control);
+    });
+    ui.add_space(12.0);
+    let y = ui.cursor().top();
+    ui.painter().line_segment([egui::pos2(ui.max_rect().left(), y), egui::pos2(ui.max_rect().right(), y)], egui::Stroke::new(1.0, t.border));
+}
+
 fn aiscraft_backends_cookie_name() -> &'static str {
     aiscraft_engine::SESSION_COOKIE
 }

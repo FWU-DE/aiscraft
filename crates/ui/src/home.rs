@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use crate::app::AisCraftApp;
 use crate::dialogs::{Dialog, SettingsTab};
+use crate::icons::Icon;
 use crate::widgets::{bell_button, card, muted, plain, small_muted, status_dot};
 
 /// Gap between cards.
@@ -100,7 +101,7 @@ fn bar(ui: &mut Ui, t: &crate::theme::Tokens, used: f32) -> egui::Response {
 fn card_head(ui: &mut Ui, t: &crate::theme::Tokens, title: &str, link: Option<&str>) -> bool {
     let mut clicked = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(title).strong());
+        ui.label(if t.designed() { crate::theme::bold(title).size(16.0) } else { RichText::new(title).strong() });
         if let Some(link) = link {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 clicked = ui.add(egui::Button::new(RichText::new(link).color(t.accent).small()).frame(false)).clicked();
@@ -173,7 +174,8 @@ impl AisCraftApp {
     /// A card that fills the width it is given.
     fn home_card(&mut self, ui: &mut Ui, add: impl FnOnce(&mut Self, &mut Ui)) {
         let t = self.tokens.clone();
-        card(&t).show(ui, |ui| {
+        let frame = if t.designed() { crate::kit::card_frame(&t).inner_margin(egui::Margin::same(16)) } else { card(&t) };
+        frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(self, ui);
         });
@@ -531,6 +533,329 @@ impl AisCraftApp {
             egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| self.inbox_list(ui, 20));
         });
     }
+}
+
+/// Prompt starters on the designed start page: icon, title, line, and the text they put into
+/// the composer.
+const STARTERS: [(Icon, &str, &str, &str); 4] = [
+    (Icon::Book, "Stundenentwurf", "Photosynthese, Klasse 7", "Stundenentwurf für Klasse 7 zum Thema Photosynthese"),
+    (Icon::Table, "Arbeitsblatt", "Brüche addieren, Klasse 6", "Arbeitsblatt zum Addieren von Brüchen für Klasse 6"),
+    (Icon::Mail, "Elternbrief", "Klassenfahrt Edersee", "Formuliere einen freundlichen Elternbrief zur Klassenfahrt an den Edersee"),
+    (Icon::Quiz, "Quiz", "Zellbestandteile, 5 Fragen", "Erstelle ein Quiz mit 5 Fragen zu den Zellbestandteilen"),
+];
+
+const WEEKDAYS: [&str; 7] = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"];
+const MONTHS: [&str; 12] = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
+
+/// "Dienstag, 24. November" and the greeting for the hour.
+pub(crate) fn date_and_greeting(now: i64) -> (String, &'static str) {
+    match aiscraft_engine::local_date_parts(now) {
+        Some((wd, day, month, hour)) => {
+            let date = format!(
+                "{}, {day}. {}",
+                WEEKDAYS.get(wd as usize).copied().unwrap_or_default(),
+                MONTHS.get(month.saturating_sub(1) as usize).copied().unwrap_or_default()
+            );
+            let hello = match hour {
+                4..=10 => "Guten Morgen",
+                11..=17 => "Guten Tag",
+                _ => "Guten Abend",
+            };
+            (date, hello)
+        }
+        None => (String::new(), "Hallo"),
+    }
+}
+
+impl AisCraftApp {
+    /// The start page of Modern and Glas: date, greeting, the large composer, prompt starters,
+    /// favourites from AIS.chat, what was worked on last, then schedules, usage and notices.
+    pub(crate) fn home_designed(&mut self, ui: &mut Ui, first: Option<String>) {
+        let t = self.tokens.clone();
+        self.refresh_home_usage();
+        self.decode_budget = self.decode_budget.max(4);
+        let now = aiscraft_engine::now_ms();
+        let (date, hello) = date_and_greeting(now);
+        let w = ui.available_width();
+        let narrow = w < 640.0;
+        ui.label(crate::theme::semibold(date).size(14.0).color(if t.dark { t.link } else { t.accent_ink }));
+        ui.add_space(2.0);
+        let greeting = match &first {
+            Some(n) => format!("{hello}, {n}."),
+            None => format!("{hello}."),
+        };
+        ui.add(egui::Label::new(crate::theme::bold(greeting).size(if narrow { 36.0 } else { 44.0 }).color(t.text)).wrap());
+        ui.label(crate::theme::medium("Woran arbeiten wir heute?").size(if narrow { 19.0 } else { 22.0 }).color(t.text2));
+        if let Some(p) = self.state.selection.project_id.as_ref().and_then(|pid| self.state.projects.iter().find(|p| &p.id == pid)) {
+            ui.label(muted(&t, format!("Neuer Chat im Projekt {}", p.name)));
+        }
+        ui.add_space(20.0);
+        self.not_connected_card(ui);
+        self.composer_big = true;
+        self.composer(ui);
+        ui.add_space(14.0);
+        // Prompt starters: four in a row, two on narrow windows.
+        let cols = if narrow { 2 } else { 4 };
+        let cw = ((w - GAP * (cols as f32 - 1.0)) / cols as f32).max(80.0);
+        for chunk in STARTERS.chunks(cols) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = GAP;
+                for (icon, title, line, prompt) in chunk {
+                    if starter_card(ui, &t, *icon, title, line, cw).on_hover_text(*prompt).clicked() {
+                        self.composer = prompt.to_string();
+                        self.focus_composer = true;
+                    }
+                }
+            });
+            ui.add_space(GAP);
+        }
+        ui.add_space(16.0);
+        self.favorites_designed(ui, w);
+        ui.add_space(24.0);
+        self.recent_designed(ui, w);
+        ui.add_space(24.0);
+        let unread = self.state.inbox.iter().any(|i| !i.read);
+        if unread {
+            self.inbox_card(ui);
+            ui.add_space(GAP);
+        }
+        let two = w >= TWO_COLUMNS;
+        self.card_row(ui, two, Self::schedules_card, Self::usage_card);
+        if !unread && !self.state.inbox.is_empty() {
+            ui.add_space(GAP);
+            self.inbox_card(ui);
+        }
+        ui.add_space(24.0);
+    }
+
+    /// Before any service is ready: sign in to AIS.chat or add another service.
+    pub(crate) fn not_connected_card(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        if self.state.backends.iter().any(|b| matches!(b.status, BackendStatus::Ready { .. })) {
+            return;
+        }
+        let frame = if t.designed() { crate::kit::card_frame(&t) } else { card(&t) };
+        frame.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(crate::theme::title(&t, "Noch nicht verbunden"));
+            ui.label(muted(&t, "Melde dich bei AIS.chat an oder füge einen anderen Dienst hinzu (OpenAI, Claude, Ollama, LM Studio …)."));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if let Some(ais) = self.state.backends.iter().find(|b| b.config.kind == BackendKind::AisChat)
+                    && crate::widgets::accent_button(ui, &t, "Bei AIS.chat anmelden").clicked()
+                {
+                    self.dialog = Some(Dialog::login(&ais.config.id));
+                }
+                if ui.button("Dienst hinzufügen").clicked() {
+                    self.dialog = Some(Dialog::add_backend());
+                }
+            });
+        });
+        ui.add_space(12.0);
+    }
+
+    /// A section title with a leading icon and an optional link on the right; true when the link
+    /// was clicked.
+    fn section_title(&mut self, ui: &mut Ui, icon: Icon, icon_color: egui::Color32, title: &str, link: Option<&str>) -> bool {
+        let t = self.tokens.clone();
+        let mut clicked = false;
+        ui.horizontal(|ui| {
+            ui.label(icon.text(18.0).color(icon_color));
+            ui.label(crate::theme::bold(title).size(18.0).color(t.text));
+            if let Some(link) = link {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    clicked = crate::kit::pill(ui, &t, crate::kit::Pill::Link, None, link, 14.0, Some(Icon::ChevronRight)).clicked();
+                });
+            }
+        });
+        ui.add_space(6.0);
+        clicked
+    }
+
+    fn favorites_designed(&mut self, ui: &mut Ui, w: f32) {
+        let t = self.tokens.clone();
+        let ais = self.ais_ready();
+        if self.section_title(ui, Icon::Star, t.accent2, "Favoriten aus AIS.chat", (!ais.is_empty()).then_some("Alle anzeigen")) {
+            self.open_explore();
+        }
+        if ais.is_empty() {
+            crate::kit::card_frame(&t).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add(
+                    egui::Label::new(muted(
+                        &t,
+                        "Deine Lieblings-Assistenten, -Dialogpartner und -Lernszenarien aus AIS.chat stehen hier, sobald du angemeldet bist.",
+                    ))
+                    .wrap(),
+                );
+                if let Some(id) = self.state.backends.iter().find(|b| b.config.kind == BackendKind::AisChat).map(|b| b.config.id.clone()) {
+                    ui.add_space(6.0);
+                    if crate::kit::pill(ui, &t, crate::kit::Pill::Soft, None, "Bei AIS.chat anmelden", 13.5, None).clicked() {
+                        self.dialog = Some(Dialog::login(&id));
+                    }
+                }
+            });
+            return;
+        }
+        self.prefetch_personas(false);
+        let favorites: Vec<(String, PersonaInfo)> =
+            ais.iter().flat_map(|b| b.personas.iter().flatten().filter(|p| p.favorite).map(|p| (b.config.id.clone(), p.clone()))).take(8).collect();
+        if favorites.is_empty() {
+            crate::kit::card_frame(&t).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                if ais.iter().all(|b| b.personas.is_none() && b.personas_error.is_none()) {
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Spinner::new().size(12.0));
+                        ui.label(small_muted(&t, "Lädt …"));
+                    });
+                } else if let Some(e) = ais.iter().find_map(|b| b.personas_error.clone()) {
+                    ui.add(egui::Label::new(small_muted(&t, e)).wrap());
+                } else {
+                    ui.add(
+                        egui::Label::new(muted(&t, "Noch keine Favoriten. Markiere Assistenten, Dialogpartner oder Lernszenarien mit einem Stern, dann startest du sie hier mit einem Klick."))
+                            .wrap(),
+                    );
+                    ui.add_space(6.0);
+                    if crate::kit::pill(ui, &t, crate::kit::Pill::Soft, Some(Icon::Explore), "Entdecken", 13.5, None).clicked() {
+                        self.open_explore();
+                    }
+                }
+            });
+            return;
+        }
+        let n = if w < 640.0 { 2 } else { 4 };
+        let tile_w = ((w - GAP * (n as f32 - 1.0)) / n as f32).max(60.0);
+        for chunk in favorites.chunks(n) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = GAP;
+                for (backend, p) in chunk {
+                    if self.favorite_card(ui, backend, p, tile_w).clicked() {
+                        self.start_persona(backend, p.kind, &p.id, None);
+                    }
+                }
+            });
+            ui.add_space(GAP);
+        }
+    }
+
+    fn favorite_card(&mut self, ui: &mut Ui, backend: &str, p: &PersonaInfo, w: f32) -> egui::Response {
+        let t = self.tokens.clone();
+        let (rect, resp) = ui.allocate_exact_size(vec2(w, 78.0), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &p.name));
+        paint_card(ui, &t, rect, resp.hovered() || resp.has_focus());
+        let pic = egui::Rect::from_min_size(egui::pos2(rect.left() + 12.0, rect.center().y - 21.0), vec2(42.0, 42.0));
+        self.paint_persona_picture(ui, pic, backend, p, 21, false);
+        let text = egui::Rect::from_min_max(egui::pos2(pic.right() + 12.0, rect.top() + 10.0), egui::pos2(rect.right() - 10.0, rect.bottom() - 8.0));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text).layout(Layout::top_down(Align::Min)));
+        child.spacing_mut().item_spacing.y = 1.0;
+        let name = crate::kit::line(&child, &p.name, crate::kit::font(14.5, crate::theme::BOLD), t.text, text.width());
+        let wrap = egui::text::LayoutJob {
+            wrap: egui::text::TextWrapping { max_width: text.width(), max_rows: 2, break_anywhere: false, ..Default::default() },
+            ..egui::text::LayoutJob::single_section(
+                p.name.clone(),
+                egui::text::TextFormat { font_id: crate::kit::font(14.5, crate::theme::BOLD), color: t.text, line_height: Some(18.0), ..Default::default() },
+            )
+        };
+        let _ = name;
+        let g = child.fonts_mut(|f| f.layout_job(wrap));
+        let gh = g.size().y;
+        let top = rect.center().y - (gh + 17.0) / 2.0;
+        child.painter().galley(egui::pos2(text.left(), top), g, t.text);
+        child.painter().text(egui::pos2(text.left(), top + gh + 2.0), egui::Align2::LEFT_TOP, p.kind.label(), crate::kit::font(12.5, ""), t.muted);
+        resp.on_hover_text(format!("Neuer Chat: {} {}", p.kind.label(), p.name))
+    }
+
+    /// The three things worked on last: chats, documents and whiteboards by their last change.
+    fn recent_designed(&mut self, ui: &mut Ui, w: f32) {
+        let t = self.tokens.clone();
+        self.section_title(ui, Icon::History, t.text2, "Zuletzt bearbeitet", None);
+        enum Item {
+            Chat(String),
+            Artifact(String),
+        }
+        let mut items: Vec<(i64, Icon, String, String, Item)> = Vec::new();
+        for c in &self.state.conversations {
+            let title = if c.title.trim().is_empty() { "Ohne Titel".to_string() } else { c.title.clone() };
+            items.push((c.updated_at, Icon::Chat, title, "Chat".into(), Item::Chat(c.id.clone())));
+        }
+        for a in &self.state.artifacts {
+            let kind = match a.kind {
+                aiscraft_core::ArtifactKind::Document => "Dokument",
+                aiscraft_core::ArtifactKind::Board => "Whiteboard",
+                aiscraft_core::ArtifactKind::Worksheet => "Arbeitsblatt",
+                aiscraft_core::ArtifactKind::App => "Lern-App",
+                aiscraft_core::ArtifactKind::H5p => "H5P-Inhalt",
+            };
+            items.push((a.updated_at, crate::learn_panel::kind_lucide(a.kind), a.title.clone(), kind.into(), Item::Artifact(a.id.clone())));
+        }
+        items.sort_by_key(|i| std::cmp::Reverse(i.0));
+        if items.is_empty() {
+            ui.label(muted(&t, "Noch nichts. Schreib oben einfach los."));
+            return;
+        }
+        let now = aiscraft_engine::now_ms();
+        let n = if w < 640.0 { 1 } else { 3 };
+        let tile_w = ((w - GAP * (n as f32 - 1.0)) / n as f32).max(60.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(GAP, GAP);
+            for (at, icon, title, kind, item) in items.into_iter().take(3) {
+                let (rect, resp) = ui.allocate_exact_size(vec2(tile_w, 54.0), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &title));
+                let p = ui.painter();
+                let hovered = resp.hovered() || resp.has_focus();
+                let fill = if t.glass.is_some() || hovered { t.surface } else { egui::Color32::TRANSPARENT };
+                let stroke = if t.glass.is_some() { t.card_stroke } else { t.border };
+                p.rect(rect, CornerRadius::same(14), fill, egui::Stroke::new(1.0, if hovered { t.accent } else { stroke }), egui::StrokeKind::Inside);
+                let tile = egui::Rect::from_min_size(egui::pos2(rect.left() + 9.0, rect.center().y - 17.0), vec2(34.0, 34.0));
+                let (tf, ti) = if t.glass.is_some() { (t.accent_soft, t.accent_ink) } else { (t.sunken, t.text2) };
+                crate::kit::icon_tile(p, tile, 10, tf, icon, 17.0, ti);
+                let tw = rect.right() - tile.right() - 22.0;
+                let g1 = crate::kit::line(ui, &title, crate::kit::font(14.0, crate::theme::SEMIBOLD), t.text, tw);
+                let g2 = crate::kit::line(ui, &format!("{kind} · {}", aiscraft_engine::friendly_time(at, now)), crate::kit::font(12.5, ""), t.muted, tw);
+                let x = tile.right() + 11.0;
+                p.galley(egui::pos2(x, rect.center().y - 17.0), g1, t.text);
+                p.galley(egui::pos2(x, rect.center().y + 1.0), g2, t.muted);
+                if resp.clicked() {
+                    match &item {
+                        Item::Chat(id) => self.run("chat.open", json!({"id": id})),
+                        Item::Artifact(id) => {
+                            self.save_if_dirty();
+                            self.run("artifact.open", json!({"id": id}));
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// The surface of a clickable card in the designed looks, lit on hover.
+fn paint_card(ui: &Ui, t: &crate::theme::Tokens, rect: egui::Rect, hovered: bool) {
+    let p = ui.painter();
+    let r = CornerRadius::same(t.r_card);
+    if t.card_shadow.color.a() > 0 {
+        p.add(t.card_shadow.as_shape(rect, r));
+    }
+    p.rect(rect, r, t.surface, egui::Stroke::new(1.0, if hovered { t.accent } else { t.card_stroke }), egui::StrokeKind::Inside);
+    if let Some(g) = &t.glass {
+        crate::backdrop::glass_edge(p, rect, f32::from(t.r_card), g.edge);
+    }
+}
+
+/// A prompt starter: an icon tile, a chevron, the title and a line.
+fn starter_card(ui: &mut Ui, t: &crate::theme::Tokens, icon: Icon, title: &str, line: &str, w: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 118.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
+    paint_card(ui, t, rect, resp.hovered() || resp.has_focus());
+    let p = ui.painter();
+    let tile = egui::Rect::from_min_size(rect.min + vec2(14.0, 14.0), vec2(36.0, 36.0));
+    crate::kit::icon_tile(p, tile, 11, t.accent_soft, icon, 19.0, t.accent_ink);
+    Icon::ChevronRight.paint(p, egui::pos2(rect.right() - 22.0, tile.center().y), 16.0, t.muted);
+    let g1 = crate::kit::line(ui, title, crate::kit::font(16.0, crate::theme::BOLD), t.text, w - 28.0);
+    let g2 = crate::kit::line(ui, line, crate::kit::font(13.5, ""), t.muted, w - 28.0);
+    p.galley(egui::pos2(rect.left() + 14.0, rect.bottom() - 52.0), g1, t.text);
+    p.galley(egui::pos2(rect.left() + 14.0, rect.bottom() - 30.0), g2, t.muted);
+    resp
 }
 
 #[cfg(test)]

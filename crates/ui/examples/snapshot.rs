@@ -17,7 +17,8 @@
 //! (`["ui.show", {"what": "personas"}]`, `{"what": "persona:character:c1"}` for one entry;
 //! `persona.favorite` works against it;
 //! `["ui.wait", {"ms": 1500}]` lets the pictures arrive; `["ui.drop", {"paths": [..]}]` drops
-//! files on the window). `--theme light|dark|omarchy`.
+//! files on the window). `--theme modern|glas|system|…` (see `aiscraft_engine::THEMES`),
+//! `--system light|dark` for what "Wie das System" follows.
 //! `--demo-update` hands the update check a made-up newer release (no request to GitHub) and
 //! checks, so the hint shows (`["ui.show", {"what": "about"}]` for the settings part).
 //! The engine runs in memory; nothing touches your real data.
@@ -172,7 +173,7 @@ fn demo_server(engine: &Engine) -> String {
                     let answer = if user_text.contains("Linkliste") {
                         links = format!("Zwei Seiten zum Thema:\n\n- [Ferientermine](http://{addr}/ferien)\n- [Arbeitsblätter Photosynthese](http://{addr}/weg/photosynthese)\n\nPrüfe die Links, bevor du sie weitergibst.");
                         links.as_str()
-                    } else if req.contains("Formel") {
+                    } else if user_text.contains("Formel") {
                         MATH_ANSWER
                     } else {
                         ANSWER
@@ -506,6 +507,10 @@ fn main() {
         .allow_missing_glyphs()
         .wgpu()
         .build_eframe(move |cc| AisCraftApp::new(cc, app_engine.clone(), rx.take()));
+    // `--system light|dark`: the scheme the system reports ("Wie das System").
+    if let Some(theme) = arg(&args, "--system") {
+        harness.input_mut().system_theme = Some(if theme == "light" { egui::Theme::Light } else { egui::Theme::Dark });
+    }
     harness.run_steps(4);
     // "$last" in a string param stands for the id the previous command returned.
     let mut last = String::new();

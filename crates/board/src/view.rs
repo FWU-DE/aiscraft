@@ -76,6 +76,14 @@ pub struct BoardStyle {
     pub palette: [Color32; 8],
     /// Alignment guides while moving.
     pub guide: Color32,
+    /// Text on the accent (the active tool, the start buttons).
+    pub on_accent: Color32,
+    /// Tinted accent (halo of the empty state, "Notiz anlegen").
+    pub accent_soft: Color32,
+    /// Pill-shaped floating bars and the designed empty state with start buttons.
+    pub rounded: bool,
+    /// Font family for the empty state's title (a bold cut), when the app has one.
+    pub title_family: Option<egui::FontFamily>,
 }
 
 impl BoardStyle {
@@ -92,6 +100,10 @@ impl BoardStyle {
             note_text: Color32::from_rgb(0x1f, 0x1d, 0x1a),
             palette: Self::PASTELS,
             guide: Color32::from_rgb(0xe0, 0x3a, 0x6e),
+            on_accent: Color32::WHITE,
+            accent_soft: Color32::from_rgb(0xf6, 0xd9, 0xc8),
+            rounded: false,
+            title_family: None,
         }
     }
 
@@ -108,6 +120,10 @@ impl BoardStyle {
             note_text: Color32::from_rgb(0x1f, 0x1d, 0x1a),
             palette: Self::PASTELS,
             guide: Color32::from_rgb(0xff, 0x6b, 0x9a),
+            on_accent: Color32::from_rgb(0x1e, 0x1d, 0x1b),
+            accent_soft: Color32::from_rgb(0x5a, 0x34, 0x22),
+            rounded: false,
+            title_family: None,
         }
     }
 
@@ -402,6 +418,8 @@ pub struct ViewState {
     pub snap: bool,
     /// Show the shortcut overlay (F1 or „?“).
     pub help: bool,
+    /// "Mindmap aus Chat" on the empty board was clicked; the app takes it from here.
+    pub wants_mindmap: bool,
     fit_pending: bool,
     /// Canvas size and camera of the last automatic fit; refit when the canvas size settles.
     fitted: Option<(Vec2, Camera)>,
@@ -425,6 +443,7 @@ impl Default for ViewState {
             toolbar: true,
             snap: true,
             help: false,
+            wants_mindmap: false,
             fit_pending: true,
             fitted: None,
             guides: Vec::new(),
@@ -523,7 +542,11 @@ impl<'a> BoardView<'a> {
         paint_overlay(&painter, ui, &resp, rect, st, style);
         editor(ui, resp.id, rect, board, st, style);
         if st.cache.els.is_empty() && st.editing.is_none() && !st.help {
-            empty_hint(&painter, ui, rect, style);
+            if style.rounded {
+                empty_start(&painter, ui, rect, resp.id, board, st, style);
+            } else {
+                empty_hint(&painter, ui, rect, style);
+            }
         }
         if st.toolbar {
             toolbar(ui, &painter, rect, resp.id, board, st, style);
@@ -1991,21 +2014,32 @@ fn paint_icon(painter: &Painter, icon: Icon, c: Pos2, color: Color32, accent: Co
 }
 
 fn bar_background(painter: &Painter, r: Rect, style: &BoardStyle) {
-    painter.rect_filled(r.translate(vec2(0.0, 2.0)).expand(1.0), 12.0, Color32::from_black_alpha(22));
-    painter.rect_filled(r, 12.0, style.surface);
-    painter.rect_stroke(r, 12.0, Stroke::new(1.0, style.border), StrokeKind::Inside);
+    let radius = if style.rounded { r.height() / 2.0 } else { 12.0 };
+    if style.rounded {
+        let shade = egui::epaint::Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_rgba_unmultiplied(0x0b, 0x2a, 0x45, 0x1c) };
+        painter.add(shade.as_shape(r, egui::CornerRadius::same(radius.clamp(0.0, 255.0) as u8)));
+    } else {
+        painter.rect_filled(r.translate(vec2(0.0, 2.0)).expand(1.0), radius, Color32::from_black_alpha(22));
+    }
+    painter.rect_filled(r, radius, style.surface);
+    painter.rect_stroke(r, radius, Stroke::new(1.0, style.border), StrokeKind::Inside);
 }
 
 #[allow(clippy::too_many_arguments)]
 fn icon_button(ui: &Ui, painter: &Painter, r: Rect, id: Id, icon: Icon, tip: &str, active: bool, enabled: bool, style: &BoardStyle) -> bool {
     let resp = ui.interact(r, id, if enabled { Sense::click() } else { Sense::hover() }).on_hover_text(tip);
-    if active {
-        painter.rect_filled(r.shrink(2.0), 8.0, style.selection);
+    let rad = if style.rounded { r.width() / 2.0 - 1.0 } else { 8.0 };
+    if active && style.rounded {
+        painter.rect_filled(r.shrink(1.0), rad, style.accent);
+    } else if active {
+        painter.rect_filled(r.shrink(2.0), rad, style.selection);
     } else if resp.hovered() && enabled {
-        painter.rect_filled(r.shrink(2.0), 8.0, style.border.gamma_multiply(0.6));
+        painter.rect_filled(r.shrink(2.0), rad, style.border.gamma_multiply(0.6));
     }
     let color = if !enabled {
         style.muted.gamma_multiply(0.45)
+    } else if active && style.rounded {
+        style.on_accent
     } else if active {
         style.accent
     } else {
@@ -2188,24 +2222,105 @@ fn context_bar(ui: &mut Ui, painter: &Painter, rect: Rect, base: Id, board: &mut
     }
 }
 
-/// Centred card on an empty board with the quickest ways to start.
+/// Empty state of the designed looks: the note symbol in an accent circle with a tinted halo,
+/// "Noch leer", one sentence, and two ways to start: a note in the middle, or a mind map from
+/// the chat (handed to the app through `ViewState::wants_mindmap`).
+fn empty_start(painter: &Painter, ui: &Ui, rect: Rect, base: Id, board: &mut Board, st: &mut ViewState, style: &BoardStyle) {
+    let title_font = FontId::new(22.0, style.title_family.clone().unwrap_or(egui::FontFamily::Proportional));
+    let title = ui.fonts_mut(|f| f.layout_no_wrap("Noch leer".to_string(), title_font, style.text));
+    let wrap = (rect.width() - 64.0).clamp(160.0, 330.0);
+    let body = ui.fonts_mut(|f| {
+        f.layout_job(text_job("Doppelklick legt eine Notiz an. Oder lass die KI aus einem Chat eine Mindmap bauen.", 14.5, style.muted, wrap, true))
+    });
+    let foot = ui.fonts_mut(|f| f.layout_no_wrap("F1 zeigt alle Tastenkürzel".to_string(), FontId::proportional(12.5), style.muted));
+    let labels = ["Notiz anlegen", "Mindmap aus Chat"];
+    let galleys: Vec<_> = labels.iter().map(|l| ui.fonts_mut(|f| f.layout_no_wrap(l.to_string(), FontId::proportional(13.5), style.text))).collect();
+    let btn_w: Vec<f32> = galleys.iter().map(|g| g.size().x + 26.0 + 20.0).collect();
+    let h = 72.0 + 12.0 + title.size().y + 10.0 + body.size().y + 14.0 + 34.0 + 10.0 + foot.size().y;
+    let mut y = rect.center().y - h / 2.0;
+    let cx = rect.center().x;
+    painter.rect_filled(Rect::from_center_size(rect.center(), vec2(wrap + 48.0, h + 40.0)), 24.0, style.bg.gamma_multiply(0.92));
+    let c = pos2(cx, y + 36.0);
+    painter.circle_filled(c, 36.0, style.accent_soft);
+    painter.circle_filled(c, 24.0, style.accent);
+    paint_icon(painter, Icon::Tool(Tool::Note), c, style.on_accent, style.on_accent);
+    y += 72.0 + 12.0;
+    let th = title.size();
+    painter.galley(pos2(cx - th.x / 2.0, y), title, style.text);
+    y += th.y + 10.0;
+    let bh = body.size().y;
+    painter.galley(pos2(cx, y), body, style.muted);
+    y += bh + 14.0;
+    let total = btn_w.iter().sum::<f32>() + 8.0;
+    let mut x = cx - total / 2.0;
+    for (i, g) in galleys.into_iter().enumerate() {
+        let w = btn_w.get(i).copied().unwrap_or(120.0);
+        let r = Rect::from_min_size(pos2(x, y), vec2(w, 34.0));
+        let resp = ui.interact(r, base.with(("empty-start", i)), Sense::click());
+        let label = labels.get(i).copied().unwrap_or_default();
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+        let (fill, fg, stroke) = if i == 0 { (style.accent_soft, style.text, Color32::TRANSPARENT) } else { (style.surface, style.text, style.border) };
+        painter.rect(r, 17.0, fill, Stroke::new(1.0, stroke), StrokeKind::Inside);
+        if resp.hovered() {
+            painter.rect_filled(r, 17.0, style.text.gamma_multiply(0.06));
+        }
+        let ic = pos2(r.left() + 20.0, r.center().y);
+        if i == 0 {
+            painter.line_segment([ic + vec2(-5.0, 0.0), ic + vec2(5.0, 0.0)], Stroke::new(1.8, fg));
+            painter.line_segment([ic + vec2(0.0, -5.0), ic + vec2(0.0, 5.0)], Stroke::new(1.8, fg));
+        } else {
+            // A small four-pointed spark.
+            let pts = vec![
+                ic + vec2(0.0, -6.0),
+                ic + vec2(1.6, -1.6),
+                ic + vec2(6.0, 0.0),
+                ic + vec2(1.6, 1.6),
+                ic + vec2(0.0, 6.0),
+                ic + vec2(-1.6, 1.6),
+                ic + vec2(-6.0, 0.0),
+                ic + vec2(-1.6, -1.6),
+            ];
+            painter.add(Shape::closed_line(pts, Stroke::new(1.5, fg)));
+        }
+        painter.galley(pos2(r.left() + 32.0, r.center().y - g.size().y / 2.0), g, fg);
+        if resp.clicked() {
+            if i == 0 {
+                let w = st.camera.to_world(rect, rect.center());
+                create_at(board, st, Kind::Note, w);
+            } else {
+                st.wants_mindmap = true;
+            }
+        }
+        x += w + 8.0;
+    }
+    y += 34.0 + 10.0;
+    let fw = foot.size().x;
+    painter.galley(pos2(cx - fw / 2.0, y), foot, style.muted);
+}
+
+/// Empty state of a board (design review 2026-11): a symbol in a tonal circle, one sentence on
+/// the quickest start and where mind maps come from; the shortcut list stays behind F1.
 fn empty_hint(painter: &Painter, ui: &Ui, rect: Rect, style: &BoardStyle) {
     let lines = [
-        ("Leeres Whiteboard", 17.0, style.text),
-        ("Doppelklick: Notiz · N: Notiz · T: Text · R: Rechteck · A: Pfeil", 13.5, style.muted),
-        ("Mausrad: verschieben · Strg+Mausrad: zoomen · F1 oder ?: alle Tastenkürzel", 13.5, style.muted),
+        ("Noch leer", 19.0, style.text),
+        ("Doppelklick auf die Fläche legt eine Notiz an.\nOder unter einer Chat-Antwort „Als Whiteboard“ wählen: daraus wird eine Mindmap.", 14.0, style.muted),
+        ("Werkzeuge oben · F1 zeigt alle Tastenkürzel", 12.5, style.muted.gamma_multiply(0.85)),
     ];
-    let wrap = (rect.width() - 64.0).max(120.0);
+    let wrap = (rect.width() - 64.0).clamp(120.0, 420.0);
     let galleys: Vec<_> = lines.iter().map(|(t, size, color)| ui.fonts_mut(|f| f.layout_job(text_job(t, *size, *color, wrap, true)))).collect();
-    let h: f32 = galleys.iter().map(|g| g.size().y).sum::<f32>() + 10.0 * (galleys.len() as f32 - 1.0);
+    let icon = 56.0;
+    let h: f32 = icon + 16.0 + galleys.iter().map(|g| g.size().y).sum::<f32>() + 10.0 * (galleys.len() as f32 - 1.0);
     let w = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max);
-    let card = Rect::from_center_size(rect.center(), vec2(w + 40.0, h + 32.0));
-    painter.rect_filled(card, 14.0, style.surface.gamma_multiply(0.92));
-    painter.rect_stroke(card, 14.0, Stroke::new(1.0, style.border), StrokeKind::Inside);
-    let mut y = card.min.y + 16.0;
+    // A soft backdrop so the dot grid does not run through the text.
+    painter.rect_filled(Rect::from_center_size(rect.center(), vec2(w + 48.0, h + 40.0)), 20.0, style.bg.gamma_multiply(0.9));
+    let mut y = rect.center().y - h / 2.0;
+    let c = pos2(rect.center().x, y + icon / 2.0);
+    painter.circle_filled(c, icon / 2.0, style.accent.gamma_multiply(0.14));
+    paint_icon(painter, Icon::Tool(Tool::Note), c, style.accent, style.accent);
+    y += icon + 16.0;
     for g in galleys {
         let gh = g.size().y;
-        painter.galley(pos2(card.center().x, y), g, style.text);
+        painter.galley(pos2(rect.center().x, y), g, style.text);
         y += gh + 10.0;
     }
 }

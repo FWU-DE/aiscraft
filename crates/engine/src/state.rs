@@ -278,8 +278,15 @@ pub struct NoticeAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// "system" (AIS look, light or dark like the system), "light", "dark" or "omarchy" (follow the desktop theme).
+    /// The look, one of [`THEMES`]: "modern", "glas" (each also "-light" or "-dark", else like the
+    /// system), "system", "light", "dark" (Klassisch, the earlier look) or "omarchy" (follow the
+    /// desktop theme).
     pub theme: String,
+    /// Glas: "gradient" (translucent panels over the gradient) or "off" (opaque panels).
+    pub transparency: String,
+    /// The person has picked a look (or closed the question) once; until then the welcome
+    /// dialog asks on start.
+    pub look_chosen: bool,
     /// Keep notes from "Merke dir: …" and send them to backends that allow context.
     pub memory: bool,
     /// UI zoom.
@@ -310,10 +317,15 @@ pub struct Settings {
     pub update_check: bool,
 }
 
+/// Accepted values of the `theme` setting.
+pub const THEMES: &[&str] = &["modern", "modern-light", "modern-dark", "glas", "glas-light", "glas-dark", "system", "light", "dark", "omarchy"];
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            theme: "system".into(),
+            theme: "modern".into(),
+            transparency: "gradient".into(),
+            look_chosen: false,
             memory: true,
             zoom: 1.0,
             enter_sends: true,

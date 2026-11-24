@@ -4,19 +4,24 @@
 
 mod app;
 mod artifact_panel;
+mod backdrop;
 mod conversation;
 mod dialogs;
 mod downloads;
 mod explore;
 mod h5p_panel;
 mod home;
+pub mod icons;
+mod kit;
 mod learn_panel;
+mod looks;
 pub mod manual;
 pub mod markup;
 pub mod math;
 pub mod mermaid;
 mod palette;
 pub mod plot;
+mod rich;
 mod share;
 mod sidebar;
 pub mod theme;

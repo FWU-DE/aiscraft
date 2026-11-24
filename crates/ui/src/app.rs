@@ -13,7 +13,7 @@ use crate::theme::{self, ThemeWatcher, Tokens};
 pub enum UiRequest {
     /// Save a PNG of the window.
     Screenshot { path: PathBuf, reply: std::sync::mpsc::Sender<Result<Value, String>> },
-    /// Open a dialog by name: settings, memory, login, add_backend, palette, welcome.
+    /// Open a dialog by name: settings, memory, login, add_backend, palette, welcome, look.
     Show { what: String, reply: std::sync::mpsc::Sender<Result<Value, String>> },
 }
 
@@ -23,10 +23,14 @@ pub struct AisCraftApp {
     pub(crate) engine: Engine,
     pub(crate) state: Arc<State>,
     pub(crate) tokens: Tokens,
-    theme_key: (String, bool),
+    theme_key: (String, bool, String),
     watcher: ThemeWatcher,
     pub(crate) md: egui_commonmark::CommonMarkCache,
     pub(crate) composer: String,
+    /// The next composer drawn is the start page's large one (Modern, Glas).
+    pub(crate) composer_big: bool,
+    /// Draw the next "Erstellen" menu as an icon (narrow composer).
+    pub(crate) create_as_icon: bool,
     pub(crate) pending_files: Vec<PathBuf>,
     /// Web links for the next message, and the address being typed (`Some` while the field is open).
     pub(crate) pending_links: Vec<String>,
@@ -80,6 +84,70 @@ const NARROW_WINDOW: f32 = 1000.0;
 
 pub(crate) const CONTENT_WIDTH: f32 = 760.0;
 
+/// The frames of sidebar, artifact panel and chat area for a look: flush panels (Klassisch,
+/// Modern) or floating glass surfaces 12 px apart with radius 24 (Glas).
+struct PanelFrames {
+    sidebar: Frame,
+    sidebar_width: f32,
+    panel: Frame,
+    main: Frame,
+}
+
+/// Gap between Glas' floating surfaces and to the window edge.
+pub(crate) const GLASS_GAP: i8 = 12;
+
+impl PanelFrames {
+    fn new(t: &Tokens) -> Self {
+        let g = GLASS_GAP;
+        let side_margin = Margin { left: 14, right: 14, top: 18, bottom: 14 };
+        match t.look {
+            theme::Look::Glas => {
+                let r = CornerRadius::same(t.r_panel);
+                let shade = |a: u8| egui::epaint::Shadow {
+                    offset: [0, 14],
+                    blur: 36,
+                    spread: 0,
+                    color: if t.dark {
+                        egui::Color32::from_black_alpha(a.saturating_mul(2))
+                    } else {
+                        egui::Color32::from_rgba_unmultiplied(0x1b, 0x3a, 0x5a, a)
+                    },
+                };
+                Self {
+                    sidebar: Frame::new()
+                        .fill(t.side_top)
+                        .stroke(Stroke::new(1.0, t.side_stroke))
+                        .corner_radius(r)
+                        .outer_margin(Margin { left: g, right: 0, top: g, bottom: g })
+                        .inner_margin(side_margin)
+                        .shadow(shade(0x14)),
+                    sidebar_width: 252.0 + f32::from(g),
+                    panel: Frame::new()
+                        .fill(t.panel)
+                        .stroke(Stroke::new(1.0, t.panel_stroke))
+                        .corner_radius(r)
+                        .outer_margin(Margin { left: 0, right: g, top: g, bottom: g })
+                        .shadow(shade(0x1f)),
+                    main: Frame::new().fill(t.main).stroke(Stroke::new(1.0, t.panel_stroke)).corner_radius(r).outer_margin(Margin::same(g)).shadow(shade(0x1a)),
+                }
+            }
+            theme::Look::Modern | theme::Look::Omarchy => Self {
+                // The gradient is painted by the sidebar itself (egui frames fill flat).
+                sidebar: Frame::new().inner_margin(side_margin),
+                sidebar_width: 268.0,
+                panel: Frame::new().fill(t.panel).inner_margin(Margin::ZERO),
+                main: Frame::new().fill(t.main),
+            },
+            theme::Look::Classic => Self {
+                sidebar: Frame::new().fill(t.sidebar).inner_margin(Margin::symmetric(10, 12)),
+                sidebar_width: 272.0,
+                panel: Frame::new().fill(t.surface).inner_margin(Margin::ZERO),
+                main: Frame::new().fill(t.bg),
+            },
+        }
+    }
+}
+
 impl AisCraftApp {
     pub fn new(cc: &eframe::CreationContext<'_>, engine: Engine, control: Option<std::sync::mpsc::Receiver<UiRequest>>) -> Self {
         theme::install_fonts(&cc.egui_ctx);
@@ -87,18 +155,34 @@ impl AisCraftApp {
         engine.on_change(move || ctx.request_repaint());
         let state = engine.state();
         let system_dark = cc.egui_ctx.system_theme().is_none_or(|t| t == egui::Theme::Dark);
-        let tokens = theme::resolve(&state.settings.theme, system_dark);
+        let tokens = theme::resolve(&state.settings.theme, system_dark, state.settings.transparency == "off");
         tokens.apply(&cc.egui_ctx, state.settings.zoom);
         let first_run = state.backends.iter().all(|b| !b.has_secret) && state.backends.len() == 1;
-        Self {
+        // A fresh profile gets the whole welcome (look, then sign-in); people who are set up
+        // already see only the look question, once.
+        let welcome = if first_run {
+            Some(Dialog::Welcome { look_only: false })
+        } else if !state.settings.look_chosen {
+            // The question starts on Modern, like the system's scheme; Omarchy stays, it was a
+            // deliberate choice. One click on "Klassisch" brings the earlier look back.
+            if let (theme::Look::Classic, _) = theme::parse(&state.settings.theme) {
+                engine.dispatch("settings.set", json!({"key": "theme", "value": theme::setting(theme::Look::Modern, theme::Mode::System)}));
+            }
+            Some(Dialog::Welcome { look_only: true })
+        } else {
+            None
+        };
+        let mut app = Self {
             control,
             engine,
-            theme_key: (state.settings.theme.clone(), system_dark),
+            theme_key: (state.settings.theme.clone(), system_dark, state.settings.transparency.clone()),
             state,
             tokens,
             watcher: ThemeWatcher::new(),
             md: Default::default(),
             composer: String::new(),
+            composer_big: false,
+            create_as_icon: false,
             pending_files: Vec::new(),
             pending_links: Vec::new(),
             link_input: None,
@@ -106,7 +190,7 @@ impl AisCraftApp {
             search_text: String::new(),
             project_filter: None,
             editing: None,
-            dialog: first_run.then_some(Dialog::Welcome),
+            dialog: welcome,
             palette: None,
             focus_composer: true,
             focus_search: false,
@@ -128,7 +212,9 @@ impl AisCraftApp {
             home: Default::default(),
             toast_seen: Default::default(),
             narrow: None,
-        }
+        };
+        app.register_code_theme();
+        app
     }
 
     /// The texture of an image file (at most 25 MB, 8192 px a side), loaded on first use.
@@ -159,12 +245,23 @@ impl AisCraftApp {
         self.engine.dispatch(cmd, params);
     }
 
+    /// Modern and Glas draw code on their own background: load the matching syntax theme.
+    fn register_code_theme(&mut self) {
+        if let Some(xml) = self.tokens.code_theme_xml() {
+            let name = self.tokens.code_theme();
+            if let Err(e) = self.md.add_syntax_theme_from_bytes(name, xml.as_bytes()) {
+                log::warn!("Farbschema für Code: {e}");
+            }
+        }
+    }
+
     fn sync_theme(&mut self, ctx: &egui::Context) {
         let system_dark = ctx.system_theme().is_none_or(|t| t == egui::Theme::Dark);
-        let key = (self.state.settings.theme.clone(), system_dark);
+        let key = (self.state.settings.theme.clone(), system_dark, self.state.settings.transparency.clone());
         let follow = key.0 == "omarchy" && self.watcher.changed();
         if key != self.theme_key || follow {
-            self.tokens = theme::resolve(&key.0, system_dark);
+            self.tokens = theme::resolve(&key.0, system_dark, key.2 == "off");
+            self.register_code_theme();
             self.theme_key = key;
         }
         self.tokens.apply(ctx, self.state.settings.zoom);
@@ -409,7 +506,11 @@ impl AisCraftApp {
                             true
                         }
                         "welcome" => {
-                            self.dialog = Some(Dialog::Welcome);
+                            self.dialog = Some(Dialog::Welcome { look_only: false });
+                            true
+                        }
+                        "look" => {
+                            self.dialog = Some(Dialog::Welcome { look_only: true });
                             true
                         }
                         "manual" => {
@@ -496,13 +597,20 @@ impl eframe::App for AisCraftApp {
             }
             self.narrow = Some(narrow);
         }
+        // Glas: the soft backdrop behind everything; the panels float on it.
+        if let Some(g) = &t.glass {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            crate::backdrop::paint(&painter, ctx.content_rect(), g, 1.0);
+        }
+        let frames = PanelFrames::new(&t);
         let before = self.sidebar_open;
         let mut sidebar_open = before;
         egui::Panel::left("sidebar")
             .resizable(true)
-            .default_size(272.0)
+            .show_separator_line(!t.designed())
+            .default_size(frames.sidebar_width)
             .size_range(200.0..=420.0)
-            .frame(Frame::new().fill(t.sidebar).inner_margin(Margin::symmetric(10, 12)))
+            .frame(frames.sidebar)
             .show_collapsible(ui, &mut sidebar_open, |ui| self.sidebar(ui));
         if self.sidebar_open == before {
             self.sidebar_open = sidebar_open;
@@ -513,15 +621,34 @@ impl eframe::App for AisCraftApp {
             let w = ui.available_width();
             egui::Panel::right("artifact")
                 .resizable(true)
-                .default_size((w * 0.45).clamp(360.0, 760.0))
+                .show_separator_line(!t.designed())
+                .default_size(if t.designed() { (w * 0.46).clamp(380.0, 760.0) } else { (w * 0.45).clamp(360.0, 760.0) })
                 .size_range(320.0..=(w - 360.0).max(340.0))
-                .frame(Frame::new().fill(t.surface).inner_margin(Margin::ZERO))
-                .show(ui, |ui| self.artifact_panel(ui));
+                .frame(frames.panel)
+                .show(ui, |ui| {
+                    if t.flush_modern() {
+                        // A soft shadow cast to the left onto the chat, and the hairline.
+                        let r = ui.max_rect();
+                        let shade =
+                            egui::epaint::Shadow { offset: [-8, 0], blur: 24, spread: 0, color: egui::Color32::from_rgba_unmultiplied(0x0b, 0x2a, 0x45, 0x14) };
+                        ui.ctx()
+                            .layer_painter(egui::LayerId::new(egui::Order::Background, Id::unique("panel-shadow")))
+                            .add(shade.as_shape(r, CornerRadius::ZERO));
+                        ui.painter().line_segment([r.left_top(), r.left_bottom()], Stroke::new(1.0, t.panel_stroke));
+                    }
+                    if let Some(g) = &t.glass {
+                        crate::backdrop::glass_edge(ui.painter(), ui.max_rect(), f32::from(t.r_panel), g.edge);
+                    }
+                    self.artifact_panel(ui)
+                });
         } else {
             self.attach_artifact = false;
         }
 
-        egui::CentralPanel::default().frame(Frame::new().fill(t.bg)).show(ui, |ui| {
+        egui::CentralPanel::default().frame(frames.main).show(ui, |ui| {
+            if let Some(g) = &t.glass {
+                crate::backdrop::glass_edge(ui.painter(), ui.max_rect(), f32::from(t.r_panel), g.edge);
+            }
             if self.explore.is_some() {
                 self.explore_page(ui);
             } else {

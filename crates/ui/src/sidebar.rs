@@ -5,6 +5,7 @@ use serde_json::json;
 
 use crate::app::AisCraftApp;
 use crate::dialogs::Dialog;
+use crate::icons::Icon;
 use crate::widgets::{age_group, icon_button, muted, small_muted, status_dot};
 
 /// A section heading in the sidebar, its text in line with the entries' text below it.
@@ -15,6 +16,67 @@ fn section_heading(ui: &mut Ui, t: &crate::theme::Tokens, text: &str) {
 
 impl AisCraftApp {
     pub(crate) fn sidebar(&mut self, ui: &mut Ui) {
+        // Inside the sidebar the sidebar's own colours apply (restored at the end).
+        let outer = self.tokens.clone();
+        if outer.designed() {
+            self.tokens = outer.for_sidebar();
+            let v = ui.visuals_mut();
+            v.override_text_color = Some(outer.side_text2);
+            v.widgets.inactive.weak_bg_fill = outer.opaque(outer.side_search);
+            v.widgets.inactive.bg_fill = outer.opaque(outer.side_search);
+            v.widgets.hovered.weak_bg_fill = outer.opaque(outer.side_active);
+            v.widgets.hovered.bg_fill = outer.opaque(outer.side_active);
+            v.widgets.noninteractive.fg_stroke.color = outer.side_text2;
+            v.widgets.inactive.fg_stroke.color = outer.side_text2;
+            v.widgets.hovered.fg_stroke.color = outer.side_text;
+            v.hyperlink_color = outer.side_text;
+            self.sidebar_top_designed(ui, &outer);
+        } else {
+            self.sidebar_top_classic(ui);
+        }
+        ScrollArea::vertical().id_salt("sidebar-list").auto_shrink([false, false]).show(ui, |ui| {
+            // Leave room for the scroll bar, so it never covers the "+" buttons on the right.
+            ui.set_max_width((ui.available_width() - 12.0).max(80.0));
+            if self.state.search.is_some() && !self.search_text.trim().is_empty() {
+                self.search_results(ui);
+            } else {
+                self.projects_section(ui);
+                ui.add_space(4.0);
+                self.artifacts_section(ui);
+                ui.add_space(4.0);
+                self.personas_section(ui);
+                self.chat_list(ui);
+                self.remote_section(ui);
+            }
+        });
+        self.tokens = outer;
+    }
+
+    /// A section heading with an optional "+" (its tooltip); returns the plus button.
+    fn heading(&self, ui: &mut Ui, label: &str, plus: Option<&str>) -> Option<egui::Response> {
+        let t = self.tokens.clone();
+        if t.designed() {
+            return crate::kit::section(ui, &t, label, plus);
+        }
+        ui.horizontal(|ui| {
+            section_heading(ui, &t, label);
+            let tip = plus?;
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| Some(icon_button(ui, &t, "+", tip))).inner
+        })
+        .inner
+    }
+
+    /// One entry of a list: a selectable row (Klassisch, with `classic` as its text) or the
+    /// designed entry with its icon.
+    fn entry(&self, ui: &mut Ui, icon: Icon, classic: impl Into<egui::WidgetText>, label: &str, active: bool) -> egui::Response {
+        if self.tokens.designed() {
+            crate::kit::side_item(ui, &self.tokens, icon, label, active)
+        } else {
+            ui.add(egui::Button::selectable(active, classic).truncate().min_size(egui::vec2(ui.available_width(), 26.0)))
+        }
+    }
+
+    fn sidebar_top_classic(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         egui::Panel::bottom("sidebar-account").frame(egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 8, bottom: 2 })).show(ui, |ui| {
             self.update_banner(ui);
@@ -63,22 +125,117 @@ impl AisCraftApp {
             }
         }
         ui.add_space(8.0);
+    }
 
-        ScrollArea::vertical().id_salt("sidebar-list").auto_shrink([false, false]).show(ui, |ui| {
-            // Leave room for the scroll bar, so it never covers the "+" buttons on the right.
-            ui.set_max_width((ui.available_width() - 12.0).max(80.0));
-            if self.state.search.is_some() && !self.search_text.trim().is_empty() {
-                self.search_results(ui);
-            } else {
-                self.projects_section(ui);
-                ui.add_space(4.0);
-                self.artifacts_section(ui);
-                ui.add_space(4.0);
-                self.personas_section(ui);
-                self.chat_list(ui);
-                self.remote_section(ui);
+    /// Modern and Glas: logo tile and name, the "Neuer Chat" pill, the search pill; the account
+    /// at the bottom.
+    fn sidebar_top_designed(&mut self, ui: &mut Ui, t: &crate::theme::Tokens) {
+        let t = t.clone();
+        if let Some(g) = &t.glass {
+            let full = ui.max_rect() + egui::Margin { left: 14, right: 14, top: 18, bottom: 14 };
+            crate::backdrop::glass_edge(ui.painter(), full, f32::from(t.r_panel), g.edge);
+        }
+        if t.flush_modern() {
+            let full = ui.max_rect().expand2(egui::vec2(14.0, 0.0)) + egui::Margin { left: 0, right: 0, top: 18, bottom: 14 };
+            crate::backdrop::vertical_gradient(ui.painter(), full, CornerRadius::ZERO, t.side_top, t.side_bottom);
+        }
+        egui::Panel::bottom("sidebar-account")
+            .show_separator_line(false)
+            .frame(egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 0, bottom: 0 }))
+            .show(ui, |ui| {
+                self.update_banner(ui);
+                self.account_row_designed(ui);
+            });
+        ui.horizontal(|ui| {
+            ui.add_space(4.0);
+            let tile = crate::kit::logo_tile(ui, 34.0);
+            ui.add_space(2.0);
+            let name = ui.add(egui::Label::new(crate::theme::bold("AIS.ChatCraft").size(19.0).color(t.side_text)).selectable(false));
+            let home = ui
+                .interact(tile.rect.union(name.rect), ui.scope_id().with("home"), egui::Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Startseite");
+            if home.clicked() && (self.state.current.is_some() || self.explore.is_some()) {
+                self.close_chat();
             }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if crate::kit::icon_button(ui, &t, Icon::Panel, "Seitenleiste ausblenden (Strg+B)", t.side_muted, 19.0, 32.0).clicked() {
+                    self.sidebar_open = false;
+                }
+            });
         });
+        ui.add_space(12.0);
+        // "Neuer Chat": a full-width pill in the accent.
+        let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.0), Sense::click());
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Neuer Chat"));
+        {
+            let p = ui.painter();
+            p.add(
+                egui::epaint::Shadow { offset: [0, 3], blur: 10, spread: 0, color: egui::Color32::from_black_alpha(38) }.as_shape(rect, CornerRadius::same(20)),
+            );
+            if t.glass.is_some() {
+                crate::kit::accent_fill(p, rect, CornerRadius::same(20), &t);
+            } else {
+                p.rect_filled(rect, CornerRadius::same(20), t.side_new);
+            }
+            if r.hovered() {
+                p.rect_filled(rect, CornerRadius::same(20), egui::Color32::from_white_alpha(24));
+            }
+            let g = crate::kit::line(ui, "Neuer Chat", crate::kit::font(15.0, crate::theme::SEMIBOLD), t.side_new_text, 200.0);
+            let w = 18.0 + 8.0 + g.size().x;
+            let x = rect.center().x - w / 2.0;
+            Icon::Plus.paint(p, egui::pos2(x + 9.0, rect.center().y), 18.0, t.side_new_text);
+            p.galley(egui::pos2(x + 26.0, rect.center().y - g.size().y / 2.0), g, t.side_new_text);
+        }
+        if r.on_hover_text("Strg+N").clicked() {
+            self.new_chat();
+        }
+        ui.add_space(8.0);
+        // Search: a pill with the icon, the field and the key for the command palette.
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), Sense::hover());
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(18),
+            t.side_search,
+            egui::Stroke::new(1.0, if t.glass.is_some() { t.side_line } else { egui::Color32::TRANSPARENT }),
+            egui::StrokeKind::Inside,
+        );
+        Icon::Search.paint(ui.painter(), egui::pos2(rect.left() + 22.0, rect.center().y), 17.0, t.side_search_text);
+        let key_bg = if t.glass.is_none() {
+            t.side_line
+        } else if t.dark {
+            egui::Color32::from_white_alpha(20)
+        } else {
+            egui::Color32::from_white_alpha(180)
+        };
+        let key = crate::kit::kbd(ui, ui.painter(), egui::pos2(rect.right() - 8.0, rect.center().y), "Strg K", t.side_search_text, key_bg);
+        let key_r = ui.interact(key, ui.scope_id().with("palette-key"), Sense::click()).on_hover_text("Befehle (Strg+K)");
+        key_r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Befehle (Strg+K)"));
+        if key_r.clicked() {
+            self.palette = Some(Default::default());
+        }
+        let field = egui::Rect::from_min_max(egui::pos2(rect.left() + 36.0, rect.center().y - 9.0), egui::pos2(key.left() - 6.0, rect.center().y + 9.0));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(field).layout(Layout::left_to_right(Align::Center)));
+        let search = child.add(
+            egui::TextEdit::singleline(&mut self.search_text)
+                .hint_text(RichText::new("Chats durchsuchen").color(t.side_search_text))
+                .text_color(t.side_text)
+                .frame(egui::Frame::NONE)
+                .font(egui::FontId::proportional(14.5))
+                .desired_width(field.width()),
+        );
+        if self.focus_search {
+            search.request_focus();
+            self.focus_search = false;
+        }
+        if search.changed() {
+            if self.search_text.trim().is_empty() {
+                self.run("search.clear", json!({}));
+            } else {
+                self.run("search", json!({"query": self.search_text}));
+            }
+        }
+        ui.add_space(10.0);
     }
 
     fn search_results(&mut self, ui: &mut Ui) {
@@ -102,23 +259,16 @@ impl AisCraftApp {
 
     fn projects_section(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
-        ui.horizontal(|ui| {
-            section_heading(ui, &t, "Projekte");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if icon_button(ui, &t, "+", "Neues Projekt").clicked() {
-                    self.dialog = Some(Dialog::project(None));
-                }
-            });
-        });
+        if self.heading(ui, "Projekte", Some("Neues Projekt")).is_some_and(|r| r.clicked()) {
+            self.dialog = Some(Dialog::project(None));
+        }
         let projects = self.state.projects.clone();
         if projects.is_empty() {
             empty_hint(ui, &t, "Noch keine Projekte. Ein Projekt bündelt Chats mit eigenen Anweisungen.");
         }
         for p in projects {
             let active = self.project_filter.as_deref() == Some(&p.id);
-            let r = ui
-                .add(egui::Button::selectable(active, p.name.as_str()).truncate().min_size(egui::vec2(ui.available_width(), 26.0)))
-                .on_hover_text(format!("Neuer Chat im Projekt {}", p.name));
+            let r = self.entry(ui, Icon::Folder, p.name.as_str(), &p.name, active).on_hover_text(format!("Neuer Chat im Projekt {}", p.name));
             if r.clicked() {
                 if active {
                     self.project_filter = None;
@@ -151,26 +301,22 @@ impl AisCraftApp {
 
     fn artifacts_section(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
-        ui.horizontal(|ui| {
-            section_heading(ui, &t, "Dokumente & Whiteboards");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let plus = icon_button(ui, &t, "+", "Neues Dokument oder Whiteboard");
-                egui::Popup::menu(&plus).show(|ui| {
-                    if ui.button("📄  Neues Dokument").clicked() {
-                        self.run("artifact.create", json!({"kind": "document"}));
-                        ui.close();
-                    }
-                    if ui.button("▣  Neues Whiteboard").clicked() {
-                        self.run("artifact.create", json!({"kind": "board"}));
-                        ui.close();
-                    }
-                    if self.state.collab.available {
-                        ui.separator();
-                        self.collab_join_row(ui);
-                    }
-                });
+        if let Some(plus) = self.heading(ui, "Dokumente & Whiteboards", Some("Neues Dokument oder Whiteboard")) {
+            egui::Popup::menu(&plus).show(|ui| {
+                if ui.button("📄  Neues Dokument").clicked() {
+                    self.run("artifact.create", json!({"kind": "document"}));
+                    ui.close();
+                }
+                if ui.button("▣  Neues Whiteboard").clicked() {
+                    self.run("artifact.create", json!({"kind": "board"}));
+                    ui.close();
+                }
+                if self.state.collab.available {
+                    ui.separator();
+                    self.collab_join_row(ui);
+                }
             });
-        });
+        }
         let items: Vec<_> =
             self.state.artifacts.iter().filter(|a| self.project_filter.as_ref().is_none_or(|p| a.project_id.as_ref() == Some(p))).take(12).cloned().collect();
         if items.is_empty() {
@@ -179,9 +325,7 @@ impl AisCraftApp {
         for a in items {
             let open = self.state.open_artifact.as_deref() == Some(&a.id);
             let icon = crate::learn_panel::kind_icon(a.kind);
-            let r = ui
-                .add(egui::Button::selectable(open, format!("{icon}  {}", a.title)).truncate().min_size(egui::vec2(ui.available_width(), 26.0)))
-                .on_hover_text(&a.title);
+            let r = self.entry(ui, crate::learn_panel::kind_lucide(a.kind), format!("{icon}  {}", a.title), &a.title, open).on_hover_text(&a.title);
             if r.clicked() {
                 if open {
                     self.save_if_dirty();
@@ -219,7 +363,7 @@ impl AisCraftApp {
             let group = if c.pinned { "Angeheftet" } else { age_group(c.updated_at) };
             if group != last_group {
                 ui.add_space(8.0);
-                ui.horizontal(|ui| section_heading(ui, &t, group));
+                self.heading(ui, group, None);
                 last_group = group;
             }
             let selected = self.state.current.as_deref() == Some(&c.id);
@@ -227,9 +371,15 @@ impl AisCraftApp {
             let w = ui.available_width();
             let is_ais = self.state.backend(&c.backend_id).is_some_and(|b| b.config.kind == BackendKind::AisChat);
             // AIS.chat chats get a small AIS.chat logo; the spaces make room for it.
-            let title = if is_ais { format!("      {}", c.title) } else { c.title.clone() };
-            let resp = ui.add(egui::Button::selectable(selected, RichText::new(title)).truncate().min_size(egui::vec2(w, 26.0))).on_hover_text(&c.title);
-            if is_ais {
+            let designed = t.designed();
+            let title = if is_ais && !designed { format!("      {}", c.title) } else { c.title.clone() };
+            let resp = if designed {
+                crate::kit::side_item(ui, &t, Icon::Chat, &c.title, selected)
+            } else {
+                ui.add(egui::Button::selectable(selected, RichText::new(title)).truncate().min_size(egui::vec2(w, 26.0)))
+            }
+            .on_hover_text(&c.title);
+            if is_ais && !designed {
                 let r = resp.rect;
                 let h = 10.0;
                 let logo = egui::Rect::from_min_size(egui::pos2(r.left() + 8.0, r.center().y - h / 2.0), egui::vec2(h * 269.8 / 230.1, h));
@@ -302,12 +452,16 @@ impl AisCraftApp {
         let count: usize = ais.iter().filter_map(|b| b.personas.as_ref()).map(Vec::len).sum();
         let loaded = ais.iter().any(|b| b.personas.is_some());
         ui.add_space(4.0);
-        let r = ui.add(
-            egui::Button::selectable(self.explore.is_some(), RichText::new(format!("{EXPLORE_ICON}  Entdecken")))
-                .right_text(small_muted(&t, if loaded { count.to_string() } else { String::new() }))
-                .truncate()
-                .min_size(egui::vec2(ui.available_width(), 28.0)),
-        );
+        let r = if t.designed() {
+            crate::kit::side_item(ui, &t, Icon::Explore, &if loaded { format!("Entdecken ({count})") } else { "Entdecken".to_string() }, self.explore.is_some())
+        } else {
+            ui.add(
+                egui::Button::selectable(self.explore.is_some(), RichText::new(format!("{EXPLORE_ICON}  Entdecken")))
+                    .right_text(small_muted(&t, if loaded { count.to_string() } else { String::new() }))
+                    .truncate()
+                    .min_size(egui::vec2(ui.available_width(), 28.0)),
+            )
+        };
         if r.on_hover_text("Assistenten, Dialogpartner und Lernszenarien aus AIS.chat").clicked() {
             if self.explore.is_some() {
                 self.explore = None;
@@ -319,7 +473,7 @@ impl AisCraftApp {
         // it off).
         if let Some(b) = ais.iter().find(|b| !b.image_models.is_empty()) {
             let active = self.explore.is_none() && self.state.current.is_none() && self.state.selection.kind == aiscraft_core::ConversationKind::Image;
-            let r = ui.add(egui::Button::selectable(active, RichText::new("🖼  Bild erzeugen")).truncate().min_size(egui::vec2(ui.available_width(), 28.0)));
+            let r = self.entry(ui, Icon::Image, RichText::new("🖼  Bild erzeugen"), "Bild erzeugen", active);
             if r.on_hover_text("Neuer Bild-Chat: beschreibe, was das Bild zeigen soll").clicked() {
                 self.explore = None;
                 self.run("chat.new_image", json!({"backend": b.config.id}));
@@ -335,8 +489,7 @@ impl AisCraftApp {
             let active = self.explore.is_none()
                 && self.state.current.is_none()
                 && self.state.selection.persona.as_ref().is_some_and(|x| x.kind == p.kind && x.id == p.id);
-            let r =
-                ui.add(egui::Button::selectable(active, RichText::new(format!("★  {}", p.name))).truncate().min_size(egui::vec2(ui.available_width(), 22.0)));
+            let r = self.entry(ui, Icon::Star, RichText::new(format!("★  {}", p.name)), &p.name, active);
             let r = r.on_hover_text(format!("Neuer Chat: {} {}", p.kind.label(), p.name));
             if r.clicked() {
                 self.start_persona(&backend, p.kind, &p.id, None);
@@ -385,7 +538,8 @@ impl AisCraftApp {
         }
     }
 
-    fn account_row(&mut self, ui: &mut Ui) {
+    /// The selected service's status: dot colour, first and second line, and the service.
+    fn account_status(&self) -> (egui::Color32, String, String, Option<aiscraft_engine::BackendView>) {
         let t = self.tokens.clone();
         let sel = self.state.selection.backend_id.clone();
         let view = self.state.backend(&sel).cloned();
@@ -402,6 +556,12 @@ impl AisCraftApp {
             Some(BackendStatus::Failed { message }) => (t.danger, view.as_ref().map(|b| b.config.name.clone()).unwrap_or_default(), message.clone()),
             None => (t.muted, "Kein Dienst".into(), String::new()),
         };
+        (color, line1, line2, view)
+    }
+
+    fn account_row(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        let (color, line1, line2, view) = self.account_status();
         let r = ui
             .horizontal(|ui| {
                 status_dot(ui, color);
@@ -426,6 +586,21 @@ impl AisCraftApp {
             })
             .response
             .interact(Sense::click());
+        self.quota_bar(ui);
+        if r.clicked() {
+            if let Some(b) = view.filter(|b| !matches!(b.status, BackendStatus::Ready { .. })) {
+                self.dialog = Some(Dialog::login(&b.config.id));
+            } else {
+                self.dialog = Some(Dialog::settings());
+            }
+        }
+    }
+}
+
+impl AisCraftApp {
+    /// AIS.chat's token points left, as a bar under the account.
+    fn quota_bar(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
         if let Some(q) = self
             .state
             .backends
@@ -454,6 +629,46 @@ impl AisCraftApp {
             );
             resp.on_hover_text(format!("{:.0} von {:.0} Token-Punkten verbraucht (aus AIS.chat, nach jeder Antwort aktualisiert)", q.used, q.max));
         }
+    }
+
+    /// Modern and Glas: avatar with initials, name, status, and the settings and handbook buttons.
+    fn account_row_designed(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        let (color, line1, line2, view) = self.account_status();
+        ui.add_space(4.0);
+        let top = ui.cursor().top();
+        ui.painter().line_segment([egui::pos2(ui.max_rect().left(), top), egui::pos2(ui.max_rect().right(), top)], egui::Stroke::new(1.0, t.side_line));
+        ui.add_space(10.0);
+        let r = ui
+            .horizontal(|ui| {
+                ui.add_space(6.0);
+                let (av, _) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), Sense::hover());
+                crate::kit::avatar(ui.painter(), av.center(), 36.0, &crate::kit::initials(&line1));
+                ui.add_space(2.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    ui.set_max_width((ui.available_width() - 40.0).max(40.0));
+                    ui.add(egui::Label::new(crate::theme::semibold(&line1).size(14.5).color(t.text)).truncate().selectable(false));
+                    if !line2.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 5.0;
+                            let (d, _) = ui.allocate_exact_size(egui::vec2(7.0, 14.0), Sense::hover());
+                            ui.painter().circle_filled(d.center(), 3.5, color);
+                            ui.add(egui::Label::new(RichText::new(&line2).size(12.5).color(t.muted)).truncate().selectable(false));
+                        });
+                    }
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    if crate::kit::icon_button(ui, &t, Icon::Sliders, "Einstellungen (Strg+,)", t.text, 19.0, 34.0).clicked() {
+                        self.dialog = Some(Dialog::settings());
+                    }
+                });
+            })
+            .response
+            .interact(Sense::click());
+        self.quota_bar(ui);
+        ui.add_space(2.0);
         if r.clicked() {
             if let Some(b) = view.filter(|b| !matches!(b.status, BackendStatus::Ready { .. })) {
                 self.dialog = Some(Dialog::login(&b.config.id));

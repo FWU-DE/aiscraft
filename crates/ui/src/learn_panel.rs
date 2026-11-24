@@ -23,17 +23,83 @@ impl AisCraftApp {
         let t = self.tokens.clone();
         let Some(v) = self.artifact.as_mut() else { return };
         let mut go = None;
-        Frame::new().inner_margin(Margin::symmetric(12, 4)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let r = ui.add_enabled(!v.revising, egui::TextEdit::singleline(&mut v.revise).hint_text(hint).desired_width(ui.available_width() - 90.0));
-                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if v.revising {
-                    ui.add(egui::Spinner::new().color(t.accent));
-                } else if (accent_button(ui, &t, "Los").clicked() || enter) && !v.revise.trim().is_empty() {
-                    go = Some(v.revise.trim().to_string());
-                }
-            });
-        });
+        // Under the content, styled like the chat composer: a tonal pill (surface container)
+        // with a frameless field and the main action spelled out ("Überarbeiten", not "Los").
+        if t.designed() {
+            egui::Panel::bottom("artifact-revise-bar")
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(Frame::new().inner_margin(Margin { left: 14, right: 14, top: 12, bottom: 14 }))
+                .show(ui, |ui| {
+                    let top = ui.max_rect().top() - 12.0;
+                    ui.painter().line_segment(
+                        [egui::pos2(ui.max_rect().left() - 14.0, top), egui::pos2(ui.max_rect().right() + 14.0, top)],
+                        egui::Stroke::new(1.0, t.border),
+                    );
+                    let stroke = if t.glass.is_some() { egui::Stroke::new(1.0, t.card_stroke) } else { egui::Stroke::new(1.5, t.accent) };
+                    Frame::new()
+                        .fill(t.surface)
+                        .stroke(stroke)
+                        .corner_radius(egui::CornerRadius::same(22))
+                        .shadow(if t.glass.is_some() { t.card_shadow } else { egui::epaint::Shadow::NONE })
+                        .inner_margin(Margin { left: 14, right: 6, top: 6, bottom: 6 })
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(crate::icons::Icon::Sparkles.text(18.0).color(t.accent));
+                                let r = ui.add_enabled(
+                                    !v.revising,
+                                    egui::TextEdit::singleline(&mut v.revise)
+                                        .hint_text(RichText::new(hint).color(t.muted))
+                                        .frame(Frame::NONE)
+                                        .font(egui::FontId::proportional(14.0))
+                                        .margin(Margin::symmetric(0, 6))
+                                        .desired_width(ui.available_width() - 130.0),
+                                );
+                                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if v.revising {
+                                        ui.add(egui::Spinner::new().color(t.accent));
+                                    } else if (crate::kit::pill(ui, &t, crate::kit::Pill::Primary, None, "Überarbeiten", 13.5, None).clicked() || enter)
+                                        && !v.revise.trim().is_empty()
+                                    {
+                                        go = Some(v.revise.trim().to_string());
+                                    }
+                                });
+                            });
+                        });
+                });
+        } else {
+            egui::Panel::bottom("artifact-revise-bar")
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(Frame::new().inner_margin(Margin { left: 12, right: 12, top: 6, bottom: 10 }))
+                .show(ui, |ui| {
+                    Frame::new()
+                        .fill(t.surface_hi)
+                        .corner_radius(egui::CornerRadius::same(22))
+                        .inner_margin(Margin { left: 16, right: 6, top: 4, bottom: 4 })
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let r = ui.add_enabled(
+                                    !v.revising,
+                                    egui::TextEdit::singleline(&mut v.revise)
+                                        .hint_text(hint)
+                                        .frame(Frame::NONE)
+                                        .margin(Margin::symmetric(0, 8))
+                                        .desired_width(ui.available_width() - 130.0),
+                                );
+                                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if v.revising {
+                                        ui.add(egui::Spinner::new().color(t.accent));
+                                    } else if (accent_button(ui, &t, "Überarbeiten").clicked() || enter) && !v.revise.trim().is_empty() {
+                                        go = Some(v.revise.trim().to_string());
+                                    }
+                                });
+                            });
+                        });
+                });
+        }
         if v.revising && v.revise_done.load(std::sync::atomic::Ordering::Relaxed) {
             v.revising = false;
         }
@@ -127,91 +193,119 @@ impl AisCraftApp {
         let open_same =
             self.state.open_artifact.as_ref().and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id)).filter(|a| a.kind == kind).map(|a| a.id.clone());
         let generating = self.state.current.as_ref().is_some_and(|c| self.state.is_generating(c));
-        Frame::new()
-            .fill(t.surface)
-            .stroke(Stroke::new(1.0, t.border))
-            .corner_radius(CornerRadius::same(t.radius.saturating_add(2)))
-            .inner_margin(Margin::symmetric(14, 10))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                let (icon, headline, detail, problems) = match kind {
-                    ArtifactKind::App => {
-                        let title = aiscraft_engine::learn::html_title(src).unwrap_or_else(|| "Lern-App".into());
-                        ("🎮", title, format!("Lern-App · HTML, {} KB", src.len().div_ceil(1024)), Vec::new())
-                    }
-                    ArtifactKind::H5p => match aiscraft_core::h5p::parse_lenient(src) {
-                        Ok((h, problems)) => ("📦", h.title.clone(), format!("H5P · {} Aufgaben", h.tasks.len()), problems),
-                        Err(e) => ("📦", "H5P".to_string(), "lässt sich nicht lesen".to_string(), vec![e]),
-                    },
-                    _ => match worksheet::parse_lenient(src) {
-                        Ok((ws, problems)) => (
-                            "📝",
-                            ws.title.clone(),
-                            format!("Arbeitsblatt · {} Aufgaben, {} Punkte", ws.tasks.len(), ws.tasks.iter().map(|x| x.points).sum::<f64>()),
-                            problems,
-                        ),
-                        Err(e) => ("📝", "Arbeitsblatt".to_string(), "lässt sich nicht lesen".to_string(), vec![e]),
-                    },
-                };
-                ui.horizontal(|ui| {
+        let frame = if t.designed() {
+            Frame::new().fill(t.surface).stroke(Stroke::new(1.5, t.accent)).corner_radius(CornerRadius::same(16)).shadow(t.card_shadow).inner_margin(Margin {
+                left: 10,
+                right: 14,
+                top: 10,
+                bottom: 10,
+            })
+        } else {
+            Frame::new()
+                .fill(t.surface)
+                .stroke(Stroke::new(1.0, t.border))
+                .corner_radius(CornerRadius::same(t.radius.saturating_add(2)))
+                .inner_margin(Margin::symmetric(14, 10))
+        };
+        frame.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let (icon, headline, detail, problems) = match kind {
+                ArtifactKind::App => {
+                    let title = aiscraft_engine::learn::html_title(src).unwrap_or_else(|| "Lern-App".into());
+                    ("🎮", title, format!("Lern-App · HTML, {} KB", src.len().div_ceil(1024)), Vec::new())
+                }
+                ArtifactKind::H5p => match aiscraft_core::h5p::parse_lenient(src) {
+                    Ok((h, problems)) => ("📦", h.title.clone(), format!("H5P · {} Aufgaben", h.tasks.len()), problems),
+                    Err(e) => ("📦", "H5P".to_string(), "lässt sich nicht lesen".to_string(), vec![e]),
+                },
+                _ => match worksheet::parse_lenient(src) {
+                    Ok((ws, problems)) => (
+                        "📝",
+                        ws.title.clone(),
+                        format!("Arbeitsblatt · {} Aufgaben, {} Punkte", ws.tasks.len(), ws.tasks.iter().map(|x| x.points).sum::<f64>()),
+                        problems,
+                    ),
+                    Err(e) => ("📝", "Arbeitsblatt".to_string(), "lässt sich nicht lesen".to_string(), vec![e]),
+                },
+            };
+            ui.horizontal(|ui| {
+                if t.designed() {
+                    let (tile, _) = ui.allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::hover());
+                    crate::kit::accent_fill(ui.painter(), tile, CornerRadius::same(12), &t);
+                    kind_lucide(kind).paint(ui.painter(), tile.center(), 20.0, t.on_accent);
+                    ui.add_space(4.0);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        ui.label(crate::theme::bold(headline).size(15.0).color(t.text));
+                        ui.label(RichText::new(detail).size(13.0).color(t.muted));
+                    });
+                } else {
                     ui.label(RichText::new(icon).size(22.0).color(t.accent));
                     ui.vertical(|ui| {
                         ui.label(RichText::new(headline).strong());
                         ui.label(small_muted(&t, detail));
                     });
-                });
-                for p in problems.iter().take(3) {
-                    ui.label(RichText::new(p).small().color(t.warning));
                 }
-                if generating {
-                    return;
-                }
-                ui.horizontal_wrapped(|ui| {
-                    let (open_cmd, open_label, apply_label) = match kind {
-                        ArtifactKind::App => ("learning_app.create", "Als Lern-App öffnen", "In die Lern-App übernehmen"),
-                        ArtifactKind::H5p => ("h5p.create", "Als H5P öffnen", "In den H5P-Inhalt übernehmen"),
-                        _ => ("worksheet.create", "Als Arbeitsblatt öffnen", "Ins Arbeitsblatt übernehmen"),
-                    };
-                    if let Some(id) = &open_same
-                        && kind == ArtifactKind::H5p
-                        && accent_button(ui, &t, apply_label).on_hover_text("Ersetzt die Aufgaben; die vorige Fassung bleibt unter Versionen").clicked()
-                    {
-                        self.run("h5p.create", json!({"id": id, "content": src}));
-                    } else if let Some(id) = &open_same
-                        && kind != ArtifactKind::H5p
-                        && accent_button(ui, &t, apply_label).on_hover_text("Ersetzt den Inhalt; die vorige Fassung bleibt unter Versionen").clicked()
-                    {
-                        let text = match kind {
-                            ArtifactKind::App => Some(src.trim().to_string()),
-                            _ => worksheet::parse_lenient(src).ok().map(|(ws, _)| worksheet::to_json(&ws)),
-                        };
-                        if let Some(text) = text {
-                            self.run("artifact.save", json!({"id": id, "text": text, "version": "Aus einer Antwort übernommen"}));
-                        }
-                    }
-                    let params = match kind {
-                        ArtifactKind::App => json!({"html": src}),
-                        _ => json!({"content": src, "repair": true}),
-                    };
-                    let clicked = if open_same.is_some() { ui.button(open_label).clicked() } else { accent_button(ui, &t, open_label).clicked() };
-                    if clicked {
-                        self.run(open_cmd, params);
-                    }
-                });
             });
+            for p in problems.iter().take(3) {
+                ui.label(RichText::new(p).small().color(t.warning));
+            }
+            if generating {
+                return;
+            }
+            ui.horizontal_wrapped(|ui| {
+                let (open_cmd, open_label, apply_label) = match kind {
+                    ArtifactKind::App => ("learning_app.create", "Als Lern-App öffnen", "In die Lern-App übernehmen"),
+                    ArtifactKind::H5p => ("h5p.create", "Als H5P öffnen", "In den H5P-Inhalt übernehmen"),
+                    _ => ("worksheet.create", "Als Arbeitsblatt öffnen", "Ins Arbeitsblatt übernehmen"),
+                };
+                if let Some(id) = &open_same
+                    && kind == ArtifactKind::H5p
+                    && accent_button(ui, &t, apply_label).on_hover_text("Ersetzt die Aufgaben; die vorige Fassung bleibt unter Versionen").clicked()
+                {
+                    self.run("h5p.create", json!({"id": id, "content": src}));
+                } else if let Some(id) = &open_same
+                    && kind != ArtifactKind::H5p
+                    && accent_button(ui, &t, apply_label).on_hover_text("Ersetzt den Inhalt; die vorige Fassung bleibt unter Versionen").clicked()
+                {
+                    let text = match kind {
+                        ArtifactKind::App => Some(src.trim().to_string()),
+                        _ => worksheet::parse_lenient(src).ok().map(|(ws, _)| worksheet::to_json(&ws)),
+                    };
+                    if let Some(text) = text {
+                        self.run("artifact.save", json!({"id": id, "text": text, "version": "Aus einer Antwort übernommen"}));
+                    }
+                }
+                let params = match kind {
+                    ArtifactKind::App => json!({"html": src}),
+                    _ => json!({"content": src, "repair": true}),
+                };
+                let clicked = if open_same.is_some() { ui.button(open_label).clicked() } else { accent_button(ui, &t, open_label).clicked() };
+                if clicked {
+                    self.run(open_cmd, params);
+                }
+            });
+        });
         ui.add_space(6.0);
     }
 
     /// "Erstellen" in the composer: the composer text becomes the topic of a learning app or
     /// worksheet request.
+    /// "Erstellen" as the sparkle icon (narrow composer).
+    pub(crate) fn create_menu_icon(&mut self, ui: &mut Ui) {
+        self.create_as_icon = true;
+        self.create_menu(ui);
+        self.create_as_icon = false;
+    }
+
     pub(crate) fn create_menu(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
-        ui.menu_button(RichText::new("Erstellen  ⏷").color(t.muted), |ui| {
+        let body = |app: &mut Self, ui: &mut Ui| {
             ui.set_min_width(300.0);
             // The topic field is the composer itself, so text typed before opening the menu is there.
             ui.label(small_muted(&t, "Thema"));
-            ui.add(egui::TextEdit::singleline(&mut self.composer).hint_text("z. B. Brüche vergleichen, Klasse 6").desired_width(f32::INFINITY));
-            let topic = self.composer.trim().to_string();
+            ui.add(egui::TextEdit::singleline(&mut app.composer).hint_text("z. B. Brüche vergleichen, Klasse 6").desired_width(f32::INFINITY));
+            let topic = app.composer.trim().to_string();
             let usable = topic.chars().filter(|ch| ch.is_alphanumeric()).count() >= 2;
             ui.add_space(4.0);
             for (label, cmd, tip) in [
@@ -220,14 +314,23 @@ impl AisCraftApp {
                 ("📦 H5P-Quiz", "h5p.request", "Ein H5P-Quiz zum Thema im Eingabefeld, als .h5p-Datei für Moodle, Mebis, ByCS und andere Lernplattformen"),
             ] {
                 if ui.add_enabled(usable, egui::Button::new(label)).on_hover_text(tip).clicked() {
-                    self.composer.clear();
-                    self.run(cmd, json!({"topic": topic}));
+                    app.composer.clear();
+                    app.run(cmd, json!({"topic": topic}));
                     ui.close();
                 }
             }
-        })
-        .response
-        .on_hover_text("Lern-App, Arbeitsblatt oder H5P-Quiz erstellen lassen");
+        };
+        let tip = "Lern-App, Arbeitsblatt oder H5P-Quiz erstellen lassen";
+        if t.designed() {
+            let r = if self.create_as_icon {
+                crate::kit::icon_button(ui, &t, crate::icons::Icon::Sparkles, "Erstellen: Lern-App, Arbeitsblatt oder H5P-Quiz", t.text2, 19.0, 34.0)
+            } else {
+                crate::kit::pill(ui, &t, crate::kit::Pill::Chip, None, "Erstellen", 13.5, Some(crate::icons::Icon::ChevronDown)).on_hover_text(tip)
+            };
+            egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| body(self, ui));
+        } else {
+            ui.menu_button(RichText::new("Erstellen  ⏷").color(t.muted), |ui| body(self, ui)).response.on_hover_text(tip);
+        }
     }
 }
 
@@ -316,6 +419,18 @@ pub fn highlight_html(src: &str, t: &Tokens) -> LayoutJob {
 }
 
 /// The label of a learning artifact for lists: (icon, kind label).
+/// The line icon of an artifact kind (Modern, Glas).
+pub fn kind_lucide(kind: ArtifactKind) -> crate::icons::Icon {
+    use crate::icons::Icon;
+    match kind {
+        ArtifactKind::Board => Icon::Note,
+        ArtifactKind::App => Icon::App,
+        ArtifactKind::Worksheet => Icon::Table,
+        ArtifactKind::H5p => Icon::Puzzle,
+        ArtifactKind::Document => Icon::File,
+    }
+}
+
 pub fn kind_icon(kind: ArtifactKind) -> &'static str {
     match kind {
         ArtifactKind::Board => "▣",

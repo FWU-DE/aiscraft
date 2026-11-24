@@ -380,15 +380,33 @@ pub enum Action {
 /// Draw one segment (plots too, without the app's extras).
 pub fn show(ui: &mut Ui, md: &mut egui_commonmark::CommonMarkCache, t: &Tokens, seg: &Segment, salt: impl std::hash::Hash + std::fmt::Debug) -> Option<Action> {
     match seg {
+        Segment::Markdown(text) if t.designed() => {
+            ui.scope(|ui| crate::rich::show(ui, md, t, text, |ui, md, s| markdown_viewer(ui, md, t, s)));
+            None
+        }
         Segment::Markdown(text) => {
             ui.scope(|ui| {
                 // Tables are striped grids, and the stripe made a single row look selected: no stripes.
                 ui.visuals_mut().faint_bg_color = Color32::TRANSPARENT;
-                egui_commonmark::CommonMarkViewer::new()
-                    .default_width(Some(ui.available_width().max(1.0) as usize))
-                    .syntax_theme_light(t.code_theme())
-                    .syntax_theme_dark(t.code_theme())
-                    .show(ui, md, text);
+                for (i, (table, piece)) in table_pieces(text).into_iter().enumerate() {
+                    ui.push_id(i, |ui| {
+                        if table {
+                            // egui_commonmark draws a table as a grid in Frame::group (6 px margin,
+                            // default item spacing): cells sat cramped against each other. More
+                            // room between the cells, and our own card frame around the group.
+                            ui.spacing_mut().item_spacing = egui::vec2(28.0, 4.0);
+                            ui.visuals_mut().widgets.noninteractive.bg_stroke = Stroke::NONE;
+                            Frame::new()
+                                .stroke(Stroke::new(1.0, t.border))
+                                .corner_radius(egui::CornerRadius::same(t.radius))
+                                .inner_margin(Margin::symmetric(8, 4))
+                                .show(ui, |ui| markdown_viewer(ui, md, t, piece));
+                            ui.add_space(8.0);
+                        } else {
+                            markdown_viewer(ui, md, t, piece);
+                        }
+                    });
+                }
             });
             None
         }
@@ -421,6 +439,63 @@ pub fn show(ui: &mut Ui, md: &mut egui_commonmark::CommonMarkCache, t: &Tokens, 
             None
         }
     }
+}
+
+fn markdown_viewer(ui: &mut Ui, md: &mut egui_commonmark::CommonMarkCache, t: &Tokens, text: &str) {
+    egui_commonmark::CommonMarkViewer::new()
+        .default_width(Some(ui.available_width().max(1.0) as usize))
+        .syntax_theme_light(t.code_theme())
+        .syntax_theme_dark(t.code_theme())
+        .show(ui, md, text);
+}
+
+/// Split Markdown into runs of text and GFM tables (`true`), outside code fences, so tables can be
+/// drawn with more room. Without a table the text comes back as one piece.
+pub fn table_pieces(text: &str) -> Vec<(bool, &str)> {
+    let is_delim = |l: &str| {
+        let l = l.trim();
+        l.contains('-') && l.contains('|') && l.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t'))
+    };
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut pos = 0;
+    let mut fence: Option<(char, usize)> = None;
+    let mut table_from: Option<usize> = None;
+    while pos < text.len() {
+        let end = line_end(text, pos);
+        let line = text.get(pos..end).unwrap_or("");
+        if let Some((c, n)) = fence {
+            if fence_closes(line, c, n) {
+                fence = None;
+            }
+        } else if let Some(from) = table_from {
+            if line.trim().is_empty() || !line.contains('|') {
+                if from > start {
+                    out.push((false, text.get(start..from).unwrap_or("")));
+                }
+                out.push((true, text.get(from..pos).unwrap_or("")));
+                start = pos;
+                table_from = None;
+            }
+        } else if let Some((c, n, _)) = fence_open(line) {
+            fence = Some((c, n));
+        } else if line.trim_start().starts_with('|') {
+            let next_end = line_end(text, end);
+            if is_delim(text.get(end..next_end).unwrap_or("")) {
+                table_from = Some(pos);
+            }
+        }
+        pos = end;
+    }
+    if let Some(from) = table_from {
+        if from > start {
+            out.push((false, text.get(start..from).unwrap_or("")));
+        }
+        out.push((true, text.get(from..).unwrap_or("")));
+    } else if start < text.len() || out.is_empty() {
+        out.push((false, text.get(start..).unwrap_or("")));
+    }
+    out
 }
 
 fn framed<R>(ui: &mut Ui, t: &Tokens, add: impl FnOnce(&mut Ui) -> R) -> R {
@@ -654,6 +729,17 @@ mod tests {
 
     fn md(s: &str) -> Segment<'_> {
         Segment::Markdown(Cow::Borrowed(s))
+    }
+
+    #[test]
+    fn tables_are_split_out_of_markdown() {
+        let s = "Vorher\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\nNachher";
+        assert_eq!(table_pieces(s), vec![(false, "Vorher\n\n"), (true, "| A | B |\n|---|---|\n| 1 | 2 |\n"), (false, "\nNachher")]);
+        assert_eq!(table_pieces("| A |\n|---|\n| 1 |"), vec![(true, "| A |\n|---|\n| 1 |")]);
+        // Not a table: no delimiter row, or inside a code fence.
+        assert_eq!(table_pieces("| nur | Text |\nweiter"), vec![(false, "| nur | Text |\nweiter")]);
+        assert_eq!(table_pieces("```\n| A |\n|---|\n```\n"), vec![(false, "```\n| A |\n|---|\n```\n")]);
+        assert_eq!(table_pieces(""), vec![(false, "")]);
     }
 
     #[test]

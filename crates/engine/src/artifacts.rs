@@ -86,10 +86,21 @@ fn minimal_edit(old: &str, new: &str) -> (usize, usize, String) {
 }
 
 /// A title from the first Markdown heading, else the first line.
+/// A title from the first line of a text, without its Markdown marks (heading, bold, italic,
+/// code, links keep only their words).
 fn title_of(text: &str, fallback: &str) -> String {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or(fallback);
-    let t = line.trim_start_matches('#').trim();
-    let t: String = t.chars().take(80).collect();
+    let line = line.trim_start_matches(['#', '>', '-', '*', '+']).trim();
+    let mut plain = String::new();
+    for ev in pulldown_cmark::Parser::new_ext(line, pulldown_cmark::Options::ENABLE_STRIKETHROUGH) {
+        match ev {
+            pulldown_cmark::Event::Text(s) | pulldown_cmark::Event::Code(s) => plain.push_str(&s),
+            pulldown_cmark::Event::SoftBreak | pulldown_cmark::Event::HardBreak => plain.push(' '),
+            _ => {}
+        }
+    }
+    let plain = plain.split_whitespace().collect::<Vec<_>>().join(" ");
+    let t: String = plain.chars().take(80).collect();
     if t.is_empty() { fallback.to_string() } else { t }
 }
 
@@ -485,6 +496,10 @@ mod tests {
         assert_eq!(strip_fence("```markdown\n# A\ntext\n```"), "# A\ntext");
         assert_eq!(strip_fence("# A"), "# A");
         assert_eq!(title_of("\n## Stundenplan 7b\n…", "x"), "Stundenplan 7b");
+        assert_eq!(title_of("Die **Photosynthese** ist _der_ Vorgang", "x"), "Die Photosynthese ist der Vorgang");
+        assert_eq!(title_of("# [Link](https://x.de) und `Code`", "x"), "Link und Code");
+        assert_eq!(title_of("- **Punkt**", "x"), "Punkt");
+        assert_eq!(title_of("****", "x"), "x");
         assert!(markdown_html("T<", "**fett**").contains("<strong>fett</strong>"));
     }
 }
