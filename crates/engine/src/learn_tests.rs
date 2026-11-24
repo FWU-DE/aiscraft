@@ -289,3 +289,40 @@ fn worksheet_blocks_are_parsed_leniently_and_repaired() {
         assert!(engine.call("worksheet.create", bad).is_err());
     }
 }
+
+/// Sorting into groups, hints one after the other, option feedback and word lists through the
+/// commands: validated, stored, checked and printed.
+#[test]
+fn worksheet_groups_hints_feedback_and_word_bank() {
+    let engine = routed_engine();
+    let sheet = json!({"title": "Tiere", "tasks": [
+        {"id": "g", "type": "categorize", "prompt": "Sortiere die Tiere", "points": 4,
+         "categories": [{"name": "Saeugetiere", "items": ["Wal", "Fledermaus"]}, {"name": "Fische", "items": ["Hai", "Forelle"]}]},
+        {"id": "c", "type": "cloze", "prompt": "Ergaenze", "text": "Der Wal ist ein [[Saeugetier]].", "word_bank": true, "distractors": ["Fisch"],
+         "hints": ["Wie atmet er?", "Er hat Lungen."]},
+        {"id": "m", "type": "choice", "prompt": "Wer atmet mit Lungen?", "options": [{"text": "Wal", "correct": true}, {"text": "Hai", "feedback": "Haie haben Kiemen"}]}
+    ]});
+    let v = engine.call("worksheet.validate", json!({"content": sheet.to_string()})).unwrap();
+    assert_eq!(v["ok"], true, "{v}");
+    let id = engine.call("worksheet.create", json!({"worksheet": sheet})).unwrap()["id"].as_str().unwrap().to_string();
+    // Group answers as indices or names; half right gives half the points.
+    let r =
+        engine.call("worksheet.check", json!({"id": id, "answers": {"g": ["Saeugetiere", 0, "Saeugetiere", null], "c": ["saeugetier"], "m": [0]}})).unwrap();
+    assert_eq!(r["results"][0]["points"], 2.0, "{r}");
+    assert_eq!(r["results"][0]["parts"], json!([true, true, false, false]));
+    assert_eq!(r["results"][1]["correct"], true);
+    assert_eq!(r["points"], 4.0);
+    // Stored with the new fields.
+    let text = engine.call("artifact.get", json!({"id": id})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(text.contains("\"categorize\"") && text.contains("\"hints\"") && text.contains("Haie haben Kiemen") && text.contains("\"word_bank\": true"));
+    // Printed: word list and groups on the sheet, filled groups and option feedback on the solutions.
+    use base64::Engine as _;
+    let pdf = |variant: &str| {
+        let out = engine.call("worksheet.export", json!({"id": id, "format": "pdf", "variant": variant})).unwrap();
+        String::from_utf8_lossy(&base64::engine::general_purpose::STANDARD.decode(out["base64"].as_str().unwrap()).unwrap()).into_owned()
+    };
+    let (a, l) = (pdf("arbeitsblatt"), pdf("loesung"));
+    assert!(a.contains("Saeugetiere") && a.contains("Fisch") && a.contains("Wie atmet er?") && !a.contains("Er hat Lungen"));
+    assert!(l.contains("Haie haben Kiemen") && l.contains("Er hat Lungen"));
+    assert!(!a.contains("Haie haben Kiemen"));
+}

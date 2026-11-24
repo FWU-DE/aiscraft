@@ -3,7 +3,7 @@
 //! Only WinAnsi characters, so the PDF prints them: `( )` and `[ ]` instead of ballot boxes.
 
 use aiscraft_core::Result;
-use aiscraft_core::worksheet::{ClozePart, TaskBody, Worksheet, cloze_parts, display_order};
+use aiscraft_core::worksheet::{ClozePart, TaskBody, Worksheet, category_items, cloze_parts, cloze_word_bank, display_order};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variant {
@@ -91,7 +91,10 @@ pub fn worksheet_markdown(ws: &Worksheet, v: Variant) -> String {
                         (false, true) => "(x)",
                         (false, false) => "( )",
                     };
-                    let text = if sol && opt.correct { format!("**{}**", md(&opt.text)) } else { md(&opt.text) };
+                    let mut text = if sol && opt.correct { format!("**{}**", md(&opt.text)) } else { md(&opt.text) };
+                    if sol && !opt.feedback.trim().is_empty() {
+                        text.push_str(&format!(" – *{}*", md(opt.feedback.trim())));
+                    }
                     o.push_str(&format!("{} {text}  \n", mark.replace('[', "\\[").replace(']', "\\]")));
                 }
                 o.push('\n');
@@ -104,7 +107,11 @@ pub fn worksheet_markdown(ws: &Worksheet, v: Variant) -> String {
                 };
                 o.push_str(&format!("{r}     {f}\n\n"));
             }
-            TaskBody::Cloze { text } => {
+            TaskBody::Cloze { text, word_bank, distractors } => {
+                if *word_bank && !sol {
+                    let words: Vec<String> = cloze_word_bank(text, distractors, &t.id).iter().map(|w| md(w)).collect();
+                    o.push_str(&format!("Wörter: {}\n\n", words.join("  ·  ")));
+                }
                 let mut s = String::new();
                 for part in cloze_parts(text) {
                     match part {
@@ -145,6 +152,23 @@ pub fn worksheet_markdown(ws: &Worksheet, v: Variant) -> String {
                 }
                 o.push('\n');
             }
+            TaskBody::Categorize { categories } => {
+                let items = category_items(categories);
+                if !sol {
+                    let words: Vec<String> = display_order(items.len(), &t.id).into_iter().filter_map(|i| items.get(i)).map(|(_, w)| md(w)).collect();
+                    o.push_str(&format!("Wörter: {}\n\n", words.join("  ·  ")));
+                }
+                // One column per group; on the sheet as many empty rows as the largest group.
+                let head: Vec<String> = categories.iter().map(|c| md(&c.name)).collect();
+                o.push_str(&format!("| {} |\n|{}\n", head.join(" | "), "---|".repeat(head.len())));
+                let columns: Vec<Vec<&str>> = (0..categories.len()).map(|c| items.iter().filter(|(k, _)| *k == c).map(|(_, w)| *w).collect()).collect();
+                let rows = columns.iter().map(Vec::len).max().unwrap_or(0).max(1);
+                for r in 0..rows {
+                    let cells: Vec<String> = columns.iter().map(|col| if sol { col.get(r).map(|x| md(x)).unwrap_or_default() } else { line(10) }).collect();
+                    o.push_str(&format!("| {} |\n", cells.join(" | ")));
+                }
+                o.push('\n');
+            }
             TaskBody::ShortAnswer { accepted, .. } => {
                 if sol {
                     o.push_str(&format!("Antwort: **{}**\n\n", md(&accepted.join(" / "))));
@@ -176,8 +200,14 @@ pub fn worksheet_markdown(ws: &Worksheet, v: Variant) -> String {
                 }
             }
         }
-        if !t.hint.trim().is_empty() && !sol {
-            o.push_str(&format!("*Tipp: {}*\n\n", md(&t.hint)));
+        // On paper nothing can be uncovered: the sheet prints the first hint only, the solutions all.
+        let hints: Vec<&String> = t.hints.iter().filter(|h| !h.trim().is_empty()).collect();
+        if !sol && let Some(h) = hints.first() {
+            o.push_str(&format!("*Tipp: {}*\n\n", md(h)));
+        }
+        if sol && !hints.is_empty() {
+            let list: Vec<String> = hints.iter().enumerate().map(|(i, h)| format!("{}. {}", i + 1, md(h))).collect();
+            o.push_str(&format!("*Tipps: {}*\n\n", list.join("  ")));
         }
         if sol && !t.feedback.trim().is_empty() {
             o.push_str(&format!("*Erklärung: {}*\n\n", md(&t.feedback)));
@@ -232,6 +262,34 @@ mod tests {
         assert!(pdf.contains("/Count 1"));
         let docx = worksheet_docx(&ws, Variant::Solution).unwrap();
         assert!(docx.starts_with(b"PK"));
+    }
+
+    #[test]
+    fn new_task_parts_print_on_sheet_and_solution() {
+        let ws = from_value(&json!({"title": "Tiere", "tasks": [
+            {"type": "categorize", "prompt": "Sortiere", "categories": [{"name": "Saeugetiere", "items": ["Wal", "Fledermaus", "Igel"]}, {"name": "Fische", "items": ["Hai"]}]},
+            {"type": "cloze", "prompt": "Ergaenze", "text": "Der Wal ist ein [[Saeugetier]].", "word_bank": true, "distractors": ["Fisch"]},
+            {"type": "choice", "prompt": "Welches?", "hints": ["Erster Tipp", "Zweiter Tipp"],
+             "options": [{"text": "Wal", "correct": true}, {"text": "Hai", "feedback": "Der Hai atmet mit Kiemen"}]}
+        ]})).unwrap().0;
+        let a = worksheet_markdown(&ws, Variant::Sheet);
+        let l = worksheet_markdown(&ws, Variant::Solution);
+        // Categorize: word box and one column per group, filled only on the solution sheet.
+        assert!(a.contains("| Saeugetiere | Fische |") && l.contains("| Saeugetiere | Fische |"));
+        assert!(a.contains("Wörter:") && a.contains("Fledermaus") && a.contains("Hai"));
+        assert!(l.contains("| Igel |  |") && !l.contains("Wörter:"));
+        assert_eq!(a.lines().filter(|r| r.starts_with("| \\_")).count(), 3, "three empty rows for the largest group");
+        // Word bank with the distractor on the sheet only.
+        assert!(a.contains("Fisch") && a.contains("Saeugetier"));
+        // Hints: the first on the sheet, all on the solution sheet; option feedback only there.
+        assert!(a.contains("Tipp: Erster Tipp") && !a.contains("Zweiter Tipp"));
+        assert!(l.contains("1. Erster Tipp") && l.contains("2. Zweiter Tipp"));
+        assert!(l.contains("Kiemen") && !a.contains("Kiemen"));
+        for v in [Variant::Sheet, Variant::Solution] {
+            let pdf = String::from_utf8_lossy(&worksheet_pdf(&ws, v).unwrap()).into_owned();
+            assert!(pdf.contains("Saeugetiere"), "group names in the PDF");
+            assert!(worksheet_docx(&ws, v).unwrap().starts_with(b"PK"));
+        }
     }
 
     #[test]
