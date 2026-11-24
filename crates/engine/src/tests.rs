@@ -988,7 +988,8 @@ fn links_on_messages() {
 /// fails here.
 #[test]
 fn every_command_has_a_functional_test() {
-    let src = include_str!("tests.rs");
+    // The learning-app and worksheet tests live in their own file, included below.
+    let src = format!("{}{}", include_str!("tests.rs"), include_str!("learn_tests.rs"));
     // The panic hunt touches every command; count only calls outside it.
     let hunt_start = src.find("fn panic_hunt_every_command_with_hostile_params").unwrap_or(0);
     let hunt_end = src[hunt_start..].find("\n}\n").map(|e| hunt_start + e).unwrap_or(hunt_start);
@@ -1722,3 +1723,6 @@ fn model_creates_spreadsheet_and_slides_and_the_person_saves_them() {
     assert!(engine.call("chat.save_file", json!({"message_id": "nope", "path": "/tmp/x"})).is_err());
     let _ = std::fs::remove_file(&target);
 }
+
+#[path = "learn_tests.rs"]
+mod learn_tests;

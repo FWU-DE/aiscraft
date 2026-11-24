@@ -7,7 +7,7 @@ pkgdesc="AIS.ChatCraft: nativer Client für AIS.chat und weitere KI-Dienste"
 arch=('x86_64' 'aarch64')
 url="https://github.com/FWU-DE/aiscraft"
 license=('MIT OR Apache-2.0')
-depends=('alsa-lib' 'gcc-libs' 'glibc' 'libxkbcommon' 'wayland')
+depends=('alsa-lib' 'gcc-libs' 'glibc' 'libxkbcommon' 'wayland' 'webkit2gtk-4.1' 'gtk3')
 optdepends=('chromium: Anmeldung bei AIS.chat im Browserfenster'
             'claude-code: Claude-Abo als Backend'
             'nodejs: Konnektor-Vorlagen über npx')
@@ -16,13 +16,14 @@ source=()
 
 build() {
   cd "$startdir/.."
-  cargo build --release --locked -p aiscraft -p aiscraft-cli
+  cargo build --release --locked -p aiscraft -p aiscraft-cli -p aiscraft-preview
 }
 
 package() {
   cd "$startdir/.."
   install -Dm755 target/release/aiscraft "$pkgdir/usr/bin/aiscraft"
   install -Dm755 target/release/aiscraft-cli "$pkgdir/usr/bin/aiscraft-cli"
+  install -Dm755 target/release/aiscraft-preview "$pkgdir/usr/bin/aiscraft-preview"
   install -Dm644 packaging/ai.uds.aischatcraft.desktop "$pkgdir/usr/share/applications/ai.uds.aischatcraft.desktop"
   install -Dm644 packaging/icons/aischatcraft.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/aischatcraft.svg"
   for s in 32 48 64 128 256 512; do

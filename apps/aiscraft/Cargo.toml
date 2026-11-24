@@ -18,5 +18,11 @@ log.workspace = true
 env_logger.workspace = true
 uuid.workspace = true
 
+[features]
+default = ["preview"]
+# Learning apps open in the separate `aiscraft-preview` program (wry webview) when it is
+# installed next to `aiscraft`; without this feature, or without the program, in the browser.
+preview = []
+
 [lints]
 workspace = true

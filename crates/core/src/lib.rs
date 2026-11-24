@@ -3,6 +3,7 @@
 mod error;
 mod memory;
 mod model;
+pub mod worksheet;
 
 pub use error::{Error, ErrorKind, Result};
 pub use memory::{MemoryArea, MemoryNote, extract_explicit_memory, memory_prompt};

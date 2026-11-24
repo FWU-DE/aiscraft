@@ -69,3 +69,13 @@ pages with Helvetica and Courier, which every viewer has, so no font is embedded
 a bundled font file and still leaves pagination and line breaking to the app. Limit: characters
 outside WinAnsi (emoji, Greek, CJK) print as a stand-in or `?`. Switch to `write` with an
 embedded Unicode font when that matters.
+
+Worksheets (`engine/src/learn/print.rs`) print through the same writer: the worksheet becomes
+Markdown (answer lines as escaped underscores, `( )`/`[ ]` instead of ballot boxes, which
+WinAnsi lacks) and then PDF or, through craft-markdown + craft-docx, Word.
+
+## HTML preview (not a craft-lib)
+
+Learning apps are shown by `apps/aiscraft-preview`, a separate program on `wry` 0.57 + `tao`
+0.37 (one window, one webview; WebKitGTK 4.1 on Linux). craft-libs has no webview crate, and
+the main app links none on purpose.

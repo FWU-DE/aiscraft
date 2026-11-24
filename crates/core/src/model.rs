@@ -375,13 +375,17 @@ pub struct Project {
     pub created_at: Millis,
 }
 
-/// What kind of artifact: a Markdown document or a whiteboard. Both are CRDTs (yrs) so they can
-/// be shared live later without changing their format.
+/// What kind of artifact: a Markdown document, a whiteboard, a learning app (one self-contained
+/// HTML file) or an interactive worksheet (`aiscraft-worksheet` JSON, see [`crate::worksheet`]).
+/// All are CRDTs (yrs) so they can be shared live without changing their format; documents,
+/// apps and worksheets are one text each ([`ArtifactKind::is_text`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactKind {
     Document,
     Board,
+    App,
+    Worksheet,
 }
 
 impl ArtifactKind {
@@ -389,12 +393,16 @@ impl ArtifactKind {
         match self {
             ArtifactKind::Document => "document",
             ArtifactKind::Board => "board",
+            ArtifactKind::App => "app",
+            ArtifactKind::Worksheet => "worksheet",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "document" | "doc" => Some(ArtifactKind::Document),
             "board" | "whiteboard" => Some(ArtifactKind::Board),
+            "app" | "learning_app" | "html" => Some(ArtifactKind::App),
+            "worksheet" | "arbeitsblatt" => Some(ArtifactKind::Worksheet),
             _ => None,
         }
     }
@@ -402,7 +410,13 @@ impl ArtifactKind {
         match self {
             ArtifactKind::Document => "Dokument",
             ArtifactKind::Board => "Whiteboard",
+            ArtifactKind::App => "Lern-App",
+            ArtifactKind::Worksheet => "Arbeitsblatt",
         }
+    }
+    /// Stored as one yrs text (documents, learning apps, worksheets), not as a board.
+    pub fn is_text(self) -> bool {
+        self != ArtifactKind::Board
     }
 }
 
