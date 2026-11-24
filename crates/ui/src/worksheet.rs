@@ -319,6 +319,19 @@ fn text_area(ui: &mut Ui, s: &mut String, hint: &str, rows: usize) -> bool {
 }
 
 /// A list of strings with remove buttons and an add button. Returns changed.
+/// The rest of a row: `trailing` buttons laid out first from the right, then a text field filling
+/// what they leave. A fixed reserve for the buttons overflowed once the looks got wider spacing,
+/// and an overflowing row widened the artifact panel a little every frame until it covered the
+/// chat.
+fn field_then_buttons<R>(ui: &mut Ui, trailing: impl FnOnce(&mut Ui) -> R, field: impl FnOnce(&mut Ui, f32) -> bool) -> (bool, R) {
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let r = trailing(ui);
+        let w = ui.available_width().max(40.0);
+        (field(ui, w), r)
+    })
+    .inner
+}
+
 fn string_list(ui: &mut Ui, t: &Tokens, items: &mut Vec<String>, add_label: &str, placeholder: &str, max: usize, reorder: bool) -> bool {
     let mut changed = false;
     let mut action = None;
@@ -328,18 +341,29 @@ fn string_list(ui: &mut Ui, t: &Tokens, items: &mut Vec<String>, add_label: &str
             if reorder {
                 ui.label(muted(t, format!("{}.", i + 1)));
             }
-            let w = ui.available_width() - if reorder { 90.0 } else { 34.0 };
-            changed |= ui.add(egui::TextEdit::singleline(s).hint_text(placeholder).desired_width(w.max(60.0))).changed();
-            if reorder {
-                if ui.add_enabled(i > 0, egui::Button::new("⏶").frame(false)).on_hover_text("Nach oben").clicked() {
-                    action = Some(Move::Up(i));
-                }
-                if ui.add_enabled(i + 1 < n, egui::Button::new("⏷").frame(false)).on_hover_text("Nach unten").clicked() {
-                    action = Some(Move::Down(i));
-                }
-            }
-            if icon_button(ui, t, "×", "Entfernen").clicked() {
-                action = Some(Move::Remove(i));
+            let (edited, act) = field_then_buttons(
+                ui,
+                |ui| {
+                    // Right to left: × first, then ⏷ and ⏶, so they read ⏶ ⏷ ×.
+                    if icon_button(ui, t, "×", "Entfernen").clicked() {
+                        return Some(Move::Remove(i));
+                    }
+                    let mut act = None;
+                    if reorder {
+                        if ui.add_enabled(i + 1 < n, egui::Button::new("⏷").frame(false)).on_hover_text("Nach unten").clicked() {
+                            act = Some(Move::Down(i));
+                        }
+                        if ui.add_enabled(i > 0, egui::Button::new("⏶").frame(false)).on_hover_text("Nach oben").clicked() {
+                            act = Some(Move::Up(i));
+                        }
+                    }
+                    act
+                },
+                |ui, w| ui.add(egui::TextEdit::singleline(s).hint_text(placeholder).desired_width(w)).changed(),
+            );
+            changed |= edited;
+            if act.is_some() {
+                action = act;
             }
         });
     }
@@ -478,10 +502,13 @@ fn edit_body(ui: &mut Ui, t: &Tokens, body: &mut TaskBody, h5p: bool) -> bool {
                 ui.horizontal(|ui| {
                     let c = ui.checkbox(&mut o.correct, "richtig").on_hover_text("Richtige Antwort");
                     changed |= c.changed();
-                    changed |= ui
-                        .add(egui::TextEdit::singleline(&mut o.text).hint_text("Antwortmöglichkeit").desired_width((ui.available_width() - 34.0).max(60.0)))
-                        .changed();
-                    if icon_button(ui, t, "×", "Entfernen").clicked() {
+                    let (edited, gone) = field_then_buttons(
+                        ui,
+                        |ui| icon_button(ui, t, "×", "Entfernen").clicked(),
+                        |ui, w| ui.add(egui::TextEdit::singleline(&mut o.text).hint_text("Antwortmöglichkeit").desired_width(w)).changed(),
+                    );
+                    changed |= edited;
+                    if gone {
                         remove = Some(i);
                     }
                 });
@@ -551,9 +578,13 @@ fn edit_body(ui: &mut Ui, t: &Tokens, body: &mut TaskBody, h5p: bool) -> bool {
             let n = categories.len();
             for (i, c) in categories.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    changed |=
-                        ui.add(egui::TextEdit::singleline(&mut c.name).hint_text("Gruppe").desired_width((ui.available_width() - 34.0).max(60.0))).changed();
-                    if n > 2 && icon_button(ui, t, "×", "Gruppe entfernen").clicked() {
+                    let (edited, gone) = field_then_buttons(
+                        ui,
+                        |ui| n > 2 && icon_button(ui, t, "×", "Gruppe entfernen").clicked(),
+                        |ui, w| ui.add(egui::TextEdit::singleline(&mut c.name).hint_text("Gruppe").desired_width(w)).changed(),
+                    );
+                    changed |= edited;
+                    if gone {
                         remove = Some(i);
                     }
                 });

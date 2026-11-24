@@ -437,3 +437,41 @@ fn omarchy_card_only_with_an_omarchy_theme() {
     aiscraft_ui::theme::set_omarchy_dir(None);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Quality gate (layout): an editor row whose buttons needed more room than reserved widened the
+/// artifact panel within a few frames until it covered the chat (Glas, choice task, 150 %). The
+/// panel keeps its default width and stays put, in every look.
+#[test]
+fn artifact_panel_does_not_grow_frame_by_frame() {
+    for theme in ["glas-dark", "modern-light", "omarchy"] {
+        let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+        engine.call("settings.set", serde_json::json!({"key": "theme", "value": theme})).unwrap();
+        let sheet = serde_json::json!({"title": "Photosynthese – So stellen Pflanzen Nahrung her", "tasks": [
+            {"type": "choice", "prompt": "Welche Zellbestandteile führen die Photosynthese durch?", "options": [{"text": "Chloroplasten", "correct": true}, {"text": "Mitochondrien"}]},
+            {"type": "true_false", "prompt": "Pflanzen nehmen Sauerstoff auf.", "answer": false, "hints": ["Welches Gas geben Pflanzen ab?"]},
+            {"type": "categorize", "prompt": "Sortiere", "categories": [{"name": "Säugetiere", "items": ["Wal"]}, {"name": "Fische", "items": ["Hai"]}]}
+        ]});
+        engine.call("worksheet.create", serde_json::json!({"worksheet": sheet})).unwrap();
+        engine.call("settings.set", serde_json::json!({"key": "look_chosen", "value": true})).ok();
+        // A laptop at 150 %: the size and scale the overflow showed up at.
+        let e = engine.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1333.0, 889.0))
+            .with_pixels_per_point(1.5)
+            .allow_missing_glyphs()
+            .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
+        h.run_steps(4);
+        if let Some(later) = h.query_by_label("Später") {
+            later.click();
+        }
+        h.run_steps(10);
+        let left = |h: &egui_kittest::Harness<'static, AisCraftApp>| h.get_by_label("Druckvorschau").rect().left();
+        let before = left(&h);
+        h.run_steps(40);
+        let after = left(&h);
+        assert!((before - after).abs() < 0.5, "{theme}: the panel grew from x={before} to x={after}");
+        // The panel keeps about its default width (46 % of the room right of the sidebar): its
+        // toolbar starts in the right third. An overflowing row pushed it to x≈790.
+        assert!(after > 1333.0 * 0.65, "{theme}: an editor row widened the panel (toolbar at x={after})");
+    }
+}
