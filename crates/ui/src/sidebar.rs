@@ -160,7 +160,7 @@ impl AisCraftApp {
         }
         for a in items {
             let open = self.state.open_artifact.as_deref() == Some(&a.id);
-            let icon = if a.kind == aiscraft_core::ArtifactKind::Board { "▣" } else { "📄" };
+            let icon = crate::learn_panel::kind_icon(a.kind);
             let r = ui.add(egui::Button::selectable(open, format!("{icon}  {}", a.title)).truncate().min_size(egui::vec2(ui.available_width(), 24.0)));
             if r.clicked() {
                 if open {

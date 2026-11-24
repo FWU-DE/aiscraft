@@ -55,6 +55,9 @@ fn handbook_opens_closes_and_follows_settings_links() {
     h.key_press(egui::Key::F1);
     h.run_steps(6);
     assert!(h.query_by_label("Erste Schritte").is_some(), "F1 opens the handbook with its chapters");
+    // The table of contents scrolls on small windows.
+    h.get_by_label("Tresor").scroll_to_me();
+    h.run_steps(4);
     h.get_by_label("Tresor").click();
     h.run_steps(6);
     assert!(h.query_by_label_contains("{{vault:").is_some(), "a chapter opens");
@@ -159,4 +162,35 @@ fn variant_switcher_shows_the_old_answer() {
     h.run_steps(6);
     assert!(h.query_by_label("1/2").is_some());
     assert!(h.query_by_label_contains("Antwort 1").is_some());
+}
+
+/// A worksheet: edit mode shows the tasks, work mode checks an answer and counts points; a
+/// learning app shows its source and the open button.
+#[test]
+fn worksheet_work_mode_checks_answers_and_app_panel_shows_source() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let sheet = serde_json::json!({"title": "Brüche", "tasks": [
+        {"id": "a1", "type": "choice", "prompt": "Welcher Bruch ist am größten?", "options": [{"text": "ein Halb"}, {"text": "drei Viertel", "correct": true}]},
+        {"id": "a2", "type": "true_false", "prompt": "Zwei Viertel sind ein Halb.", "answer": true}
+    ]});
+    engine.call("worksheet.create", serde_json::json!({"worksheet": sheet})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    assert!(h.query_by_label("+ Aufgabe hinzufügen  ⏷").is_some(), "edit mode first");
+    h.get_by_label("Lösen").click();
+    h.run_steps(6);
+    h.get_by_label("drei Viertel").click();
+    h.run_steps(4);
+    h.get_by_label("Prüfen").click();
+    h.run_steps(6);
+    assert!(h.query_by_label_contains("1 von 2 Punkte").is_some(), "score shown");
+    assert!(h.query_by_label("✔ Richtig").is_some());
+    h.get_by_label("Zurücksetzen").click();
+    h.run_steps(4);
+    assert!(h.query_by_label("✔ Richtig").is_none());
+
+    engine.call("learning_app.create", serde_json::json!({"html": "<!doctype html><html><head><title>Quiz</title></head><body>Hallo</body></html>"})).unwrap();
+    h.run_steps(8);
+    assert!(h.query_by_label("▶ Öffnen").is_some());
+    assert!(h.query_by_label("Speichern …").is_some());
 }

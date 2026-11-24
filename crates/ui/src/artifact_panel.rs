@@ -1,4 +1,5 @@
-//! The panel next to the chat that shows the open document or whiteboard.
+//! The panel next to the chat that shows the open document, whiteboard, learning app or
+//! worksheet (the last two in `learn_panel.rs` and `worksheet.rs`).
 
 use std::time::{Duration, Instant};
 
@@ -11,7 +12,7 @@ use serde_json::json;
 use crate::app::AisCraftApp;
 use crate::widgets::{accent_button, icon_button, muted};
 
-const SAVE_AFTER: Duration = Duration::from_millis(700);
+pub(crate) const SAVE_AFTER: Duration = Duration::from_millis(700);
 
 pub struct ArtifactView {
     pub id: String,
@@ -19,18 +20,20 @@ pub struct ArtifactView {
     rev_loaded: u64,
     /// Our own save is on its way; the next revision bump is ours and needs no reload.
     own_saves: u32,
-    doc: String,
+    pub(crate) doc: String,
     /// The document state `doc` was loaded from or last saved as: saves are edits on top of
     /// it, so changes that arrived meanwhile (model, people in a shared room) are kept.
     base: Vec<u8>,
-    dirty_since: Option<Instant>,
+    pub(crate) dirty_since: Option<Instant>,
     pub preview: bool,
     board: Option<(Board, ViewState, u64)>,
     pub revise: String,
     pub revising: bool,
     /// Set by the background revision when it ends, success or not.
-    revise_done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) revise_done: std::sync::Arc<std::sync::atomic::AtomicBool>,
     error: Option<String>,
+    /// An open worksheet: parsed tasks, mode, a pupil's answers.
+    pub(crate) sheet: crate::worksheet::SheetState,
 }
 
 impl AisCraftApp {
@@ -53,6 +56,7 @@ impl AisCraftApp {
                     revising: false,
                     revise_done: Default::default(),
                     error: Some(e.message),
+                    sheet: Default::default(),
                 });
             }
         };
@@ -76,13 +80,14 @@ impl AisCraftApp {
             own_saves: 0,
             preview: kind == ArtifactKind::Document && !text.is_empty(),
             doc: text,
-            base: if kind == ArtifactKind::Document { bytes } else { Vec::new() },
+            base: if kind.is_text() { bytes } else { Vec::new() },
             dirty_since: None,
             board,
             revise: String::new(),
             revising: false,
             revise_done: Default::default(),
             error: None,
+            sheet: Default::default(),
         })
     }
 
@@ -109,9 +114,11 @@ impl AisCraftApp {
                     } else if !dirty {
                         let revising = v.revising;
                         let preview = v.preview;
+                        let mode = v.sheet.mode;
                         self.artifact = self.load_artifact(id);
                         if let Some(v) = self.artifact.as_mut() {
                             v.preview = preview || revising;
+                            v.sheet.mode = mode;
                         }
                     }
                 }
@@ -137,10 +144,10 @@ impl AisCraftApp {
         }
     }
 
-    fn save_artifact_now(&mut self) {
+    pub(crate) fn save_artifact_now(&mut self) {
         let Some(v) = self.artifact.as_mut() else { return };
         match v.kind {
-            ArtifactKind::Document => match aiscraft_engine::doc_replace(&v.base, &v.doc) {
+            ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet => match aiscraft_engine::doc_replace(&v.base, &v.doc) {
                 Ok(state) => {
                     let b64 = base64::engine::general_purpose::STANDARD.encode(&state);
                     v.base = state;
@@ -166,7 +173,7 @@ impl AisCraftApp {
         // Header
         Frame::new().inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(if meta.kind == ArtifactKind::Board { "▣" } else { "📄" }).color(t.accent));
+                ui.label(RichText::new(crate::learn_panel::kind_icon(meta.kind)).color(t.accent)).on_hover_text(meta.kind.label());
                 let r = ui
                     .add(egui::Label::new(RichText::new(&meta.title).strong()).truncate().sense(egui::Sense::click()))
                     .on_hover_text("Doppelklick zum Umbenennen");
@@ -179,10 +186,11 @@ impl AisCraftApp {
                         self.run("artifact.close", json!({}));
                     }
                     ui.menu_button(RichText::new("⬇").color(t.muted), |ui| {
-                        let formats: &[(&str, &str)] = if meta.kind == ArtifactKind::Board {
-                            &[("markdown", "md"), ("json", "json")]
-                        } else {
-                            &[("markdown", "md"), ("html", "html"), ("docx", "docx"), ("pdf", "pdf")]
+                        let formats: &[(&str, &str)] = match meta.kind {
+                            ArtifactKind::Board => &[("markdown", "md"), ("json", "json")],
+                            ArtifactKind::App => &[("html", "html")],
+                            ArtifactKind::Worksheet => &[("pdf", "pdf"), ("docx", "docx"), ("json", "json")],
+                            ArtifactKind::Document => &[("markdown", "md"), ("html", "html"), ("docx", "docx"), ("pdf", "pdf")],
                         };
                         for (f, ext) in formats {
                             let label = if *ext == "docx" { "Als Word (DOCX)".to_string() } else { format!("Als {}", ext.to_uppercase()) };
@@ -219,6 +227,12 @@ impl AisCraftApp {
                     })
                     .response
                     .on_hover_text("Versionen");
+                    if meta.kind == ArtifactKind::Document
+                        && ui.button("Als Arbeitsblatt").on_hover_text("Daraus ein interaktives Arbeitsblatt machen lassen (eine Anfrage ans Modell)").clicked()
+                    {
+                        self.save_if_dirty();
+                        self.run("worksheet.from_document", json!({"id": meta.id}));
+                    }
                     let mut attach = self.attach_artifact;
                     if ui.toggle_value(&mut attach, "Im Chat").on_hover_text("Inhalt bei der nächsten Nachricht als Kontext mitschicken").changed() {
                         self.attach_artifact = attach;
@@ -238,6 +252,8 @@ impl AisCraftApp {
         match meta.kind {
             ArtifactKind::Document => self.document_body(ui),
             ArtifactKind::Board => self.board_body(ui),
+            ArtifactKind::App => self.app_body(ui),
+            ArtifactKind::Worksheet => self.worksheet_body(ui),
         }
     }
 

@@ -8,6 +8,7 @@ mod conversation;
 mod dialogs;
 mod downloads;
 mod explore;
+mod learn_panel;
 pub mod manual;
 pub mod markup;
 pub mod math;
@@ -18,5 +19,6 @@ mod share;
 mod sidebar;
 pub mod theme;
 mod widgets;
+pub mod worksheet;
 
 pub use app::{AisCraftApp, UiRequest};
