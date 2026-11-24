@@ -202,19 +202,34 @@ pub(crate) async fn send_with(c: Ctx, text: String, paths: Vec<String>, links: V
     }
 
     // Attachments first, so a bad file fails before anything is saved.
-    let mut attachments = Vec::new();
+    // Each file is prepared on the device first (#45, #47, #50): converted to a type the
+    // backend takes, only the pages picked, photos without location and scaled for AIS.chat.
+    let target = crate::attach::Target::of(backend.config().kind);
+    let mut prepared = Vec::new();
     for p in &paths {
-        let (mut a, bytes) = files::load(Path::new(p), !caps.uploads)?;
+        let range = crate::attach::range_for(&c, p);
+        let (p2, r) = (p.clone(), range.clone());
+        let prep = tokio::task::spawn_blocking(move || crate::attach::prepare(Path::new(&p2), &r, target))
+            .await
+            .map_err(|e| Error::invalid(format!("Vorbereiten abgebrochen: {e}")))??;
+        prepared.push(prep);
+    }
+    if target == crate::attach::Target::AisChat {
+        crate::attach::check_image_count(&c, prepared.iter().filter(|p| files::is_image(&p.mime)).count())?;
+    }
+    let mut attachments = Vec::new();
+    for prep in prepared {
         // Keep a copy: the bytes are not stored in the database and are read back per request.
-        let copy = files::keep_copy(&c.0.attachments_dir, Path::new(p), &bytes)?;
-        a.local_path = Some(copy.display().to_string());
+        let copy = files::keep_copy(&c.0.attachments_dir, Path::new(&prep.name), &prep.bytes)?;
+        let mut a = crate::attach::attachment(&prep, &copy, !caps.uploads);
         if caps.uploads {
-            a.remote_id = Some(backend.upload(a.name.clone(), a.mime.clone(), bytes).await?);
+            a.remote_id = Some(backend.upload(a.name.clone(), a.mime.clone(), prep.bytes).await?);
         } else if a.text.is_none() && a.data_base64.is_none() {
             return Err(Error::unsupported(format!("{} kann {} nicht lesen. Text, Bilder und PDFs gehen.", backend.config().name, a.name)));
         }
         attachments.push(a);
     }
+    crate::attach::forget(&c, &paths);
     // Links: the server reads the page first where it can, so a page it cannot read fails here.
     for url in &links {
         backend.check_link(url.clone()).await?;

@@ -43,11 +43,16 @@ Fork = needs the storytold egui fork (`[patch.crates-io]`, see below).
 | craft-xlsx | SpreadsheetML read and **write** (`Document::write`, a new workbook from fields) | — | exact: sheets, shared strings, styles, formulas, frozen header | no | **adopted** (#38: `spreadsheet_create`) |
 | craft-pptx | PresentationML read and **write** (`export`), `Plain` master | — | exact: text boxes, bullets, tables, notes | no | **adopted** (#38: `slides_create`) |
 | craft-opc | The OOXML ZIP package | — | tests open our .docx/.xlsx/.pptx with it | no | **adopted** (tests) |
-| craft-pdf | PDF read/render (hayro), write (Krilla), Standard-14 metrics | — | `write` needs the vendored Krilla through a `[patch.crates-io]` entry, an embedded font and our own text layout; feature `fonts` alone has the Standard-14 metrics and WinAnsi encoding without dependencies | no | **adopted, feature `fonts` only** (see below) |
+| craft-pdf | PDF read/render (hayro), write (Krilla), Standard-14 metrics, object layer (`cos`) | — | `write` needs the vendored Krilla through a `[patch.crates-io]` entry, an embedded font and our own text layout; feature `fonts` alone has the Standard-14 metrics and WinAnsi encoding without dependencies | no | **adopted, features `fonts` and `cos`** (see below; `cos` builds the page subset of #47) |
 | craft-flow | The flow model behind craft-markdown | pulldown-cmark (HTML export, PDF layout) | comes with craft-markdown | no | indirect |
 | craft-math | Equations as one tree (OMML, MathML, LaTeX math, UnicodeMath), bounded readers | — | `math_latex::parse_latex` reads the formulas in answers and documents (#36); layout and drawing are ours (`ui/src/math.rs`) | no | **adopted** |
 | craft-latex | Whole LaTeX documents to and from the craft-flow model | — | answers hold formulas, not `.tex` documents | no | later (LaTeX export with #38) |
-| craft-ical, craft-dav, craft-vcard | iCalendar, CalDAV/CardDAV, vCard | — | calendar connectors (#26) | no | later (#26) |
+| craft-ical, craft-vcard | iCalendar content lines and dates, vCard contacts | — | `.ics` → a readable list of events, `.vcf` → contacts as Markdown before an AIS.chat upload (`attach/docs.rs`, #45) | no | **adopted** (attachments; calendar connectors later, #26) |
+| craft-dav | CalDAV/CardDAV | — | calendar connectors (#26) | no | later (#26) |
+| craft-doc-binary, craft-rtf (`doc`), craft-epub + craft-html (`flow`), craft-mime | Word 97-2003, RTF, EPUB, HTML, e-mail and mbox readers | — | `.doc`, `.rtf`, `.epub`, `.eml`, `.mbox` → word model → craft-markdown before an AIS.chat upload (`attach/docs.rs`, #45); password-protected `.doc` and DRM e-books get a message, not decrypted | no | **adopted** |
+| craft-xls, craft-ods, craft-csv | Excel 97-2003 and OpenDocument spreadsheet readers, CSV quoting | — | `.xls` → CSV (one sheet) or Markdown tables (#45); one sheet of `.xls`/`.xlsx`/`.ods` as CSV (#47, `attach/sheets.rs`) | no | **adopted** |
+| craft-ppt-binary | PowerPoint 97-2003 reader into the craft-pptx model | — | `.ppt` → Markdown; some slides of `.ppt`/`.pptx` (#47, `attach/slides.rs`) | no | **adopted** |
+| craft-image-codecs (+ craft-heif, `avif-decode`), craft-metadata | Bounded image decode/encode, HEIC and AVIF decoders; EXIF/XMP reading | — | photos for AIS.chat decoded upright, scaled to 1000 px (our box filter: the crate has no resize), encoded as JPEG/PNG without metadata; `has_location_metadata` and EXIF GPS say "Standortdaten entfernt" (#50, `attach/image.rs`). HEIC behind the engine feature `heif` (default on; HEVC patents are a distributor's call) | no | **adopted** |
 | craft-ai-core / craft-ai | AI connection/model contract | `backends`, `engine` | AIS.chat is a Next.js server action, not a provider API | no | no |
 
 ## egui fork
@@ -69,3 +74,12 @@ pages with Helvetica and Courier, which every viewer has, so no font is embedded
 a bundled font file and still leaves pagination and line breaking to the app. Limit: characters
 outside WinAnsi (emoji, Greek, CJK) print as a stand-in or `?`. Switch to `write` with an
 embedded Unicode font when that matters.
+
+## Page subsets (#47)
+
+`attach/pdf.rs` opens the PDF with `craft_pdf::cos`, collects the page tree's leaves (with the
+inherited `Resources`, `MediaBox`, `CropBox`, `Rotate`), points the catalog at a new flat page
+list of the chosen pages and writes a full, garbage-collected copy. Outlines, named
+destinations, forms, structure tree, page labels and link/widget annotations are left out,
+because they can reach pages that were not chosen; the result is reopened and must hold exactly
+the chosen number of `/Page` objects, else the subset is refused. No reader patches are needed.

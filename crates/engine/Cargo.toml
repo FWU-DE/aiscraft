@@ -15,6 +15,19 @@ craft-pptx.workspace = true
 craft-opc.workspace = true
 craft-xml.workspace = true
 craft-pdf.workspace = true
+craft-doc-binary.workspace = true
+craft-xls.workspace = true
+craft-ppt-binary.workspace = true
+craft-rtf.workspace = true
+craft-epub.workspace = true
+craft-html.workspace = true
+craft-mime.workspace = true
+craft-ical.workspace = true
+craft-vcard.workspace = true
+craft-csv.workspace = true
+craft-ods.workspace = true
+craft-metadata.workspace = true
+craft-image-codecs.workspace = true
 aiscraft-core.workspace = true
 aiscraft-store.workspace = true
 aiscraft-backends.workspace = true
@@ -39,12 +52,17 @@ aiscraft-voice = { path = "../voice" }
 aiscraft-collab = { path = "../collab", optional = true }
 
 [features]
-default = ["collab"]
+default = ["collab", "heif"]
 # Live collaboration on artifacts (a plug-in: without it the engine is unchanged).
 collab = ["dep:aiscraft-collab"]
+# HEIC/HEIF photos (iPhone) through craft-heif. HEVC patents are a distributor's call, so a
+# package can leave it out; HEIC files then get a clear message instead.
+heif = ["craft-image-codecs/heif"]
 
 [dev-dependencies]
 craft-wordmodel.workspace = true
+craft-xls = { workspace = true, features = ["test-support"] }
+craft-heif = { workspace = true, features = ["test-support"] }
 aiscraft-collab-server = { path = "../../apps/aiscraft-collab-server" }
 
 [lints]

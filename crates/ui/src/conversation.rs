@@ -877,6 +877,81 @@ impl AisCraftApp {
         }
     }
 
+    /// The files in the composer, each with what will be sent (#45, #47, #50): the converted
+    /// name, "Standortdaten entfernt", an error, and for PDFs, tables and slides a field to send
+    /// only some pages ("Nur Seiten …"). The engine prepares each file once per backend.
+    /// Returns the index of a file to remove.
+    fn attachment_chips(&mut self, ui: &mut Ui) -> Option<usize> {
+        let t = self.tokens.clone();
+        let mut remove = None;
+        let mut requests = Vec::new();
+        ui.vertical(|ui| {
+            for (i, f) in self.pending_files.iter().enumerate() {
+                let path = f.display().to_string();
+                let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let preview = self.state.attachments.get(&path);
+                // Ask once; the flag goes when the answer is there, so a file added again later
+                // (after sending) is prepared again.
+                let asked = egui::Id::unique(("attachment-asked", &path));
+                if preview.is_some() {
+                    ui.data_mut(|d| d.remove::<bool>(asked));
+                } else if !ui.data(|d| d.get_temp::<bool>(asked).unwrap_or(false)) {
+                    ui.data_mut(|d| {
+                        d.insert_temp(asked, true);
+                        d.remove::<String>(egui::Id::unique(("attachment-range", &path)));
+                    });
+                    requests.push(("attachment.prepare", json!({"path": path, "quiet": true})));
+                }
+                Frame::new().fill(t.surface_hi).corner_radius(CornerRadius::same(6)).inner_margin(Margin::symmetric(8, 3)).show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(format!("📎 {name}")).small());
+                        if let Some(p) = preview {
+                            if let Some(err) = &p.error {
+                                ui.label(RichText::new(err).small().color(t.danger));
+                            } else if let Some(note) = &p.note {
+                                ui.label(RichText::new(note).small().color(t.muted));
+                            }
+                            if let Some(kind) = p.range_kind {
+                                let (label, hint) = match kind {
+                                    aiscraft_engine::RangeKind::Pages => {
+                                        ("Nur Seiten", if p.total > 0 { format!("1-{}", p.total) } else { "z. B. 3-7".into() })
+                                    }
+                                    aiscraft_engine::RangeKind::Slides => {
+                                        ("Nur Folien", if p.total > 0 { format!("1-{}", p.total) } else { "z. B. 2-5".into() })
+                                    }
+                                    aiscraft_engine::RangeKind::Sheet => ("Nur Blatt", p.sheets.first().cloned().unwrap_or_else(|| "Name oder Nummer".into())),
+                                };
+                                let id = egui::Id::unique(("attachment-range", &path));
+                                // While not typing in it, the field shows the range the engine uses.
+                                let focused = ui.memory(|m| m.has_focus(id));
+                                let mut text =
+                                    if focused { ui.data_mut(|d| d.get_temp_mut_or_insert_with(id, || p.range.clone()).clone()) } else { p.range.clone() };
+                                ui.label(RichText::new(label).small().color(t.muted));
+                                let r = ui.add(egui::TextEdit::singleline(&mut text).id(id).hint_text(hint).desired_width(90.0).font(egui::TextStyle::Small));
+                                if r.changed() {
+                                    ui.data_mut(|d| d.insert_temp(id, text.clone()));
+                                }
+                                if r.lost_focus() && text.trim() != p.range {
+                                    requests.push(("attachment.set_range", json!({"path": path, "range": text.trim(), "quiet": true})));
+                                }
+                                if kind == aiscraft_engine::RangeKind::Sheet && p.sheets.len() > 1 {
+                                    r.on_hover_text(format!("Blätter: {}", p.sheets.join(", ")));
+                                }
+                            }
+                        }
+                        if icon_button(ui, &t, "×", "Entfernen").clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                });
+            }
+        });
+        for (cmd, params) in requests {
+            self.run(cmd, params);
+        }
+        remove
+    }
+
     pub(crate) fn composer(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let generating = self.state.current.as_ref().is_some_and(|c| self.state.is_generating(c));
@@ -892,22 +967,10 @@ impl AisCraftApp {
             .shadow(egui::epaint::Shadow { offset: [0, 2], blur: 12, spread: 0, color: egui::Color32::from_black_alpha(if t.dark { 60 } else { 18 }) })
             .show(ui, |ui| {
                 if !self.pending_files.is_empty() {
-                    let mut remove = None;
-                    ui.horizontal_wrapped(|ui| {
-                        for (i, f) in self.pending_files.iter().enumerate() {
-                            let name = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                            Frame::new().fill(t.surface_hi).corner_radius(CornerRadius::same(6)).inner_margin(Margin::symmetric(8, 3)).show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(format!("📎 {name}")).small());
-                                    if icon_button(ui, &t, "×", "Entfernen").clicked() {
-                                        remove = Some(i);
-                                    }
-                                });
-                            });
-                        }
-                    });
+                    let remove = self.attachment_chips(ui);
                     if let Some(i) = remove {
-                        self.pending_files.remove(i);
+                        let gone = self.pending_files.remove(i);
+                        self.run("attachment.remove", json!({"path": gone.display().to_string()}));
                     }
                 }
                 if !self.pending_links.is_empty() {

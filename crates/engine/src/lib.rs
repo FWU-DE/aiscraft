@@ -3,6 +3,7 @@
 //! all dispatch the same commands by id, so everything a person can do, an agent can do.
 
 mod artifacts;
+mod attach;
 mod bridge;
 mod chat;
 #[cfg(feature = "collab")]
@@ -35,6 +36,7 @@ use serde_json::Value;
 
 pub use aiscraft_backends::SESSION_COOKIE;
 pub use artifacts::{change_blocks, doc_replace, doc_text, markdown_html, merge_states};
+pub use attach::{AIS_ACCEPTS, AttachmentPreview, RangeKind};
 pub use commands::{CommandSpec, commands};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use schedules::{Cron, Schedule, next_run as schedule_next_run};
