@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use aiscraft_core::worksheet::{self, ChoiceOption, ClozePart, Pair, Response, SheetResult, Task, TaskBody, Worksheet};
+use aiscraft_core::worksheet::{self, Category, ChoiceOption, ClozePart, Pair, Response, SheetResult, Task, TaskBody, Worksheet};
 use egui::{CornerRadius, Frame, Margin, RichText, ScrollArea, Stroke, Ui};
 use serde_json::json;
 
@@ -33,6 +33,8 @@ enum Ans {
     Matches(Vec<Option<usize>>),
     /// Item indices in the order shown.
     Order(Vec<usize>),
+    /// For each item of a categorize task, the group picked.
+    Assign(Vec<Option<usize>>),
     Text(String),
 }
 
@@ -41,9 +43,10 @@ impl Ans {
         match &task.body {
             TaskBody::Choice { .. } => Ans::Chosen(Vec::new()),
             TaskBody::TrueFalse { .. } => Ans::Bool(None),
-            TaskBody::Cloze { text } => Ans::Gaps(vec![String::new(); worksheet::cloze_gaps(text).len()]),
+            TaskBody::Cloze { text, .. } => Ans::Gaps(vec![String::new(); worksheet::cloze_gaps(text).len()]),
             TaskBody::Matching { pairs } => Ans::Matches(vec![None; pairs.len()]),
             TaskBody::Ordering { items } => Ans::Order(worksheet::display_order(items.len(), &task.id)),
+            TaskBody::Categorize { categories } => Ans::Assign(vec![None; worksheet::category_items(categories).len()]),
             _ => Ans::Text(String::new()),
         }
     }
@@ -56,6 +59,7 @@ impl Ans {
             Ans::Gaps(g) => Response::Gaps(g.clone()),
             Ans::Matches(m) => Response::Matches(m.clone()),
             Ans::Order(o) => Response::Order(o.clone()),
+            Ans::Assign(a) => Response::Assign(a.clone()),
             Ans::Text(t) => Response::Text(t.clone()),
         }
     }
@@ -72,7 +76,8 @@ pub struct SheetState {
     problems: Vec<String>,
     answers: HashMap<String, Ans>,
     result: Option<SheetResult>,
-    hints: HashSet<String>,
+    /// How many of each task's staged hints are revealed.
+    hints: HashMap<String, usize>,
     /// Tasks the pupil answered: an ordering left as shown is no answer.
     touched: HashSet<String>,
 }
@@ -266,7 +271,7 @@ fn text_area(ui: &mut Ui, s: &mut String, hint: &str, rows: usize) -> bool {
 }
 
 /// A list of strings with remove buttons and an add button. Returns changed.
-fn string_list(ui: &mut Ui, t: &Tokens, items: &mut Vec<String>, add_label: &str, max: usize, reorder: bool) -> bool {
+fn string_list(ui: &mut Ui, t: &Tokens, items: &mut Vec<String>, add_label: &str, placeholder: &str, max: usize, reorder: bool) -> bool {
     let mut changed = false;
     let mut action = None;
     let n = items.len();
@@ -276,7 +281,7 @@ fn string_list(ui: &mut Ui, t: &Tokens, items: &mut Vec<String>, add_label: &str
                 ui.label(muted(t, format!("{}.", i + 1)));
             }
             let w = ui.available_width() - if reorder { 90.0 } else { 34.0 };
-            changed |= ui.add(egui::TextEdit::singleline(s).hint_text(if reorder { "Element" } else { "Antwort" }).desired_width(w.max(60.0))).changed();
+            changed |= ui.add(egui::TextEdit::singleline(s).hint_text(placeholder).desired_width(w.max(60.0))).changed();
             if reorder {
                 if ui.add_enabled(i > 0, egui::Button::new("⏶").frame(false)).on_hover_text("Nach oben").clicked() {
                     action = Some(Move::Up(i));
@@ -356,12 +361,23 @@ fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet) -> bool {
             ui.add_space(4.0);
             changed |= edit_body(ui, t, &mut task.body);
             if !info {
-                egui::CollapsingHeader::new(small_muted(t, "Tipp und Erklärung"))
+                egui::CollapsingHeader::new(small_muted(t, "Tipps und Erklärung"))
                     .id_salt(("hint", i))
-                    .default_open(!task.hint.is_empty() || !task.feedback.is_empty())
+                    .default_open(!task.hints.is_empty() || !task.feedback.is_empty())
                     .show(ui, |ui| {
-                        changed |= text_line(ui, &mut task.hint, "Tipp, den man beim Lösen aufdecken kann");
+                        ui.label(small_muted(t, "Tipps werden beim Lösen einzeln aufgedeckt. Fang allgemein an und werde mit jedem Tipp konkreter."));
+                        changed |= string_list(ui, t, &mut task.hints, "+ Tipp", "Tipp", worksheet::MAX_HINTS, true);
                         changed |= text_line(ui, &mut task.feedback, "Erklärung, die nach dem Prüfen erscheint");
+                        if let TaskBody::Choice { options, .. } = &mut task.body {
+                            ui.label(small_muted(t, "Rückmeldung je Antwort (erscheint nach dem Prüfen, wenn gewählt)"));
+                            for o in options.iter_mut() {
+                                ui.horizontal(|ui| {
+                                    let name: String = o.text.chars().take(24).collect();
+                                    ui.label(muted(t, if name.is_empty() { "Antwort".to_string() } else { name }));
+                                    changed |= text_line(ui, &mut o.feedback, "z. B. welche Fehlvorstellung dahintersteckt");
+                                });
+                            }
+                        }
                     });
             }
         });
@@ -416,7 +432,7 @@ fn edit_body(ui: &mut Ui, t: &Tokens, body: &mut TaskBody) -> bool {
                 changed = true;
             }
             if options.len() < worksheet::MAX_OPTIONS && ui.small_button("+ Antwort").clicked() {
-                options.push(ChoiceOption { text: String::new(), correct: false });
+                options.push(ChoiceOption::new("", false));
                 changed = true;
             }
         }
@@ -427,10 +443,15 @@ fn edit_body(ui: &mut Ui, t: &Tokens, body: &mut TaskBody) -> bool {
                 changed |= ui.radio_value(answer, false, "falsch").changed();
             });
         }
-        TaskBody::Cloze { text } => {
+        TaskBody::Cloze { text, word_bank, distractors } => {
             changed |= text_area(ui, text, "Text mit [[Lösung|Alternative]] für jede Lücke", 3);
             let gaps = worksheet::cloze_gaps(text).len();
             ui.label(small_muted(t, format!("{gaps} Lücken · Lücken so markieren: [[Lösung|Alternative]]")));
+            changed |= ui.checkbox(word_bank, "Wortliste zeigen").on_hover_text("Die Lösungswörter gemischt über dem Text, leichter für Jüngere").changed();
+            if *word_bank {
+                ui.label(small_muted(t, "Zusätzliche falsche Wörter (optional)"));
+                changed |= string_list(ui, t, distractors, "+ falsches Wort", "Ablenker", worksheet::MAX_DISTRACTORS, false);
+            }
         }
         TaskBody::Matching { pairs } => {
             let mut remove = None;
@@ -456,11 +477,36 @@ fn edit_body(ui: &mut Ui, t: &Tokens, body: &mut TaskBody) -> bool {
         }
         TaskBody::Ordering { items } => {
             ui.label(small_muted(t, "In der richtigen Reihenfolge eintragen; beim Lösen erscheinen sie gemischt."));
-            changed |= string_list(ui, t, items, "+ Element", worksheet::MAX_ITEMS, true);
+            changed |= string_list(ui, t, items, "+ Element", "Element", worksheet::MAX_ITEMS, true);
+        }
+        TaskBody::Categorize { categories } => {
+            ui.label(small_muted(t, "Jede Gruppe mit den Elementen, die hineingehören; beim Lösen erscheinen alle gemischt."));
+            let mut remove = None;
+            let n = categories.len();
+            for (i, c) in categories.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    changed |=
+                        ui.add(egui::TextEdit::singleline(&mut c.name).hint_text("Gruppe").desired_width((ui.available_width() - 34.0).max(60.0))).changed();
+                    if n > 2 && icon_button(ui, t, "×", "Gruppe entfernen").clicked() {
+                        remove = Some(i);
+                    }
+                });
+                ui.indent(("group", i), |ui| {
+                    changed |= string_list(ui, t, &mut c.items, "+ Element", "Element", worksheet::MAX_ITEMS, false);
+                });
+            }
+            if let Some(i) = remove.filter(|i| *i < categories.len()) {
+                categories.remove(i);
+                changed = true;
+            }
+            if categories.len() < worksheet::MAX_CATEGORIES && ui.small_button("+ Gruppe").clicked() {
+                categories.push(Category { name: String::new(), items: Vec::new() });
+                changed = true;
+            }
         }
         TaskBody::ShortAnswer { accepted, case_sensitive } => {
             ui.label(small_muted(t, "Akzeptierte Antworten"));
-            changed |= string_list(ui, t, accepted, "+ Variante", worksheet::MAX_ALTERNATIVES, false);
+            changed |= string_list(ui, t, accepted, "+ Variante", "Antwort", worksheet::MAX_ALTERNATIVES, false);
             changed |= ui.checkbox(case_sensitive, "Groß- und Kleinschreibung beachten").changed();
         }
         TaskBody::Numeric { answer, tolerance, unit } => {
@@ -558,14 +604,18 @@ fn work_sheet(ui: &mut Ui, t: &Tokens, sheet: &mut SheetState) {
                 sheet.touched.insert(task.id.clone());
             }
             ui.horizontal_wrapped(|ui| {
-                if !task.hint.trim().is_empty() {
-                    let open = sheet.hints.contains(&task.id);
-                    if ui.add(egui::Button::new(small_muted(t, if open { "💡 Tipp ausblenden" } else { "💡 Tipp" })).frame(false)).clicked() {
-                        if open {
-                            sheet.hints.remove(&task.id);
-                        } else {
-                            sheet.hints.insert(task.id.clone());
-                        }
+                let total = task.hints.len();
+                if total > 0 {
+                    let shown = sheet.hints.get(&task.id).copied().unwrap_or(0).min(total);
+                    let label = match (shown, total) {
+                        (0, 1) => "💡 Tipp".to_string(),
+                        (0, _) => format!("💡 Tipp (1 von {total})"),
+                        (s, _) if s < total => format!("💡 Nächster Tipp ({} von {total})", s + 1),
+                        _ => "💡 Tipps ausblenden".to_string(),
+                    };
+                    if ui.add(egui::Button::new(small_muted(t, label)).frame(false)).clicked() {
+                        let next = if shown >= total { 0 } else { shown + 1 };
+                        sheet.hints.insert(task.id.clone(), next);
                     }
                 }
                 if let Some(r) = res {
@@ -581,8 +631,10 @@ fn work_sheet(ui: &mut Ui, t: &Tokens, sheet: &mut SheetState) {
                     ui.label(RichText::new(label).color(color).strong());
                 }
             });
-            if sheet.hints.contains(&task.id) {
-                ui.label(RichText::new(&task.hint).italics().color(t.muted));
+            let shown = sheet.hints.get(&task.id).copied().unwrap_or(0);
+            for (k, h) in task.hints.iter().take(shown).enumerate() {
+                let text = if task.hints.len() > 1 { format!("Tipp {}: {h}", k + 1) } else { h.clone() };
+                ui.label(RichText::new(text).italics().color(t.muted));
             }
             if checked && !task.feedback.trim().is_empty() {
                 ui.label(RichText::new(&task.feedback).color(t.muted));
@@ -621,6 +673,9 @@ fn work_task(ui: &mut Ui, t: &Tokens, task: &Task, ans: &mut Ans, res: Option<&w
                     text = text.color(t.danger);
                 }
                 let r = if *multiple { ui.checkbox(&mut on, text) } else { ui.radio(on, text) };
+                if checked && on && !o.feedback.trim().is_empty() {
+                    ui.indent(("optfb", &task.id, i), |ui| ui.label(small_muted(t, &o.feedback)));
+                }
                 if r.clicked() {
                     if *multiple {
                         if on {
@@ -647,7 +702,24 @@ fn work_task(ui: &mut Ui, t: &Tokens, task: &Task, ans: &mut Ans, res: Option<&w
                 }
             });
         }
-        (TaskBody::Cloze { text }, Ans::Gaps(gaps)) => {
+        (TaskBody::Cloze { text, word_bank, distractors }, Ans::Gaps(gaps)) => {
+            if *word_bank {
+                let words = worksheet::cloze_word_bank(text, distractors, &task.id);
+                Frame::new().stroke(Stroke::new(1.0, t.border)).corner_radius(CornerRadius::same(t.radius)).inner_margin(Margin::symmetric(10, 6)).show(
+                    ui,
+                    |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(small_muted(t, "Wörter:"));
+                            for w in &words {
+                                // Words already used in a gap are greyed out.
+                                let used = gaps.iter().any(|g| g.trim().eq_ignore_ascii_case(w.trim()));
+                                ui.label(if used { RichText::new(w).color(t.muted).strikethrough() } else { RichText::new(w).strong() });
+                            }
+                        });
+                    },
+                );
+                ui.add_space(4.0);
+            }
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let mut g = 0;
@@ -728,6 +800,39 @@ fn work_task(ui: &mut Ui, t: &Tokens, task: &Task, ans: &mut Ans, res: Option<&w
             {
                 order.swap(a, b);
                 changed = true;
+            }
+        }
+        (TaskBody::Categorize { categories }, Ans::Assign(assign)) => {
+            let items = worksheet::category_items(categories);
+            egui::Grid::new(("groups", &task.id)).num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                for i in worksheet::display_order(items.len(), &task.id) {
+                    let Some((_, word)) = items.get(i) else { continue };
+                    let mut label = RichText::new(*word);
+                    if let Some(c) = part_color(t, res, i) {
+                        label = label.color(c);
+                    }
+                    ui.label(label);
+                    let cur = assign.get(i).copied().flatten();
+                    let shown = cur.and_then(|c| categories.get(c)).map(|c| c.name.clone()).unwrap_or_else(|| "– Gruppe wählen –".into());
+                    egui::ComboBox::from_id_salt(("group-pick", &task.id, i)).selected_text(shown).width(220.0).show_ui(ui, |ui| {
+                        for (c, cat) in categories.iter().enumerate() {
+                            if ui.selectable_label(cur == Some(c), &cat.name).clicked()
+                                && let Some(slot) = assign.get_mut(i)
+                            {
+                                *slot = Some(c);
+                                changed = true;
+                            }
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
+            if checked && res.and_then(|r| r.correct) == Some(false) {
+                let solution: Vec<String> = categories
+                    .iter()
+                    .map(|c| format!("{}: {}", c.name, c.items.iter().filter(|x| !x.trim().is_empty()).cloned().collect::<Vec<_>>().join(", ")))
+                    .collect();
+                ui.label(small_muted(t, format!("Richtig wäre: {}", solution.join(" · "))));
             }
         }
         (TaskBody::ShortAnswer { accepted, .. }, Ans::Text(s)) => {
