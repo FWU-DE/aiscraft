@@ -65,7 +65,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Senden",
         "Chat",
         Some("Enter"),
-        "text: string, files?: [path | {path, range}], artifact?: string (as context), force?: bool (past the monthly limit), aspect_ratio?: quadratic|landscape|portrait (image chats), links?: [url] (web pages, at most 5)",
+        "text: string, files?: [path | {path, range}], artifact?: string (as context), force?: bool (past the monthly limit), aspect_ratio?: quadratic|landscape|portrait (image chats), links?: [url] (web pages, at most 5), privacy?: {off?: [{text, n}], on?: [{text, n}], add?: [string]} (Namen schützen: hits switched in the preview, terms added by hand)",
         false,
         |c, p| Box::pin(async move {
             let text = opt_str(&p, "text").unwrap_or_default();
@@ -77,7 +77,8 @@ static COMMANDS: &[CommandSpec] = &[
                 p.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| crate::attach::file_param(&c, v)).collect()).unwrap_or_default();
             let links: Vec<String> =
                 p.get("links").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-            chat::send_with(c, text, files, links, opt_str(&p, "artifact"), p.get("force").and_then(Value::as_bool).unwrap_or(false)).await
+            let decisions = crate::privacy::Decisions::from_value(p.get("privacy"));
+            chat::send_full(c, text, files, links, opt_str(&p, "artifact"), p.get("force").and_then(Value::as_bool).unwrap_or(false), decisions).await
         })
     ),
     cmd!("chat.stop", "Antwort anhalten", "Chat", Some("Escape"), "conversation?: string", true, |c, p| Box::pin(async move {
@@ -106,7 +107,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Quellen des Chats",
         "Chat",
         None,
-        "tools?: bool, memory?: bool, project?: bool, history?: bool, web?: bool (web search or the page reader), inline?: bool (memory and project at the top of a message, for backends without a system prompt), other_services?: bool (recall may send excerpts from chats with other services to this one), connectors?: [id] | null (alle)",
+        "tools?: bool, memory?: bool, project?: bool, history?: bool, web?: bool (web search or the page reader), inline?: bool (memory and project at the top of a message, for backends without a system prompt), other_services?: bool (recall may send excerpts from chats with other services to this one), connectors?: [id] | null (alle), protect?: bool | null (Namen schützen; null = automatisch, an sobald es eine Klassenliste gibt)",
         false,
         |c, p| Box::pin(set_sources(c, p))
     ),
@@ -498,6 +499,41 @@ static COMMANDS: &[CommandSpec] = &[
         false,
         |c, p| Box::pin(crate::vault::add(c, p))
     ),
+    cmd!(
+        "privacy.list_import",
+        "Klassenliste einlesen",
+        "Namen schützen",
+        None,
+        "path: string (csv, xlsx, xls, ods, vcf), name?: string, project?: string (nur für diesen Projekt; ohne: alle Chats)",
+        true,
+        |c, p| Box::pin(crate::privacy::list_import(c, p))
+    ),
+    cmd!(
+        "privacy.list_add",
+        "Klassenliste aus Text",
+        "Namen schützen",
+        None,
+        "text: string (eine Person pro Zeile: „Lea Müller“ oder „Müller, Lea“), name?: string, project?: string",
+        false,
+        |c, p| Box::pin(crate::privacy::list_add(c, p))
+    ),
+    cmd!("privacy.list_remove", "Klassenliste löschen", "Namen schützen", None, "id: string", false, |c, p| Box::pin(crate::privacy::list_remove(c, p))),
+    cmd!("privacy.lists", "Klassenlisten anzeigen", "Namen schützen", None, "", false, |c, p| Box::pin(crate::privacy::lists(c, p))),
+    cmd!(
+        "privacy.preview",
+        "Vorschau: was rausgeht",
+        "Namen schützen",
+        None,
+        "text: string, files?: [path], off?: [{text, n}], on?: [{text, n}], add?: [string] (or the same inside privacy: {...})",
+        false,
+        |c, p| Box::pin(crate::privacy::preview(c, p))
+    ),
+    cmd!("privacy.mapping", "Platzhalter des Chats anzeigen", "Namen schützen", None, "conversation?: string", true, |c, p| Box::pin(
+        crate::privacy::show_mapping(c, p)
+    )),
+    cmd!("privacy.reveal", "Platzhalter zurückübersetzen", "Namen schützen", None, "text: string, conversation?: string", false, |c, p| Box::pin(
+        crate::privacy::reveal_cmd(c, p)
+    )),
     cmd!("vault.remove", "Tresor-Eintrag löschen", "Tresor", None, "id: string", false, |c, p| Box::pin(crate::vault::remove(c, p))),
     cmd!("vault.code", "Einmalcode anzeigen", "Tresor", None, "id: string", false, |c, p| Box::pin(crate::vault::code(c, p))),
     cmd!("vault.import_bitwarden", "Aus Bitwarden übernehmen", "Tresor", None, "path: string (CSV-Export)", false, |c, p| Box::pin(
@@ -755,6 +791,12 @@ async fn set_sources(c: Ctx, p: Value) -> Result<Value> {
     src.web = flag("web", src.web);
     src.inline = flag("inline", src.inline);
     src.other_services = flag("other_services", src.other_services);
+    match p.get("protect") {
+        Some(Value::Null) => src.protect = None,
+        Some(Value::Bool(b)) => src.protect = Some(*b),
+        Some(_) => return Err(Error::invalid("protect muss true, false oder null sein")),
+        None => {}
+    }
     match p.get("connectors") {
         Some(Value::Null) => src.connectors = None,
         Some(Value::Array(a)) => src.connectors = Some(a.iter().filter_map(|v| v.as_str().map(str::to_string)).take(200).collect()),
@@ -774,6 +816,7 @@ async fn chat_delete(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     chat::stop(&c, &id);
     c.store(|st| st.delete_conversation(&id))?;
+    crate::privacy::forget(&c, &id);
     c.update(|s| {
         s.conversations.retain(|x| x.id != id);
         if s.current.as_deref() == Some(&id) {
@@ -812,7 +855,8 @@ async fn chat_export(c: Ctx, p: Value) -> Result<Value> {
     let messages = c.store(|st| st.messages(&id))?;
     let text = match opt_str(&p, "format").as_deref().unwrap_or("markdown") {
         "json" => serde_json::to_string_pretty(&json!({"conversation": conv, "messages": messages}))?,
-        "markdown" | "md" => markdown_export(&conv.title, &messages),
+        // Placeholders of „Namen schützen“ back to the names; the JSON keeps what was sent.
+        "markdown" | "md" => crate::privacy::reveal(&c, &id, &markdown_export(&conv.title, &messages)),
         other => return Err(Error::invalid(format!("Unbekanntes Format {other}"))),
     };
     if let Some(path) = opt_str(&p, "path") {
@@ -840,7 +884,8 @@ async fn save_document(c: Ctx, p: Value) -> Result<Value> {
     let bytes = if binary {
         base64::engine::general_purpose::STANDARD.decode(doc.content.trim()).unwrap_or_else(|_| doc.content.into_bytes())
     } else {
-        doc.content.into_bytes()
+        // Text documents: placeholders back to the names (#55).
+        crate::privacy::reveal(&c, c.state().current.as_deref().unwrap_or(""), &doc.content).into_bytes()
     };
     craft_atomic::atomic_write(std::path::Path::new(&path), &bytes).map_err(|e| Error::storage(format!("{path}: {e}")))?;
     c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));

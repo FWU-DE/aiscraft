@@ -351,6 +351,10 @@ pub struct Sources {
     /// other way round.
     #[serde(default)]
     pub other_services: bool,
+    /// „Namen schützen“ (#55): names and personal data become placeholders before sending.
+    /// `None` = automatic: on once a class list for the chat's project (or for all chats) exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protect: Option<bool>,
 }
 
 impl Default for Sources {
@@ -366,6 +370,7 @@ impl Default for Sources {
             inline_sent: None,
             inline_recalled: Vec::new(),
             other_services: false,
+            protect: None,
         }
     }
 }
@@ -698,7 +703,13 @@ pub enum StreamEvent {
 pub fn title_from(text: &str) -> String {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("Neuer Chat");
     let mut title: String = line.chars().take(60).collect();
-    if line.chars().count() > 60 {
+    // A placeholder such as "[Geburtsdatum 1]" (#55) is never cut in half.
+    if title.rfind('[') > title.rfind(']')
+        && let Some(close) = line.chars().skip(60).take(24).position(|c| c == ']')
+    {
+        title = line.chars().take(61 + close).collect();
+    }
+    if line.chars().count() > title.chars().count() {
         title.push('…');
     }
     title
@@ -711,6 +722,8 @@ mod tests {
     #[test]
     fn title_is_first_nonempty_line_capped() {
         assert_eq!(title_from("\n  Hallo Welt \nmehr"), "Hallo Welt");
+        let t = title_from("Schreib eine Zeugnisbemerkung für [S1] [N1] (geb. [Geburtsdatum 1]): mehr Text");
+        assert!(t.ends_with("[Geburtsdatum 1]…"), "{t}");
         assert_eq!(title_from(""), "Neuer Chat");
         let long = "ä".repeat(80);
         assert_eq!(title_from(&long).chars().count(), 61);

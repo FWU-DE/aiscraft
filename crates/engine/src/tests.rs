@@ -1048,7 +1048,7 @@ fn links_on_messages() {
 #[test]
 fn every_command_has_a_functional_test() {
     // The learning-app/worksheet tests and the attachment tests live in their own files.
-    let src = concat!(include_str!("tests.rs"), include_str!("learn_tests.rs"), include_str!("attach/tests.rs"));
+    let src = concat!(include_str!("tests.rs"), include_str!("learn_tests.rs"), include_str!("attach/tests.rs"), include_str!("privacy/tests.rs"));
     // The panic hunt touches every command; count only calls outside it.
     let hunt_start = src.find("fn panic_hunt_every_command_with_hostile_params").unwrap_or(0);
     let hunt_end = src[hunt_start..].find("\n}\n").map(|e| hunt_start + e).unwrap_or(hunt_start);

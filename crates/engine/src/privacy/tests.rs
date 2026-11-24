@@ -1,0 +1,244 @@
+//! „Namen schützen“ (#55) end to end: class lists, preview, sending, translating back.
+
+use std::sync::{Arc, Mutex};
+
+use serde_json::{Value, json};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+use super::detect::{Found, Kind};
+use super::*;
+use crate::{Engine, Options};
+
+/// An OpenAI-compatible server that records every request and streams `chunks` as the answer,
+/// so placeholders can be cut across chunk boundaries.
+fn chunked_openai(engine: &Engine, chunks: &'static [&'static str]) -> (String, Arc<Mutex<Vec<String>>>) {
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let seen2 = seen.clone();
+    let url = engine.block_on(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let seen = seen2.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = vec![0u8; 1 << 16];
+                    loop {
+                        let k = sock.read(&mut chunk).await.unwrap_or(0);
+                        if k == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..k]);
+                        let s = String::from_utf8_lossy(&buf).to_string();
+                        if let Some(h) = s.find("\r\n\r\n") {
+                            let len = s[..h]
+                                .lines()
+                                .find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                                .unwrap_or(0);
+                            if buf.len() >= h + 4 + len {
+                                break;
+                            }
+                        }
+                    }
+                    let req = String::from_utf8_lossy(&buf).to_string();
+                    seen.lock().unwrap().push(req.clone());
+                    if req.starts_with("GET") {
+                        let body = r#"{"data":[{"id":"m","context_length":100000}]}"#;
+                        let head = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", body.len());
+                        let _ = sock.write_all(format!("{head}{body}").as_bytes()).await;
+                        return;
+                    }
+                    let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
+                    for part in chunks {
+                        let c = json!({"choices":[{"delta":{"content": part}}]});
+                        let _ = sock.write_all(format!("data: {c}\n\n").as_bytes()).await;
+                        let _ = sock.flush().await;
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    }
+                    let _ = sock.write_all(b"data: [DONE]\n\n").await;
+                });
+            }
+        });
+        format!("http://{addr}/v1")
+    });
+    (url, seen)
+}
+
+fn engine_with(chunks: &'static [&'static str]) -> (Engine, Arc<Mutex<Vec<String>>>) {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let (url, seen) = chunked_openai(&engine, chunks);
+    let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    (engine, seen)
+}
+
+fn posted(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+    seen.lock().unwrap().iter().filter(|r| r.starts_with("POST")).cloned().collect()
+}
+
+/// Real names, contact data and the bank account of the made-up class.
+const SECRETS: &[&str] = &["Lea", "Müller", "Jonas", "Schmidt", "lea.mueller@example.org", "0171 2345678", "DE89 3704 0044 0532 0130 00", "Lindenstraße 5"];
+
+/// Quality gate (AGENTS.md §6): with protection on, no real name or contact detail is in any
+/// byte the backend receives — not in the message, not in an attached document, not in memory,
+/// not in the system prompt, not in later rounds — and the answer shows the names again.
+#[test]
+fn no_real_name_reaches_the_backend() {
+    let (engine, seen) = engine_with(&["[S1]s Arbeit ist gut. [S", "2] [N", "2] hilft [S1] gern. Mail an [E-Mail 1]."]);
+    // Without a class list protection is off by default.
+    assert!(!active(engine.ctx(), &engine.state().selection.sources, None));
+    let added = engine.call("privacy.list_add", json!({"name": "7b", "text": "Lea Müller\nSchmidt, Jonas\nMark Hoffmann"})).unwrap();
+    assert_eq!(added["count"], 3);
+    assert_eq!(engine.state().privacy.lists[0].count, 3);
+    assert!(!serde_json::to_string(&*engine.state()).unwrap().contains("Müller"), "the state agents read has no names");
+    engine.call("memory.add", json!({"text": "Lea Müller braucht mehr Zeit bei Tests", "area": "about"})).unwrap();
+
+    let dir = std::env::temp_dir().join(format!("aiscraft-privacy-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let notes = dir.join("notizen.txt");
+    std::fs::write(&notes, "Elternkontakt Jonas Schmidt: 0171 2345678, lea.mueller@example.org, Lindenstraße 5, 10115 Berlin").unwrap();
+
+    let text = "Schreib eine Zeugnisbemerkung für Lea Müller (geb. 03.05.2014). Leas Mitarbeit ist gut, Jonas hilft ihr. \
+                Das Mark der Sache: IBAN DE89 3704 0044 0532 0130 00.";
+    // The preview shows exactly what goes out; "Mark" is unsure and stays until confirmed.
+    let pv = engine.call("privacy.preview", json!({"text": text})).unwrap();
+    assert_eq!(pv["active"], true);
+    let out = pv["outgoing"].as_str().unwrap();
+    assert!(out.starts_with("Schreib eine Zeugnisbemerkung für [S1] [N1] (geb. [Geburtsdatum 1]). [S1]s Mitarbeit ist gut, [S2] hilft ihr."), "{out}");
+    assert!(out.contains("Das Mark der Sache: IBAN [IBAN 1]."), "{out}");
+    let mark = pv["hits"].as_array().unwrap().iter().find(|h| h["text"] == "Mark").unwrap();
+    assert_eq!((mark["ambiguous"].as_bool(), mark["on"].as_bool()), (Some(true), Some(false)));
+    assert!(engine.state().privacy.preview.as_ref().is_some_and(|p| p.outgoing == out));
+    // Switching a hit off keeps it; nothing of the preview is kept in the chat.
+    let off = engine.call("privacy.preview", json!({"text": text, "off": [{"text": "Jonas", "n": 0}]})).unwrap();
+    assert!(off["outgoing"].as_str().unwrap().contains("Jonas hilft"));
+
+    engine.call("chat.send", json!({"text": text, "files": [notes.display().to_string()]})).unwrap();
+    engine.call("chat.send", json!({"text": "Und noch ein Satz zu Jonas Schmidt bitte."})).unwrap();
+    let reqs = posted(&seen);
+    assert_eq!(reqs.len(), 2);
+    for r in &reqs {
+        for s in SECRETS {
+            assert!(!r.contains(s), "„{s}“ reached the backend: {}", r[r.find("\r\n\r\n").unwrap_or(0)..].chars().take(1500).collect::<String>());
+        }
+        assert!(r.contains("[S1]") && r.contains("Platzhalter in eckigen Klammern"), "placeholders and the note go along");
+    }
+    assert!(reqs[1].contains("[S2] [N2]"), "the same pupil keeps the same placeholder");
+
+    // Stored: what the backend saw. Shown, copied, exported: the names.
+    let s = engine.state();
+    assert!(s.messages[0].content.contains("[S1] [N1]") && !s.messages[0].content.contains("Müller"));
+    assert_eq!(s.messages[0].activity.iter().find(|a| a.label == PROTECTED).and_then(|a| a.detail.clone()).as_deref(), Some("11 Angaben ersetzt"));
+    assert!(s.messages[0].attachments[0].text.as_deref().unwrap_or("").contains("[Telefon 1]"));
+    let shown = engine.shown_messages(&s);
+    assert!(shown[0].content.starts_with("Schreib eine Zeugnisbemerkung für Lea Müller (geb. 03.05.2014). Leas Mitarbeit"));
+    assert_eq!(shown[1].content, "Leas Arbeit ist gut. Jonas Schmidt hilft Lea gern. Mail an lea.mueller@example.org.");
+    let md = engine.call("chat.export", json!({"format": "markdown"})).unwrap();
+    assert!(md["text"].as_str().unwrap().contains("Jonas Schmidt hilft Lea gern"));
+    let raw = engine.call("chat.export", json!({"format": "json"})).unwrap();
+    assert!(!raw["text"].as_str().unwrap().contains("Müller"), "the diagnostic export has no mapping");
+    let map = engine.call("privacy.mapping", json!({})).unwrap();
+    assert!(map["entries"].as_array().unwrap().iter().any(|e| e["placeholder"] == "[N1]" && e["original"] == "Müller"));
+    assert_eq!(engine.call("privacy.reveal", json!({"text": "[S2] [N2]"})).unwrap()["text"], "Jonas Schmidt");
+
+    // Confirming "Mark" in the preview replaces it, here and from then on.
+    engine.call("chat.send", json!({"text": "Mark kommt auch.", "privacy": {"on": [{"text": "Mark", "n": 0}], "add": ["Frau Özdemir"]}})).unwrap();
+    engine.call("chat.send", json!({"text": "Grüße an Mark und Frau Özdemir"})).unwrap();
+    let last = posted(&seen).pop().unwrap();
+    assert!(!last.contains("Mark kommt") && !last.contains("Özdemir") && last.contains("[Name 1]"), "{last}");
+
+    // Switched off for this chat: the text goes out as written.
+    engine.call("chat.set_sources", json!({"protect": false})).unwrap();
+    engine.call("chat.send", json!({"text": "Ohne Schutz: Lea"})).unwrap();
+    assert!(posted(&seen).pop().unwrap().contains("Ohne Schutz: Lea"));
+    engine.call("chat.set_sources", json!({"protect": null})).unwrap();
+
+    // Deleting the chat deletes its mapping.
+    let conv = engine.state().current.clone().unwrap();
+    engine.call("chat.delete", json!({"id": conv})).unwrap();
+    assert!(mapping(engine.ctx(), &conv).entries.is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Model calls outside a chat (revising a document, tidying memory) are protected too.
+#[test]
+fn single_calls_are_protected_and_translated_back() {
+    let (engine, seen) = engine_with(&["Für [S1]: ", "alles gut."]);
+    engine.call("privacy.list_add", json!({"text": "Lea Müller"})).unwrap();
+    let out = engine.block_on(crate::chat::complete(engine.ctx(), Some("Du hilfst Lea Müller."), "Überarbeite: Lea war krank.")).unwrap();
+    assert_eq!(out, "Für Lea: alles gut.");
+    assert!(posted(&seen).iter().all(|r| !r.contains("Lea") && !r.contains("Müller")));
+}
+
+/// Class lists come from CSV, Excel, OpenDocument-like sheets and contacts; for one project or all.
+#[test]
+fn class_lists_import_and_remove() {
+    let (engine, _) = engine_with(&["ok"]);
+    let dir = std::env::temp_dir().join(format!("aiscraft-lists-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let csv = dir.join("7b.csv");
+    std::fs::write(&csv, "Nachname;Vorname\nMüller;Lea\nSchmidt;Jonas\n").unwrap();
+    let r = engine.call("privacy.list_import", json!({"path": csv.display().to_string()})).unwrap();
+    assert_eq!(r["count"], 2);
+    let vcf = dir.join("eltern.vcf");
+    std::fs::write(&vcf, "BEGIN:VCARD\r\nVERSION:3.0\r\nN:Yilmaz;Emre;;;\r\nFN:Emre Yilmaz\r\nEND:VCARD\r\n").unwrap();
+    let pid = engine.call("project.create", json!({"name": "Klasse 8a"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("privacy.list_import", json!({"path": vcf.display().to_string(), "project": pid})).unwrap();
+    let xlsx = dir.join("8a.xlsx");
+    let bytes =
+        crate::office::xlsx::workbook_xlsx(&json!({"sheets": [{"columns": ["Vorname", "Nachname"], "rows": [["Ada", "Lovelace"], ["Max", "Planck"]]}]}))
+            .unwrap();
+    std::fs::write(&xlsx, bytes).unwrap();
+    assert_eq!(engine.call("privacy.list_import", json!({"path": xlsx.display().to_string(), "name": "8a"})).unwrap()["count"], 2);
+    let lists = engine.call("privacy.lists", json!({})).unwrap();
+    assert_eq!(lists.as_array().unwrap().len(), 3);
+    assert!(lists[0]["names"].as_array().unwrap().iter().any(|n| n == "Lea Müller"));
+    // The project's list counts only in the project's chats.
+    let s = engine.state();
+    assert!(active(engine.ctx(), &s.selection.sources, Some(&pid)));
+    let people = people_for(engine.ctx(), None);
+    assert!(!people.iter().any(|p| p.last == "Yilmaz"));
+    assert!(people_for(engine.ctx(), Some(&pid)).iter().any(|p| p.last == "Yilmaz"));
+    assert!(engine.call("privacy.list_import", json!({"path": dir.join("x.pdf").display().to_string()})).is_err());
+    std::fs::write(dir.join("leer.csv"), "\n\n").unwrap();
+    assert!(engine.call("privacy.list_import", json!({"path": dir.join("leer.csv").display().to_string()})).is_err());
+    for l in lists.as_array().unwrap() {
+        engine.call("privacy.list_remove", json!({"id": l["id"]})).unwrap();
+    }
+    assert!(engine.state().privacy.lists.is_empty());
+    assert!(engine.call("privacy.list_remove", json!({"id": "weg"})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+fn found(kind: Kind, key: &str, display: &str) -> Found {
+    Found { start: 0, end: 0, kind, key: key.into(), display: display.into(), ambiguous: false }
+}
+
+#[test]
+fn placeholders_are_stable_and_stream_back_without_flashing() {
+    let mut m = Mapping::default();
+    assert_eq!(m.placeholder_for(&found(Kind::FirstName, "p:lea|müller", "Lea")), "[S1]");
+    assert_eq!(m.placeholder_for(&found(Kind::FirstName, "p:jonas|schmidt", "Jonas")), "[S2]");
+    assert_eq!(m.placeholder_for(&found(Kind::LastName, "p:lea|müller", "Müller")), "[N1]");
+    assert_eq!(m.placeholder_for(&found(Kind::FirstName, "p:lea|müller", "Lea")), "[S1]");
+    assert_eq!(m.placeholder_for(&found(Kind::Email, "a@b.de", "a@b.de")), "[E-Mail 1]");
+    assert_eq!(m.reveal("[S1] [N1], [S2]; [S3] [x] [E-Mail 1]"), "Lea Müller, Jonas; [S3] [x] a@b.de");
+    // A placeholder cut off at the end of a chunk waits; other brackets do not.
+    assert_eq!(m.reveal_streaming("Gut, [S"), "Gut, ");
+    assert_eq!(m.reveal_streaming("Gut, [E-Ma"), "Gut, ");
+    assert_eq!(m.reveal_streaming("Gut, [x"), "Gut, [x");
+    assert_eq!(m.reveal_streaming("Gut, [S1]"), "Gut, Lea");
+    assert_eq!(m.reveal("ü[ä[S1]"), "ü[äLea");
+    let v = json!({"title": "Zeugnis [S1]", "rows": [["[N1]", 2]]});
+    let mut walked = v.clone();
+    if let Value::Object(o) = &mut walked {
+        o.insert("title".into(), json!(m.reveal("Zeugnis [S1]")));
+    }
+    assert_eq!(walked["title"], "Zeugnis Lea");
+    let d = Decisions::from_value(Some(&json!({"off": [{"text": "LEA", "n": 1}], "add": ["x", "Frau Özdemir", 5]})));
+    assert_eq!(d.off, vec![("lea".to_string(), 1)]);
+    assert_eq!(d.add, vec!["Frau Özdemir".to_string()]);
+}
