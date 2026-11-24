@@ -689,10 +689,6 @@ pub(crate) fn export_for(c: &Ctx, a: &Artifact, p: &Value) -> Option<Result<Valu
             "html" => app_of(c, &a.id).map(|(_, h)| with_csp(&h).into_bytes()),
             other => Err(Error::invalid(format!("Format {other} gibt es für Lern-Apps nicht (html)"))),
         },
-        ArtifactKind::Worksheet if format.as_deref() == Some("h5p") => worksheet_of(c, &a.id).and_then(|(_, ws, _)| {
-            let (h, _) = aiscraft_core::h5p::from_worksheet(&ws);
-            h5p::package_bytes(c, &h).map(|(b, _)| b)
-        }),
         ArtifactKind::Worksheet => {
             worksheet_of(c, &a.id).and_then(|(_, ws, _)| worksheet_bytes(&ws, format.as_deref().unwrap_or("pdf"), variant(p)).map(|(b, _)| b))
         }

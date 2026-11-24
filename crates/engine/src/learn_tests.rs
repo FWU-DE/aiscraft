@@ -534,39 +534,6 @@ fn h5p_with_tools() {
     assert!(crate::learn::run_tool(engine.ctx(), "h5p_create", &json!({"h5p": "{\"tasks\": []}"})).unwrap().is_err());
 }
 
-/// A worksheet becomes H5P: the tasks H5P has, the others named; as an artifact or a file.
-#[test]
-fn worksheet_saved_as_h5p() {
-    let engine = routed_engine();
-    let ws = engine.call("worksheet.create", json!({"worksheet": sheet_json()})).unwrap()["id"].as_str().unwrap().to_string();
-    let out = engine.call("h5p.from_worksheet", json!({"id": ws})).unwrap();
-    let not_mapped: Vec<String> = serde_json::from_value(out["not_mapped"].clone()).unwrap();
-    // choice, true_false, numeric map; the cloze has only answers with a slash ("2/4" and "0,5"
-    // stays), free text does not.
-    assert_eq!(out["tasks"], 4, "{out}");
-    assert_eq!(not_mapped.len(), 1, "{not_mapped:?}");
-    assert!(not_mapped[0].starts_with("Aufgabe 5 (Freier Text)"));
-    let h5p_id = out["id"].as_str().unwrap();
-    assert_eq!(engine.state().artifacts.iter().find(|a| a.id == h5p_id).unwrap().title, "Bruchrechnung");
-    let dir = tmp_dir("ws-h5p");
-    let path = dir.join("a.h5p");
-    let out = engine.call("h5p.from_worksheet", json!({"id": ws, "path": path.display().to_string()})).unwrap();
-    assert_eq!(out["tasks"], 4);
-    let (meta, content, _) = unzip_h5p(&std::fs::read(&path).unwrap());
-    assert_eq!(meta["mainLibrary"], "H5P.QuestionSet");
-    assert_eq!(content["questions"][2]["params"]["questions"][0], "<p>1/2 = *0,5*</p>", "only the answer H5P can check");
-    assert_eq!(content["questions"][3]["params"]["questions"][0], "<p>Kehrwert von 4 als Dezimalzahl *0,25/0.25*</p>");
-    assert!(!decode(&engine.call("artifact.export", json!({"id": ws, "format": "h5p"})).unwrap()).is_empty());
-    let doc = engine.call("artifact.create", json!({"kind": "document", "content": "x"})).unwrap()["id"].as_str().unwrap().to_string();
-    assert!(engine.call("h5p.from_worksheet", json!({"id": doc})).is_err());
-    let only_free = engine.call("worksheet.create", json!({"worksheet": {"tasks": [{"type": "free_text", "prompt": "Erkläre"}]}})).unwrap()["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(engine.call("h5p.from_worksheet", json!({"id": only_free})).unwrap_err().message.contains("Freier Text"));
-    let _ = std::fs::remove_dir_all(dir);
-}
-
 fn package(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut w = craft_zip::Writer::new();
     for (n, d) in entries {

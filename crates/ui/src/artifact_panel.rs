@@ -189,7 +189,7 @@ impl AisCraftApp {
                         let formats: &[(&str, &str)] = match meta.kind {
                             ArtifactKind::Board => &[("markdown", "md"), ("json", "json")],
                             ArtifactKind::App => &[("html", "html")],
-                            ArtifactKind::Worksheet => &[("pdf", "pdf"), ("docx", "docx"), ("json", "json"), ("h5p", "h5p")],
+                            ArtifactKind::Worksheet => &[("pdf", "pdf"), ("docx", "docx"), ("json", "json")],
                             ArtifactKind::H5p => &[("h5p", "h5p"), ("json", "json")],
                             ArtifactKind::Document => &[("markdown", "md"), ("html", "html"), ("docx", "docx"), ("pdf", "pdf")],
                         };
@@ -205,8 +205,6 @@ impl AisCraftApp {
                                     self.save_if_dirty();
                                     let path = path.display().to_string();
                                     match (meta.kind, *ext) {
-                                        // Names the tasks H5P cannot express.
-                                        (ArtifactKind::Worksheet, "h5p") => self.run("h5p.from_worksheet", json!({"id": meta.id, "path": path})),
                                         (ArtifactKind::H5p, "h5p") => self.run("h5p.export", json!({"id": meta.id, "path": path})),
                                         _ => self.run("artifact.export", json!({"id": meta.id, "format": f, "path": path})),
                                     }
@@ -243,12 +241,6 @@ impl AisCraftApp {
                     {
                         self.save_if_dirty();
                         self.run("worksheet.from_document", json!({"id": meta.id}));
-                    }
-                    if meta.kind == ArtifactKind::Worksheet
-                        && ui.button("Als H5P").on_hover_text("Die Aufgaben als H5P-Inhalt öffnen; was H5P nicht abbilden kann, wird genannt").clicked()
-                    {
-                        self.save_if_dirty();
-                        self.run("h5p.from_worksheet", json!({"id": meta.id}));
                     }
                     let mut attach = self.attach_artifact;
                     if ui.toggle_value(&mut attach, "Im Chat").on_hover_text("Inhalt bei der nächsten Nachricht als Kontext mitschicken").changed() {

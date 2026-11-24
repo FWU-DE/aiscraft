@@ -119,7 +119,7 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 **H5P** sind interaktive Übungen, die Lernplattformen wie Moodle, Mebis oder ByCS direkt abspielen. AIS.ChatCraft legt H5P-Inhalte als eigene Art neben Dokument, Whiteboard, Arbeitsblatt und Lern-App an und speichert sie als `.h5p`-Datei, die du in der Lernplattform hochlädst.
 
-**Erstellen:** Thema ins Eingabefeld schreiben und **Erstellen** › **H5P-Quiz** wählen. Mit AIS.chat kommt die Antwort als ```` ```aiscraft-h5p ````-Block mit einer Karte „Als H5P öffnen“; Modelle mit Werkzeugen legen den Inhalt direkt an. Aus einem Arbeitsblatt wird mit **Als H5P** oben (öffnet einen H5P-Inhalt) oder ⬇ › **Als H5P (.h5p)** (speichert gleich die Datei) ein H5P-Quiz.
+**Erstellen:** Thema ins Eingabefeld schreiben und **Erstellen** › **H5P-Quiz** wählen. Mit AIS.chat kommt die Antwort als ```` ```aiscraft-h5p ````-Block mit einer Karte „Als H5P öffnen“; Modelle mit Werkzeugen legen den Inhalt direkt an.
 
 **Welche Aufgaben:** Multiple Choice (H5P.MultiChoice), Richtig oder falsch (H5P.TrueFalse), Lückentext zum Eintippen (H5P.Blanks) und Wörter in Lücken ziehen (H5P.DragText). Mehrere Aufgaben oder eine Einleitung werden ein Quiz (H5P.QuestionSet). Kurze Antworten und Zahlen aus Arbeitsblättern werden Lückentexte mit einer Lücke; Zahlen prüft H5P ohne Toleranz. Zuordnen, Reihenfolge, In Gruppen sortieren, freie Texte und Info-Texte hat H5P so nicht: AIS.ChatCraft nennt sie und lässt sie weg. Lösungen mit `/`, `:` oder `*` kann H5P nicht prüfen. Was beim Speichern verloren geht (Tipps, Toleranzen), steht unter den Aufgaben.
 

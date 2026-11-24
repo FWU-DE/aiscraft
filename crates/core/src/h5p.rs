@@ -277,29 +277,6 @@ pub fn apply_worksheet(h: &mut H5p, ws: &Worksheet) {
     h.tasks = ws.tasks.clone();
 }
 
-/// A worksheet as H5P content: the tasks H5P can express, and for each other one a line that
-/// says which and why ("Aufgabe 4 (Zuordnen): …").
-pub fn from_worksheet(ws: &Worksheet) -> (H5p, Vec<String>) {
-    let mut tasks = Vec::new();
-    let mut not_mapped = Vec::new();
-    let mut number = 0;
-    for t in &ws.tasks {
-        if !matches!(t.body, TaskBody::Info { .. }) {
-            number += 1;
-        }
-        let name = if matches!(t.body, TaskBody::Info { .. }) { "Info-Text".to_string() } else { format!("Aufgabe {number}") };
-        match library_for(&t.body) {
-            Ok(_) => match question(t) {
-                Ok(_) => tasks.push(t.clone()),
-                Err(why) => not_mapped.push(format!("{name} ({}): {why}", t.body.label())),
-            },
-            Err(why) => not_mapped.push(format!("{name} ({}): {why}", t.body.label())),
-        }
-    }
-    let h = H5p { title: ws.title.clone(), intro: ws.instructions.clone(), tasks, ..H5p::default() };
-    (h, not_mapped)
-}
-
 /// A short, stable hash of what a person can edit (title, intro, tasks).
 pub fn fingerprint(h: &H5p) -> String {
     let src = serde_json::to_string(&(&h.title, &h.intro, &h.tasks)).unwrap_or_default();
@@ -1000,25 +977,6 @@ mod tests {
         assert_eq!(b.content["questions"][0]["params"]["questions"][0], "<p>Hauptstadt von Frankreich? *Paris*</p>");
         assert_eq!(b.content["questions"][1]["params"]["questions"][0], "<p>Wie lang? *2,5/2.5* cm</p>");
         assert!(b.notes.iter().any(|n| n.contains("Toleranz")));
-    }
-
-    #[test]
-    fn worksheet_tasks_are_mapped_or_named() {
-        let (ws, _) = worksheet::from_value(&json!({"title": "Tiere", "instructions": "Los geht's", "tasks": [
-            {"type": "info", "text": "Lies"},
-            {"type": "choice", "prompt": "Säugetier?", "options": [{"text": "Wal", "correct": true}, {"text": "Hai"}]},
-            {"type": "categorize", "prompt": "Sortiere", "categories": [{"name": "A", "items": ["x"]}, {"name": "B", "items": ["y"]}]},
-            {"type": "cloze", "prompt": "Ergänze", "text": "Nur [[a/b]]."},
-            {"type": "free_text", "prompt": "Erkläre", "sample": "…"}
-        ]}))
-        .unwrap();
-        let (h, not_mapped) = from_worksheet(&ws);
-        assert_eq!(h.tasks.len(), 1);
-        assert_eq!(h.intro, "Los geht's");
-        assert_eq!(not_mapped.len(), 4, "{not_mapped:?}");
-        assert!(not_mapped[0].starts_with("Info-Text"));
-        assert!(not_mapped[1].starts_with("Aufgabe 2 (In Gruppen sortieren)"));
-        assert!(not_mapped[2].starts_with("Aufgabe 3 (Lückentext)") && not_mapped[2].contains("/"));
     }
 
     #[test]

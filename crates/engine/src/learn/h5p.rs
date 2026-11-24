@@ -418,15 +418,6 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         run: |c, p| Box::pin(open_file(c, p)),
     },
     CommandSpec {
-        id: "h5p.from_worksheet",
-        label: "Arbeitsblatt als H5P speichern",
-        group: "H5P",
-        shortcut: None,
-        params: "id: string (ein Arbeitsblatt), path?: string (dann als .h5p-Datei speichern, sonst als H5P-Inhalt öffnen)",
-        palette: false,
-        run: |c, p| Box::pin(from_worksheet(c, p)),
-    },
-    CommandSpec {
         id: "h5p.update_task",
         label: "H5P-Aufgabe ändern",
         group: "H5P",
@@ -563,32 +554,6 @@ async fn open_file(c: Ctx, p: Value) -> Result<Value> {
         c.notice(NoticeLevel::Info, format!("{}: AIS.ChatCraft zeigt, was im Paket ist, und speichert es unverändert.", pkg.main_library));
     }
     Ok(json!({"id": id, "editable": supported, "main_library": pkg.main_library, "tasks": h.tasks.len(), "files": pkg.files}))
-}
-
-async fn from_worksheet(c: Ctx, p: Value) -> Result<Value> {
-    let id = req_str(&p, "id")?;
-    let (a, ws, _) = super::worksheet_of(&c, &id)?;
-    let (h, not_mapped) = h5p::from_worksheet(&ws);
-    if h.tasks.is_empty() {
-        return Err(Error::invalid(format!(
-            "Keine Aufgabe dieses Arbeitsblatts lässt sich als H5P abbilden ({})",
-            not_mapped.iter().take(3).cloned().collect::<Vec<_>>().join("; ")
-        )));
-    }
-    let skipped = if not_mapped.is_empty() { String::new() } else { format!(" Nicht übernommen: {}", not_mapped.join("; ")) };
-    if let Some(path) = opt_str(&p, "path") {
-        let (bytes, notes) = package_bytes(&c, &h)?;
-        let out = write_out(&c, &bytes, Some(path))?;
-        if !not_mapped.is_empty() {
-            c.notice(NoticeLevel::Warning, format!("Als H5P gespeichert ({} Aufgaben).{skipped}", h.tasks.len()));
-        }
-        return Ok(json!({"path": out.get("path"), "tasks": h.tasks.len(), "not_mapped": not_mapped, "notes": notes}));
-    }
-    let new_id = create_h5p(&c, &h, Some(a.title.clone()), a.conversation_id.clone())?;
-    if !not_mapped.is_empty() {
-        c.notice(NoticeLevel::Warning, format!("H5P-Inhalt mit {} Aufgaben angelegt.{skipped}", h.tasks.len()));
-    }
-    Ok(json!({"id": new_id, "tasks": h.tasks.len(), "not_mapped": not_mapped}))
 }
 
 async fn update_task(c: Ctx, p: Value) -> Result<Value> {
