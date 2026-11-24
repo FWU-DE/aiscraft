@@ -16,7 +16,8 @@
 //! prompts with "Parabel"), with a catalogue of placeholder portraits for the "Entdecken" page
 //! (`["ui.show", {"what": "personas"}]`, `{"what": "persona:character:c1"}` for one entry;
 //! `persona.favorite` works against it;
-//! `["ui.wait", {"ms": 1500}]` lets the pictures arrive). `--theme light|dark|omarchy`.
+//! `["ui.wait", {"ms": 1500}]` lets the pictures arrive; `["ui.drop", {"paths": [..]}]` drops
+//! files on the window). `--theme light|dark|omarchy`.
 //! `--demo-update` hands the update check a made-up newer release (no request to GitHub) and
 //! checks, so the hint shows (`["ui.show", {"what": "about"}]` for the settings part).
 //! The engine runs in memory; nothing touches your real data.
@@ -528,6 +529,11 @@ fn main() {
                 harness.step();
                 std::thread::sleep(Duration::from_millis(50));
             }
+        } else if cmd == "ui.drop" {
+            // Files dropped on the window: {"paths": ["/tmp/Brief.doc"]} (attachment chips).
+            for p in params["paths"].as_array().into_iter().flatten().filter_map(|p| p.as_str()) {
+                harness.input_mut().dropped_files.push(std::sync::Arc::new(ScriptFile(p.into())));
+            }
         } else if cmd == "ui.type" {
             harness.event(egui::Event::Text(params["text"].as_str().unwrap_or("").into()));
         } else if let Some(c) = cmd.strip_prefix("dispatch:") {
@@ -552,4 +558,17 @@ fn main() {
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     println!("wrote {out} ({}×{})", img.width(), img.height());
+}
+
+/// A file "dropped" by `ui.drop`.
+#[derive(Debug)]
+struct ScriptFile(std::path::PathBuf);
+
+impl egui::DroppedFile for ScriptFile {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
 }

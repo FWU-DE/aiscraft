@@ -52,6 +52,10 @@ pub struct State {
     /// `backend/kind/id`: the cached file, or `None` when there is none (or it failed).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub persona_pictures: BTreeMap<String, Option<String>>,
+    /// Files in the composer, by path: what will be sent (converted, pages picked, location
+    /// removed) or why not. Filled by `attachment.prepare`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attachments: BTreeMap<String, crate::attach::AttachmentPreview>,
     /// The update check: running version, what the last check found.
     #[serde(default)]
     pub update: UpdateState,

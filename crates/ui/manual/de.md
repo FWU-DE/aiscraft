@@ -42,7 +42,7 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 - **Neu erzeugen:** „Neu erzeugen“ unter der letzten Antwort oder Strg+R.
 - **Bearbeiten:** über einer eigenen Nachricht auf das Stift-Symbol; alles danach wird neu erzeugt.
 - **Fassungen:** Nach Bearbeiten oder Neu erzeugen bleibt die vorige Fassung erhalten. Mit **‹ 1/2 ›** an der Nachricht (bei Antworten über dem Text) wechselst du zwischen ihnen; was danach kam, wechselt mit. Das Modell, die Suche und der Export sehen nur die gezeigte Fassung. Bei AIS.chat gibt es die Fassungen nur in AIS.ChatCraft: Der Server führt einen eigenen Verlauf, in dem Neu erzeugen die letzte Antwort ersetzt und eine bearbeitete Nachricht hinzukommt; ‹ › ändert daran nichts.
-- **Anhänge:** Büroklammer oder Dateien ins Fenster ziehen. Bilder und PDFs gehen an Modelle, die sie lesen können; Textdateien werden mitgeschickt.
+- **Anhänge:** Büroklammer oder Dateien ins Fenster ziehen. Bilder und PDFs gehen an Modelle, die sie lesen können; Textdateien werden mitgeschickt. Für AIS.chat siehe „Dateien für AIS.chat“.
 - **Diktieren:** Mikrofon im Eingabefeld. Der Text landet im Eingabefeld, du schickst ihn selbst ab. Braucht einen OpenAI-kompatiblen Dienst mit Transkription.
 - **Vorlesen:** „Vorlesen“ unter einer Antwort. Nutzt AIS.chat, wenn du dort angemeldet bist.
 - **Links prüfen:** „Links prüfen“ unter einer Antwort fragt jede Adresse darin einmal an (höchstens 20). Tote Links stehen durchgestrichen unter der Antwort. Adressen im lokalen Netz fragt AIS.ChatCraft nie an. Automatisch für jede Antwort: Einstellungen › Fähigkeiten & Hinweise (standardmäßig aus, weil dabei fremde Seiten kontaktiert werden).
@@ -181,6 +181,17 @@ Dafür geht eine anonyme Anfrage an `api.github.com` (die Releases von FWU-DE/ai
 | Strg+Umschalt+E | Chat exportieren |
 | F1 | Dieses Handbuch |
 | Enter / Umschalt+Enter | Senden / neue Zeile |
+
+## Dateien für AIS.chat
+
+AIS.chat nimmt nur csv, docx, htm, html, md, odp, ods, odt, pdf, pptx, tex, txt, xlsx und Bilder (jpg, png, svg, webp) an, höchstens 20 MB pro Datei und fünf Bilder pro Chat. AIS.ChatCraft bereitet deine Dateien deshalb auf deinem Gerät vor, bevor sie hochgehen. Was passiert, steht auf dem Anhang, bevor du sendest.
+
+- **Umwandeln:** Alte Word-, Excel- und PowerPoint-Dateien (.doc, .xls, .ppt), RTF, E-Books (.epub), E-Mails (.eml, .mbox), Kalender (.ics) und Kontakte (.vcf) gehen als Markdown-Datei hoch, eine einzelne Tabelle als CSV, iPhone-Fotos (HEIC) und AVIF als JPEG. Code und andere Textdateien gehen als .txt. Die Datei wird hochgeladen, nicht in die Nachricht eingefügt: So kostet sie nicht bei jeder Antwort Token-Punkte.
+- **Fotos:** Standort, Kameradaten und andere Metadaten bleiben auf dem Gerät; Fotos werden auf 1000 Pixel verkleinert (das macht AIS.chat ohnehin). Auf dem Anhang steht dann „Standortdaten entfernt“.
+- **Nur einen Teil senden:** Bei PDFs, Tabellen und Präsentationen trägst du auf dem Anhang ein, was mitgehen soll: „Nur Seiten 3-7“ (auch „1, 4, 6-8“), „Nur Blatt Noten“ (Name oder Nummer, geht als CSV) oder „Nur Folien 2-5“ (geht als Markdown). Weniger Daten verlassen das Gerät.
+- **Geht nicht:** Dateien mit Passwort, kopiergeschützte E-Books und Typen, die AIS.chat nicht annimmt (z. B. .zip), meldet AIS.ChatCraft vor dem Senden mit einem Hinweis. Entferne den Passwortschutz zuerst.
+
+Andere Backends bekommen Dateien wie bisher; was sie gar nicht lesen könnten (etwa .doc), lesen sie als umgewandelten Text.
 
 ## Daten und Datenschutz
 

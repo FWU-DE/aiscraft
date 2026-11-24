@@ -38,6 +38,7 @@ pub fn commands() -> &'static [CommandSpec] {
         all.extend(crate::collab::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::office::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::learn::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::attach::COMMANDS.iter().map(CommandSpec::copy));
         all
     })
 }
@@ -63,15 +64,16 @@ static COMMANDS: &[CommandSpec] = &[
         "Senden",
         "Chat",
         Some("Enter"),
-        "text: string, files?: [path], artifact?: string (as context), force?: bool (past the monthly limit), aspect_ratio?: quadratic|landscape|portrait (image chats), links?: [url] (web pages, at most 5)",
+        "text: string, files?: [path | {path, range}], artifact?: string (as context), force?: bool (past the monthly limit), aspect_ratio?: quadratic|landscape|portrait (image chats), links?: [url] (web pages, at most 5)",
         false,
         |c, p| Box::pin(async move {
             let text = opt_str(&p, "text").unwrap_or_default();
             if let Some(r) = opt_str(&p, "aspect_ratio") {
                 set_aspect(&c, &r)?;
             }
+            // A file is a path, or {path, range} for only some pages, a sheet or some slides.
             let files: Vec<String> =
-                p.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                p.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| crate::attach::file_param(&c, v)).collect()).unwrap_or_default();
             let links: Vec<String> =
                 p.get("links").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
             chat::send_with(c, text, files, links, opt_str(&p, "artifact"), p.get("force").and_then(Value::as_bool).unwrap_or(false)).await
@@ -298,7 +300,9 @@ static COMMANDS: &[CommandSpec] = &[
         });
         Ok(out)
     })),
-    cmd!("persona.refresh", "Assistenten, Dialogpartner und Lernszenarien laden", "Backends", None, "backend?: string", true, |c, p| Box::pin(persona_refresh(c, p))),
+    cmd!("persona.refresh", "Assistenten, Dialogpartner und Lernszenarien laden", "Backends", None, "backend?: string", true, |c, p| Box::pin(
+        persona_refresh(c, p)
+    )),
     cmd!(
         "persona.start",
         "Chat mit Assistent, Dialogpartner oder Lernszenario",

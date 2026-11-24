@@ -740,6 +740,9 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                         ("200 OK", "application/javascript", reference(0x22, "getCharactersByFilterAction"))
                     } else if req.starts_with("GET /_next/static/chunks/scenarios.js") {
                         ("200 OK", "application/javascript", reference(0x33, "getLearningScenariosByFilterAction"))
+                    } else if req.starts_with("POST /api/v1/files") {
+                        rec.lock().unwrap().push(req.clone());
+                        ("200 OK", "application/json", r#"{"body":"{\"file_id\":\"file-up\"}","status":200}"#.to_string())
                     } else if req.starts_with("POST / ") {
                         rec.lock().unwrap().push(req.clone());
                         let body = if action == id(0x11) {
@@ -786,7 +789,7 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
     (base, posted)
 }
 
-fn ais_engine() -> (Engine, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+pub(crate) fn ais_engine() -> (Engine, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
     let (base, posted) = scripted_ais(&engine);
     engine.call("backend.update", json!({"id": "ais-chat", "base_url": base})).ok();
@@ -1018,8 +1021,8 @@ fn links_on_messages() {
 /// fails here.
 #[test]
 fn every_command_has_a_functional_test() {
-    // The learning-app and worksheet tests live in their own file, included below.
-    let src = format!("{}{}", include_str!("tests.rs"), include_str!("learn_tests.rs"));
+    // The learning-app/worksheet tests and the attachment tests live in their own files.
+    let src = concat!(include_str!("tests.rs"), include_str!("learn_tests.rs"), include_str!("attach/tests.rs"));
     // The panic hunt touches every command; count only calls outside it.
     let hunt_start = src.find("fn panic_hunt_every_command_with_hostile_params").unwrap_or(0);
     let hunt_end = src[hunt_start..].find("\n}\n").map(|e| hunt_start + e).unwrap_or(hunt_start);
