@@ -27,8 +27,10 @@ pub struct AisCraftApp {
     watcher: ThemeWatcher,
     pub(crate) md: egui_commonmark::CommonMarkCache,
     pub(crate) composer: String,
-    /// The next composer drawn is the start page's large one (Mutig, Glas).
+    /// The next composer drawn is the start page's large one (Modern, Glas).
     pub(crate) composer_big: bool,
+    /// Draw the next "Erstellen" menu as an icon (narrow composer).
+    pub(crate) create_as_icon: bool,
     pub(crate) pending_files: Vec<PathBuf>,
     /// Web links for the next message, and the address being typed (`Some` while the field is open).
     pub(crate) pending_links: Vec<String>,
@@ -83,7 +85,7 @@ const NARROW_WINDOW: f32 = 1000.0;
 pub(crate) const CONTENT_WIDTH: f32 = 760.0;
 
 /// The frames of sidebar, artifact panel and chat area for a look: flush panels (Klassisch,
-/// Mutig) or floating glass surfaces 12 px apart with radius 24 (Glas).
+/// Modern) or floating glass surfaces 12 px apart with radius 24 (Glas).
 struct PanelFrames {
     sidebar: Frame,
     sidebar_width: f32,
@@ -129,14 +131,14 @@ impl PanelFrames {
                     main: Frame::new().fill(t.main).stroke(Stroke::new(1.0, t.panel_stroke)).corner_radius(r).outer_margin(Margin::same(g)).shadow(shade(0x1a)),
                 }
             }
-            theme::Look::Mutig => Self {
+            theme::Look::Modern | theme::Look::Omarchy => Self {
                 // The gradient is painted by the sidebar itself (egui frames fill flat).
                 sidebar: Frame::new().inner_margin(side_margin),
                 sidebar_width: 268.0,
                 panel: Frame::new().fill(t.panel).inner_margin(Margin::ZERO),
                 main: Frame::new().fill(t.main),
             },
-            theme::Look::Classic | theme::Look::Omarchy => Self {
+            theme::Look::Classic => Self {
                 sidebar: Frame::new().fill(t.sidebar).inner_margin(Margin::symmetric(10, 12)),
                 sidebar_width: 272.0,
                 panel: Frame::new().fill(t.surface).inner_margin(Margin::ZERO),
@@ -161,10 +163,10 @@ impl AisCraftApp {
         let welcome = if first_run {
             Some(Dialog::Welcome { look_only: false })
         } else if !state.settings.look_chosen {
-            // The question starts on Mutig (kept in the person's scheme); Omarchy stays, it was a
+            // The question starts on Modern, like the system's scheme; Omarchy stays, it was a
             // deliberate choice. One click on "Klassisch" brings the earlier look back.
-            if let (theme::Look::Classic, mode) = theme::parse(&state.settings.theme) {
-                engine.dispatch("settings.set", json!({"key": "theme", "value": theme::setting(theme::Look::Mutig, mode)}));
+            if let (theme::Look::Classic, _) = theme::parse(&state.settings.theme) {
+                engine.dispatch("settings.set", json!({"key": "theme", "value": theme::setting(theme::Look::Modern, theme::Mode::System)}));
             }
             Some(Dialog::Welcome { look_only: true })
         } else {
@@ -180,6 +182,7 @@ impl AisCraftApp {
             md: Default::default(),
             composer: String::new(),
             composer_big: false,
+            create_as_icon: false,
             pending_files: Vec::new(),
             pending_links: Vec::new(),
             link_input: None,
@@ -242,7 +245,7 @@ impl AisCraftApp {
         self.engine.dispatch(cmd, params);
     }
 
-    /// Mutig and Glas draw code on their own background: load the matching syntax theme.
+    /// Modern and Glas draw code on their own background: load the matching syntax theme.
     fn register_code_theme(&mut self) {
         if let Some(xml) = self.tokens.code_theme_xml() {
             let name = self.tokens.code_theme();
@@ -623,7 +626,7 @@ impl eframe::App for AisCraftApp {
                 .size_range(320.0..=(w - 360.0).max(340.0))
                 .frame(frames.panel)
                 .show(ui, |ui| {
-                    if t.look == crate::theme::Look::Mutig {
+                    if t.flush_modern() {
                         // A soft shadow cast to the left onto the chat, and the hairline.
                         let r = ui.max_rect();
                         let shade =

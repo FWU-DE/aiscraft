@@ -232,7 +232,7 @@ impl AisCraftApp {
                 ui.add_space(12.0);
                 community_notice(ui, &t);
                 ui.add_space(16.0);
-                self.look_cards(ui, false);
+                self.look_cards(ui, true);
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
                     ui.label(crate::theme::semibold("Farbschema"));
@@ -694,7 +694,7 @@ impl AisCraftApp {
         keep
     }
 
-    /// Mutig and Glas: a rail with icons on a recessed surface, the section's title in Bold with
+    /// Modern and Glas: a rail with icons on a recessed surface, the section's title in Bold with
     /// a line under it, and a round close button.
     fn settings_body_designed(&mut self, ui: &mut Ui, tab: &mut SettingsTab, new_note: &mut String) -> bool {
         use crate::icons::Icon;
@@ -712,7 +712,7 @@ impl AisCraftApp {
             SettingsTab::Vault => ("Tresor", "Tresor", "Zugangsdaten, die Werkzeuge nutzen dürfen, ohne sie zu sehen."),
             SettingsTab::Usage => ("Nutzung", "Nutzung", "Verbrauch je Dienst und eine Monatsgrenze."),
             SettingsTab::Memory => ("Gedächtnis", "Gedächtnis", "Was AIS.ChatCraft sich von dir gemerkt hat."),
-            SettingsTab::Appearance => ("Tastenkürzel", "Darstellung", "So sieht AIS.ChatCraft auf diesem Gerät aus."),
+            SettingsTab::Appearance => ("Erscheinungsbild", "Darstellung", "So sieht AIS.ChatCraft auf diesem Gerät aus."),
             SettingsTab::About => ("Mitmachen", "Über", "Version, Aktualisierungen und wie du mitmachen kannst."),
         };
         let rail_fill =
@@ -821,7 +821,7 @@ impl AisCraftApp {
             SettingsTab::Vault => "Tresor",
             SettingsTab::Usage => "Nutzung",
             SettingsTab::Memory => "Gedächtnis",
-            SettingsTab::Appearance => "Tastenkürzel",
+            SettingsTab::Appearance => "Erscheinungsbild",
             SettingsTab::About => "Mitmachen",
         };
         ui.horizontal(|ui| {

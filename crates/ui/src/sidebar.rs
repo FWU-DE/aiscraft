@@ -127,7 +127,7 @@ impl AisCraftApp {
         ui.add_space(8.0);
     }
 
-    /// Mutig and Glas: logo tile and name, the "Neuer Chat" pill, the search pill; the account
+    /// Modern and Glas: logo tile and name, the "Neuer Chat" pill, the search pill; the account
     /// at the bottom.
     fn sidebar_top_designed(&mut self, ui: &mut Ui, t: &crate::theme::Tokens) {
         let t = t.clone();
@@ -135,7 +135,7 @@ impl AisCraftApp {
             let full = ui.max_rect() + egui::Margin { left: 14, right: 14, top: 18, bottom: 14 };
             crate::backdrop::glass_edge(ui.painter(), full, f32::from(t.r_panel), g.edge);
         }
-        if t.look == crate::theme::Look::Mutig {
+        if t.flush_modern() {
             let full = ui.max_rect().expand2(egui::vec2(14.0, 0.0)) + egui::Margin { left: 0, right: 0, top: 18, bottom: 14 };
             crate::backdrop::vertical_gradient(ui.painter(), full, CornerRadius::ZERO, t.side_top, t.side_bottom);
         }
@@ -631,7 +631,7 @@ impl AisCraftApp {
         }
     }
 
-    /// Mutig and Glas: avatar with initials, name, status, and the settings and handbook buttons.
+    /// Modern and Glas: avatar with initials, name, status, and the settings and handbook buttons.
     fn account_row_designed(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let (color, line1, line2, view) = self.account_status();

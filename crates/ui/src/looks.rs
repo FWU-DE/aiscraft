@@ -11,10 +11,10 @@ use crate::theme::{self, Look, Mode, Tokens};
 
 /// The looks offered, with their names and one line each.
 pub(crate) const LOOKS: [(Look, &str, &str); 4] = [
-    (Look::Mutig, "Mutig", "Nachtblaue Seitenleiste, kräftige Schrift"),
+    (Look::Modern, "Modern", "Nachtblaue Seitenleiste, kräftige Schrift"),
     (Look::Glas, "Glas", "Leichte Glasflächen auf weichem Verlauf"),
     (Look::Classic, "Klassisch", "Das bisherige, schlichte Aussehen"),
-    (Look::Omarchy, "Omarchy", "Farben des Desktop-Themes"),
+    (Look::Omarchy, "Omarchy", "Farben deines Omarchy-Desktops"),
 ];
 
 impl AisCraftApp {
@@ -32,6 +32,8 @@ impl AisCraftApp {
     pub(crate) fn look_cards(&mut self, ui: &mut Ui, with_omarchy: bool) {
         let t = self.tokens.clone();
         let (look, mode) = self.current_look();
+        // Omarchy only where there is an Omarchy desktop (or it is chosen already).
+        let with_omarchy = with_omarchy && (theme::omarchy_available() || look == Look::Omarchy);
         let looks: Vec<_> = LOOKS.iter().filter(|(l, ..)| with_omarchy || *l != Look::Omarchy).collect();
         let n = looks.len() as f32;
         let gap = 12.0;
@@ -153,7 +155,7 @@ pub(crate) fn paint_preview(p: &egui::Painter, r: Rect, t: &Tokens) {
     let comp = Rect::from_min_max(pos2(mx(0.08), at(0.0, 0.74).y), pos2(mx(0.92), at(0.0, 0.9).y));
     p.rect(comp, CornerRadius::same(8), t.composer, Stroke::new(1.0, t.composer_stroke), StrokeKind::Inside);
     p.circle_filled(pos2(comp.right() - comp.height() * 0.5, comp.center().y), comp.height() * 0.32, t.accent);
-    if t.look == Look::Mutig {
+    if t.flush_modern() {
         // The coral bar on the active entry.
         let y = side.top() + 0.44 * h;
         p.rect_filled(Rect::from_min_size(pos2(side.left(), y - 0.01 * h), vec2(2.0, 0.065 * h)), CornerRadius::same(1), t.accent2);

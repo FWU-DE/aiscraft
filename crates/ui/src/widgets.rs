@@ -148,7 +148,7 @@ pub fn segmented<T: PartialEq + Copy, const N: usize>(ui: &mut Ui, t: &Tokens, v
     });
 }
 
-/// A segmented control with optional icons (Mutig, Glas): a recessed pill, the chosen segment
+/// A segmented control with optional icons (Modern, Glas): a recessed pill, the chosen segment
 /// raised on the surface.
 pub fn segmented_icons<T: PartialEq + Copy, const N: usize>(ui: &mut Ui, t: &Tokens, value: &mut T, options: [(T, Option<crate::icons::Icon>, &str); N]) {
     let fill = if t.glass.is_some() { t.chip } else { t.sunken };
@@ -164,7 +164,7 @@ pub fn segmented_icons<T: PartialEq + Copy, const N: usize>(ui: &mut Ui, t: &Tok
                 let on = *value == option;
                 let fg = if on { t.text } else { t.muted };
                 let g = crate::kit::line(ui, label, crate::kit::font(13.5, crate::theme::SEMIBOLD), fg, 300.0);
-                let w = 26.0 + g.size().x + if icon.is_some() { 22.0 } else { 0.0 };
+                let w = 22.0 + g.size().x + if icon.is_some() { 22.0 } else { 0.0 };
                 let (rect, r) = ui.allocate_exact_size(egui::vec2(w, 30.0), egui::Sense::click());
                 r.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, label));
                 let p = ui.painter();
@@ -178,7 +178,7 @@ pub fn segmented_icons<T: PartialEq + Copy, const N: usize>(ui: &mut Ui, t: &Tok
                 } else if r.hovered() {
                     p.rect_filled(rect, CornerRadius::same(15), t.text.gamma_multiply(0.05));
                 }
-                let mut x = rect.left() + 13.0;
+                let mut x = rect.left() + 11.0;
                 if let Some(i) = icon {
                     i.paint(p, egui::pos2(x + 8.0, rect.center().y), 16.0, fg);
                     x += 22.0;

@@ -350,6 +350,10 @@ static COMMANDS: &[CommandSpec] = &[
             };
             obj.insert(key.clone(), value);
             let mut parsed: Settings = serde_json::from_value(settings).map_err(|e| Error::invalid(format!("{key}: {e}")))?;
+            // "Modern" was called "Mutig" in early builds: the old values still work.
+            if let Some(rest) = parsed.theme.strip_prefix("mutig") {
+                parsed.theme = format!("modern{rest}");
+            }
             if key == "theme" && !crate::state::THEMES.contains(&parsed.theme.as_str()) {
                 return Err(Error::invalid(format!("Unbekanntes Erscheinungsbild {}; möglich: {}", parsed.theme, crate::state::THEMES.join(", "))));
             }

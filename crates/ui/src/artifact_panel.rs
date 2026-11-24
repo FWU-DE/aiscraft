@@ -261,7 +261,7 @@ impl AisCraftApp {
         }
     }
 
-    /// Mutig and Glas: the kind as an accent tile, the title in Bold, "Teilen" and close; below
+    /// Modern and Glas: the kind as an accent tile, the title in Bold, "Teilen" and close; below
     /// "Bearbeiten | Vorschau", "Im Chat", the version chip, export and more.
     fn artifact_header_designed(&mut self, ui: &mut Ui, meta: &aiscraft_core::Artifact) {
         let t = self.tokens.clone();
@@ -476,7 +476,7 @@ impl AisCraftApp {
         }
         let mut board = None;
         let designed = t.designed();
-        // Mutig and Glas: the document as a sheet on a recessed area.
+        // Modern and Glas: the document as a sheet on a recessed area.
         let (area, page) = if designed {
             let sheet = if t.dark { t.opaque(t.surface) } else { egui::Color32::WHITE };
             (
@@ -538,7 +538,14 @@ impl AisCraftApp {
         let t = self.tokens.clone();
         let designed = t.designed();
         let style = BoardStyle {
-            bg: if designed { t.opaque(t.panel) } else { t.bg },
+            // Glas: the panel's own glass shows through the canvas.
+            bg: if t.glass.is_some() {
+                egui::Color32::TRANSPARENT
+            } else if designed {
+                t.opaque(t.panel)
+            } else {
+                t.bg
+            },
             grid: if designed { t.opaque(t.border) } else { t.border },
             text: t.text,
             muted: t.muted,

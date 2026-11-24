@@ -1,7 +1,7 @@
-//! Design tokens. Four looks: "Mutig" (night-blue sidebar, bold type), "Glas" (frosted panels on
+//! Design tokens. Four looks: "Modern" (night-blue sidebar, bold type), "Glas" (frosted panels on
 //! a soft gradient), "Klassisch" (the earlier flat AIS look) and "Omarchy" (colours from the
 //! desktop theme, followed live). Each has a light and a dark set; widgets never hard-code
-//! colours. The values of Mutig and Glas come from `design/build/themes.py`.
+//! colours. The values of Modern and Glas come from `design/build/themes.py`.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
@@ -9,11 +9,11 @@ use std::time::{Duration, Instant, SystemTime};
 use egui::epaint::Shadow;
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Stroke, TextStyle, Visuals};
 
-/// Which design the tokens belong to. Mutig and Glas share one anatomy (sidebar with icons,
+/// Which design the tokens belong to. Modern and Glas share one anatomy (sidebar with icons,
 /// greeting and cards on the start page, pill actions); Klassisch and Omarchy keep the earlier one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Look {
-    Mutig,
+    Modern,
     Glas,
     Classic,
     Omarchy,
@@ -66,7 +66,7 @@ pub struct Tokens {
     /// Tinted accent surface (number circles, chips, icon tiles) and text on it.
     pub accent_soft: Color32,
     pub accent_ink: Color32,
-    /// The second accent: coral in Mutig, lavender in Glas (favourites, hints, the active bar).
+    /// The second accent: coral in Modern, lavender in Glas (favourites, hints, the active bar).
     pub accent2: Color32,
     pub accent2_soft: Color32,
     pub accent2_ink: Color32,
@@ -151,6 +151,52 @@ pub fn over(c: Color32, under: Color32) -> Color32 {
     // Color32 is premultiplied.
     let l = |x: u8, y: u8| (x as f32 + y as f32 * (1.0 - a)).round().clamp(0.0, 255.0) as u8;
     Color32::from_rgb(l(c.r(), under.r()), l(c.g(), under.g()), l(c.b(), under.b()))
+}
+
+/// WCAG relative luminance.
+fn rel_luminance(c: Color32) -> f32 {
+    let lin = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.039_28 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+/// WCAG contrast ratio of two opaque colours.
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let (x, y) = (rel_luminance(a) + 0.05, rel_luminance(b) + 0.05);
+    if x > y { x / y } else { y / x }
+}
+
+/// `fg`, moved towards white or black (whichever `bg` allows more of) until it reaches `ratio`
+/// against `bg`, or as far as it goes.
+pub fn readable(fg: Color32, bg: Color32, ratio: f32) -> Color32 {
+    if contrast(fg, bg) >= ratio {
+        return fg;
+    }
+    let target = if contrast(Color32::WHITE, bg) >= contrast(Color32::BLACK, bg) { Color32::WHITE } else { Color32::BLACK };
+    for i in 1..=20 {
+        let c = mix(fg, target, i as f32 / 20.0);
+        if contrast(c, bg) >= ratio {
+            return c;
+        }
+    }
+    target
+}
+
+/// An accent and the text on it, AA together: white or near-black text, and the accent's
+/// lightness moved when neither reaches 4.5:1.
+fn accent_pair(accent: Color32) -> (Color32, Color32) {
+    let ink = Color32::from_rgb(0x10, 0x14, 0x18);
+    for i in 0..=20 {
+        let k = i as f32 / 20.0;
+        for (shade, on) in [(mix(accent, Color32::BLACK, k), Color32::WHITE), (mix(accent, Color32::WHITE, k), ink)] {
+            if contrast(on, shade) >= 4.5 {
+                return (shade, on);
+            }
+        }
+    }
+    (Color32::from_rgb(0x10, 0x7f, 0xad), Color32::WHITE)
 }
 
 fn luminance(c: Color32) -> f32 {
@@ -339,11 +385,11 @@ impl Tokens {
         self.modal_shadow = shadow(8, 28, shade);
     }
 
-    /// "Mutig", light: a night-blue sidebar, a calm light work area, Barlow Bold titles.
-    pub fn mutig_light() -> Self {
+    /// "Modern", light: a night-blue sidebar, a calm light work area, Barlow Bold titles.
+    pub fn modern_light() -> Self {
         let navy = rgba(0x0b2a45ff);
         Self {
-            look: Look::Mutig,
+            look: Look::Modern,
             dark: false,
             bg: rgb(0xf3f6f9),
             sidebar: rgb(0x0c2e4e),
@@ -411,8 +457,8 @@ impl Tokens {
         }
     }
 
-    /// "Mutig", dark: the sidebar a shade darker than the work area, the AIS blue lighter.
-    pub fn mutig_dark() -> Self {
+    /// "Modern", dark: the sidebar a shade darker than the work area, the AIS blue lighter.
+    pub fn modern_dark() -> Self {
         Self {
             dark: true,
             bg: rgb(0x0d1723),
@@ -466,7 +512,7 @@ impl Tokens {
             card_shadow: Shadow::NONE,
             composer_shadow: shadow(14, 36, Color32::from_black_alpha(0x4d)),
             modal_shadow: shadow(24, 64, Color32::from_black_alpha(0x66)),
-            ..Self::mutig_light()
+            ..Self::modern_light()
         }
     }
 
@@ -529,8 +575,8 @@ impl Tokens {
             composer_stroke: Color32::WHITE,
             chip: rgb(0xeef4f9),
             chip_text: rgb(0x24364b),
-            overlay: rgba(0xc9dceb99),
-            modal: rgba(0xffffffeb),
+            overlay: rgba(0xc9dcebb3),
+            modal: rgba(0xfffffff7),
             r_card: 18,
             r_composer: 24,
             r_bubble: 20,
@@ -606,8 +652,8 @@ impl Tokens {
             composer_stroke: rgba(0xffffff2e),
             chip: rgba(0xffffff14),
             chip_text: rgb(0xdce6f0),
-            overlay: rgba(0x02060eb3),
-            modal: rgba(0x101e31f2),
+            overlay: rgba(0x02060ec7),
+            modal: rgba(0x101e31fa),
             card_shadow: Shadow::NONE,
             composer_shadow: shadow(20, 44, Color32::from_black_alpha(0x5c)),
             modal_shadow: shadow(30, 70, Color32::from_black_alpha(0x80)),
@@ -657,7 +703,10 @@ impl Tokens {
         self
     }
 
-    /// Tokens from an Omarchy `colors.toml` (`key = "#rrggbb"` lines).
+    /// Tokens from an Omarchy `colors.toml` (`key = "#rrggbb"` lines): Modern's structure (radii,
+    /// type, shadows, anatomy) in the desktop theme's colours. Every text colour is checked
+    /// against what it sits on and moved in lightness until it reaches WCAG AA, so odd themes
+    /// stay readable.
     pub fn from_omarchy(colors: &str) -> Option<Self> {
         let get = |k: &str| {
             colors.lines().find_map(|l| {
@@ -671,40 +720,89 @@ impl Tokens {
         };
         let bg = get("background")?;
         let fg = get("foreground")?;
-        let accent = get("accent").or_else(|| get("orange")).unwrap_or(fg);
         let dark = colors.lines().any(|l| l.replace(' ', "") == "mode=\"dark\"") || luminance(bg) < 0.5;
-        let base = if dark { Self::dark() } else { Self::light() };
-        let on_accent = if luminance(accent) > 0.55 { Color32::from_rgb(0x10, 0x10, 0x10) } else { Color32::WHITE };
-        let mut t = Self {
+        let base = if dark { Self::modern_dark() } else { Self::modern_light() };
+        let text = readable(fg, bg, 7.0);
+        // The accent carries white or near-black text (send button, primary pills).
+        let raw_accent = get("accent").or_else(|| get("blue")).or_else(|| get("orange")).unwrap_or(fg);
+        let (accent, on_accent) = accent_pair(raw_accent);
+        let surface = get("lighter_background").filter(|c| contrast(*c, bg) < 1.6).unwrap_or_else(|| mix(bg, fg, if dark { 0.05 } else { 0.0 }));
+        let surface = if dark { surface } else { mix(surface, Color32::WHITE, 0.6) };
+        let side = get("dark_background").filter(|_| dark).unwrap_or_else(|| if dark { mix(bg, Color32::BLACK, 0.3) } else { mix(bg, fg, 0.06) });
+        let side_dark = luminance(side) < 0.5;
+        let side_text = readable(fg, side, 7.0);
+        let side_active = mix(side, accent, if side_dark { 0.3 } else { 0.18 });
+        let accent_soft = mix(bg, accent, if dark { 0.22 } else { 0.14 });
+        let user_bubble = mix(bg, accent, if dark { 0.2 } else { 0.12 });
+        let sunken = mix(bg, fg, if dark { 0.06 } else { 0.05 });
+        let chip = mix(surface, fg, if dark { 0.08 } else { 0.06 });
+        let border = mix(bg, fg, if dark { 0.16 } else { 0.13 });
+        let th_fill = if dark { mix(bg, accent, 0.32) } else { mix(fg, accent, 0.25) };
+        let code_bg = if dark { get("darker_background").unwrap_or_else(|| mix(bg, Color32::BLACK, 0.35)) } else { mix(fg, Color32::BLACK, 0.2) };
+        let accent2 = get("magenta").or_else(|| get("yellow")).unwrap_or(base.accent2);
+        let accent2_soft = mix(bg, accent2, 0.2);
+        let muted = readable(get("muted").or_else(|| get("dark_foreground")).unwrap_or_else(|| mix(fg, bg, 0.4)), bg, 4.6);
+        Some(Self {
             look: Look::Omarchy,
             dark,
             bg,
-            sidebar: get("dark_background").unwrap_or_else(|| mix(bg, Color32::BLACK, 0.12)),
-            surface: get("lighter_background").unwrap_or_else(|| mix(bg, fg, 0.06)),
-            surface_hi: mix(get("lighter_background").unwrap_or(bg), fg, 0.08),
-            border: mix(bg, fg, 0.16),
-            text: fg,
-            muted: get("muted").or_else(|| get("dark_foreground")).unwrap_or_else(|| mix(fg, bg, 0.4)),
+            sidebar: side,
+            surface,
+            surface_hi: chip,
+            border,
+            text,
+            muted,
             accent,
             on_accent,
-            selection: get("selection").unwrap_or_else(|| mix(bg, accent, 0.3)),
-            user_bubble: mix(get("lighter_background").unwrap_or(bg), fg, 0.04),
-            danger: get("red").unwrap_or(base.danger),
-            success: get("green").unwrap_or(base.success),
-            warning: get("yellow").unwrap_or(base.warning),
-            code_bg: get("darker_background").unwrap_or_else(|| mix(bg, Color32::BLACK, 0.2)),
-            radius: 12,
-            ..Self::base()
-        };
-        t.derive_flat();
-        if let Some(m) = get("magenta") {
-            t.accent2 = m;
-            t.accent2_soft = mix(bg, m, 0.25);
-        }
-        Some(t)
+            selection: accent_soft,
+            user_bubble,
+            danger: readable(get("red").unwrap_or(base.danger), bg, 4.5),
+            success: readable(get("green").unwrap_or(base.success), bg, 3.0),
+            warning: readable(get("yellow").unwrap_or(base.warning), bg, 3.0),
+            code_bg,
+            text2: readable(mix(fg, bg, 0.15), bg, 4.6),
+            link: readable(accent, bg, 4.6),
+            accent_end: accent,
+            accent_soft,
+            accent_ink: readable(mix(accent, text, 0.35), accent_soft, 4.6),
+            accent2,
+            accent2_soft,
+            accent2_ink: readable(accent2, accent2_soft, 4.6),
+            user_text: readable(fg, user_bubble, 4.6),
+            sunken,
+            card_stroke: border,
+            main: bg,
+            panel: surface,
+            panel_stroke: border,
+            side_top: side,
+            side_bottom: side,
+            side_text,
+            side_text2: readable(mix(side_text, side, 0.12), side, 4.6),
+            side_muted: readable(mix(side_text, side, 0.35), side, 4.6),
+            side_line: mix(side, side_text, 0.14),
+            side_active,
+            side_active_text: readable(side_text, side_active, 4.6),
+            side_search: mix(side, side_text, if side_dark { 0.08 } else { 0.06 }),
+            side_search_text: readable(mix(side_text, side, 0.3), mix(side, side_text, 0.08), 4.6),
+            side_new: accent,
+            side_new_text: on_accent,
+            th_fill,
+            th_text: readable(if luminance(th_fill) < 0.5 { Color32::WHITE } else { fg }, th_fill, 4.6),
+            row_line: mix(bg, fg, 0.1),
+            code_head: mix(code_bg, Color32::WHITE, 0.06),
+            code_text: readable(Color32::from_rgb(0xe6, 0xed, 0xf5), code_bg, 7.0),
+            code_muted: readable(Color32::from_rgb(0x94, 0xa9, 0xbe), code_bg, 4.6),
+            composer: surface,
+            composer_stroke: border,
+            chip,
+            chip_text: readable(fg, chip, 4.6),
+            overlay: Color32::from_black_alpha(if dark { 150 } else { 90 }),
+            modal: surface,
+            ..base
+        })
     }
 
-    /// The tokens inside the sidebar: its own text, muted and line colours (Mutig's sidebar is
+    /// The tokens inside the sidebar: its own text, muted and line colours (Modern's sidebar is
     /// dark in the light scheme too), so plain widgets there stay readable.
     pub fn for_sidebar(&self) -> Tokens {
         if !self.designed() {
@@ -719,13 +817,18 @@ impl Tokens {
         t.selection = self.side_active;
         t.bg = self.side_bottom;
         t.main = self.side_bottom;
-        t.dark = self.dark || self.look == Look::Mutig;
+        t.dark = luminance(self.opaque(self.side_bottom)) < 0.5;
         t
     }
 
-    /// Mutig and Glas: the new anatomy (icons, greeting, cards, pills).
+    /// Modern, Glas and Omarchy: the new anatomy (icons, greeting, cards, pills).
     pub fn designed(&self) -> bool {
-        matches!(self.look, Look::Mutig | Look::Glas)
+        matches!(self.look, Look::Modern | Look::Glas | Look::Omarchy)
+    }
+
+    /// Modern and Omarchy: panels flush to each other (no floating glass).
+    pub fn flush_modern(&self) -> bool {
+        matches!(self.look, Look::Modern | Look::Omarchy)
     }
 
     /// Corners of buttons, fields and menus (AIS.chat: `--radius` 0.5rem); cards use `radius`.
@@ -734,7 +837,7 @@ impl Tokens {
     }
 
     /// The syntax theme for code blocks: one whose colours stay readable on `code_bg`
-    /// (`base16-ocean.light` has strings at about 1.9:1 on a light background). Mutig and Glas
+    /// (`base16-ocean.light` has strings at about 1.9:1 on a light background). Modern and Glas
     /// put code on a dark block in both schemes.
     pub fn code_theme(&self) -> String {
         if self.designed() {
@@ -747,7 +850,7 @@ impl Tokens {
         }
     }
 
-    /// Mutig and Glas: a syntax theme (tmTheme) on the code block's own background, with the
+    /// Modern and Glas: a syntax theme (tmTheme) on the code block's own background, with the
     /// designs' colours for comments, keywords, strings and numbers.
     pub fn code_theme_xml(&self) -> Option<String> {
         if !self.designed() {
@@ -855,7 +958,7 @@ impl Tokens {
 }
 
 /// The `theme` setting split into look and mode. Older values ("system", "light", "dark") are
-/// Klassisch; unknown values fall back to Mutig like the system.
+/// Klassisch; unknown values fall back to Modern like the system.
 pub fn parse(setting: &str) -> (Look, Mode) {
     let (look, mode) = setting.split_once('-').unwrap_or((setting, ""));
     let mode = match mode {
@@ -870,7 +973,7 @@ pub fn parse(setting: &str) -> (Look, Mode) {
         "classic" => (Look::Classic, mode),
         "omarchy" => (Look::Omarchy, Mode::System),
         "glas" => (Look::Glas, mode),
-        _ => (Look::Mutig, mode),
+        _ => (Look::Modern, mode),
     }
 }
 
@@ -888,7 +991,7 @@ pub fn setting(look: Look, mode: Mode) -> String {
             Mode::Dark => "dark".into(),
         },
         Look::Omarchy => "omarchy".into(),
-        Look::Mutig => format!("mutig{suffix}"),
+        Look::Modern => format!("modern{suffix}"),
         Look::Glas => format!("glas{suffix}"),
     }
 }
@@ -896,8 +999,8 @@ pub fn setting(look: Look, mode: Mode) -> String {
 /// The tokens of one look in one scheme.
 pub fn tokens(look: Look, dark: bool) -> Tokens {
     match (look, dark) {
-        (Look::Mutig, false) => Tokens::mutig_light(),
-        (Look::Mutig, true) => Tokens::mutig_dark(),
+        (Look::Modern, false) => Tokens::modern_light(),
+        (Look::Modern, true) => Tokens::modern_dark(),
         (Look::Glas, false) => Tokens::glas_light(),
         (Look::Glas, true) => Tokens::glas_dark(),
         (Look::Classic | Look::Omarchy, false) => Tokens::light(),
@@ -921,7 +1024,31 @@ pub fn resolve(setting: &str, system_dark: bool, solid: bool) -> Tokens {
     if solid { t.solid() } else { t }
 }
 
+/// A theme directory set by the program itself (tests): `Some(dir)` replaces the desktop's,
+/// even when `dir` does not exist.
+static OMARCHY_OVERRIDE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// Use this Omarchy theme directory instead of the desktop's (tests, offscreen pictures); `None`
+/// goes back to the desktop's.
+pub fn set_omarchy_dir(dir: Option<PathBuf>) {
+    if let Ok(mut d) = OMARCHY_OVERRIDE.lock() {
+        *d = dir;
+    }
+}
+
+/// Whether an Omarchy desktop theme is there to follow.
+pub fn omarchy_available() -> bool {
+    omarchy_colors().and_then(|c| Tokens::from_omarchy(&c)).is_some()
+}
+
 fn omarchy_dir() -> Option<PathBuf> {
+    if let Some(dir) = OMARCHY_OVERRIDE.lock().ok().and_then(|d| d.clone()) {
+        return dir.is_dir().then_some(dir);
+    }
+    // Another theme directory for offscreen snapshots, without touching the desktop's theme.
+    if let Some(dir) = std::env::var_os("AISCRAFT_OMARCHY_THEME").map(PathBuf::from).filter(|d| d.is_dir()) {
+        return Some(dir);
+    }
     let home = std::env::var_os("HOME")?;
     let dir = PathBuf::from(home).join(".local/state/omarchy/current/theme");
     dir.is_dir().then_some(dir)
@@ -1049,7 +1176,7 @@ pub fn bold(text: impl Into<String>) -> egui::RichText {
     egui::RichText::new(text).family(FontFamily::Name(BOLD.into()))
 }
 
-/// Titles: Bold in Mutig and Glas, SemiBold in Klassisch and Omarchy.
+/// Titles: Bold in Modern and Glas, SemiBold in Klassisch and Omarchy.
 pub fn title(t: &Tokens, text: impl Into<String>) -> egui::RichText {
     if t.designed() { bold(text) } else { semibold(text) }
 }
@@ -1070,15 +1197,17 @@ mod tests {
         let t = Tokens::from_omarchy("mode = \"dark\"\naccent = \"#e96429\"\nbackground = \"#1d1a18\"\nforeground = \"#fff3e9\"\nred = \"#f55050\"").unwrap();
         assert!(t.dark);
         assert_eq!(t.look, Look::Omarchy);
+        assert!(t.designed() && t.flush_modern(), "Omarchy has Modern's structure");
+        assert_eq!(t.r_composer, Tokens::modern_dark().r_composer);
         assert_eq!(t.accent, Color32::from_rgb(0xe9, 0x64, 0x29));
-        assert_eq!(t.danger, Color32::from_rgb(0xf5, 0x50, 0x50));
+        assert!(contrast(t.danger, t.bg) >= 4.5);
         assert!(Tokens::from_omarchy("nothing here").is_none());
         assert!(Tokens::from_omarchy("background = \"#zzzzzz\"\nforeground = \"#ffffff\"").is_none());
     }
 
     #[test]
     fn theme_settings_round_trip() {
-        for look in [Look::Mutig, Look::Glas, Look::Classic] {
+        for look in [Look::Modern, Look::Glas, Look::Classic] {
             for mode in [Mode::System, Mode::Light, Mode::Dark] {
                 assert_eq!(parse(&setting(look, mode)), (look, mode), "{look:?} {mode:?}");
             }
@@ -1086,22 +1215,23 @@ mod tests {
         assert_eq!(parse("omarchy"), (Look::Omarchy, Mode::System));
         assert_eq!(parse("system"), (Look::Classic, Mode::System));
         assert_eq!(parse("dark"), (Look::Classic, Mode::Dark));
-        assert_eq!(parse("whatever"), (Look::Mutig, Mode::System));
-        assert_eq!(parse(""), (Look::Mutig, Mode::System));
+        assert_eq!(parse("whatever"), (Look::Modern, Mode::System));
+        assert_eq!(parse("mutig-dark"), (Look::Modern, Mode::Dark), "the early name still works");
+        assert_eq!(parse(""), (Look::Modern, Mode::System));
         let t = resolve("glas-dark", false, false);
         assert!(t.dark && t.look == Look::Glas && t.glass.is_some());
-        assert!(!resolve("mutig", false, false).dark);
-        assert!(resolve("mutig", true, false).dark);
+        assert!(!resolve("modern", false, false).dark);
+        assert!(resolve("modern", true, false).dark);
     }
 
     /// The design values from design/build/themes.py arrive unchanged.
     #[test]
     fn design_values() {
-        let m = Tokens::mutig_light();
+        let m = Tokens::modern_light();
         assert_eq!(m.accent, rgb(0x107fad));
         assert_eq!((m.side_top, m.side_bottom), (rgb(0x0c2e4e), rgb(0x081f37)));
         assert_eq!(m.accent2, rgb(0xf0663f));
-        assert_eq!(Tokens::mutig_dark().accent, rgb(0x38a8db));
+        assert_eq!(Tokens::modern_dark().accent, rgb(0x38a8db));
         let g = Tokens::glas_light();
         assert_eq!(g.main, Color32::from_rgba_unmultiplied(255, 255, 255, 0xa6));
         assert_eq!(g.accent2, rgb(0x7b5ce5));
@@ -1111,7 +1241,7 @@ mod tests {
     /// The generated syntax theme loads (it is parsed by syntect at runtime).
     #[test]
     fn code_theme_parses() {
-        for t in [Tokens::mutig_light(), Tokens::glas_dark()] {
+        for t in [Tokens::modern_light(), Tokens::glas_dark()] {
             let xml = t.code_theme_xml().unwrap();
             let mut md = egui_commonmark::CommonMarkCache::default();
             md.add_syntax_theme_from_bytes(t.code_theme(), xml.as_bytes()).unwrap();
@@ -1145,7 +1275,9 @@ mod tests {
             let (x, y) = (rel(a) + 0.05, rel(b) + 0.05);
             if x > y { x / y } else { y / x }
         }
-        for t in [Tokens::mutig_light(), Tokens::mutig_dark(), Tokens::glas_light(), Tokens::glas_dark(), Tokens::light(), Tokens::dark()] {
+        let odd = Tokens::from_omarchy("background = \"#808080\"\nforeground = \"#8a8a8a\"\naccent = \"#ffee00\"").unwrap();
+        let pale = Tokens::from_omarchy("background = \"#fdf6e3\"\nforeground = \"#93a1a1\"\naccent = \"#b58900\"").unwrap();
+        for t in [Tokens::modern_light(), Tokens::modern_dark(), Tokens::glas_light(), Tokens::glas_dark(), Tokens::light(), Tokens::dark(), odd, pale] {
             let main = t.opaque(t.main);
             assert!(ratio(t.text, main) >= 4.5, "{:?} text", t.look);
             assert!(ratio(t.muted, main) >= 4.5, "{:?} muted {}", t.look, ratio(t.muted, main));

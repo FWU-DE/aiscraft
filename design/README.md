@@ -1,11 +1,13 @@
 # AIS.ChatCraft: Designentwürfe 2 und 3
 
+Entwurf 2 hieß zuerst „Mutig“ und heißt jetzt „Modern“ (in der App, im Handbuch und hier). Die Dateinamen `d2-*` bleiben. Beide Entwürfe sind in der App umgesetzt; Aufnahmen aus der App liegen in `app-screens/` neben den Mockups.
+
 Zwei eigenständige Entwürfe als Mockups, noch ohne Code in `crates/`. Entwurf 1 (Material 3, behutsam)
 steht in `docs/design-review-2026-11.md`. Er war zu zaghaft („sieht noch spröde aus“, „fast wie vorher“).
 Beide neuen Entwürfe zeigen dieselben sechs Bildschirme mit demselben Inhalt. So lassen sie sich Bild
 für Bild vergleichen.
 
-| | Entwurf 2 „Mutig“ | Entwurf 3 „Glas“ |
+| | Entwurf 2 „Modern“ | Entwurf 3 „Glas“ |
 |---|---|---|
 | Startseite | `screens/d2-01-start.png` | `screens/d3-01-start.png` |
 | Chat hell | `screens/d2-02-chat-hell.png` | `screens/d3-02-chat-hell.png` |
@@ -46,7 +48,7 @@ weder `₂` noch `→` hat. In der App setzt `craft-math` die Formeln.
 
 ---
 
-## Entwurf 2 „Mutig“
+## Entwurf 2 „Modern“
 
 **Idee.** Der Unterschied soll auf den ersten Blick sichtbar sein. Eine nachtblaue Seitenleiste mit
 heller Schrift trennt Navigation und Arbeit klar. Rechts davon liegt eine helle, ruhige Fläche. Die
@@ -166,7 +168,7 @@ Verlauf in AIS-Blau. Lavendel ist der Zweitakzent für Favoriten und Hinweise.
 
 ### Schriftskala
 
-Wie bei „Mutig“. Glas braucht keine eigene Skala, die Hierarchie trägt dieselbe Barlow-Staffel. Auf
+Wie bei „Modern“. Glas braucht keine eigene Skala, die Hierarchie trägt dieselbe Barlow-Staffel. Auf
 Glas steht nichts kleiner als 12,5 px. Nebentext auf Glas ist nie heller als `#4A5D71` (hell) bzw.
 `#9AABBD` (dunkel).
 
@@ -247,7 +249,7 @@ Systemen.** Alle Komponenten aus Entwurf 2 werden wiederverwendet, nur mit Glas-
 beide Verlaufsenden und jedes Licht in voller Stärke, also ungünstiger als der weichgezeichnete
 Hintergrund je ist. Alle Werte erreichen 4,5 : 1 oder mehr. Die knappsten:
 
-| Paar | Mutig hell | Mutig dunkel | Glas hell | Glas dunkel |
+| Paar | Modern hell | Modern dunkel | Glas hell | Glas dunkel |
 |---|---|---|---|---|
 | Text auf Akzent (Knöpfe) | 4,51 | 6,97 | 4,51 (Verlauf: 4,51) | 6,97 (Verlauf: 5,44) |
 | Nebentext auf Hauptfläche | 5,49 | 6,66 | 5,35 | 5,81 |
@@ -260,11 +262,11 @@ dürfen deshalb nicht hinter weiße Schrift. Deshalb beginnt der Akzent-Verlauf 
 
 ## Offene Entscheidungen
 
-1. **Welcher Entwurf?** Oder eine Mischung: zum Beispiel die Struktur und Typografie von „Mutig“ mit
+1. **Welcher Entwurf?** Oder eine Mischung: zum Beispiel die Struktur und Typografie von „Modern“ mit
    „Glas“ als wählbarem Schema in den Einstellungen.
 2. **Seitenleiste nachtblau auch im dunklen Schema?** Heute ist sie dort nur etwas dunkler als der
    Inhalt. Die Alternative wäre ein hellerer Ton als Abhebung.
-3. **Zweitakzent:** Koralle (Mutig) oder Lavendel (Glas). Und wie sparsam: nur Favoriten und Hinweise
+3. **Zweitakzent:** Koralle (Modern) oder Lavendel (Glas). Und wie sparsam: nur Favoriten und Hinweise
    oder auch der aktive Eintrag?
 4. **Wählbare Akzentfarbe** (gezeigt in den Einstellungen): ja, oder fest AIS-Blau, damit die Marke
    eindeutig bleibt?

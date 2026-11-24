@@ -1,4 +1,4 @@
-//! Building blocks of the Mutig and Glas anatomy (design/build/app.py): pills, round icon
+//! Building blocks of the Modern and Glas anatomy (design/build/app.py): pills, round icon
 //! buttons, sidebar entries, section labels, tiles. Each paints itself from the tokens and
 //! carries its words as accessible label, so tests and screen readers find it by name.
 
@@ -183,7 +183,7 @@ pub fn section(ui: &mut Ui, t: &Tokens, label: &str, plus: Option<&str>) -> Opti
     Some(resp.on_hover_text(tip))
 }
 
-/// An entry of the sidebar: icon and label; the active one filled (Mutig: with the coral bar).
+/// An entry of the sidebar: icon and label; the active one filled (Modern: with the coral bar).
 pub fn side_item(ui: &mut Ui, t: &Tokens, icon: Icon, label: &str, active: bool) -> Response {
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
@@ -197,7 +197,7 @@ pub fn side_item(ui: &mut Ui, t: &Tokens, icon: Icon, label: &str, active: bool)
             );
         }
         p.rect_filled(rect, r, t.side_active);
-        if t.look == theme::Look::Mutig {
+        if t.flush_modern() {
             p.rect_filled(Rect::from_min_size(pos2(rect.left(), rect.center().y - 9.0), vec2(3.0, 18.0)), CornerRadius::same(2), t.accent2);
         }
     } else if resp.hovered() || resp.has_focus() {

@@ -1,4 +1,4 @@
-//! Markdown in Mutig and Glas. egui_commonmark draws headings and table heads in the regular
+//! Markdown in Modern and Glas. egui_commonmark draws headings and table heads in the regular
 //! cut ("strong" is only a colour in egui) and lists with plain numbers; the designs want Barlow
 //! Bold titles, tables with a coloured bold head, numbered steps in accent circles, quotes as a
 //! recessed block with an accent bar, and code on a dark block with a head. So the top-level

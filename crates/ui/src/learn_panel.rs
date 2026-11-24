@@ -193,83 +193,111 @@ impl AisCraftApp {
         let open_same =
             self.state.open_artifact.as_ref().and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id)).filter(|a| a.kind == kind).map(|a| a.id.clone());
         let generating = self.state.current.as_ref().is_some_and(|c| self.state.is_generating(c));
-        Frame::new()
-            .fill(t.surface)
-            .stroke(Stroke::new(1.0, t.border))
-            .corner_radius(CornerRadius::same(t.radius.saturating_add(2)))
-            .inner_margin(Margin::symmetric(14, 10))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                let (icon, headline, detail, problems) = match kind {
-                    ArtifactKind::App => {
-                        let title = aiscraft_engine::learn::html_title(src).unwrap_or_else(|| "Lern-App".into());
-                        ("🎮", title, format!("Lern-App · HTML, {} KB", src.len().div_ceil(1024)), Vec::new())
-                    }
-                    ArtifactKind::H5p => match aiscraft_core::h5p::parse_lenient(src) {
-                        Ok((h, problems)) => ("📦", h.title.clone(), format!("H5P · {} Aufgaben", h.tasks.len()), problems),
-                        Err(e) => ("📦", "H5P".to_string(), "lässt sich nicht lesen".to_string(), vec![e]),
-                    },
-                    _ => match worksheet::parse_lenient(src) {
-                        Ok((ws, problems)) => (
-                            "📝",
-                            ws.title.clone(),
-                            format!("Arbeitsblatt · {} Aufgaben, {} Punkte", ws.tasks.len(), ws.tasks.iter().map(|x| x.points).sum::<f64>()),
-                            problems,
-                        ),
-                        Err(e) => ("📝", "Arbeitsblatt".to_string(), "lässt sich nicht lesen".to_string(), vec![e]),
-                    },
-                };
-                ui.horizontal(|ui| {
+        let frame = if t.designed() {
+            Frame::new().fill(t.surface).stroke(Stroke::new(1.5, t.accent)).corner_radius(CornerRadius::same(16)).shadow(t.card_shadow).inner_margin(Margin {
+                left: 10,
+                right: 14,
+                top: 10,
+                bottom: 10,
+            })
+        } else {
+            Frame::new()
+                .fill(t.surface)
+                .stroke(Stroke::new(1.0, t.border))
+                .corner_radius(CornerRadius::same(t.radius.saturating_add(2)))
+                .inner_margin(Margin::symmetric(14, 10))
+        };
+        frame.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let (icon, headline, detail, problems) = match kind {
+                ArtifactKind::App => {
+                    let title = aiscraft_engine::learn::html_title(src).unwrap_or_else(|| "Lern-App".into());
+                    ("🎮", title, format!("Lern-App · HTML, {} KB", src.len().div_ceil(1024)), Vec::new())
+                }
+                ArtifactKind::H5p => match aiscraft_core::h5p::parse_lenient(src) {
+                    Ok((h, problems)) => ("📦", h.title.clone(), format!("H5P · {} Aufgaben", h.tasks.len()), problems),
+                    Err(e) => ("📦", "H5P".to_string(), "lässt sich nicht lesen".to_string(), vec![e]),
+                },
+                _ => match worksheet::parse_lenient(src) {
+                    Ok((ws, problems)) => (
+                        "📝",
+                        ws.title.clone(),
+                        format!("Arbeitsblatt · {} Aufgaben, {} Punkte", ws.tasks.len(), ws.tasks.iter().map(|x| x.points).sum::<f64>()),
+                        problems,
+                    ),
+                    Err(e) => ("📝", "Arbeitsblatt".to_string(), "lässt sich nicht lesen".to_string(), vec![e]),
+                },
+            };
+            ui.horizontal(|ui| {
+                if t.designed() {
+                    let (tile, _) = ui.allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::hover());
+                    crate::kit::accent_fill(ui.painter(), tile, CornerRadius::same(12), &t);
+                    kind_lucide(kind).paint(ui.painter(), tile.center(), 20.0, t.on_accent);
+                    ui.add_space(4.0);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        ui.label(crate::theme::bold(headline).size(15.0).color(t.text));
+                        ui.label(RichText::new(detail).size(13.0).color(t.muted));
+                    });
+                } else {
                     ui.label(RichText::new(icon).size(22.0).color(t.accent));
                     ui.vertical(|ui| {
                         ui.label(RichText::new(headline).strong());
                         ui.label(small_muted(&t, detail));
                     });
-                });
-                for p in problems.iter().take(3) {
-                    ui.label(RichText::new(p).small().color(t.warning));
                 }
-                if generating {
-                    return;
-                }
-                ui.horizontal_wrapped(|ui| {
-                    let (open_cmd, open_label, apply_label) = match kind {
-                        ArtifactKind::App => ("learning_app.create", "Als Lern-App öffnen", "In die Lern-App übernehmen"),
-                        ArtifactKind::H5p => ("h5p.create", "Als H5P öffnen", "In den H5P-Inhalt übernehmen"),
-                        _ => ("worksheet.create", "Als Arbeitsblatt öffnen", "Ins Arbeitsblatt übernehmen"),
-                    };
-                    if let Some(id) = &open_same
-                        && kind == ArtifactKind::H5p
-                        && accent_button(ui, &t, apply_label).on_hover_text("Ersetzt die Aufgaben; die vorige Fassung bleibt unter Versionen").clicked()
-                    {
-                        self.run("h5p.create", json!({"id": id, "content": src}));
-                    } else if let Some(id) = &open_same
-                        && kind != ArtifactKind::H5p
-                        && accent_button(ui, &t, apply_label).on_hover_text("Ersetzt den Inhalt; die vorige Fassung bleibt unter Versionen").clicked()
-                    {
-                        let text = match kind {
-                            ArtifactKind::App => Some(src.trim().to_string()),
-                            _ => worksheet::parse_lenient(src).ok().map(|(ws, _)| worksheet::to_json(&ws)),
-                        };
-                        if let Some(text) = text {
-                            self.run("artifact.save", json!({"id": id, "text": text, "version": "Aus einer Antwort übernommen"}));
-                        }
-                    }
-                    let params = match kind {
-                        ArtifactKind::App => json!({"html": src}),
-                        _ => json!({"content": src, "repair": true}),
-                    };
-                    let clicked = if open_same.is_some() { ui.button(open_label).clicked() } else { accent_button(ui, &t, open_label).clicked() };
-                    if clicked {
-                        self.run(open_cmd, params);
-                    }
-                });
             });
+            for p in problems.iter().take(3) {
+                ui.label(RichText::new(p).small().color(t.warning));
+            }
+            if generating {
+                return;
+            }
+            ui.horizontal_wrapped(|ui| {
+                let (open_cmd, open_label, apply_label) = match kind {
+                    ArtifactKind::App => ("learning_app.create", "Als Lern-App öffnen", "In die Lern-App übernehmen"),
+                    ArtifactKind::H5p => ("h5p.create", "Als H5P öffnen", "In den H5P-Inhalt übernehmen"),
+                    _ => ("worksheet.create", "Als Arbeitsblatt öffnen", "Ins Arbeitsblatt übernehmen"),
+                };
+                if let Some(id) = &open_same
+                    && kind == ArtifactKind::H5p
+                    && accent_button(ui, &t, apply_label).on_hover_text("Ersetzt die Aufgaben; die vorige Fassung bleibt unter Versionen").clicked()
+                {
+                    self.run("h5p.create", json!({"id": id, "content": src}));
+                } else if let Some(id) = &open_same
+                    && kind != ArtifactKind::H5p
+                    && accent_button(ui, &t, apply_label).on_hover_text("Ersetzt den Inhalt; die vorige Fassung bleibt unter Versionen").clicked()
+                {
+                    let text = match kind {
+                        ArtifactKind::App => Some(src.trim().to_string()),
+                        _ => worksheet::parse_lenient(src).ok().map(|(ws, _)| worksheet::to_json(&ws)),
+                    };
+                    if let Some(text) = text {
+                        self.run("artifact.save", json!({"id": id, "text": text, "version": "Aus einer Antwort übernommen"}));
+                    }
+                }
+                let params = match kind {
+                    ArtifactKind::App => json!({"html": src}),
+                    _ => json!({"content": src, "repair": true}),
+                };
+                let clicked = if open_same.is_some() { ui.button(open_label).clicked() } else { accent_button(ui, &t, open_label).clicked() };
+                if clicked {
+                    self.run(open_cmd, params);
+                }
+            });
+        });
         ui.add_space(6.0);
     }
 
     /// "Erstellen" in the composer: the composer text becomes the topic of a learning app or
     /// worksheet request.
+    /// "Erstellen" as the sparkle icon (narrow composer).
+    pub(crate) fn create_menu_icon(&mut self, ui: &mut Ui) {
+        self.create_as_icon = true;
+        self.create_menu(ui);
+        self.create_as_icon = false;
+    }
+
     pub(crate) fn create_menu(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let body = |app: &mut Self, ui: &mut Ui| {
@@ -294,7 +322,11 @@ impl AisCraftApp {
         };
         let tip = "Lern-App, Arbeitsblatt oder H5P-Quiz erstellen lassen";
         if t.designed() {
-            let r = crate::kit::pill(ui, &t, crate::kit::Pill::Chip, None, "Erstellen", 13.5, Some(crate::icons::Icon::ChevronDown)).on_hover_text(tip);
+            let r = if self.create_as_icon {
+                crate::kit::icon_button(ui, &t, crate::icons::Icon::Sparkles, "Erstellen: Lern-App, Arbeitsblatt oder H5P-Quiz", t.text2, 19.0, 34.0)
+            } else {
+                crate::kit::pill(ui, &t, crate::kit::Pill::Chip, None, "Erstellen", 13.5, Some(crate::icons::Icon::ChevronDown)).on_hover_text(tip)
+            };
             egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| body(self, ui));
         } else {
             ui.menu_button(RichText::new("Erstellen  ⏷").color(t.muted), |ui| body(self, ui)).response.on_hover_text(tip);
@@ -387,7 +419,7 @@ pub fn highlight_html(src: &str, t: &Tokens) -> LayoutJob {
 }
 
 /// The label of a learning artifact for lists: (icon, kind label).
-/// The line icon of an artifact kind (Mutig, Glas).
+/// The line icon of an artifact kind (Modern, Glas).
 pub fn kind_lucide(kind: ArtifactKind) -> crate::icons::Icon {
     use crate::icons::Icon;
     match kind {

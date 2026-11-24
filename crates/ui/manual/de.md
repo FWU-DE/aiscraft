@@ -2,26 +2,30 @@
 
 AIS.ChatCraft ist ein Programm für den Rechner, mit dem du mit AIS.chat und anderen KI-Diensten chattest. Deine Chats, Dokumente und Whiteboards liegen auf diesem Rechner und sind durchsuchbar.
 
+AIS.ChatCraft ist kein offizielles Werkzeug des AIS.chat-Teams, sondern ein Community-Experiment. Es nutzt AIS.chat über die Web-App; Funktionen können sich ändern oder ausfallen. Rückmeldungen und Ideen gehen über [GitHub](https://github.com/FWU-DE/aiscraft/issues/new).
+
 ## Erste Schritte
 
 1. **Anmelden.** Unten links auf das Konto klicken oder im Startbildschirm „Bei AIS.chat anmelden“ wählen.
-2. **Modell wählen.** Im Eingabefeld auf „Dienst · Modell“ klicken.
+2. **Modell wählen.** Im Eingabefeld auf das Modell klicken (in „Klassisch“: „Dienst · Modell“).
 3. **Schreiben.** Enter sendet, Umschalt+Enter macht eine neue Zeile.
 
 Weitere Dienste (Claude, OpenAI, Ollama, LM Studio …) fügst du unter **Einstellungen › Dienste** hinzu.
 
 ### Startseite
 
-Ist kein Chat offen, zeigt AIS.ChatCraft die Startseite: oben das Eingabefeld (Schreiben beginnt einen neuen Chat), darunter Karten.
+Ist kein Chat offen, zeigt AIS.ChatCraft die Startseite: oben das Eingabefeld (Schreiben beginnt einen neuen Chat), darunter Karten. In „Modern“, „Glas“ und „Omarchy“ begrüßt dich die Startseite mit Datum und Namen (aus der AIS.chat-Anmeldung, sonst aus dem Benutzerkonto des Rechners).
 
+- **Vorschläge** (Modern, Glas, Omarchy): Stundenentwurf, Arbeitsblatt, Elternbrief und Quiz; ein Klick schreibt einen Anfang ins Eingabefeld, den du anpasst und abschickst.
+- **Zuletzt bearbeitet** (Modern, Glas, Omarchy): die drei Chats, Dokumente oder Whiteboards, an denen du zuletzt gearbeitet hast.
 - **Favoriten:** deine mit Stern markierten Assistenten, Dialogpartner und Lernszenarien aus AIS.chat; ein Klick startet einen Chat. „Alle entdecken“ öffnet die Übersicht.
-- **Neu starten:** neuer Chat, neues Bild (wenn ein Dienst Bildmodelle hat), neues Dokument oder Whiteboard.
-- **Zuletzt:** die fünf zuletzt benutzten Chats.
+- **Neu starten** (Klassisch): neuer Chat, neues Bild (wenn ein Dienst Bildmodelle hat), neues Dokument oder Whiteboard.
+- **Zuletzt** (Klassisch): die fünf zuletzt benutzten Chats.
 - **Zeitpläne:** die nächsten Läufe; „+ Zeitplan anlegen“ legt einen neuen an.
 - **Kontingent & Verbrauch:** die AIS.chat-Token-Punkte (sind sie aufgebraucht, nimmt AIS.chat bis zum nächsten Zeitraum keine Nachrichten an), die Tokens dieses Monats pro Dienst, die Monatsgrenze und wie lange Anmeldungen (etwa das Claude-Abo) noch gelten. Es steht nur da, was die Dienste melden.
 - **Benachrichtigungen:** was Zeitpläne, Beobachtungen, Nachfragen, Hinweise und Aufgaben gemeldet haben, neue zuerst. Ein Klick öffnet den Chat dazu; „Alle gelesen“ markiert alles. Dieselbe Liste öffnet die Glocke oben rechts; die Zahl daran zählt die neuen. Die letzten 50 bleiben gespeichert; die Meldung ans System kommt weiterhin.
 
-**Chat schließen:** das × oben rechts im Chat, Esc bei leerem Eingabefeld oder „Chat schließen“ in den Befehlen (Strg+K). Der Chat bleibt in der Seitenleiste.
+**Chat schließen:** das × oben rechts im Chat (in Modern, Glas und Omarchy im Menü ⋯ oben rechts), Esc bei leerem Eingabefeld oder „Chat schließen“ in den Befehlen (Strg+K). Der Chat bleibt in der Seitenleiste.
 
 ## Anmelden
 
@@ -182,6 +186,23 @@ Unter **Einstellungen › Nutzung** stehen die Tokens pro Monat, Dienst und Mode
 Einmal am Tag schaut AIS.ChatCraft nach, ob es eine neue Version gibt. Gibt es eine, steht über deinem Konto ein Hinweis: **Herunterladen** öffnet den Download im Browser, **Was ist neu** die Seite mit den Änderungen. **Diese Version überspringen** blendet den Hinweis für diese Version dauerhaft aus, **Später** bis zum nächsten Start. Installiert wird nichts von selbst.
 
 Dafür geht eine anonyme Anfrage an `api.github.com` (die Releases von FWU-DE/aiscraft), ohne Konto und ohne Daten aus deinen Chats. Unter **Einstellungen › Über** schaltest du das ab, prüfst mit **Jetzt prüfen** sofort und siehst deine Version.
+
+## Erscheinungsbild
+
+Unter **Einstellungen › Darstellung** wählst du, wie AIS.ChatCraft aussieht. Jede Wahl gilt sofort. Beim ersten Start fragt der Begrüßungsdialog danach. Wer AIS.ChatCraft schon eingerichtet hatte, sieht die Frage nach dem Update einmal.
+
+- **Modern** (Standard): nachtblaue Seitenleiste, kräftige Schrift, Karten auf heller Fläche. Koralle markiert den aktiven Eintrag, Favoriten und Hinweise.
+- **Glas**: leichte, lichtdurchlässige Flächen auf einem weichen Farbverlauf. Lavendel ist der Zweitakzent.
+- **Klassisch**: das bisherige, schlichte Aussehen.
+- **Omarchy**: sieht aus wie „Modern“, nimmt aber die Farben des Desktop-Themes und folgt ihm, wenn du es wechselst. Wo ein Theme zu wenig Kontrast hätte, hellt AIS.ChatCraft die Schrift auf oder dunkelt sie ab, damit alles lesbar bleibt.
+
+**Farbschema:** Hell, Dunkel oder wie das System. Bei Omarchy bestimmt das Desktop-Theme hell oder dunkel.
+
+**Transparenz** (nur Glas): „Verlauf“ zeigt die Glasflächen lichtdurchlässig über dem Verlauf. „Aus“ macht sie deckend. Das ist ruhiger und auf schwachen Rechnern schneller. Echte Unschärfe hinter dem Fenster (der Desktop scheint durch) gibt es nicht.
+
+**Zoom** vergrößert Schrift und Bedienelemente. **Enter sendet** schaltet zwischen Enter und Strg+Enter zum Senden um.
+
+Die Akzentfarbe ist überall das AIS-Blau.
 
 ## Tastenkürzel
 

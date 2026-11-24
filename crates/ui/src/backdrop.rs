@@ -1,6 +1,6 @@
 //! Gradients egui does not have as fills: Glas' backdrop (a diagonal gradient with five soft
 //! lights, painted as meshes, so it is already "blurred" and needs no backdrop filter) and the
-//! vertical gradient of Mutig's sidebar.
+//! vertical gradient of Modern's sidebar.
 
 use egui::epaint::{Mesh, Vertex, WHITE_UV};
 use egui::{Color32, CornerRadius, Painter, Pos2, Rect, pos2, vec2};

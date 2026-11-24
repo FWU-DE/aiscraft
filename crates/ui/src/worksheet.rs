@@ -203,9 +203,13 @@ impl AisCraftApp {
         let (mut check, mut reset) = (false, false);
         Frame::new().inner_margin(Margin::symmetric(12, 4)).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut mode, Mode::Edit, "Bearbeiten");
-                ui.selectable_value(&mut mode, Mode::Work, "Lösen");
-                ui.selectable_value(&mut mode, Mode::Preview, "Druckvorschau").on_hover_text("Die Seiten so, wie sie gedruckt werden");
+                if t.designed() {
+                    crate::widgets::segmented(ui, &t, &mut mode, [(Mode::Edit, "Bearbeiten"), (Mode::Work, "Lösen"), (Mode::Preview, "Druckvorschau")]);
+                } else {
+                    ui.selectable_value(&mut mode, Mode::Edit, "Bearbeiten");
+                    ui.selectable_value(&mut mode, Mode::Work, "Lösen");
+                    ui.selectable_value(&mut mode, Mode::Preview, "Druckvorschau").on_hover_text("Die Seiten so, wie sie gedruckt werden");
+                }
                 ui.separator();
                 if mode == Mode::Work {
                     check = accent_button(ui, &t, "Prüfen").on_hover_text("Antworten prüfen und Punkte zählen").clicked();

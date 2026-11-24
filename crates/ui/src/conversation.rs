@@ -21,7 +21,8 @@ impl AisCraftApp {
             .show(ui, |ui| {
                 centered(ui, |ui| self.composer(ui));
             });
-        ScrollArea::vertical().id_salt(("messages", self.state.current.clone())).stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
+        let fade = self.tokens.designed().then(|| if self.tokens.glass.is_some() { self.tokens.main.gamma_multiply(0.6) } else { self.tokens.main });
+        let out = ScrollArea::vertical().id_salt(("messages", self.state.current.clone())).stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
             centered(ui, |ui| {
                 ui.add_space(12.0);
                 let msgs = self.state.messages.clone();
@@ -39,6 +40,16 @@ impl AisCraftApp {
                 ui.add_space(20.0);
             });
         });
+        // Mutig, Glas, Omarchy: lines scrolled to the top and bottom edge fade out instead of
+        // being cut, so nothing sharp sits right under the header or above the composer.
+        if let Some(main) = fade {
+            let r = out.inner_rect;
+            let clear = egui::Color32::TRANSPARENT;
+            let top = egui::Rect::from_min_size(r.min, egui::vec2(r.width() - 12.0, 26.0));
+            crate::backdrop::vertical_gradient(ui.painter(), top, egui::CornerRadius::ZERO, main, clear);
+            let bottom = egui::Rect::from_min_max(egui::pos2(r.left(), r.bottom() - 26.0), egui::pos2(r.right() - 12.0, r.bottom()));
+            crate::backdrop::vertical_gradient(ui.painter(), bottom, egui::CornerRadius::ZERO, clear, main);
+        }
     }
 
     fn header(&mut self, ui: &mut Ui) {
@@ -118,7 +129,7 @@ impl AisCraftApp {
         Some(format!("{}{path}", b.config.base_url.trim_end_matches('/')))
     }
 
-    /// Mutig and Glas: the title in Bold with project chip and model · time underneath; on the
+    /// Modern and Glas: the title in Bold with project chip and model · time underneath; on the
     /// right the context pill, export, notifications and a menu with the rarer actions.
     fn header_designed(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
@@ -154,7 +165,8 @@ impl AisCraftApp {
                     if crate::kit::icon_button(ui, &t, crate::icons::Icon::Share, "Chat als Datei speichern (Strg+Umschalt+E)", t.text2, 19.0, 36.0).clicked() {
                         self.export_dialog();
                     }
-                    if self.state.selection.kind == aiscraft_core::ConversationKind::Chat {
+                    // Next to an open artifact the header is narrow: the title gets the room.
+                    if self.state.selection.kind == aiscraft_core::ConversationKind::Chat && self.state.open_artifact.is_none() {
                         ui.add_space(6.0);
                         self.context_meter(ui);
                     }
@@ -1428,7 +1440,9 @@ impl AisCraftApp {
                 });
             });
         });
-        self.context_hint(ui);
+        if !(designed && big) {
+            self.context_hint(ui);
+        }
         if send && !generating {
             let text = std::mem::take(&mut self.composer);
             let files: Vec<String> = self.pending_files.drain(..).map(|p| p.display().to_string()).collect();
@@ -1443,10 +1457,12 @@ impl AisCraftApp {
         }
     }
 
-    /// Mutig and Glas: attach and link icons, the model, "Quellen" and "Erstellen" as filled
+    /// Modern and Glas: attach and link icons, the model, "Quellen" and "Erstellen" as filled
     /// chips, the microphone and the round send button.
     fn composer_tools_designed(&mut self, ui: &mut Ui, generating: bool, image_mode: bool, send: &mut bool) {
         let t = self.tokens.clone();
+        // A narrow composer (next to a panel, small window): "Erstellen" becomes the sparkle icon.
+        let compact = ui.available_width() < 560.0;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1461,14 +1477,14 @@ impl AisCraftApp {
                         egui::epaint::Shadow { offset: [0, 4], blur: 12, spread: 0, color: t.accent.gamma_multiply(if ok || generating { 0.35 } else { 0.0 }) }
                             .as_shape(rect, round),
                     );
+                    // Always the solid accent, as designed; with nothing to send the arrow is quieter.
                     crate::kit::accent_fill(p, rect, round, &t);
-                    if !(ok || generating) {
-                        p.rect_filled(rect, round, t.opaque(t.composer).gamma_multiply(0.45));
-                    } else if b.hovered() {
+                    if (ok || generating) && b.hovered() {
                         p.rect_filled(rect, round, egui::Color32::from_white_alpha(28));
                     }
                     let icon = if generating { crate::icons::Icon::Stop } else { crate::icons::Icon::ArrowUp };
-                    icon.paint(p, rect.center(), if generating { 16.0 } else { 20.0 }, t.on_accent);
+                    let fg = if ok || generating { t.on_accent } else { t.on_accent.gamma_multiply(0.7) };
+                    icon.paint(p, rect.center(), if generating { 16.0 } else { 20.0 }, fg);
                 }
                 if b.on_hover_text(name).clicked() {
                     if generating {
@@ -1504,6 +1520,9 @@ impl AisCraftApp {
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center).with_main_wrap(true), |ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    if compact && !image_mode {
+                        self.create_menu_icon(ui);
+                    }
                     if !image_mode
                         && crate::kit::icon_button(ui, &t, crate::icons::Icon::Clip, "Dateien anhängen (oder hineinziehen)", t.text2, 19.0, 34.0).clicked()
                         && let Some(files) = rfd::FileDialog::new().pick_files()
@@ -1532,7 +1551,9 @@ impl AisCraftApp {
                         });
                     } else {
                         self.sources_menu(ui);
-                        self.create_menu(ui);
+                        if !compact {
+                            self.create_menu(ui);
+                        }
                     }
                 });
             });

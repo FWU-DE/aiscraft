@@ -6,6 +6,15 @@ use aiscraft_engine::{Engine, Options};
 use aiscraft_ui::AisCraftApp;
 use egui_kittest::kittest::Queryable;
 
+/// Whether the control with this label is the chosen one (selected or toggled on).
+fn chosen(h: &egui_kittest::Harness<'static, AisCraftApp>, label: &str) -> bool {
+    h.query_all(
+        egui_kittest::kittest::By::new().label(label).predicate(|n| n.is_selected() == Some(true) || n.toggled() == Some(egui::accesskit::Toggled::True)),
+    )
+    .next()
+    .is_some()
+}
+
 fn harness(engine: &Engine) -> egui_kittest::Harness<'static, AisCraftApp> {
     let e = engine.clone();
     let mut h = egui_kittest::Harness::builder()
@@ -322,6 +331,8 @@ fn welcome_asks_for_the_look_once() {
         .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
     h.run_steps(4);
     assert!(h.query_by_label("Willkommen bei AIS.ChatCraft").is_some(), "full welcome");
+    assert_eq!(engine.state().settings.theme, "modern", "Modern, like the system, is preselected");
+    assert!(chosen(&h, "Wie das System"), "scheme: like the system");
     assert!(h.query_by_label_contains(notice).is_some(), "community notice");
     assert!(h.query_by_label("Weiter").is_some(), "the sign-in step follows");
     h.get_by_label("Glas").click();
@@ -345,10 +356,12 @@ fn welcome_asks_for_the_look_once() {
     assert!(h.query_by_label("AIS.ChatCraft sieht jetzt neu aus").is_some(), "look step only");
     assert!(h.query_by_label("Willkommen bei AIS.ChatCraft").is_none());
     assert!(h.query_by_label_contains(notice).is_some(), "community notice");
-    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.theme == "mutig-dark"), "starts on Mutig, scheme kept");
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.theme == "modern"), "starts on Modern, like the system");
+    h.run_steps(4);
+    assert!(chosen(&h, "Wie das System"), "scheme: like the system");
     h.get_by_label("Klassisch").click();
     h.run_steps(4);
-    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.theme == "dark"), "Klassisch is one click away");
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.theme == "system"), "Klassisch is one click away");
     h.get_by_label("Fertig").click();
     h.run_steps(4);
     assert!(h.query_by_label("AIS.ChatCraft sieht jetzt neu aus").is_none(), "closed");
@@ -383,7 +396,43 @@ fn every_look_renders_and_switches_live() {
     h.run_steps(3);
     let (tx, _rx) = std::sync::mpsc::channel::<aiscraft_ui::UiRequest>();
     drop(tx);
-    engine.call("settings.set", json!({"key": "theme", "value": "mutig"})).unwrap();
+    engine.call("settings.set", json!({"key": "theme", "value": "modern"})).unwrap();
     h.run_steps(3);
-    assert!(h.query_by_label("Neuer Chat").is_some(), "Mutig's sidebar");
+    assert!(h.query_by_label("Neuer Chat").is_some(), "Modern's sidebar");
+}
+
+/// The Omarchy card shows where an Omarchy theme is there, and choosing it hides the scheme
+/// switch (Omarchy follows the desktop). Uses a fake theme directory, never the real one.
+#[test]
+fn omarchy_card_only_with_an_omarchy_theme() {
+    let dir = std::env::temp_dir().join(format!("aiscraft-omarchy-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("colors.toml"), "background = \"#1e1e2e\"\nforeground = \"#cdd6f4\"\naccent = \"#89b4fa\"\n").unwrap();
+    let open = |engine: &Engine| {
+        let e = engine.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .allow_missing_glyphs()
+            .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
+        h.run_steps(4);
+        h
+    };
+    aiscraft_ui::theme::set_omarchy_dir(Some(dir.clone()));
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let mut h = open(&engine);
+    assert!(h.query_by_label("Omarchy").is_some(), "card with an Omarchy theme");
+    assert_eq!(engine.state().settings.theme, "modern", "Modern stays the default");
+    h.get_by_label("Omarchy").click();
+    h.run_steps(4);
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.settings.theme == "omarchy"));
+    h.run_steps(4);
+    assert!(h.query_by_label("Wie das System").is_none(), "no scheme switch for Omarchy");
+    assert!(h.query_by_label_contains("bestimmt das Omarchy-Theme").is_some(), "a hint instead");
+
+    aiscraft_ui::theme::set_omarchy_dir(Some(dir.join("fehlt")));
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let h = open(&engine);
+    assert!(h.query_by_label("Omarchy").is_none(), "no card without an Omarchy theme");
+    aiscraft_ui::theme::set_omarchy_dir(None);
+    let _ = std::fs::remove_dir_all(&dir);
 }

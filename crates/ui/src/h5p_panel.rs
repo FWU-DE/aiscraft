@@ -30,8 +30,12 @@ impl AisCraftApp {
         Frame::new().inner_margin(Margin::symmetric(12, 4)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 if editable {
-                    ui.selectable_value(&mut mode, Mode::Edit, "Bearbeiten");
-                    ui.selectable_value(&mut mode, Mode::Work, "Ausprobieren").on_hover_text("Die Aufgaben so lösen, wie Schülerinnen und Schüler es tun");
+                    if t.designed() {
+                        crate::widgets::segmented(ui, &t, &mut mode, [(Mode::Edit, "Bearbeiten"), (Mode::Work, "Ausprobieren")]);
+                    } else {
+                        ui.selectable_value(&mut mode, Mode::Edit, "Bearbeiten");
+                        ui.selectable_value(&mut mode, Mode::Work, "Ausprobieren").on_hover_text("Die Aufgaben so lösen, wie Schülerinnen und Schüler es tun");
+                    }
                     ui.separator();
                     if mode == Mode::Work {
                         check = accent_button(ui, &t, "Prüfen").clicked();

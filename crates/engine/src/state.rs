@@ -278,7 +278,7 @@ pub struct NoticeAction {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// The look, one of [`THEMES`]: "mutig", "glas" (each also "-light" or "-dark", else like the
+    /// The look, one of [`THEMES`]: "modern", "glas" (each also "-light" or "-dark", else like the
     /// system), "system", "light", "dark" (Klassisch, the earlier look) or "omarchy" (follow the
     /// desktop theme).
     pub theme: String,
@@ -318,12 +318,12 @@ pub struct Settings {
 }
 
 /// Accepted values of the `theme` setting.
-pub const THEMES: &[&str] = &["mutig", "mutig-light", "mutig-dark", "glas", "glas-light", "glas-dark", "system", "light", "dark", "omarchy"];
+pub const THEMES: &[&str] = &["modern", "modern-light", "modern-dark", "glas", "glas-light", "glas-dark", "system", "light", "dark", "omarchy"];
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            theme: "mutig".into(),
+            theme: "modern".into(),
             transparency: "gradient".into(),
             look_chosen: false,
             memory: true,

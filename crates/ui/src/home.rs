@@ -568,7 +568,7 @@ pub(crate) fn date_and_greeting(now: i64) -> (String, &'static str) {
 }
 
 impl AisCraftApp {
-    /// The start page of Mutig and Glas: date, greeting, the large composer, prompt starters,
+    /// The start page of Modern and Glas: date, greeting, the large composer, prompt starters,
     /// favourites from AIS.chat, what was worked on last, then schedules, usage and notices.
     pub(crate) fn home_designed(&mut self, ui: &mut Ui, first: Option<String>) {
         let t = self.tokens.clone();
