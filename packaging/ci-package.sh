@@ -15,14 +15,15 @@ cp LICENSE* "$STAGE/" 2>/dev/null || true
 
 case "$OS" in
   Windows)
-    for b in aiscraft aiscraft-cli aiscraft-collab-server; do cp "$BIN/$b.exe" "$STAGE/"; done
+    for b in aiscraft aiscraft-cli aiscraft-collab-server aiscraft-preview; do cp "$BIN/$b.exe" "$STAGE/"; done
     (cd dist/stage && 7z a -tzip -bso0 "../$NAME.zip" "$NAME")
     ;;
   macOS)
-    for b in aiscraft aiscraft-cli aiscraft-collab-server; do cp "$BIN/$b" "$STAGE/"; done
+    for b in aiscraft aiscraft-cli aiscraft-collab-server aiscraft-preview; do cp "$BIN/$b" "$STAGE/"; done
     APP="$STAGE/AIS.ChatCraft.app/Contents"
     mkdir -p "$APP/MacOS" "$APP/Resources"
     cp "$BIN/aiscraft" "$APP/MacOS/aiscraft"
+    cp "$BIN/aiscraft-preview" "$APP/MacOS/aiscraft-preview"   # found next to the app binary
     if [ -f packaging/icons/aischatcraft-512.png ]; then
       cp packaging/icons/aischatcraft-512.png "$APP/Resources/icon.png"
     fi
@@ -47,7 +48,7 @@ PLIST
     tar -C dist/stage -czf "dist/$NAME.tar.gz" "$NAME"
     ;;
   *)
-    for b in aiscraft aiscraft-cli aiscraft-collab-server; do cp "$BIN/$b" "$STAGE/"; done
+    for b in aiscraft aiscraft-cli aiscraft-collab-server aiscraft-preview; do cp "$BIN/$b" "$STAGE/"; done
     cp packaging/ai.uds.aischatcraft.desktop packaging/install.sh "$STAGE/"
     cp -r packaging/icons "$STAGE/"
     tar -C dist/stage -czf "dist/$NAME.tar.gz" "$NAME"
