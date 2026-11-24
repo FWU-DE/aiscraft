@@ -14,6 +14,7 @@
 //! AIS.chat (assistants, characters, learning scenarios, image generation, a plot answer for
 //! prompts with "Parabel"), with a catalogue of placeholder portraits for the "Entdecken" page
 //! (`["ui.show", {"what": "personas"}]`, `{"what": "persona:character:c1"}` for one entry;
+//! `persona.favorite` works against it;
 //! `["ui.wait", {"ms": 1500}]` lets the pictures arrive). `--theme light|dark|omarchy`.
 //! The engine runs in memory; nothing touches your real data.
 
@@ -332,11 +333,13 @@ fn demo_ais(engine: &Engine) {
                     } else if req.starts_with("GET /_next/static/chunks/app.js") {
                         ("application/javascript", reference(0x7f, "sendChatMessageAction"))
                     } else if req.starts_with("GET /_next/static/chunks/assistants.js") {
-                        ("application/javascript", reference(0x11, "getAssistantsByFilterAction"))
+                        ("application/javascript", reference(0x11, "getAssistantsByFilterAction") + &reference(0x66, "setFavoriteAction"))
                     } else if req.starts_with("GET /_next/static/chunks/characters.js") {
                         ("application/javascript", reference(0x22, "getCharactersByFilterAction"))
                     } else if req.starts_with("GET /_next/static/chunks/scenarios.js") {
                         ("application/javascript", reference(0x33, "getLearningScenariosByFilterAction"))
+                    } else if req.starts_with("POST / ") && action == id(0x66) {
+                        ("text/x-component", flight(r#"{"success":true}"#))
                     } else if req.starts_with("POST / ") && action == id(0x11) {
                         ("text/x-component", flight(&assistants))
                     } else if req.starts_with("POST / ") && action == id(0x22) {

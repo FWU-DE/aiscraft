@@ -735,7 +735,7 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                     } else if req.starts_with("GET /_next/static/chunks/app.js") {
                         ("200 OK", "application/javascript", reference(0x7f, "sendChatMessageAction"))
                     } else if req.starts_with("GET /_next/static/chunks/assistants.js") {
-                        ("200 OK", "application/javascript", reference(0x11, "getAssistantsByFilterAction"))
+                        ("200 OK", "application/javascript", reference(0x11, "getAssistantsByFilterAction") + &reference(0x66, "setFavoriteAction"))
                     } else if req.starts_with("GET /_next/static/chunks/characters.js") {
                         ("200 OK", "application/javascript", reference(0x22, "getCharactersByFilterAction"))
                     } else if req.starts_with("GET /_next/static/chunks/scenarios.js") {
@@ -759,6 +759,12 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                                 flight(r#"{"success":false,"error":{"name":"TokenPointsExceededError","message":"leer"}}"#)
                             } else {
                                 flight(r#"{"success":true,"value":{"imageUrl":"/files/bild.png","conversationId":"srv-img","fileId":"file_1","assistantMessageId":"am1","userMessageId":"um1"}}"#)
+                            }
+                        } else if action == id(0x66) {
+                            if req.contains(r#""entityId":"c1""#) {
+                                flight(r#"{"success":false,"error":{"name":"ForbiddenError","message":"Kein Zugriff"}}"#)
+                            } else {
+                                flight(r#"{"success":true}"#)
                             }
                         } else if action == id(0x7f) {
                             static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -787,6 +793,30 @@ fn ais_engine() -> (Engine, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
     engine.call("backend.login", json!({"id": "ais-chat", "secret": "good"})).unwrap();
     engine.call("chat.select_model", json!({"backend": "ais-chat", "model": "m-uuid"})).unwrap();
     (engine, posted)
+}
+
+/// Favourites: toggling marks at once and asks AIS.chat; a refusal puts the mark back.
+#[test]
+fn ais_chat_persona_favorite() {
+    let (engine, posted) = ais_engine();
+    let fav = |kind: &str, id: &str| {
+        engine.state().backend("ais-chat").and_then(|b| b.personas.as_ref()?.iter().find(|p| p.kind.as_str() == kind && p.id == id).map(|p| p.favorite))
+    };
+    // Before the list is loaded there is nothing to toggle.
+    assert_eq!(engine.call("persona.favorite", json!({"kind": "assistant", "id": "a1"})).unwrap_err().kind, aiscraft_core::ErrorKind::NotFound);
+    engine.call("persona.refresh", json!({"backend": "ais-chat"})).unwrap();
+    assert_eq!(fav("assistant", "a1"), Some(false));
+    let out = engine.call("persona.favorite", json!({"kind": "assistant", "id": "a1"})).unwrap();
+    assert_eq!(out["favorite"], true);
+    assert_eq!(fav("assistant", "a1"), Some(true));
+    let last = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(last.ends_with(r#"[{"entityId":"a1","entityType":"assistant","isFavorite":true}]"#), "{last}");
+    // Explicit value, and the server refusing: the mark goes back.
+    let err = engine.call("persona.favorite", json!({"kind": "character", "id": "c1", "favorite": false})).unwrap_err();
+    assert!(err.message.contains("Favorit konnte nicht gespeichert werden"), "{}", err.message);
+    assert_eq!(fav("character", "c1"), Some(true));
+    assert!(engine.call("persona.favorite", json!({"kind": "robot", "id": "a1"})).is_err());
+    assert!(engine.call("persona.favorite", json!({"kind": "assistant", "id": "../a1", "favorite": true})).is_err());
 }
 
 /// Assistants, characters and learning scenarios: list, start a chat with one (the greeting

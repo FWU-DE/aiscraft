@@ -306,6 +306,15 @@ static COMMANDS: &[CommandSpec] = &[
         false,
         |c, p| Box::pin(crate::pictures::picture(c, p))
     ),
+    cmd!(
+        "persona.favorite",
+        "Assistent, Figur oder Lernszenario als Favorit markieren",
+        "Backends",
+        None,
+        "kind: assistant|character|learning_scenario, id: string, favorite?: bool (Standard: umschalten), backend?: string",
+        false,
+        |c, p| Box::pin(persona_favorite(c, p))
+    ),
     cmd!("remote.import", "Chat vom Server übernehmen", "Backends", None, "backend: string, id: string, title?: string", false, |c, p| Box::pin(
         remote_import(c, p)
     )),
@@ -879,6 +888,44 @@ async fn persona_refresh(c: Ctx, p: Value) -> Result<Value> {
         }
     });
     Ok(serde_json::to_value(result?)?)
+}
+
+/// Mark or unmark a favourite on the server. The list shows the change at once and goes back
+/// when the server refuses.
+async fn persona_favorite(c: Ctx, p: Value) -> Result<Value> {
+    let backend_id = opt_str(&p, "backend").unwrap_or_else(|| c.state().selection.backend_id.clone());
+    let kind =
+        aiscraft_core::PersonaKind::parse(&req_str(&p, "kind")?).ok_or_else(|| Error::invalid("kind muss assistant, character oder learning_scenario sein"))?;
+    let id = req_str(&p, "id")?;
+    let backend = c.backend(&backend_id)?;
+    let current =
+        c.state().backend(&backend_id).and_then(|b| b.personas.as_ref().and_then(|l| l.iter().find(|x| x.kind == kind && x.id == id).map(|x| x.favorite)));
+    let favorite = match (p.get("favorite").and_then(Value::as_bool), current) {
+        (Some(f), _) => f,
+        (None, Some(f)) => !f,
+        (None, None) => return Err(Error::not_found(format!("{} nicht gefunden. Erst die Liste laden.", kind.label()))),
+    };
+    let mark = |c: &Ctx, value: bool| {
+        c.update(|s| {
+            if let Some(x) = s
+                .backends
+                .iter_mut()
+                .find(|b| b.config.id == backend_id)
+                .and_then(|b| b.personas.as_mut())
+                .and_then(|l| l.iter_mut().find(|x| x.kind == kind && x.id == id))
+            {
+                x.favorite = value;
+            }
+        })
+    };
+    mark(&c, favorite);
+    if let Err(e) = backend.set_favorite(kind, id.clone(), favorite).await {
+        if let Some(before) = current {
+            mark(&c, before);
+        }
+        return Err(Error { message: format!("Der Favorit konnte nicht gespeichert werden: {}", e.message), ..e });
+    }
+    Ok(json!({"kind": kind.as_str(), "id": id, "favorite": favorite}))
 }
 
 /// Start a new chat with an assistant, character or learning scenario. The chat is created on

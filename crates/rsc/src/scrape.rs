@@ -56,19 +56,53 @@ pub fn rsc_payload(html: &str) -> String {
 
 /// Every JSON value in an RSC payload (rows that are not JSON are skipped).
 pub fn payload_values(payload: &str) -> Vec<Value> {
+    payload_rows(payload).into_iter().map(|(_, v)| v).collect()
+}
+
+/// Every JSON row of an RSC payload with its row id, in order.
+fn payload_rows(payload: &str) -> Vec<(u64, Value)> {
     // Parse line by line so that one odd row does not hide the rest.
     let mut out = Vec::new();
     let mut parser = RowParser::new();
     for line in payload.split_inclusive('\n') {
         match parser.feed(line.as_bytes()) {
             Ok(rows) => out.extend(rows.into_iter().filter_map(|r| match r {
-                Row::Json { value, .. } => Some(value),
+                Row::Json { id, value } => Some((id, value)),
                 _ => None,
             })),
             Err(_) => parser = RowParser::new(),
         }
     }
     out
+}
+
+/// Follow a React Flight back-reference such as `"$1f:0:props:models:0:priceMetadata"` (row
+/// `1f`, then the path) to the value it points at. React writes these for objects it already
+/// sent, e.g. the second occurrence of a model's `priceMetadata`. Anything else passes through.
+fn resolve_ref<'a>(v: &'a Value, rows: &BTreeMap<u64, &'a Value>) -> &'a Value {
+    let Some(r) = v.as_str().and_then(|s| s.strip_prefix('$')) else { return v };
+    let mut parts = r.split(':');
+    let Some(row) = parts.next().and_then(|id| u64::from_str_radix(id, 16).ok()).and_then(|id| rows.get(&id).copied()) else { return v };
+    let mut cur = row;
+    for key in parts.take(32) {
+        let next = match cur {
+            // A React element `["$", type, key, props]` is addressed by field name.
+            Value::Array(a) if a.first().and_then(Value::as_str) == Some("$") && !key.bytes().all(|b| b.is_ascii_digit()) => match key {
+                "type" => a.get(1),
+                "key" => a.get(2),
+                "props" => a.get(3),
+                _ => None,
+            },
+            Value::Array(a) => key.parse::<usize>().ok().and_then(|i| a.get(i)),
+            Value::Object(o) => o.get(key),
+            _ => None,
+        };
+        match next {
+            Some(n) => cur = n,
+            None => return v,
+        }
+    }
+    cur
 }
 
 /// A model as AIS.chat's `llm_model` table describes it.
@@ -84,18 +118,26 @@ pub struct PageModel {
 
 /// Find AIS.chat model rows (objects with `id`, `name`, `displayName` and `priceMetadata`)
 /// anywhere in the page payload. Deduplicated by id, in first-seen order.
+///
+/// A model often appears twice (the image page sends `models` and `defaultImageModel`); the second
+/// copy carries back-references (`"$1f:0:props:models:0:priceMetadata"`) instead of objects. Those
+/// are resolved, so the kind (`text`, `image`, `embedding`) does not depend on which copy is seen
+/// first.
 pub fn page_models(payload: &str) -> Vec<PageModel> {
+    let list = payload_rows(payload);
+    let rows: BTreeMap<u64, &Value> = list.iter().map(|(id, v)| (*id, v)).collect();
     let mut out: Vec<PageModel> = Vec::new();
-    for v in payload_values(payload) {
-        walk(&v, 0, &mut |o| {
-            let s = |k: &str| o.get(k).and_then(Value::as_str).map(str::to_string);
+    for (_, v) in &list {
+        walk(v, 0, &mut |o| {
+            let s = |k: &str| resolve_ref(o.get(k).unwrap_or(&Value::Null), &rows).as_str().map(str::to_string);
             let (Some(id), Some(name), Some(display_name)) = (s("id"), s("name"), s("displayName")) else { return };
-            let Some(price) = o.get("priceMetadata") else { return };
+            let Some(price) = o.get("priceMetadata").map(|p| resolve_ref(p, &rows)) else { return };
             if o.get("isDeleted").and_then(Value::as_bool) == Some(true) || out.iter().any(|m| m.id == id) {
                 return;
             }
             let kind = price.get("type").and_then(Value::as_str).unwrap_or("text").to_string();
-            let vision = o.get("supportedImageFormats").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+            let formats = o.get("supportedImageFormats").map(|f| resolve_ref(f, &rows));
+            let vision = formats.and_then(Value::as_array).is_some_and(|a| !a.is_empty());
             out.push(PageModel { id, name, display_name, description: s("description").unwrap_or_default(), kind, vision });
         });
     }
@@ -220,5 +262,25 @@ mod tests {
         assert!(models[0].vision);
         assert_eq!(models[1].kind, "image");
         assert_eq!(initial_model_name(&payload).as_deref(), Some("gpt-5"));
+    }
+
+    #[test]
+    fn image_page_models_with_back_references() {
+        // Shape of app.ais-chat.schule/image-generation on 2026-11-24: `defaultImageModel` repeats
+        // the first model with back-references, and keys sort before `models`.
+        let rows = concat!(
+            r#"1f:[["$","$L3e","k",{"models":[{"id":"m-img","provider":"bifrost","name":"gpt-image-1.5","displayName":"GPT-Image-1.5","description":"Bilder","priceMetadata":{"type":"image","inputTextTokenPrice":414.5},"supportedImageFormats":["png","jpeg"],"isDeleted":false},{"id":"m-txt","provider":"bifrost","name":"gpt-5","displayName":"GPT-5","priceMetadata":{"type":"text"},"isDeleted":false}],"defaultImageModel":{"id":"m-img","provider":"bifrost","name":"gpt-image-1.5","displayName":"GPT-Image-1.5","description":"Bilder","priceMetadata":"$1f:0:props:models:0:priceMetadata","supportedImageFormats":"$1f:0:props:models:0:supportedImageFormats","isDeleted":false}}]]"#,
+            "\n",
+            r#"20:{"other":{"id":"m-img","name":"gpt-image-1.5","displayName":"GPT-Image-1.5","priceMetadata":"$1f:0:props:models:0:priceMetadata"},"broken":{"id":"x","name":"x","displayName":"X","priceMetadata":"$99:0:nope"}}"#,
+            "\n"
+        );
+        let models = page_models(rows);
+        let img: Vec<_> = models.iter().filter(|m| m.kind == "image").collect();
+        assert_eq!(img.len(), 1, "{models:?}");
+        assert_eq!(img[0].id, "m-img");
+        assert!(img[0].vision);
+        assert!(models.iter().any(|m| m.id == "m-txt" && m.kind == "text"));
+        // An unresolvable reference falls back to text instead of failing.
+        assert!(models.iter().any(|m| m.id == "x" && m.kind == "text"));
     }
 }

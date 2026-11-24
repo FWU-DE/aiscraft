@@ -219,16 +219,22 @@ impl AisCraftApp {
         }
     }
 
-    fn persona_card(&mut self, ui: &mut Ui, backend: &str, p: &PersonaInfo, w: f32, compact: bool) -> egui::Response {
+    /// A card; the second value is true when its star was clicked (toggle the favourite).
+    fn persona_card(&mut self, ui: &mut Ui, backend: &str, p: &PersonaInfo, w: f32, compact: bool) -> (egui::Response, bool) {
         let t = self.tokens.clone();
         let pic_h = if compact { 72.0 } else { (w * 0.52).clamp(96.0, 150.0) };
         let h = if compact { 100.0 } else { pic_h + 126.0 };
         let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &p.name));
         if !ui.is_rect_visible(rect) {
-            return resp;
+            return (resp, false);
         }
-        let hovered = resp.hovered() || resp.has_focus();
+        // The star sits on the picture's top right corner and answers before the card does.
+        let star_center = if compact { rect.min + vec2(12.0 + pic_h - 12.0, 24.0) } else { rect.min + vec2(w - 8.0 - 14.0, 8.0 + 14.0) };
+        let star = ui.interact(Rect::from_center_size(star_center, vec2(24.0, 24.0)), resp.id.with("fav"), Sense::click());
+        let star_label = if p.favorite { "Favorit entfernen" } else { "Als Favorit markieren" };
+        star.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, star_label));
+        let hovered = resp.hovered() || resp.has_focus() || star.hovered();
         ui.painter().rect(
             rect,
             CornerRadius::same(t.radius),
@@ -245,10 +251,12 @@ impl AisCraftApp {
             (pic, rect.left() + 14.0, pic.bottom() + 10.0, w - 28.0)
         };
         self.paint_persona_picture(ui, pic, backend, p, inner, false);
-        if p.favorite {
-            let c = pic.right_top() + vec2(-14.0, 14.0);
-            ui.painter().circle_filled(c, 11.0, Color32::from_black_alpha(140));
-            ui.painter().text(c + vec2(0.0, 0.5), Align2::CENTER_CENTER, "★", FontId::proportional(13.0), Color32::from_rgb(0xff, 0xc8, 0x3d));
+        let gold = Color32::from_rgb(0xff, 0xc8, 0x3d);
+        if p.favorite || hovered {
+            let c = star_center;
+            ui.painter().circle_filled(c, 11.0, Color32::from_black_alpha(if star.hovered() { 200 } else { 140 }));
+            let (glyph, color) = if p.favorite { ("★", gold) } else { ("☆", if star.hovered() { gold } else { Color32::WHITE }) };
+            ui.painter().text(c + vec2(0.0, 0.5), Align2::CENTER_CENTER, glyph, FontId::proportional(13.0), color);
         }
         let mut y = text_top;
         let name = ui.painter().layout_job(clipped(&p.name, 15.0, t.text, text_w, 1));
@@ -266,7 +274,13 @@ impl AisCraftApp {
             let galley = ui.painter().layout_job(clipped(d, 13.0, t.muted, text_w, rows));
             ui.painter().with_clip_rect(rect.shrink(1.0)).galley(egui::pos2(text_left, y), galley, t.muted);
         }
-        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+        let toggled = star.on_hover_text(star_label).on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
+        (resp.on_hover_cursor(egui::CursorIcon::PointingHand), toggled)
+    }
+
+    /// Mark or unmark a favourite in AIS.chat.
+    pub(crate) fn toggle_favorite(&self, backend: &str, kind: PersonaKind, id: &str, favorite: bool) {
+        self.run("persona.favorite", json!({"backend": backend, "kind": kind.as_str(), "id": id, "favorite": favorite}));
     }
 
     /// The entries the page lists, with their backend: favourites first, then own, then by name.
@@ -383,7 +397,7 @@ impl AisCraftApp {
                         }
                     }
                     ui.add_space(10.0);
-                    if chip(ui, &t, view.favorites, "★ Favoriten").on_hover_text("Nur die, die du in AIS.chat als Favorit markiert hast").clicked() {
+                    if chip(ui, &t, view.favorites, "★ Favoriten").on_hover_text("Nur deine Favoriten (der Stern auf einer Karte)").clicked() {
                         view.favorites = !view.favorites;
                     }
                     if chip(ui, &t, view.own, "Eigene").on_hover_text("Nur die, die du selbst angelegt hast").clicked() {
@@ -424,6 +438,20 @@ impl AisCraftApp {
                             });
                         } else if backends.iter().all(|b| b.personas.is_some()) {
                             empty_card(ui, &t, "Noch keine", "In AIS.chat angelegte und mit dir geteilte erscheinen hier.");
+                        }
+                        return;
+                    }
+                    let no_favorites = !entries.iter().any(|(_, p)| p.favorite);
+                    if shown.is_empty() && view.favorites && no_favorites {
+                        empty_card(
+                            ui,
+                            &t,
+                            "Noch keine Favoriten",
+                            "Favoriten sind Assistenten, Figuren und Lernszenarien, die du oft brauchst. Zeige auf eine Karte und klicke auf den Stern ☆ \
+                             oben rechts: Sie erscheint dann hier und in der Seitenleiste, auch in AIS.chat im Browser.",
+                        );
+                        if accent_button(ui, &t, "Alle zeigen").clicked() {
+                            view.favorites = false;
                         }
                         return;
                     }
@@ -499,7 +527,10 @@ impl AisCraftApp {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = GAP;
                 for (backend, p) in row.iter().map(|x| (&x.0, &x.1)) {
-                    let r = self.persona_card(ui, backend, p, w, compact);
+                    let (r, star) = self.persona_card(ui, backend, p, w, compact);
+                    if star {
+                        self.toggle_favorite(backend, p.kind, &p.id, !p.favorite);
+                    }
                     let r = match &p.description {
                         Some(d) if d.chars().count() > 120 => r.on_hover_text(d.chars().take(600).collect::<String>()),
                         _ => r,
@@ -539,8 +570,17 @@ impl AisCraftApp {
                             if p.own {
                                 badge(ui, &t, "Eigene", t.surface_hi, t.muted);
                             }
-                            if p.favorite {
-                                badge(ui, &t, "★ Favorit", t.surface_hi, t.text);
+                            let (label, hint) = if p.favorite {
+                                ("★ Favorit", "Favorit entfernen")
+                            } else {
+                                ("☆ Als Favorit markieren", "Erscheint dann in der Seitenleiste")
+                            };
+                            if ui
+                                .add(egui::Button::new(RichText::new(label).size(12.0)).corner_radius(CornerRadius::same(t.radius)))
+                                .on_hover_text(hint)
+                                .clicked()
+                            {
+                                this.toggle_favorite(&pick.backend, p.kind, &p.id, !p.favorite);
                             }
                         });
                         ui.add_space(4.0);
