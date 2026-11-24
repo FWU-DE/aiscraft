@@ -21,8 +21,16 @@ impl AisCraftApp {
             self.account_row(ui);
         });
         ui.horizontal(|ui| {
-            crate::widgets::ais_logo(ui, 18.0, t.accent);
-            ui.label(RichText::new("AIS.ChatCraft").strong().size(17.0));
+            // Logo and name lead to the start page, like × and Esc.
+            let logo = crate::widgets::ais_logo(ui, 18.0, t.accent);
+            let name = ui.add(egui::Label::new(RichText::new("AIS.ChatCraft").strong().size(17.0)).selectable(false));
+            let home = ui
+                .interact(logo.rect.union(name.rect), ui.scope_id().with("home"), egui::Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Startseite");
+            if home.clicked() && (self.state.current.is_some() || self.explore.is_some()) {
+                self.close_chat();
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if icon_button(ui, &t, "☰", "Seitenleiste ausblenden (Strg+B)").clicked() {
                     self.sidebar_open = false;
