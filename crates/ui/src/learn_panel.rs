@@ -160,6 +160,10 @@ impl AisCraftApp {
                         let title = aiscraft_engine::learn::html_title(src).unwrap_or_else(|| "Lern-App".into());
                         ("🎮", title, format!("Lern-App · HTML, {} KB", src.len().div_ceil(1024)), Vec::new())
                     }
+                    ArtifactKind::H5p => match aiscraft_core::h5p::parse_lenient(src) {
+                        Ok((h, problems)) => ("📦", h.title.clone(), format!("H5P · {} Aufgaben", h.tasks.len()), problems),
+                        Err(e) => ("📦", "H5P".to_string(), "lässt sich nicht lesen".to_string(), vec![e]),
+                    },
                     _ => match worksheet::parse_lenient(src) {
                         Ok((ws, problems)) => (
                             "📝",
@@ -186,9 +190,16 @@ impl AisCraftApp {
                 ui.horizontal_wrapped(|ui| {
                     let (open_cmd, open_label, apply_label) = match kind {
                         ArtifactKind::App => ("learning_app.create", "Als Lern-App öffnen", "In die Lern-App übernehmen"),
+                        ArtifactKind::H5p => ("h5p.create", "Als H5P öffnen", "In den H5P-Inhalt übernehmen"),
                         _ => ("worksheet.create", "Als Arbeitsblatt öffnen", "Ins Arbeitsblatt übernehmen"),
                     };
                     if let Some(id) = &open_same
+                        && kind == ArtifactKind::H5p
+                        && accent_button(ui, &t, apply_label).on_hover_text("Ersetzt die Aufgaben; die vorige Fassung bleibt unter Versionen").clicked()
+                    {
+                        self.run("h5p.create", json!({"id": id, "content": src}));
+                    } else if let Some(id) = &open_same
+                        && kind != ArtifactKind::H5p
                         && accent_button(ui, &t, apply_label).on_hover_text("Ersetzt den Inhalt; die vorige Fassung bleibt unter Versionen").clicked()
                     {
                         let text = match kind {
@@ -227,6 +238,7 @@ impl AisCraftApp {
             for (label, cmd, tip) in [
                 ("🎮 Lern-App", "learning_app.request", "Eine interaktive Lern-App (eine HTML-Datei) zum Thema im Eingabefeld"),
                 ("📝 Arbeitsblatt", "worksheet.request", "Ein interaktives Arbeitsblatt zum Thema im Eingabefeld, zum Lösen am Rechner und zum Drucken"),
+                ("📦 H5P-Quiz", "h5p.request", "Ein H5P-Quiz zum Thema im Eingabefeld, als .h5p-Datei für Moodle, Mebis, ByCS und andere Lernplattformen"),
             ] {
                 if ui.add_enabled(usable, egui::Button::new(label)).on_hover_text(tip).clicked() {
                     self.composer.clear();
@@ -236,7 +248,7 @@ impl AisCraftApp {
             }
         })
         .response
-        .on_hover_text("Lern-App oder Arbeitsblatt erstellen lassen");
+        .on_hover_text("Lern-App, Arbeitsblatt oder H5P-Quiz erstellen lassen");
     }
 }
 
@@ -330,6 +342,7 @@ pub fn kind_icon(kind: ArtifactKind) -> &'static str {
         ArtifactKind::Board => "▣",
         ArtifactKind::App => "🎮",
         ArtifactKind::Worksheet => "📝",
+        ArtifactKind::H5p => "📦",
         ArtifactKind::Document => "📄",
     }
 }

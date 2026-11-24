@@ -336,11 +336,23 @@ impl AisCraftApp {
         }
     }
 
+    /// Files dropped or picked for the composer: `.h5p` packages open as H5P artifacts,
+    /// everything else is attached to the next message.
+    pub(crate) fn take_files(&mut self, files: Vec<PathBuf>) {
+        for f in files {
+            if f.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("h5p")) {
+                self.run("h5p.open", json!({"path": f.display().to_string()}));
+            } else {
+                self.pending_files.push(f);
+                self.focus_composer = true;
+            }
+        }
+    }
+
     fn dropped_files(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
         if !dropped.is_empty() {
-            self.pending_files.extend(dropped);
-            self.focus_composer = true;
+            self.take_files(dropped);
         }
         let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
         if hovering {

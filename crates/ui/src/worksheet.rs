@@ -81,12 +81,14 @@ impl Ans {
 pub struct SheetState {
     pub mode: Mode,
     /// The text `ws` was parsed from; parsed again when the document text changes.
-    src: String,
-    ws: Option<Worksheet>,
-    error: Option<String>,
-    problems: Vec<String>,
+    pub(crate) src: String,
+    pub(crate) ws: Option<Worksheet>,
+    pub(crate) error: Option<String>,
+    pub(crate) problems: Vec<String>,
+    /// An open H5P artifact: its content (package info included); `ws` holds its tasks.
+    pub(crate) h5p: Option<aiscraft_core::h5p::H5p>,
     answers: HashMap<String, Ans>,
-    result: Option<SheetResult>,
+    pub(crate) result: Option<SheetResult>,
     /// How many of each task's staged hints are revealed.
     hints: HashMap<String, usize>,
     /// Tasks the pupil answered: an ordering left as shown is no answer.
@@ -97,7 +99,38 @@ pub struct SheetState {
 }
 
 impl SheetState {
+    /// Clears a pupil's answers, hints and score.
+    pub(crate) fn reset(&mut self) {
+        self.answers.clear();
+        self.result = None;
+        self.hints.clear();
+        self.touched.clear();
+    }
+
+    /// Scores the answers given ("Prüfen").
+    pub(crate) fn check(&mut self) {
+        if let Some(ws) = &self.ws {
+            let answers: HashMap<String, Response> =
+                self.answers.iter().filter(|(k, _)| self.touched.contains(*k)).map(|(k, a)| (k.clone(), a.response())).collect();
+            self.result = Some(worksheet::score(ws, &answers));
+        }
+    }
+
     fn sync(&mut self, doc: &str) {
+        self.sync_with(doc, worksheet::parse_lenient);
+    }
+
+    /// Like `sync`, for H5P content: the tasks as a worksheet, the content kept in `h5p`.
+    pub(crate) fn sync_h5p(&mut self, doc: &str) {
+        if (self.ws.is_some() || self.error.is_some() || self.h5p.is_some()) && self.src == doc {
+            return;
+        }
+        let parsed = aiscraft_core::h5p::parse_stored(doc);
+        self.h5p = parsed.as_ref().ok().map(|(h, _)| h.clone());
+        self.sync_with(doc, |_| parsed.clone().map(|(h, problems)| (aiscraft_core::h5p::as_worksheet(&h), problems)));
+    }
+
+    fn sync_with(&mut self, doc: &str, parse: impl FnOnce(&str) -> Result<(Worksheet, Vec<String>), String>) {
         if self.ws.is_some() && self.src == doc {
             return;
         }
@@ -105,7 +138,7 @@ impl SheetState {
             return;
         }
         self.src = doc.to_string();
-        match worksheet::parse_lenient(doc) {
+        match parse(doc) {
             Ok((ws, problems)) => {
                 self.ws = Some(ws);
                 self.problems = problems;
@@ -125,7 +158,7 @@ impl SheetState {
     }
 }
 
-fn page<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+pub(crate) fn page<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let avail = ui.available_width();
     let w = avail.min(PAGE_WIDTH);
     let pad = ((avail - w) / 2.0).max(0.0);
@@ -207,15 +240,10 @@ impl AisCraftApp {
         if let Some(v) = self.artifact.as_mut() {
             v.sheet.mode = mode;
             if reset {
-                v.sheet.answers.clear();
-                v.sheet.result = None;
-                v.sheet.hints.clear();
-                v.sheet.touched.clear();
+                v.sheet.reset();
             }
-            if check && let Some(ws) = &v.sheet.ws {
-                let answers: HashMap<String, Response> =
-                    v.sheet.answers.iter().filter(|(k, _)| v.sheet.touched.contains(*k)).map(|(k, a)| (k.clone(), a.response())).collect();
-                v.sheet.result = Some(worksheet::score(ws, &answers));
+            if check {
+                v.sheet.check();
             }
         }
         if let Some((what, variant, save)) = print {
@@ -246,7 +274,7 @@ impl AisCraftApp {
                     match sheet.mode {
                         Mode::Edit => {
                             if let Some(ws) = sheet.ws.as_mut() {
-                                changed = edit_sheet(ui, &t, ws);
+                                changed = edit_sheet(ui, &t, ws, false);
                             }
                             for p in sheet.problems.iter().take(6) {
                                 ui.label(RichText::new(p).small().color(t.warning));
@@ -327,18 +355,23 @@ fn string_list(ui: &mut Ui, t: &Tokens, items: &mut Vec<String>, add_label: &str
     changed
 }
 
-fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet) -> bool {
+/// The task list editor. `h5p`: for H5P content (no subject, grade or points; only the task
+/// types H5P has; tips only where H5P shows them).
+pub(crate) fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet, h5p: bool) -> bool {
     let mut changed = false;
     ui.add_space(4.0);
     changed |=
         ui.add(egui::TextEdit::singleline(&mut ws.title).font(egui::TextStyle::Heading).hint_text("Titel").desired_width(ui.available_width())).changed();
-    ui.horizontal(|ui| {
-        let l = ui.label(muted(t, "Fach"));
-        changed |= ui.add(egui::TextEdit::singleline(&mut ws.subject).hint_text("z. B. Mathematik").desired_width(180.0)).labelled_by(l.id).changed();
-        let l = ui.label(muted(t, "Klasse"));
-        changed |= ui.add(egui::TextEdit::singleline(&mut ws.grade).hint_text("6").desired_width(60.0)).labelled_by(l.id).changed();
-    });
-    changed |= text_area(ui, &mut ws.instructions, "Arbeitsauftrag für alle Aufgaben (optional)", 2);
+    if !h5p {
+        ui.horizontal(|ui| {
+            let l = ui.label(muted(t, "Fach"));
+            changed |= ui.add(egui::TextEdit::singleline(&mut ws.subject).hint_text("z. B. Mathematik").desired_width(180.0)).labelled_by(l.id).changed();
+            let l = ui.label(muted(t, "Klasse"));
+            changed |= ui.add(egui::TextEdit::singleline(&mut ws.grade).hint_text("6").desired_width(60.0)).labelled_by(l.id).changed();
+        });
+    }
+    let intro_hint = if h5p { "Einleitung auf der Startseite des Quiz (optional)" } else { "Arbeitsauftrag für alle Aufgaben (optional)" };
+    changed |= text_area(ui, &mut ws.instructions, intro_hint, 2);
     ui.add_space(8.0);
     let mut action = None;
     let n = ws.tasks.len();
@@ -350,7 +383,8 @@ fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet) -> bool {
         }
         task_card(ui, t, t.border, |ui| {
             ui.horizontal(|ui| {
-                let head = if info { task.body.label().to_string() } else { format!("Aufgabe {number} · {}", task.body.label()) };
+                let label = if h5p { aiscraft_core::h5p::task_label(&task.body) } else { task.body.label() };
+                let head = if info { label.to_string() } else { format!("Aufgabe {number} · {label}") };
                 ui.label(RichText::new(head).strong().color(t.accent));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if icon_button(ui, t, "×", "Aufgabe entfernen").clicked() {
@@ -362,7 +396,7 @@ fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet) -> bool {
                     if ui.add_enabled(i > 0, egui::Button::new("⏶").frame(false)).on_hover_text("Nach oben").clicked() {
                         action = Some(Move::Up(i));
                     }
-                    if !info {
+                    if !info && !h5p {
                         let l = ui.label(muted(t, "Punkte"));
                         changed |= ui
                             .add(egui::DragValue::new(&mut task.points).range(0.0..=worksheet::MAX_POINTS).speed(0.5).max_decimals(1))
@@ -375,14 +409,16 @@ fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet) -> bool {
                 changed |= text_area(ui, &mut task.prompt, if info { "Überschrift (optional)" } else { "Aufgabenstellung" }, 1);
             }
             ui.add_space(4.0);
-            changed |= edit_body(ui, t, &mut task.body);
+            changed |= edit_body(ui, t, &mut task.body, h5p);
             if !info {
-                egui::CollapsingHeader::new(small_muted(t, "Tipps und Erklärung"))
-                    .id_salt(("hint", i))
-                    .default_open(!task.hints.is_empty() || !task.feedback.is_empty())
-                    .show(ui, |ui| {
-                        ui.label(small_muted(t, "Tipps werden beim Lösen einzeln aufgedeckt. Fang allgemein an und werde mit jedem Tipp konkreter."));
-                        changed |= string_list(ui, t, &mut task.hints, "+ Tipp", "Tipp", worksheet::MAX_HINTS, true);
+                let head = if h5p { "Rückmeldung" } else { "Tipps und Erklärung" };
+                egui::CollapsingHeader::new(small_muted(t, head)).id_salt(("hint", i)).default_open(!task.hints.is_empty() || !task.feedback.is_empty()).show(
+                    ui,
+                    |ui| {
+                        if !h5p {
+                            ui.label(small_muted(t, "Tipps werden beim Lösen einzeln aufgedeckt. Fang allgemein an und werde mit jedem Tipp konkreter."));
+                            changed |= string_list(ui, t, &mut task.hints, "+ Tipp", "Tipp", worksheet::MAX_HINTS, true);
+                        }
                         changed |= text_line(ui, &mut task.feedback, "Erklärung, die nach dem Prüfen erscheint");
                         if let TaskBody::Choice { options, .. } = &mut task.body {
                             ui.label(small_muted(t, "Rückmeldung je Antwort (erscheint nach dem Prüfen, wenn gewählt)"));
@@ -394,7 +430,8 @@ fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet) -> bool {
                                 });
                             }
                         }
-                    });
+                    },
+                );
             }
         });
         ui.add_space(8.0);
@@ -410,9 +447,11 @@ fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet) -> bool {
     changed |= action.is_some();
     if ws.tasks.len() < worksheet::MAX_TASKS {
         ui.menu_button(RichText::new("+ Aufgabe hinzufügen  ⏷").color(t.accent), |ui| {
-            for (kind, label) in worksheet::TASK_TYPES {
+            let types = if h5p { aiscraft_core::h5p::TASK_TYPES } else { worksheet::TASK_TYPES };
+            for (kind, label) in types {
                 if ui.button(*label).clicked() {
-                    if let Some(body) = TaskBody::template(kind) {
+                    let body = if h5p { aiscraft_core::h5p::template(kind) } else { TaskBody::template(kind) };
+                    if let Some(body) = body {
                         ws.tasks.push(Task::new("", body));
                         changed = true;
                     }
@@ -424,7 +463,7 @@ fn edit_sheet(ui: &mut Ui, t: &Tokens, ws: &mut Worksheet) -> bool {
     changed
 }
 
-fn edit_body(ui: &mut Ui, t: &Tokens, body: &mut TaskBody) -> bool {
+fn edit_body(ui: &mut Ui, t: &Tokens, body: &mut TaskBody, h5p: bool) -> bool {
     let mut changed = false;
     match body {
         TaskBody::Info { text } => changed |= text_area(ui, text, "Text", 4),
@@ -463,7 +502,14 @@ fn edit_body(ui: &mut Ui, t: &Tokens, body: &mut TaskBody) -> bool {
             changed |= text_area(ui, text, "Text mit [[Lösung|Alternative]] für jede Lücke", 3);
             let gaps = worksheet::cloze_gaps(text).len();
             ui.label(small_muted(t, format!("{gaps} Lücken · Lücken so markieren: [[Lösung|Alternative]]")));
-            changed |= ui.checkbox(word_bank, "Wortliste zeigen").on_hover_text("Die Lösungswörter gemischt über dem Text, leichter für Jüngere").changed();
+            if h5p {
+                changed |= ui
+                    .checkbox(word_bank, "Wörter in die Lücken ziehen (statt eintippen)")
+                    .on_hover_text("H5P.DragText statt H5P.Blanks; zählt nur die erste Lösung jeder Lücke")
+                    .changed();
+            } else {
+                changed |= ui.checkbox(word_bank, "Wortliste zeigen").on_hover_text("Die Lösungswörter gemischt über dem Text, leichter für Jüngere").changed();
+            }
             if *word_bank {
                 ui.label(small_muted(t, "Zusätzliche falsche Wörter (optional)"));
                 changed |= string_list(ui, t, distractors, "+ falsches Wort", "Ablenker", worksheet::MAX_DISTRACTORS, false);
@@ -609,7 +655,7 @@ fn preview_sheet(ui: &mut Ui, t: &Tokens, sheet: &mut SheetState) {
     }
 }
 
-fn work_sheet(ui: &mut Ui, t: &Tokens, sheet: &mut SheetState) {
+pub(crate) fn work_sheet(ui: &mut Ui, t: &Tokens, sheet: &mut SheetState) {
     let Some(ws) = sheet.ws.clone() else { return };
     ui.add_space(4.0);
     ui.label(RichText::new(&ws.title).heading().strong());

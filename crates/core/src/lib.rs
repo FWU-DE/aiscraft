@@ -1,6 +1,7 @@
 //! AIS.ChatCraft data model (layer 0). Pure data: no I/O, no async runtime, compiles for wasm.
 
 mod error;
+pub mod h5p;
 mod memory;
 mod model;
 pub mod worksheet;

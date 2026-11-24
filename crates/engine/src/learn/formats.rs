@@ -1,14 +1,14 @@
 //! Output formats (#56): content a model delivers in one marked block, so backends without
 //! tool calling (AIS.chat) can create artifacts, and the same formats as tools for backends
 //! that have them. Learning apps (```` ```html ````) and worksheets (```` ```aiscraft-worksheet ````)
-//! are the first two entries; the whiteboard (`aiscraft-board`), calendar and diagram formats
+//! are the first two entries, H5P (```` ```aiscraft-h5p ````, #59) the third; the whiteboard (`aiscraft-board`), calendar and diagram formats
 //! join this list later.
 //!
 //! Each entry has the fence languages it is recognised by, a compact description for the
 //! prompt (sent only when the format is asked for), a lenient check, the artifact kind it
 //! becomes and the tool that creates it on tool backends.
 
-use aiscraft_core::{ArtifactKind, worksheet};
+use aiscraft_core::{ArtifactKind, h5p, worksheet};
 
 pub struct OutputFormat {
     /// Stable id (`learning_app`, `worksheet`).
@@ -46,6 +46,17 @@ fn worksheet_check(src: &str) -> Result<Vec<String>, String> {
     worksheet::parse_lenient(src).map(|(_, problems)| problems)
 }
 
+fn h5p_description() -> String {
+    h5p::prompt_schema().to_string()
+}
+
+fn h5p_check(src: &str) -> Result<Vec<String>, String> {
+    h5p::parse_lenient(src).map(|(h, mut problems)| {
+        problems.extend(h5p::validate(&h));
+        problems
+    })
+}
+
 pub const APP_INTRO: &str = "Erstelle eine interaktive Lern-App zum Thema: ";
 pub const WORKSHEET_INTRO: &str = "Erstelle ein interaktives Arbeitsblatt zum Thema: ";
 
@@ -71,6 +82,17 @@ static FORMATS: &[OutputFormat] = &[
         prompt_description: worksheet_description,
         find: super::worksheet_blocks,
         check: worksheet_check,
+    },
+    OutputFormat {
+        id: "h5p",
+        label: "H5P",
+        fences: &[h5p::FENCE],
+        kind: ArtifactKind::H5p,
+        tool: "h5p_create",
+        request_intro: super::h5p::H5P_INTRO,
+        prompt_description: h5p_description,
+        find: super::h5p::h5p_blocks,
+        check: h5p_check,
     },
 ];
 
@@ -136,6 +158,7 @@ mod tests {
         let answer = "```html\n<!doctype html><html><body>x</body></html>\n```\n```aiscraft-worksheet\n{\"tasks\":[{\"type\":\"true_false\",\"prompt\":\"Ja?\",\"answer\":true}]}\n```";
         let found = blocks(answer);
         assert_eq!(found.len(), 2);
+        assert_eq!(blocks("```aiscraft-h5p\n{\"tasks\":[{\"type\":\"true_false\",\"prompt\":\"Ja?\",\"answer\":true}]}\n```")[0].0.id, "h5p");
         assert_eq!(found[0].0.id, "learning_app");
         assert_eq!(found[1].0.kind, ArtifactKind::Worksheet);
         for (f, b) in found {
