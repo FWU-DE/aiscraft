@@ -1,6 +1,7 @@
 //! Local storage (layer 1): one SQLite file with conversations, messages, projects, memory,
 //! backends (without secrets) and settings, plus an FTS5 index over every message.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use aiscraft_core::{Artifact, ArtifactKind, ArtifactVersion, BackendConfig, Conversation, Error, MemoryArea, MemoryNote, Message, Project, Result, Role};
@@ -8,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS backends (id TEXT PRIMARY KEY, position INTEGER NOT NULL, config TEXT NOT NULL);
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS memory (
     created_at INTEGER NOT NULL, archived INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS message_heads (conversation_id TEXT PRIMARY KEY, head TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS artifacts (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, conversation_id TEXT, project_id TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, state BLOB NOT NULL
@@ -127,6 +129,23 @@ impl Store {
         if !has_extra {
             db.execute_batch("ALTER TABLE conversations ADD COLUMN extra TEXT NOT NULL DEFAULT '{}'").map_err(db_err)?;
         }
+        // 3 → 4: messages form a tree (variants after edit and regenerate). Existing chats become
+        // one linear branch: each message follows the one before it.
+        let has_parent: bool =
+            db.prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'parent_id'").and_then(|mut st| st.exists([])).map_err(db_err)?;
+        if !has_parent {
+            let tx = db.unchecked_transaction().map_err(db_err)?;
+            tx.execute_batch(
+                "ALTER TABLE messages ADD COLUMN parent_id TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE messages ADD COLUMN picked INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE messages ADD COLUMN active INTEGER NOT NULL DEFAULT 1;
+                 UPDATE messages SET picked = seq, parent_id = COALESCE((SELECT p.id FROM messages p
+                   WHERE p.conversation_id = messages.conversation_id AND p.seq < messages.seq ORDER BY p.seq DESC LIMIT 1), '');",
+            )
+            .map_err(db_err)?;
+            tx.commit().map_err(db_err)?;
+        }
+        db.execute_batch("CREATE INDEX IF NOT EXISTS messages_parent ON messages(conversation_id, parent_id)").map_err(db_err)?;
         db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}")).map_err(db_err)?;
         Ok(Self { db })
     }
@@ -226,43 +245,141 @@ impl Store {
         let tx = self.db.unchecked_transaction().map_err(db_err)?;
         tx.execute("DELETE FROM messages_fts WHERE conversation_id = ?1", [id]).map_err(db_err)?;
         tx.execute("DELETE FROM messages WHERE conversation_id = ?1", [id]).map_err(db_err)?;
+        tx.execute("DELETE FROM message_heads WHERE conversation_id = ?1", [id]).map_err(db_err)?;
         tx.execute("DELETE FROM conversations WHERE id = ?1", [id]).map_err(db_err)?;
         tx.commit().map_err(db_err)
     }
 
     // ---- messages -------------------------------------------------------------------------
+    //
+    // Messages form a tree: each one follows its parent (`parent_id`, '' for the first). Edit and
+    // regenerate add a sibling instead of deleting, so earlier versions stay. Among siblings the
+    // one with the highest `picked` is shown. The head (`message_heads`) is the last message of
+    // the shown branch; a new message goes after it. `active` marks the shown branch, and only
+    // the shown branch is in the search index.
 
-    pub fn messages(&self, conversation_id: &str) -> Result<Vec<Message>> {
-        let mut st = self.db.prepare("SELECT id, role, content, created_at, extra FROM messages WHERE conversation_id = ?1 ORDER BY seq").map_err(db_err)?;
+    /// Every message of a conversation with its place in the tree, in creation order.
+    fn rows(&self, conversation_id: &str) -> Result<Vec<(Node, Message)>> {
+        let mut st = self
+            .db
+            .prepare("SELECT id, role, content, created_at, extra, parent_id, picked, seq FROM messages WHERE conversation_id = ?1 ORDER BY seq")
+            .map_err(db_err)?;
         let rows = st
             .query_map([conversation_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?, r.get::<_, String>(4)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, i64>(7)?,
+                ))
             })
             .map_err(db_err)?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, role, content, created_at, extra) = row.map_err(db_err)?;
+            let (id, role, content, created_at, extra, parent, picked, seq) = row.map_err(db_err)?;
             let Some(role) = Role::parse(&role) else { continue };
             let extra: Extra = serde_json::from_str(&extra).unwrap_or_default();
-            out.push(Message {
-                id,
-                conversation_id: conversation_id.to_string(),
-                role,
-                content,
-                created_at,
-                model: extra.model,
-                attachments: extra.attachments,
-                activity: extra.activity,
-                error: extra.error,
-                usage: extra.usage,
-                tool_calls: extra.tool_calls,
-                tool_result: extra.tool_result,
-            });
+            out.push((
+                Node { id: id.clone(), parent, picked, seq },
+                Message {
+                    id,
+                    conversation_id: conversation_id.to_string(),
+                    role,
+                    content,
+                    created_at,
+                    model: extra.model,
+                    attachments: extra.attachments,
+                    activity: extra.activity,
+                    error: extra.error,
+                    usage: extra.usage,
+                    tool_calls: extra.tool_calls,
+                    tool_result: extra.tool_result,
+                },
+            ));
         }
         Ok(out)
     }
 
-    /// Insert or replace a message (keeps its position) and its search entry.
+    fn nodes(&self, conversation_id: &str) -> Result<Vec<Node>> {
+        let mut st = self.db.prepare("SELECT id, parent_id, picked, seq FROM messages WHERE conversation_id = ?1 ORDER BY seq").map_err(db_err)?;
+        let rows = st.query_map([conversation_id], |r| Ok(Node { id: r.get(0)?, parent: r.get(1)?, picked: r.get(2)?, seq: r.get(3)? })).map_err(db_err)?;
+        rows.collect::<rusqlite::Result<_>>().map_err(db_err)
+    }
+
+    /// The stored head: `None` when there is none (chats from before schema 4), `Some("")`
+    /// before the first message.
+    fn stored_head(&self, conversation_id: &str) -> Result<Option<String>> {
+        self.db.query_row("SELECT head FROM message_heads WHERE conversation_id = ?1", [conversation_id], |r| r.get(0)).optional().map_err(db_err)
+    }
+
+    fn set_head(&self, conversation_id: &str, head: &str) -> Result<()> {
+        self.db
+            .execute(
+                "INSERT INTO message_heads (conversation_id, head) VALUES (?1, ?2) ON CONFLICT(conversation_id) DO UPDATE SET head = excluded.head",
+                params![conversation_id, head],
+            )
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// The shown branch of a conversation, oldest first.
+    pub fn messages(&self, conversation_id: &str) -> Result<Vec<Message>> {
+        let rows = self.rows(conversation_id)?;
+        let head = self.stored_head(conversation_id)?;
+        let nodes: Vec<&Node> = rows.iter().map(|(n, _)| n).collect();
+        let path = active_path(&nodes, head.as_deref());
+        let mut msgs: Vec<Option<Message>> = rows.into_iter().map(|(_, m)| Some(m)).collect();
+        Ok(path.into_iter().filter_map(|i| msgs.get_mut(i).and_then(Option::take)).collect())
+    }
+
+    /// For each message of the shown branch that has other versions: which one it is (from 1)
+    /// and how many there are.
+    pub fn variants(&self, conversation_id: &str) -> Result<BTreeMap<String, Variant>> {
+        let nodes = self.nodes(conversation_id)?;
+        let refs: Vec<&Node> = nodes.iter().collect();
+        let head = self.stored_head(conversation_id)?;
+        let mut out = BTreeMap::new();
+        for i in active_path(&refs, head.as_deref()) {
+            let Some(n) = nodes.get(i) else { continue };
+            let siblings: Vec<&Node> = nodes.iter().filter(|s| s.parent == n.parent).collect();
+            if siblings.len() > 1
+                && let Some(pos) = siblings.iter().position(|s| s.id == n.id)
+            {
+                out.insert(n.id.clone(), Variant { index: pos + 1, count: siblings.len() });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Mark the shown branch and index only it for search.
+    fn relayout(&self, conversation_id: &str) -> Result<()> {
+        let nodes = self.nodes(conversation_id)?;
+        let refs: Vec<&Node> = nodes.iter().collect();
+        let head = self.stored_head(conversation_id)?;
+        let path = active_path(&refs, head.as_deref());
+        let tx = self.db.unchecked_transaction().map_err(db_err)?;
+        tx.execute("UPDATE messages SET active = 0 WHERE conversation_id = ?1", [conversation_id]).map_err(db_err)?;
+        for i in path {
+            if let Some(n) = nodes.get(i) {
+                tx.execute("UPDATE messages SET active = 1 WHERE id = ?1", [&n.id]).map_err(db_err)?;
+            }
+        }
+        tx.execute("DELETE FROM messages_fts WHERE conversation_id = ?1", [conversation_id]).map_err(db_err)?;
+        tx.execute(
+            "INSERT INTO messages_fts (content, message_id, conversation_id) SELECT content, id, conversation_id FROM messages
+             WHERE conversation_id = ?1 AND active = 1 AND trim(content, ' ' || char(9, 10, 13)) != ''",
+            [conversation_id],
+        )
+        .map_err(db_err)?;
+        tx.commit().map_err(db_err)
+    }
+
+    /// Insert or replace a message (keeps its place) and its search entry. A new message goes
+    /// after the head and becomes the head.
     pub fn save_message(&self, m: &Message) -> Result<()> {
         let extra = Extra {
             model: m.model.clone(),
@@ -273,26 +390,51 @@ impl Store {
             tool_calls: m.tool_calls.clone(),
             tool_result: m.tool_result.clone(),
         };
+        let exists: Option<bool> =
+            self.db.query_row("SELECT active FROM messages WHERE id = ?1", [&m.id], |r| r.get::<_, i64>(0).map(|a| a != 0)).optional().map_err(db_err)?;
+        let parent = match exists {
+            Some(_) => String::new(),
+            None => self.tip(&m.conversation_id)?,
+        };
         let tx = self.db.unchecked_transaction().map_err(db_err)?;
-        let seq: i64 = tx
+        let (seq, picked): (i64, i64) = tx
             .query_row(
-                "SELECT COALESCE((SELECT seq FROM messages WHERE id = ?1), (SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE conversation_id = ?2))",
+                "SELECT COALESCE((SELECT seq FROM messages WHERE id = ?1), (SELECT COALESCE(MAX(seq), 0) + 1 FROM messages WHERE conversation_id = ?2)),
+                        (SELECT COALESCE(MAX(picked), 0) + 1 FROM messages WHERE conversation_id = ?2)",
                 params![m.id, m.conversation_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .map_err(db_err)?;
         tx.execute(
-            "INSERT INTO messages (id, conversation_id, seq, role, content, created_at, extra) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO messages (id, conversation_id, seq, role, content, created_at, extra, parent_id, picked, active)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1)
              ON CONFLICT(id) DO UPDATE SET content = excluded.content, extra = excluded.extra",
-            params![m.id, m.conversation_id, seq, m.role.as_str(), m.content, m.created_at, serde_json::to_string(&extra)?],
+            params![m.id, m.conversation_id, seq, m.role.as_str(), m.content, m.created_at, serde_json::to_string(&extra)?, parent, picked],
         )
         .map_err(db_err)?;
+        if exists.is_none() {
+            tx.execute(
+                "INSERT INTO message_heads (conversation_id, head) VALUES (?1, ?2) ON CONFLICT(conversation_id) DO UPDATE SET head = excluded.head",
+                params![m.conversation_id, m.id],
+            )
+            .map_err(db_err)?;
+        }
         tx.execute("DELETE FROM messages_fts WHERE message_id = ?1", [&m.id]).map_err(db_err)?;
-        if !m.content.trim().is_empty() {
+        if exists.unwrap_or(true) && !m.content.trim().is_empty() {
             tx.execute("INSERT INTO messages_fts (content, message_id, conversation_id) VALUES (?1, ?2, ?3)", params![m.content, m.id, m.conversation_id])
                 .map_err(db_err)?;
         }
         tx.commit().map_err(db_err)
+    }
+
+    /// The message a new one goes after: the head, or the end of the shown branch.
+    fn tip(&self, conversation_id: &str) -> Result<String> {
+        if let Some(h) = self.stored_head(conversation_id)? {
+            return Ok(h);
+        }
+        let nodes = self.nodes(conversation_id)?;
+        let refs: Vec<&Node> = nodes.iter().collect();
+        Ok(active_path(&refs, None).last().and_then(|&i| nodes.get(i)).map(|n| n.id.clone()).unwrap_or_default())
     }
 
     /// Give a message the id the server assigned to it.
@@ -302,23 +444,90 @@ impl Store {
         }
         let tx = self.db.unchecked_transaction().map_err(db_err)?;
         tx.execute("UPDATE messages SET id = ?2 WHERE id = ?1", params![old, new]).map_err(db_err)?;
+        tx.execute("UPDATE messages SET parent_id = ?2 WHERE parent_id = ?1", params![old, new]).map_err(db_err)?;
+        tx.execute("UPDATE message_heads SET head = ?2 WHERE head = ?1", params![old, new]).map_err(db_err)?;
         tx.execute("UPDATE messages_fts SET message_id = ?2 WHERE message_id = ?1", params![old, new]).map_err(db_err)?;
         tx.commit().map_err(db_err)
     }
 
-    /// Delete a message and every message after it (for regenerate and edit).
-    pub fn truncate_from(&self, conversation_id: &str, message_id: &str) -> Result<()> {
-        let tx = self.db.unchecked_transaction().map_err(db_err)?;
-        let Some(seq): Option<i64> = tx.query_row("SELECT seq FROM messages WHERE id = ?1", [message_id], |r| r.get(0)).optional().map_err(db_err)? else {
-            return Ok(());
+    /// The next message saved becomes a new version of `message_id` (for edit and regenerate):
+    /// the shown branch ends just before it. The old version and what followed it stay.
+    pub fn fork_at(&self, conversation_id: &str, message_id: &str) -> Result<()> {
+        let parent: Option<String> = self
+            .db
+            .query_row("SELECT parent_id FROM messages WHERE id = ?1 AND conversation_id = ?2", params![message_id, conversation_id], |r| r.get(0))
+            .optional()
+            .map_err(db_err)?;
+        let Some(parent) = parent else { return Err(Error::not_found("Nachricht nicht gefunden")) };
+        self.set_head(conversation_id, &parent)?;
+        self.relayout(conversation_id)
+    }
+
+    /// Undo [`Store::fork_at`] when nothing new was saved since (the edit or regeneration
+    /// failed before it began): `message_id`'s branch is shown again.
+    pub fn unfork(&self, conversation_id: &str, message_id: &str) -> Result<()> {
+        let parent: Option<String> = self
+            .db
+            .query_row("SELECT parent_id FROM messages WHERE id = ?1 AND conversation_id = ?2", params![message_id, conversation_id], |r| r.get(0))
+            .optional()
+            .map_err(db_err)?;
+        match parent {
+            Some(p) if self.stored_head(conversation_id)?.as_deref() == Some(p.as_str()) => self.show_branch(conversation_id, message_id),
+            _ => Ok(()),
+        }
+    }
+
+    /// Show the version `index` (from 1) among `message_id` and its siblings, with the branch
+    /// that was last shown below it. Returns how many versions there are.
+    pub fn select_variant(&self, conversation_id: &str, message_id: &str, index: usize) -> Result<usize> {
+        let nodes = self.nodes(conversation_id)?;
+        let Some(me) = nodes.iter().find(|n| n.id == message_id) else { return Err(Error::not_found("Nachricht nicht gefunden")) };
+        let siblings: Vec<&Node> = nodes.iter().filter(|n| n.parent == me.parent).collect();
+        let Some(target) = index.checked_sub(1).and_then(|i| siblings.get(i)) else {
+            return Err(Error::invalid(format!("Fassung {index} gibt es nicht (1 bis {})", siblings.len())));
         };
-        tx.execute(
-            "DELETE FROM messages_fts WHERE message_id IN (SELECT id FROM messages WHERE conversation_id = ?1 AND seq >= ?2)",
-            params![conversation_id, seq],
-        )
-        .map_err(db_err)?;
-        tx.execute("DELETE FROM messages WHERE conversation_id = ?1 AND seq >= ?2", params![conversation_id, seq]).map_err(db_err)?;
-        tx.commit().map_err(db_err)
+        let id = target.id.clone();
+        self.show_branch(conversation_id, &id)?;
+        Ok(siblings.len())
+    }
+
+    /// Make `message_id` the shown child of its parent, and the head the end of its branch.
+    fn show_branch(&self, conversation_id: &str, message_id: &str) -> Result<()> {
+        self.db
+            .execute(
+                "UPDATE messages SET picked = (SELECT COALESCE(MAX(picked), 0) + 1 FROM messages WHERE conversation_id = ?1) WHERE id = ?2 AND conversation_id = ?1",
+                params![conversation_id, message_id],
+            )
+            .map_err(db_err)?;
+        let nodes = self.nodes(conversation_id)?;
+        let refs: Vec<&Node> = nodes.iter().collect();
+        let leaf = descend(&refs, message_id);
+        self.set_head(conversation_id, &leaf)?;
+        self.relayout(conversation_id)
+    }
+
+    /// Delete a message and everything that follows it on any branch (a schedule run without news).
+    pub fn truncate_from(&self, conversation_id: &str, message_id: &str) -> Result<()> {
+        let nodes = self.nodes(conversation_id)?;
+        let Some(me) = nodes.iter().find(|n| n.id == message_id) else { return Ok(()) };
+        let parent = me.parent.clone();
+        let mut doomed = vec![message_id.to_string()];
+        let mut i = 0;
+        while let Some(id) = doomed.get(i).cloned() {
+            doomed.extend(nodes.iter().filter(|n| n.parent == id).map(|n| n.id.clone()));
+            i += 1;
+            if i > nodes.len() {
+                break;
+            }
+        }
+        let tx = self.db.unchecked_transaction().map_err(db_err)?;
+        for id in &doomed {
+            tx.execute("DELETE FROM messages_fts WHERE message_id = ?1", [id]).map_err(db_err)?;
+            tx.execute("DELETE FROM messages WHERE id = ?1 AND conversation_id = ?2", params![id, conversation_id]).map_err(db_err)?;
+        }
+        tx.commit().map_err(db_err)?;
+        self.set_head(conversation_id, &parent)?;
+        self.relayout(conversation_id)
     }
 
     /// Full-text search over every message. Each word matches as a prefix; all must occur.
@@ -574,12 +783,65 @@ impl Store {
             .db
             .prepare(
                 "SELECT m.conversation_id, COALESCE(c.title, ''), m.content, m.created_at FROM messages m LEFT JOIN conversations c ON c.id = m.conversation_id
-                 WHERE m.role = 'user' AND m.created_at >= ?1 ORDER BY m.created_at DESC LIMIT ?2",
+                 WHERE m.role = 'user' AND m.active = 1 AND m.created_at >= ?1 ORDER BY m.created_at DESC LIMIT ?2",
             )
             .map_err(db_err)?;
         let rows = st.query_map(params![since, limit as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).map_err(db_err)?;
         rows.collect::<rusqlite::Result<_>>().map_err(db_err)
     }
+}
+
+/// A message's place in the tree.
+#[derive(Debug, Clone)]
+struct Node {
+    id: String,
+    parent: String,
+    picked: i64,
+    seq: i64,
+}
+
+/// Which version a message is among its siblings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Variant {
+    /// From 1.
+    pub index: usize,
+    pub count: usize,
+}
+
+/// The shown child of `parent`: the one picked last, the newest on a tie.
+fn shown_child<'a>(nodes: &[&'a Node], parent: &str) -> Option<(usize, &'a Node)> {
+    nodes.iter().copied().enumerate().filter(|(_, n)| n.parent == parent).max_by_key(|(_, n)| (n.picked, n.seq))
+}
+
+/// Indices (into `nodes`) of the shown branch from the first message, up to `head` when given.
+fn active_path(nodes: &[&Node], head: Option<&str>) -> Vec<usize> {
+    let mut path = Vec::new();
+    if head == Some("") {
+        return path;
+    }
+    let mut cur = String::new();
+    // At most one step per message: a damaged tree with a cycle still ends.
+    while path.len() < nodes.len() {
+        let Some((i, n)) = shown_child(nodes, &cur) else { break };
+        path.push(i);
+        if head == Some(n.id.as_str()) {
+            break;
+        }
+        cur = n.id.clone();
+    }
+    path
+}
+
+/// The end of the shown branch below (and including) `id`.
+fn descend(nodes: &[&Node], id: &str) -> String {
+    let mut cur = id.to_string();
+    for _ in 0..nodes.len() {
+        match shown_child(nodes, &cur) {
+            Some((_, n)) => cur = n.id.clone(),
+            None => break,
+        }
+    }
+    cur
 }
 
 /// Turn what a person types into an FTS5 query: every word quoted, as a prefix, all required.
@@ -686,6 +948,108 @@ mod tests {
         s.delete_conversation("a").unwrap();
         assert!(s.messages("a").unwrap().is_empty());
         assert!(s.search("photosynthese", 10).unwrap().is_empty());
+    }
+
+    fn ids(s: &Store, conv: &str) -> Vec<String> {
+        s.messages(conv).unwrap().into_iter().map(|m| m.id).collect()
+    }
+
+    /// Edit and regenerate keep the old version; switching shows its branch again; search
+    /// and the owner's words follow the shown branch.
+    #[test]
+    fn variants_after_edit_and_regenerate() {
+        let s = Store::open_in_memory().unwrap();
+        s.save_conversation(&conv("a", 1)).unwrap();
+        s.save_message(&msg("a", "u1", Role::User, "Frage eins")).unwrap();
+        s.save_message(&msg("a", "a1", Role::Assistant, "Antwort Apfel")).unwrap();
+        s.save_message(&msg("a", "u2", Role::User, "Frage zwei")).unwrap();
+        s.save_message(&msg("a", "a2", Role::Assistant, "Antwort Birne")).unwrap();
+        assert!(s.variants("a").unwrap().is_empty());
+
+        // Regenerate the last answer.
+        s.fork_at("a", "a2").unwrap();
+        assert_eq!(ids(&s, "a"), ["u1", "a1", "u2"]);
+        assert!(s.search("birne", 10).unwrap().is_empty(), "the hidden version is not searched");
+        s.save_message(&msg("a", "a2b", Role::Assistant, "Antwort Kirsche")).unwrap();
+        assert_eq!(ids(&s, "a"), ["u1", "a1", "u2", "a2b"]);
+        assert_eq!(s.variants("a").unwrap().get("a2b"), Some(&Variant { index: 2, count: 2 }));
+
+        // Edit the first question: a new branch from the start.
+        s.fork_at("a", "u1").unwrap();
+        assert!(ids(&s, "a").is_empty());
+        s.save_message(&msg("a", "u1b", Role::User, "Frage eins anders")).unwrap();
+        s.save_message(&msg("a", "a1b", Role::Assistant, "Antwort Pflaume")).unwrap();
+        assert_eq!(ids(&s, "a"), ["u1b", "a1b"]);
+        assert_eq!(s.variants("a").unwrap().get("u1b"), Some(&Variant { index: 2, count: 2 }));
+        assert_eq!(s.user_messages_since(0, 10).unwrap().len(), 1, "only the shown branch counts as the owner's words");
+
+        // Back to version 1: its branch comes back as it was last shown (with Kirsche).
+        assert_eq!(s.select_variant("a", "u1b", 1).unwrap(), 2);
+        assert_eq!(ids(&s, "a"), ["u1", "a1", "u2", "a2b"]);
+        assert_eq!(s.search("kirsche", 10).unwrap().len(), 1);
+        assert!(s.search("pflaume", 10).unwrap().is_empty());
+        s.select_variant("a", "a2b", 1).unwrap();
+        assert_eq!(ids(&s, "a"), ["u1", "a1", "u2", "a2"]);
+        assert_eq!(s.search("birne", 10).unwrap()[0].message_id, "a2");
+        assert!(s.select_variant("a", "a2", 3).is_err());
+        assert!(s.select_variant("a", "a2", 0).is_err());
+        assert!(s.select_variant("a", "nope", 1).is_err());
+        assert!(s.fork_at("a", "nope").is_err());
+
+        // A new message goes after the shown branch.
+        s.save_message(&msg("a", "u3", Role::User, "Frage drei")).unwrap();
+        assert_eq!(ids(&s, "a").last().map(String::as_str), Some("u3"));
+
+        // A failed edit puts the old branch back; after a saved message it does nothing.
+        s.fork_at("a", "u3").unwrap();
+        s.unfork("a", "u3").unwrap();
+        assert_eq!(ids(&s, "a").last().map(String::as_str), Some("u3"));
+        s.fork_at("a", "u3").unwrap();
+        s.save_message(&msg("a", "u3b", Role::User, "Frage drei anders")).unwrap();
+        s.unfork("a", "u3").unwrap();
+        assert_eq!(ids(&s, "a").last().map(String::as_str), Some("u3b"));
+
+        // Server ids keep the tree together.
+        s.save_message(&msg("a", "tmp", Role::Assistant, "")).unwrap();
+        s.rename_message("tmp", "srv").unwrap();
+        s.save_message(&msg("a", "u4", Role::User, "Frage vier")).unwrap();
+        assert_eq!(ids(&s, "a").iter().rev().take(2).collect::<Vec<_>>(), ["u4", "srv"]);
+
+        // Deleting a run removes it on every branch.
+        s.truncate_from("a", "u3b").unwrap();
+        assert_eq!(ids(&s, "a"), ["u1", "a1", "u2", "a2"]);
+        assert!(s.search("vier", 10).unwrap().is_empty());
+        s.delete_conversation("a").unwrap();
+        assert_eq!(s.stored_head("a").unwrap(), None);
+    }
+
+    /// A database from schema 3 (messages without a tree) opens; its chats become one branch
+    /// and take new versions.
+    #[test]
+    fn migrates_schema_3_messages_into_one_branch() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, backend_id TEXT NOT NULL, model_id TEXT NOT NULL,
+               project_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, pinned INTEGER NOT NULL DEFAULT 0,
+               sources TEXT NOT NULL DEFAULT '{}', extra TEXT NOT NULL DEFAULT '{}');
+             CREATE TABLE messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+               seq INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL, extra TEXT NOT NULL);
+             INSERT INTO conversations VALUES ('old', 'Alt', 'b', 'm', NULL, 0, 5, 0, '{}', '{}');
+             INSERT INTO messages VALUES ('m1', 'old', 1, 'user', 'Hallo', 1, '{}'), ('m2', 'old', 2, 'assistant', 'Tag', 2, '{}'),
+               ('m3', 'old', 3, 'user', 'Noch was', 3, '{}'), ('m4', 'old', 4, 'assistant', 'Gern', 4, '{}');
+             PRAGMA user_version = 3;",
+        )
+        .unwrap();
+        let s = Store::init(db).unwrap();
+        assert_eq!(ids(&s, "old"), ["m1", "m2", "m3", "m4"]);
+        assert!(s.variants("old").unwrap().is_empty());
+        s.fork_at("old", "m3").unwrap();
+        s.save_message(&msg("old", "m3b", Role::User, "Anders")).unwrap();
+        assert_eq!(ids(&s, "old"), ["m1", "m2", "m3b"]);
+        s.select_variant("old", "m3b", 1).unwrap();
+        assert_eq!(ids(&s, "old"), ["m1", "m2", "m3", "m4"]);
+        let v: i64 = s.db.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
     }
 
     #[test]

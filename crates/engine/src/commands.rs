@@ -82,6 +82,18 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("chat.edit", "Nachricht bearbeiten und neu senden", "Chat", None, "message_id: string, text: string", false, |c, p| Box::pin(async move {
         chat::edit(c, req_str(&p, "message_id")?, req_str(&p, "text")?).await
     })),
+    cmd!(
+        "chat.variant",
+        "Fassung zeigen",
+        "Chat",
+        None,
+        "message_id: string, index: number (1 = erste Fassung; nach Bearbeiten oder Neu erzeugen)",
+        false,
+        |c, p| Box::pin(async move {
+            let index = p.get("index").and_then(Value::as_u64).ok_or_else(|| Error::invalid("index fehlt (eine Zahl ab 1)"))?;
+            chat::select_variant(&c, &req_str(&p, "message_id")?, usize::try_from(index).unwrap_or(usize::MAX))
+        })
+    ),
     cmd!("chat.select_model", "Modell wählen", "Chat", None, "backend: string, model: string", false, |c, p| Box::pin(select_model(c, p))),
     cmd!(
         "chat.set_sources",
@@ -594,6 +606,7 @@ async fn chat_new(c: Ctx, p: Value) -> Result<Value> {
     c.update(|s| {
         s.current = None;
         s.messages.clear();
+        s.variants.clear();
         s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: None, kind, aspect_ratio };
     });
     persist_selection(&c);
@@ -604,10 +617,12 @@ async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let conv = c.state().conversation(&id).cloned().or(c.store(|st| st.conversation(&id))?).ok_or_else(|| Error::not_found("Chat nicht gefunden"))?;
     let messages = c.store(|st| st.messages(&id))?;
+    let variants = c.store(|st| st.variants(&id))?;
     let n = messages.len();
     c.update(|s| {
         s.current = Some(id.clone());
         s.messages = messages;
+        s.variants = variants;
         s.selection = Selection {
             backend_id: conv.backend_id.clone(),
             model_id: conv.model_id.clone(),
@@ -693,6 +708,7 @@ async fn chat_delete(c: Ctx, p: Value) -> Result<Value> {
         if s.current.as_deref() == Some(&id) {
             s.current = None;
             s.messages.clear();
+            s.variants.clear();
         }
     });
     Ok(json!({}))
@@ -895,6 +911,7 @@ async fn persona_start(c: Ctx, p: Value) -> Result<Value> {
     c.update(|s| {
         s.current = None;
         s.messages.clear();
+        s.variants.clear();
         s.selection = Selection {
             backend_id,
             model_id,

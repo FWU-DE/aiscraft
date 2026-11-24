@@ -17,6 +17,9 @@ pub struct State {
     /// The open conversation; `None` = a new chat that starts on the first message.
     pub current: Option<String>,
     pub messages: Vec<Message>,
+    /// Messages of the open chat that have other versions (after edit or regenerate), by id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub variants: BTreeMap<String, aiscraft_store::Variant>,
     /// Backend, model and project for the open (or new) chat.
     pub selection: Selection,
     /// Conversations with an answer being generated right now.

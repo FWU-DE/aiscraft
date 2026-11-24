@@ -294,7 +294,7 @@ impl AisCraftApp {
                     if ui.button("Abbrechen").clicked() {
                         cancel = true;
                     }
-                    ui.label(small_muted(&t, "Alles danach wird verworfen und neu erzeugt."));
+                    ui.label(small_muted(&t, "Die bisherige Fassung bleibt erhalten; mit ‹ › wechselst du zwischen den Fassungen."));
                 });
             });
             if let Some((mid, text)) = send {
@@ -331,6 +331,7 @@ impl AisCraftApp {
             let hovered = ui.rect_contains_pointer(r.response.rect.expand(24.0));
             ui.horizontal_wrapped(|ui| {
                 ui.set_min_height(18.0);
+                self.variant_switcher(ui, &m.id);
                 if hovered && !self.state.current.as_ref().is_some_and(|c| self.state.is_generating(c)) {
                     if icon_button(ui, &t, "✏", "Bearbeiten").clicked() {
                         self.editing = Some((m.id.clone(), m.content.clone()));
@@ -346,7 +347,14 @@ impl AisCraftApp {
     fn assistant_message(&mut self, ui: &mut Ui, m: &Message, is_last: bool) {
         let t = self.tokens.clone();
         let generating = is_last && self.state.current.as_ref().is_some_and(|c| self.state.is_generating(c));
-        if let Some(model) = &m.model {
+        if self.state.variants.contains_key(&m.id) {
+            ui.horizontal(|ui| {
+                self.variant_switcher(ui, &m.id);
+                if let Some(model) = &m.model {
+                    ui.label(small_muted(&t, model));
+                }
+            });
+        } else if let Some(model) = &m.model {
             ui.label(small_muted(&t, model));
         }
         if !m.activity.is_empty() {
@@ -553,6 +561,26 @@ impl AisCraftApp {
                 }
             });
         }
+    }
+
+    /// ‹ 1/2 › for a message with several versions (after edit or regenerate).
+    fn variant_switcher(&mut self, ui: &mut Ui, message_id: &str) {
+        let Some(v) = self.state.variants.get(message_id).copied() else { return };
+        let t = self.tokens.clone();
+        let busy = self.state.current.as_ref().is_some_and(|c| self.state.is_generating(c));
+        let gap = ui.spacing().item_spacing.x;
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let prev = ui.add_enabled(!busy && v.index > 1, egui::Button::new(RichText::new("‹").size(17.0)).frame(false)).on_hover_text("Vorige Fassung");
+        if prev.clicked() {
+            self.run("chat.variant", json!({"message_id": message_id, "index": v.index - 1}));
+        }
+        ui.label(small_muted(&t, format!("{}/{}", v.index, v.count)));
+        let next = ui.add_enabled(!busy && v.index < v.count, egui::Button::new(RichText::new("›").size(17.0)).frame(false)).on_hover_text("Nächste Fassung");
+        if next.clicked() {
+            self.run("chat.variant", json!({"message_id": message_id, "index": v.index + 1}));
+        }
+        ui.spacing_mut().item_spacing.x = gap;
+        ui.add_space(gap);
     }
 
     /// A diagram from a ```jsxgraph-json block: drawn where possible, the data one click away.

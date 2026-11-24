@@ -1517,3 +1517,75 @@ fn web_fetch_tool_reads_pages_and_lists_sources() {
     let (_, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, "", true));
     assert!(err);
 }
+
+/// Edit and regenerate keep the old version (issue #33): ‹ › switches, the model, the export
+/// and the search follow the shown branch, a failed edit leaves the old branch in place.
+#[test]
+fn variants_keep_old_versions_and_steer_the_history() {
+    use aiscraft_store::Variant;
+    let (engine, seen) = engine_with_recording("Antwort");
+    engine.call("chat.send", json!({"text": "Erste Frage"})).unwrap();
+    let s = engine.state();
+    let (q1, a1) = (s.messages[0].id.clone(), s.messages[1].id.clone());
+    assert!(s.variants.is_empty());
+
+    engine.call("chat.regenerate", json!({})).unwrap();
+    let s = engine.state();
+    assert_eq!(s.messages.len(), 2);
+    let a2 = s.messages[1].id.clone();
+    assert_ne!(a1, a2, "a new answer, the old one stays");
+    assert_eq!(s.variants.get(&a2), Some(&Variant { index: 2, count: 2 }));
+    let out = engine.call("chat.variant", json!({"message_id": a2, "index": 1})).unwrap();
+    assert_eq!(out["count"], 2);
+    assert_eq!(engine.state().messages[1].id, a1);
+    assert_eq!(engine.state().variants.get(&a1), Some(&Variant { index: 1, count: 2 }));
+
+    engine.call("chat.edit", json!({"message_id": q1, "text": "Geänderte Frage"})).unwrap();
+    let s = engine.state();
+    let q2 = s.messages[0].id.clone();
+    assert_eq!((s.messages.len(), s.messages[0].content.as_str()), (2, "Geänderte Frage"));
+    assert_eq!(s.variants.get(&q2), Some(&Variant { index: 2, count: 2 }));
+    let md = engine.call("chat.export", json!({})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(md.contains("## Du\n\nGeänderte Frage") && !md.contains("## Du\n\nErste Frage"), "export follows the shown branch: {md}");
+    assert!(engine.call("search", json!({"query": "erste"})).unwrap().as_array().unwrap().is_empty(), "search follows the shown branch");
+
+    // Back to the first question: the next message builds on it, not on the edit.
+    engine.call("chat.variant", json!({"message_id": q2, "index": 1})).unwrap();
+    let s = engine.state();
+    assert_eq!((s.messages[0].id.as_str(), s.messages[1].id.as_str()), (q1.as_str(), a1.as_str()));
+    engine.call("chat.send", json!({"text": "Weiter bitte"})).unwrap();
+    let last = seen.lock().unwrap().last().cloned().unwrap();
+    assert!(last.contains("Erste Frage") && !last.contains("Geänderte Frage"), "{last}");
+    assert_eq!(engine.state().messages.len(), 4);
+
+    // A failed edit keeps the branch as it was.
+    assert!(engine.call("chat.edit", json!({"message_id": q1, "text": "   "})).is_err());
+    assert_eq!(engine.state().messages.len(), 4);
+    assert_eq!(engine.state().variants.get(&q1), Some(&Variant { index: 1, count: 2 }));
+
+    // Reopened from the store, the versions are still there.
+    let conv = engine.state().current.clone().unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    assert!(engine.state().variants.is_empty());
+    engine.call("chat.open", json!({"id": conv})).unwrap();
+    assert_eq!(engine.state().messages.len(), 4);
+    assert_eq!(engine.state().variants.len(), 2);
+
+    assert!(engine.call("chat.variant", json!({"message_id": q1, "index": 3})).is_err());
+    assert!(engine.call("chat.variant", json!({"message_id": q1})).is_err());
+    assert!(engine.call("chat.variant", json!({"message_id": "nope", "index": 1})).is_err());
+}
+
+/// AIS.chat keeps its own history: a regeneration sends the history up to the user message,
+/// with that message's id, so the server replaces its answer.
+#[test]
+fn ais_chat_regenerate_ends_with_the_user_message() {
+    let (engine, posted) = ais_engine();
+    engine.call("chat.send", json!({"text": "Wie heißt du?"})).unwrap();
+    let uid = engine.state().messages.iter().find(|m| m.role == aiscraft_core::Role::User).unwrap().id.clone();
+    engine.call("chat.regenerate", json!({})).unwrap();
+    let body = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(body.contains(&format!(r#""id":"{uid}","role":"user"}}]"#)), "{body}");
+    assert!(!body.contains(r#""role":"assistant""#), "{body}");
+    assert_eq!(engine.state().variants.len(), 1);
+}

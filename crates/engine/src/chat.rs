@@ -88,6 +88,7 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
         s.conversations.insert(pos, conv);
         s.current = Some(id.clone());
         s.messages.clear();
+        s.variants.clear();
         s.messages.extend(greeting);
     });
     Ok(id)
@@ -323,21 +324,27 @@ pub(crate) async fn regenerate(c: Ctx) -> Result<Value> {
         return Err(Error::invalid("Die Antwort läuft noch"));
     }
     let image_chat = state.conversation(&conv).is_some_and(|x| x.kind == ConversationKind::Image);
-    // Drop everything after the last user message (answers and tool rounds).
+    let Some(prompt) = state.messages.iter().rev().find(|m| m.role == Role::User).map(|m| m.content.clone()) else {
+        return Err(Error::invalid("Nichts zum neu Erzeugen"));
+    };
+    // The new answer becomes another version of the first one after the last user message;
+    // the old answer (and its tool rounds) stays and can be shown again.
+    let mut forked = None;
     if let Some(pos) = state.messages.iter().rposition(|m| m.role == Role::User)
         && let Some(first) = state.messages.get(pos + 1)
     {
         let id = first.id.clone();
-        c.store(|st| st.truncate_from(&conv, &id))?;
+        c.store(|st| st.fork_at(&conv, &id))?;
         c.update(|s| s.messages.truncate(pos + 1));
+        forked = Some(id);
     }
-    let Some(prompt) = state.messages.iter().rev().find(|m| m.role == Role::User).map(|m| m.content.clone()) else {
-        return Err(Error::invalid("Nichts zum neu Erzeugen"));
-    };
-    if image_chat {
-        return image_answer(c, conv, prompt).await;
+    let out = if image_chat { image_answer(c.clone(), conv.clone(), prompt).await } else { generate(c.clone(), conv.clone()).await };
+    if out.is_err()
+        && let Some(id) = forked
+    {
+        restore_fork(&c, &conv, &id);
     }
-    generate(c, conv).await
+    out
 }
 
 pub(crate) async fn edit(c: Ctx, message_id: String, text: String) -> Result<Value> {
@@ -347,9 +354,60 @@ pub(crate) async fn edit(c: Ctx, message_id: String, text: String) -> Result<Val
         return Err(Error::invalid("Die Antwort läuft noch"));
     }
     let pos = state.messages.iter().position(|m| m.id == message_id && m.role == Role::User).ok_or_else(|| Error::not_found("Nachricht nicht gefunden"))?;
-    c.store(|st| st.truncate_from(&conv, &message_id))?;
+    // The edited text becomes another version of the message; the old one stays.
+    c.store(|st| st.fork_at(&conv, &message_id))?;
     c.update(|s| s.messages.truncate(pos));
-    send(c, text, vec![]).await
+    let out = send(c.clone(), text, vec![]).await;
+    if out.is_err() {
+        restore_fork(&c, &conv, &message_id);
+    }
+    out
+}
+
+/// An edit or regeneration failed before it saved anything: show the old version again.
+fn restore_fork(c: &Ctx, conv: &str, message_id: &str) {
+    if c.store(|st| st.unfork(conv, message_id)).is_ok() {
+        let _ = reload_branch(c, conv);
+    }
+}
+
+/// Read the shown branch of a chat from the store again (after switching versions).
+pub(crate) fn reload_branch(c: &Ctx, conv: &str) -> Result<()> {
+    let messages = c.store(|st| st.messages(conv))?;
+    let variants = c.store(|st| st.variants(conv))?;
+    c.update(|s| {
+        if s.current.as_deref() == Some(conv) {
+            s.messages = messages;
+            s.variants = variants;
+        }
+    });
+    Ok(())
+}
+
+/// Refresh which messages have other versions (a new version was just saved).
+fn sync_variants(c: &Ctx, conv: &str) {
+    if let Ok(v) = c.store(|st| st.variants(conv)) {
+        c.update(|s| {
+            if s.current.as_deref() == Some(conv) {
+                s.variants = v;
+            }
+        });
+    }
+}
+
+/// Show version `index` (from 1) of a message in the open chat.
+pub(crate) fn select_variant(c: &Ctx, message_id: &str, index: usize) -> Result<Value> {
+    let state = c.state();
+    let conv = state.current.clone().ok_or_else(|| Error::invalid("Kein Chat offen"))?;
+    if state.is_generating(&conv) {
+        return Err(Error::invalid("Die Antwort läuft noch"));
+    }
+    if !state.messages.iter().any(|m| m.id == message_id) {
+        return Err(Error::not_found("Nachricht nicht gefunden"));
+    }
+    let count = c.store(|st| st.select_variant(&conv, message_id, index))?;
+    reload_branch(c, &conv)?;
+    Ok(json!({"index": index, "count": count, "messages": c.state().messages.len()}))
 }
 
 /// The block of memory and project instructions to put in front of the next message, with its
@@ -557,6 +615,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
 
     let mut answer = new_answer(&conv_id, &model_name);
     put_message(&c, &conv_id, &answer);
+    sync_variants(&c, &conv_id);
     let mut result = Ok(());
     let mut read_pages: Vec<aiscraft_core::ActivityLink> = Vec::new();
     for round in 0..MAX_TOOL_ROUNDS {
@@ -747,6 +806,7 @@ async fn image_answer(c: Ctx, conv_id: String, prompt: String) -> Result<Value> 
     c.update(|s| s.generating.push(conv_id.clone()));
     let mut answer = new_answer(&conv_id, &c.state().model_name(&conv.backend_id, &conv.model_id));
     put_message(&c, &conv_id, &answer);
+    sync_variants(&c, &conv_id);
     let req = aiscraft_core::ImageRequest { prompt, model: conv.model_id.clone(), aspect_ratio: aspect, conversation_id: conv.remote_id.clone() };
     let result = tokio::select! {
         r = backend.generate_image(req) => r,
