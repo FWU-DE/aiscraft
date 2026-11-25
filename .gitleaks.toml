@@ -11,4 +11,12 @@ description = "Fake keys in tests and the demo snapshot (sk-ant-test, sk-test, â
 regexes = [
   '''sk-(ant-)?test[A-Za-z0-9_-]*''',
   '''-----BEGIN (RSA )?PRIVATE KEY-----\\nAAAA\\n-----END (RSA )?PRIVATE KEY-----''',
+  # RFC 6238 test secret "12345678901234567890" in base32 (vault.rs, totp_rfc6238_vectors).
+  '''GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ''',
 ]
+
+[[allowlists]]
+description = "Published SHA-256 checksums of the downloadable name-recognition model (privacy/ner.rs)"
+condition = "AND"
+paths = ['''crates/engine/src/privacy/ner\.rs''']
+regexes = ['''^[0-9a-f]{64}$''']
