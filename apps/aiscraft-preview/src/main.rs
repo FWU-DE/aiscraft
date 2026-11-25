@@ -21,8 +21,11 @@
 //! from the app steer the window instead (the size a view asked for, within caps; the small
 //! window on top for the `pip` display mode) and never reach the view.
 
+mod h5p;
+
 use std::borrow::Cow;
 use std::io::{BufRead as _, Read as _, Write as _};
+use std::path::PathBuf;
 
 use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
@@ -152,18 +155,8 @@ enum UserEvent {
     Window(Steer),
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let Some(file) = arg(&args, "--file") else { fail("--file <page.html> fehlt") };
-    let title = arg(&args, "--title").unwrap_or_else(|| "Lern-App".into());
-    let bridge = args.iter().any(|a| a == "--bridge");
-    let connect = all_args(&args, "--connect");
-    let resources = all_args(&args, "--resource");
-    if !connect.iter().all(|d| domain_ok(d, true)) || !resources.iter().all(|d| domain_ok(d, false)) {
-        fail("unzulässige Netzfreigabe");
-    }
-    let csp: String = if bridge { view_csp(&connect, &resources) } else { CSP.to_string() };
-    let page = match std::fs::File::open(&file) {
+fn read_page(file: &str) -> Vec<u8> {
+    match std::fs::File::open(file) {
         Ok(f) => {
             let mut buf = Vec::new();
             if f.take(MAX_PAGE + 1).read_to_end(&mut buf).is_err() || buf.len() as u64 > MAX_PAGE {
@@ -172,7 +165,32 @@ fn main() {
             buf
         }
         Err(e) => fail(&format!("{file}: {e}")),
+    }
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    // `--h5p <content dir> --player <player dir>`: H5P content in the H5P player (#62).
+    let h5p_dirs = arg(&args, "--h5p").zip(arg(&args, "--player")).map(|(c, p)| (PathBuf::from(c), PathBuf::from(p)));
+    if let Some((content, player)) = &h5p_dirs
+        && (!content.join("h5p.json").is_file() || !player.join("player").join("main.bundle.js").is_file())
+    {
+        fail("H5P-Inhalt oder H5P-Player fehlt");
+    }
+    let file = match (&h5p_dirs, arg(&args, "--file")) {
+        (Some(_), _) => String::new(),
+        (None, Some(f)) => f,
+        (None, None) => fail("--file <page.html> fehlt"),
     };
+    let title = arg(&args, "--title").unwrap_or_else(|| if h5p_dirs.is_some() { "H5P".into() } else { "Lern-App".into() });
+    let bridge = h5p_dirs.is_none() && args.iter().any(|a| a == "--bridge");
+    let connect = all_args(&args, "--connect");
+    let resources = all_args(&args, "--resource");
+    if !connect.iter().all(|d| domain_ok(d, true)) || !resources.iter().all(|d| domain_ok(d, false)) {
+        fail("unzulässige Netzfreigabe");
+    }
+    let csp: String = if bridge { view_csp(&connect, &resources) } else { CSP.to_string() };
+    let page = if h5p_dirs.is_some() { Vec::new() } else { read_page(&file) };
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     if bridge {
@@ -208,28 +226,48 @@ fn main() {
         Err(e) => fail(&format!("Fenster: {e}")),
     };
 
-    let mut builder = WebViewBuilder::new()
-        .with_custom_protocol("aiscraft".into(), move |_id, request| {
-            // One page; anything else the page asks for does not exist.
-            let path = request.uri().path();
-            let (status, body, mime): (u16, Cow<'static, [u8]>, &str) = if path == "/" || path == "/index.html" {
-                (200, Cow::Owned(page.clone()), "text/html; charset=utf-8")
-            } else {
-                (404, Cow::Borrowed(b"".as_slice()), "text/plain")
-            };
-            Response::builder()
-                .status(status)
-                .header(CONTENT_TYPE, mime)
-                .header("Content-Security-Policy", csp.as_str())
-                .header("X-Content-Type-Options", "nosniff")
-                .body(body)
-                .unwrap_or_else(|_| Response::new(Cow::Borrowed(b"".as_slice())))
-        })
-        .with_url(START)
-        .with_navigation_handler(|url| url.starts_with(START))
+    let builder = WebViewBuilder::new()
         .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
         .with_download_started_handler(|_, _| false)
         .with_devtools(cfg!(debug_assertions));
+    let mut builder = if let Some((content, player)) = h5p_dirs {
+        let origin = h5p::origin();
+        let policy = h5p::csp(origin);
+        let page_title = title.clone();
+        builder
+            .with_custom_protocol(h5p::SCHEME.into(), move |_id, request| {
+                let (status, body, mime) = h5p::respond(request.uri().path(), &content, &player, &page_title);
+                Response::builder()
+                    .status(status)
+                    .header(CONTENT_TYPE, mime)
+                    .header("Content-Security-Policy", policy.as_str())
+                    .header("X-Content-Type-Options", "nosniff")
+                    .body(Cow::Owned(body))
+                    .unwrap_or_else(|_| Response::new(Cow::Borrowed(b"".as_slice())))
+            })
+            .with_url(format!("{origin}/"))
+            .with_navigation_handler(move |url| h5p::navigation_ok(&url, origin))
+    } else {
+        builder
+            .with_custom_protocol("aiscraft".into(), move |_id, request| {
+                // One page; anything else the page asks for does not exist.
+                let path = request.uri().path();
+                let (status, body, mime): (u16, Cow<'static, [u8]>, &str) = if path == "/" || path == "/index.html" {
+                    (200, Cow::Owned(page.clone()), "text/html; charset=utf-8")
+                } else {
+                    (404, Cow::Borrowed(b"".as_slice()), "text/plain")
+                };
+                Response::builder()
+                    .status(status)
+                    .header(CONTENT_TYPE, mime)
+                    .header("Content-Security-Policy", csp.as_str())
+                    .header("X-Content-Type-Options", "nosniff")
+                    .body(body)
+                    .unwrap_or_else(|_| Response::new(Cow::Borrowed(b"".as_slice())))
+            })
+            .with_url(START)
+            .with_navigation_handler(|url| url.starts_with(START))
+    };
     if bridge {
         builder = builder.with_initialization_script(BRIDGE_JS).with_ipc_handler(|req| {
             // One message per line; JSON.stringify never writes a raw line break.

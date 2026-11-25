@@ -112,6 +112,11 @@ pub enum Dialog {
     DeleteChats(crate::archive_view::DeleteChats),
     /// Chats out of the trash for good, or the whole trash (#77).
     PurgeChats(crate::archive_view::PurgeChats),
+    /// The optional H5P player (#62): what it is, size, source and licence, load or remove it.
+    /// `artifact` is the H5P content to show once it is there.
+    H5pPlayer {
+        artifact: String,
+    },
 }
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
@@ -460,6 +465,10 @@ impl AisCraftApp {
             Dialog::Install { id, values } => {
                 let id = id.clone();
                 self.install_body(ui, &id, values)
+            }
+            Dialog::H5pPlayer { artifact } => {
+                let artifact = artifact.clone();
+                self.h5p_player_body(ui, &artifact)
             }
             Dialog::AddConnector { name, command, env, url, headers, http } => {
                 ui.heading("Konnektor hinzufügen");

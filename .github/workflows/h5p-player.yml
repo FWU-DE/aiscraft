@@ -1,0 +1,86 @@
+name: H5P-Player
+
+# Builds the optional H5P player (#62) with packaging/h5p-player/build.sh and, when asked,
+# publishes it on its own release tag (h5p-player-v<BUNDLE_VERSION>) with SHA256SUMS.txt.
+# The app downloads it from there only after the owner's explicit yes. The player contains the
+# H5P core (GPL-3.0), so it never goes into the app's packages or this repository.
+#
+# - Run it by hand ("Run workflow"). Without "publish" it only builds and keeps the zip as a
+#   workflow artifact for a look.
+# - A published tag is never replaced: a changed bundle gets a new BUNDLE_VERSION in build.sh
+#   and in crates/engine/src/learn/h5p_player.rs.
+# - The release is a pre-release and never "latest", so the app's update check (stable
+#   releases, tags named after versions) never mistakes it for a new app version.
+# - After the first publish, put the printed SHA-256 into PINNED_SHA256 in
+#   crates/engine/src/learn/h5p_player.rs, so the app also refuses a replaced asset.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Als Release veröffentlichen (Tag h5p-player-v<Version>)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: h5p-player
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: H5P-Player bauen
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Bauen
+        run: bash packaging/h5p-player/build.sh --out dist/h5p-player
+      - name: Prüfsumme
+        id: sum
+        run: |
+          cat dist/h5p-player/SHA256SUMS.txt
+          echo "sha256=$(cut -d' ' -f1 dist/h5p-player/SHA256SUMS.txt)" >> "$GITHUB_OUTPUT"
+          echo "asset=$(ls dist/h5p-player/*.zip | xargs -n1 basename)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### H5P-Player"
+            echo
+            echo "\`$(cat dist/h5p-player/SHA256SUMS.txt)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: h5p-player
+          path: dist/h5p-player/
+          retention-days: 14
+      - name: Veröffentlichen
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET: ${{ steps.sum.outputs.asset }}
+          SHA256: ${{ steps.sum.outputs.sha256 }}
+        run: |
+          version="${ASSET#aiscraft-h5p-player-}"
+          version="${version%.zip}"
+          tag="h5p-player-v${version}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::$tag gibt es schon. Ein veröffentlichter H5P-Player wird nie ersetzt; für ein neues Paket BUNDLE_VERSION erhöhen."
+            exit 1
+          fi
+          cat > notes.md <<EOF
+          Optionaler H5P-Player für AIS.ChatCraft (#62): h5p-standalone mit dem H5P-Kern und den Inhaltstypen,
+          die AIS.ChatCraft erstellt. AIS.ChatCraft lädt ihn nur auf ausdrücklichen Wunsch („H5P-Player laden“).
+
+          **Lizenz:** Der H5P-Kern steht unter der GPL-3.0, h5p-standalone und die Inhaltstypen meist unter MIT.
+          Lizenztexte und Quellen stehen im Paket (NOTICE.txt, LICENSES/).
+
+          SHA-256 von \`${ASSET}\`: \`${SHA256}\`
+
+          Kein App-Release.
+          EOF
+          gh release create "$tag" dist/h5p-player/"$ASSET" dist/h5p-player/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --title "H5P-Player ${version}" --notes-file notes.md --prerelease --latest=false

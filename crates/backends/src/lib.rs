@@ -5,6 +5,7 @@ mod aischat;
 mod anthropic;
 pub mod browser_login;
 mod claude_cli;
+pub mod download;
 mod http;
 mod openai;
 pub mod picture;

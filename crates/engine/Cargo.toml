@@ -49,6 +49,8 @@ kurbo = "0.13"
 yrs = "0.28"
 hmac = "0.12"
 sha1 = "0.10"
+# Checksum of the optional H5P player download (#62); already in the tree.
+sha2 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 notify-rust = { version = "4", default-features = false, features = ["z"] }
 webbrowser = "1"
