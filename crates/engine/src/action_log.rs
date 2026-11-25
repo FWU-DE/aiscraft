@@ -105,6 +105,38 @@ pub(crate) fn tool(c: &Ctx, conv: &str, name: &str, detail: String, why: &Why, o
     );
 }
 
+/// A connection from the workspace (#106): where to, how many bytes, allowed or why not.
+pub(crate) fn net(c: &Ctx, conv: &str, conn: &crate::sandbox::net::Conn) {
+    use crate::sandbox::net::Outcome;
+    let detail = match conn.outcome {
+        Outcome::Refused => format!("{}:{} abgelehnt", conn.host, conn.port),
+        _ => format!("{}:{} · {} Bytes hinaus, {} Bytes herein", conn.host, conn.port, conn.sent, conn.received),
+    };
+    add(
+        c,
+        LogEntry {
+            at: now_ms(),
+            conversation_id: conv.to_string(),
+            kind: "net".into(),
+            name: "Eigener Rechner · Netz".into(),
+            detail: cap(&detail, MAX_DETAIL),
+            reason: match conn.outcome {
+                Outcome::Allowed => "Erlaubte Seite".into(),
+                _ => cap(&conn.why, 200),
+            },
+            outcome: match conn.outcome {
+                Outcome::Allowed => "ok",
+                Outcome::Refused => "denied",
+                Outcome::Failed => "error",
+            }
+            .into(),
+            input_tokens: None,
+            output_tokens: None,
+            usd: None,
+        },
+    );
+}
+
 pub(crate) async fn list(c: Ctx, p: Value) -> Result<Value> {
     let limit = p.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 5000) as usize;
     let conv = p.get("conversation").and_then(Value::as_str).map(str::to_string);
@@ -136,7 +168,12 @@ pub(crate) fn csv(rows: &[LogEntry], chat: impl Fn(&str) -> String) -> String {
         let fields = [
             crate::format_local(e.at),
             chat(&e.conversation_id),
-            (if e.kind == "model" { "Modell" } else { "Werkzeug" }).to_string(),
+            (match e.kind.as_str() {
+                "model" => "Modell",
+                "net" => "Netz",
+                _ => "Werkzeug",
+            })
+            .to_string(),
             e.name.clone(),
             e.detail.clone(),
             e.reason.clone(),

@@ -4,7 +4,8 @@
 //! - an unprivileged user (1000:1000, no sudo in the image), every capability dropped,
 //!   `no-new-privileges`, a read-only root file system with a small `/tmp`;
 //! - 2 GB RAM (no extra swap), 2 CPUs, 1024 processes;
-//! - `--network none` unless the person switched the network on;
+//! - `--network none`; with network (`net.rs`) only an internal network of its own run whose one
+//!   neighbour is the relay to the app's proxy, no DNS beyond it, the proxy in `HTTPS_PROXY`;
 //! - nothing of the host: the only mount is the chat's working folder `/work/<chat>` of the
 //!   private computer, at `/work`. The private computer itself mounts no Windows drive (`wsl.rs`).
 //!
@@ -13,9 +14,6 @@
 
 use aiscraft_core::{Error, Result};
 
-/// The network containers use while the network switch is on (Nod's runtime turns Docker's
-/// default bridge off).
-pub(crate) const NETWORK: &str = "aiscraft-net";
 pub(crate) const MEMORY: &str = "2g";
 pub(crate) const CPUS: &str = "2";
 pub(crate) const PIDS: &str = "1024";
@@ -37,9 +35,10 @@ pub(crate) const LIST_SCRIPT: &str = r#"cd -- "$1" && find . -mindepth 1 -maxdep
 /// In the private computer as root, before a container: Docker running, the workspace image
 /// loaded (only after its tar matched the pinned checksum, as Nod does), every other image (an
 /// older workspace) and Nod's images we never
-/// use removed, the network for the switch there, the chat's folder there and owned by the
-/// container's user. `$1` image id (`Workspace::image`), `$2` chat (may be empty), `$3` the image tar, `$4` its
-/// SHA-256, `$5` `1` when the network switch is on.
+/// use removed, the chat's folder there and owned by the container's user. When setting up
+/// (no chat): leftovers of runs with network (relays, their networks) and the open network of
+/// v0.3.0 (`aiscraft-net`) go. `$1` image id (`Workspace::image`), `$2` chat (may be empty), `$3`
+/// the image tar, `$4` its SHA-256.
 pub(crate) const PREPARE_SCRIPT: &str = r#"set -e
 if ! docker info >/dev/null 2>&1; then
   (setsid dockerd </dev/null >/var/log/aiscraft-dockerd.log 2>&1 &)
@@ -57,7 +56,11 @@ if [ "$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null)" != "$1" ]; th
 fi
 rm -f /opt/nod-assets/images/browser.tar.zst /opt/nod-assets/images/postgres.tar.zst 2>/dev/null || true
 docker image ls --no-trunc --format '{{.ID}}' | grep -vx "$1" | xargs -r docker image rm -f >/dev/null 2>&1 || true
-if [ "$5" = 1 ]; then docker network inspect aiscraft-net >/dev/null 2>&1 || docker network create aiscraft-net >/dev/null; fi
+if [ -z "$2" ]; then
+  docker ps -aq --filter label=aiscraft.relay | xargs -r docker rm -f >/dev/null 2>&1 || true
+  docker network ls -q --filter label=aiscraft.net | xargs -r docker network rm >/dev/null 2>&1 || true
+  docker network rm aiscraft-net >/dev/null 2>&1 || true
+fi
 if [ -n "$2" ]; then install -d -o 1000 -g 1000 -m 0700 "/work/$2"; fi"#;
 /// Remove a chat's working folder. `$1` chat.
 pub(crate) const CLEAR_SCRIPT: &str = r#"[ -n "$1" ] && rm -rf -- "/work/$1""#;
@@ -108,8 +111,42 @@ pub(crate) fn rel_path(raw: &str) -> Result<String> {
     Ok(if parts.is_empty() { ".".into() } else { parts.join("/") })
 }
 
-/// The one way a container is started. `name` lets a time limit stop it (`docker kill`).
-pub(crate) fn docker_run(chat: &str, name: &str, network: bool, image: &str, script: &str, args: &[&str]) -> Vec<String> {
+/// How a container reaches the network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Net<'a> {
+    /// `--network none`.
+    None,
+    /// The run's internal network (`net::open`); the only way out is the relay to the app's proxy.
+    Proxy { network: &'a str, relay: &'a str },
+}
+
+/// A DNS server the workspace can never reach: Docker's own resolver still answers the relay's
+/// name, but forwards nothing (a loopback address here would make Docker ask from the private
+/// computer itself, a way out for DNS).
+pub(crate) const NO_DNS: &str = "192.0.2.1";
+
+fn net_args(net: Net) -> Vec<String> {
+    match net {
+        Net::None => vec!["--network".into(), "none".into()],
+        Net::Proxy { network, relay } => {
+            let proxy = format!("http://{relay}:{}", super::net::PORT);
+            let mut v = vec!["--network".into(), network.into(), "--dns".into(), NO_DNS.into()];
+            for key in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+                v.push("--env".into());
+                v.push(format!("{key}={proxy}"));
+            }
+            v.push("--env".into());
+            v.push("NO_PROXY=".into());
+            v.push("--env".into());
+            v.push("no_proxy=".into());
+            v
+        }
+    }
+}
+
+/// The relay of a run with network (`net.rs`): locked down like the workload, on the run's
+/// internal network only, its stdin/stdout the line to the engine.
+pub(crate) fn docker_relay(network: &str, name: &str, image: &str) -> Vec<String> {
     let mut v: Vec<String> = [
         "docker",
         "run",
@@ -117,8 +154,12 @@ pub(crate) fn docker_run(chat: &str, name: &str, network: bool, image: &str, scr
         "-i",
         "--name",
         name,
+        "--label",
+        "aiscraft.relay=1",
         "--network",
-        if network { NETWORK } else { "none" },
+        network,
+        "--dns",
+        NO_DNS,
         "--cap-drop",
         "ALL",
         "--security-opt",
@@ -126,26 +167,58 @@ pub(crate) fn docker_run(chat: &str, name: &str, network: bool, image: &str, scr
         "--user",
         USER,
         "--memory",
-        MEMORY,
+        "256m",
         "--memory-swap",
-        MEMORY,
+        "256m",
         "--cpus",
-        CPUS,
+        "0.5",
         "--pids-limit",
-        PIDS,
+        "128",
         "--read-only",
-        "--tmpfs",
-        "/tmp:rw,nosuid,nodev,size=512m",
-        "--env",
-        "HOME=/tmp",
         "--log-driver",
         "none",
-        "--workdir",
-        "/work",
+        image,
     ]
     .iter()
     .map(|s| s.to_string())
     .collect();
+    v.extend(machine_script(r#"exec python3 -u -c "$1""#, &[super::net::RELAY_SCRIPT]));
+    v
+}
+
+/// The one way a workload container is started. `name` lets a time limit stop it (`docker kill`).
+pub(crate) fn docker_run(chat: &str, name: &str, net: Net, image: &str, script: &str, args: &[&str]) -> Vec<String> {
+    let mut v: Vec<String> = ["docker", "run", "--rm", "-i", "--name", name].iter().map(|s| s.to_string()).collect();
+    v.extend(net_args(net));
+    v.extend(
+        [
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--user",
+            USER,
+            "--memory",
+            MEMORY,
+            "--memory-swap",
+            MEMORY,
+            "--cpus",
+            CPUS,
+            "--pids-limit",
+            PIDS,
+            "--read-only",
+            "--tmpfs",
+            "/tmp:rw,nosuid,nodev,size=512m",
+            "--env",
+            "HOME=/tmp",
+            "--log-driver",
+            "none",
+            "--workdir",
+            "/work",
+        ]
+        .iter()
+        .map(|s| s.to_string()),
+    );
     v.push("--mount".into());
     v.push(format!("type=bind,src=/work/{chat},dst=/work"));
     v.push(image.into());
@@ -175,7 +248,7 @@ mod tests {
 
     #[test]
     fn a_start_is_locked_down() {
-        let argv = docker_run("c1", "aiscraft-x", false, "sha256:abc", RUN_SCRIPT, &[".", "ls"]);
+        let argv = docker_run("c1", "aiscraft-x", Net::None, "sha256:abc", RUN_SCRIPT, &[".", "ls"]);
         let joined = argv.join(" ");
         for need in [
             "--network none",
@@ -191,6 +264,13 @@ mod tests {
         }
         assert_eq!(argv.iter().filter(|a| a.as_str() == "--mount").count(), 1, "one mount only");
         assert!(!joined.contains("--privileged") && !joined.contains("docker.sock"));
-        assert!(docker_run("c1", "n", true, "sha256:abc", RUN_SCRIPT, &[]).join(" ").contains("--network aiscraft-net"));
+        let online = docker_run("c1", "n", Net::Proxy { network: "aiscraft-int-1", relay: "aiscraft-relay-1" }, "sha256:abc", RUN_SCRIPT, &[]).join(" ");
+        assert!(online.contains("--network aiscraft-int-1 --dns 192.0.2.1") && online.contains("HTTPS_PROXY=http://aiscraft-relay-1:3128"), "{online}");
+        assert!(!online.contains("--network none") && !online.contains("aiscraft-net "), "{online}");
+        let relay = docker_relay("aiscraft-int-1", "aiscraft-relay-1", "sha256:abc").join(" ");
+        for need in ["--network aiscraft-int-1", "--cap-drop ALL", "--user 1000:1000", "--read-only", "no-new-privileges"] {
+            assert!(relay.contains(need), "{need}: {relay}");
+        }
+        assert!(!relay.contains("--mount") && !relay.contains("-v "), "the relay sees no files");
     }
 }

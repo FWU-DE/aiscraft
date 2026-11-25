@@ -328,6 +328,11 @@ impl SandboxRuntime for Lima {
         Box::pin(async move { run(&limactl, &args, &env, stdin, timeout, max_output, NO_LIMACTL).await })
     }
 
+    fn stream(&self, argv: Vec<String>) -> BoxFuture<'static, Result<super::runtime::Pipe>> {
+        let r = super::process::spawn(&self.limactl(), &self.shell_args(&argv), &self.env(), NO_LIMACTL);
+        Box::pin(async move { r })
+    }
+
     fn stop(&self) -> BoxFuture<'static, Result<()>> {
         let (guard, limactl, env, machine) = (self.guard(), self.limactl(), self.env(), self.machine.clone());
         Box::pin(async move {
