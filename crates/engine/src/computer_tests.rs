@@ -201,7 +201,7 @@ fn every_change_is_checked_with_the_window_content_and_reread_before_it_runs() {
 
     // Never into a password field; no keys while one has the focus.
     desk.focus(&word, "2", true);
-    let (text, err, outcome) = run(&engine, call(TYPE, json!({"window": word, "control": "2", "text": "geheim"})), &e, true);
+    let (text, err, outcome) = run(&engine, call(TYPE, json!({"window": word, "control": "2", "text": "Guten Morgen"})), &e, true);
     assert!(err && outcome == "denied" && text.contains("Passwortfeld"), "{text}");
     let (text, err, outcome) = run(&engine, call(KEY, json!({"window": word, "keys": "Strg+V"})), &e, true);
     assert!(err && outcome == "denied" && text.contains("Passwortfeld"), "{text}");
