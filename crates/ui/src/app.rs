@@ -672,6 +672,8 @@ impl AisCraftApp {
                                 _ => false,
                             }
                         }
+                        // "research", "connector_insert", "template:<id>", "template_new", "project:<id>" (#32, #37, #53, #54).
+                        w if self.show_know(w) => true,
                         "none" => {
                             self.dialog = None;
                             self.palette = None;
@@ -706,6 +708,7 @@ impl eframe::App for AisCraftApp {
         }
         self.control_requests(&ctx);
         self.quick_entry(&ctx);
+        self.know_frame(&ctx);
         self.sync_theme(&ctx);
         self.shortcuts(&ctx);
         self.dropped_files(&ctx);

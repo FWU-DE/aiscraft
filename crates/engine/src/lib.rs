@@ -30,6 +30,7 @@ mod secrets;
 mod skills;
 mod state;
 mod tasks;
+pub mod templates;
 mod temporary;
 pub mod tools;
 mod trust;
@@ -281,7 +282,9 @@ impl Engine {
             let schedules = schedules::load(&engine.ctx);
             let skills = skills::load(&engine.ctx);
             let inbox = inbox::load(&engine.ctx);
+            let templates = templates::load(&engine.ctx);
             engine.ctx.update(|s| {
+                s.templates = templates;
                 s.schedules = schedules;
                 s.skills = skills;
                 s.inbox = inbox;
@@ -662,6 +665,8 @@ mod trust_tests;
 
 #[cfg(test)]
 mod chatux_tests;
+#[cfg(test)]
+mod know_tests;
 
 #[cfg(test)]
 pub(crate) fn chat_system_prompt_for_test(c: &Ctx, conv: &aiscraft_core::Conversation, send: bool, takes: bool) -> Option<String> {

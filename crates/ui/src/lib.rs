@@ -17,6 +17,7 @@ mod h5p_panel;
 mod home;
 pub mod icons;
 mod kit;
+mod know;
 mod learn_panel;
 mod looks;
 pub mod manual;

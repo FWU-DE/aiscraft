@@ -68,6 +68,12 @@ pub struct State {
     /// The update check: running version, what the last check found.
     #[serde(default)]
     pub update: UpdateState,
+    /// Templates for recurring tasks (#54).
+    #[serde(default)]
+    pub templates: Vec<crate::templates::Template>,
+    /// Text for the composer from a template or a connector (#53, #54); the UI takes each `seq` once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer_fill: Option<crate::templates::ComposerFill>,
     /// Readability shown under answers (`message.readability`, #48), by message id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub readability: BTreeMap<String, crate::readability::Readability>,

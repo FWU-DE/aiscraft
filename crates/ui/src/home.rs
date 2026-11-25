@@ -461,6 +461,7 @@ impl AisCraftApp {
             });
             ui.add_space(GAP);
         }
+        self.templates_section(ui);
         ui.add_space(16.0);
         self.favorites_section(ui, w);
         ui.add_space(24.0);

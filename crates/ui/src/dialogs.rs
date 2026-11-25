@@ -90,6 +90,8 @@ pub enum Dialog {
         command: String,
         params: Value,
     },
+    /// Templates, connector results, research (#37, #53, #54).
+    Know(crate::know::KnowDialog),
 }
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
@@ -576,6 +578,7 @@ impl AisCraftApp {
                 });
                 keep
             }
+            Dialog::Know(d) => self.know_dialog(ui, d),
             Dialog::Confirm { text, command, params } => {
                 ui.label(RichText::new(text.as_str()).strong());
                 ui.add_space(8.0);
