@@ -101,6 +101,12 @@ Für einen neuen Chat stellst du die Quellen vor der ersten Nachricht ein. Das M
 
 Bei AIS.chat sind Gedächtnis und Projektanweisungen zuerst aus. Schaltest du sie ein, gehen sie am Anfang deiner nächsten Nachricht mit und bleiben im AIS.chat-Verlauf; erneut nur, wenn sie sich ändern. Werkzeuge und Konnektoren nimmt AIS.chat nicht an. Seine eigenen Werkzeuge (Websuche, Bilder, Diagramme) legt das Land fest, bei Assistenten und Dialogpartnern auch deren Einstellung in AIS.chat; das Menü zeigt sie.
 
+## Belege in Antworten
+
+Mit Claude (API) gehen angehängte Dateien als Dokumente mit. Die Antwort nennt dann, welche Stelle einer Datei eine Aussage belegt; unter ihr steht etwa „Belege: [1] igel.txt“ oder „[2] plan.pdf, S. 3“. Fährst du über einen Beleg, siehst du die Aussage und das Zitat.
+
+Ein Klick zeigt die Stelle: im Text der Datei markiert, mit dem Text davor und danach. Bei PDFs steht die Seite dabei, bei Webseiten aus der Websuche das Zitat und der Link. AIS.chat, OpenAI-kompatible Server und das Claude-Abo liefern keine Belege.
+
 ## Projekte
 
 Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebtklässler, kurz und mit Alltagsbeispielen“. Ein Klick auf ein Projekt in der Seitenleiste zeigt seine Chats und startet einen neuen Chat darin. Rechtsklick auf einen Chat › „In Projekt“ verschiebt ihn.

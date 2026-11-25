@@ -7,6 +7,7 @@ mod artifacts;
 mod attach;
 mod bridge;
 mod chat;
+pub mod citations;
 #[cfg(feature = "collab")]
 mod collab;
 mod commands;

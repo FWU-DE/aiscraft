@@ -791,9 +791,10 @@ impl eframe::App for AisCraftApp {
 
         self.toasts(&ctx);
         self.manual_ui(&ctx);
+        self.citation_ui(&ctx);
         self.dialogs(&ctx);
         self.palette_ui(&ctx);
-        layout.overlay = self.dialog.is_some() || self.manual.is_some() || self.palette.is_some();
+        layout.overlay = self.dialog.is_some() || self.manual.is_some() || self.palette.is_some() || self.state.citation.is_some();
         self.panel_layout = layout;
 
         // While an answer streams, the engine requests repaints; spinners need a steady tick too.

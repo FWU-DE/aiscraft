@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use aiscraft_core::{
-    AccountInfo, ActivityLink, ActivityStep, BackendConfig, Capabilities, ChatRequest, Error, Message, ModelInfo, Result, Role, StreamEvent, Usage,
+    AccountInfo, ActivityLink, ActivityStep, BackendConfig, Capabilities, ChatRequest, Citation, Error, Message, ModelInfo, Result, Role, StreamEvent, Usage,
 };
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
@@ -54,6 +54,63 @@ pub fn text_with_files(m: &Message) -> String {
         }
     }
     text
+}
+
+/// The message text with its links; the files go as document blocks (Anthropic only).
+fn text_with_links(m: &Message) -> String {
+    let mut text = m.content.clone();
+    for a in m.attachments.iter().filter(|a| a.is_link()) {
+        text.push_str(&format!("\n\nLink: {}", a.name));
+    }
+    text
+}
+
+/// Longest document title sent and kept, in characters.
+const MAX_TITLE: usize = 200;
+/// Most citations kept for one answer.
+const MAX_CITATIONS: usize = 100;
+/// Longest cited passage and claim kept, in characters.
+const MAX_CITED: usize = 4000;
+const MAX_CLAIM: usize = 600;
+
+/// One citation of a text block (`char_location`, `page_location`, `content_block_location`,
+/// `web_search_result_location`, `search_result_location`). Unknown kinds give `None`.
+pub fn parse_citation(c: &Value) -> Option<Citation> {
+    let s = |k: &str, max: usize| c.get(k).and_then(Value::as_str).map(|x| x.chars().take(max).collect::<String>()).unwrap_or_default();
+    let n = |k: &str| c.get(k).and_then(Value::as_u64);
+    let web = |u: String| (u.starts_with("https://") || u.starts_with("http://")).then_some(u);
+    let mut out = Citation { cited_text: s("cited_text", MAX_CITED), document_index: n("document_index"), ..Default::default() };
+    match c.get("type").and_then(Value::as_str)? {
+        "char_location" => {
+            out.title = s("document_title", MAX_TITLE);
+            if let (Some(a), Some(b)) = (n("start_char_index"), n("end_char_index")) {
+                out.chars = Some((a, b.max(a)));
+            }
+        }
+        "page_location" => {
+            out.title = s("document_title", MAX_TITLE);
+            // The end page is excluded in the API.
+            if let Some(a) = n("start_page_number") {
+                let last = n("end_page_number").map(|b| b.saturating_sub(1)).unwrap_or(a).max(a);
+                out.pages = Some((a, last));
+            }
+        }
+        "content_block_location" => out.title = s("document_title", MAX_TITLE),
+        "web_search_result_location" => {
+            out.url = Some(web(s("url", 2000))?);
+            out.title = s("title", MAX_TITLE);
+            out.document_index = None;
+        }
+        "search_result_location" => {
+            out.url = web(s("source", 2000));
+            out.title = s("title", MAX_TITLE);
+        }
+        _ => return None,
+    }
+    if out.cited_text.trim().is_empty() && out.url.is_none() {
+        return None;
+    }
+    Some(out)
 }
 
 /// Models that refuse with `stop_reason: "refusal"` and take the server-side fallback.
@@ -132,12 +189,27 @@ pub fn body(req: &ChatRequest) -> Value {
             Role::User => {
                 let mut blocks = Vec::new();
                 for a in &m.attachments {
-                    if let Some(d) = &a.data_base64 {
-                        let kind = if a.mime == "application/pdf" { "document" } else { "image" };
-                        blocks.push(json!({"type": kind, "source": {"type": "base64", "media_type": a.mime, "data": d}}));
+                    // Documents go as document blocks with citations on (#39): the answer can name
+                    // the passage it rests on. The API wants them on for all documents or none.
+                    let title: String = a.name.chars().take(MAX_TITLE).collect();
+                    match (&a.data_base64, &a.text) {
+                        (Some(d), _) if a.mime == "application/pdf" => blocks.push(json!({
+                            "type": "document",
+                            "source": {"type": "base64", "media_type": a.mime, "data": d},
+                            "title": title,
+                            "citations": {"enabled": true},
+                        })),
+                        (Some(d), _) => blocks.push(json!({"type": "image", "source": {"type": "base64", "media_type": a.mime, "data": d}})),
+                        (None, Some(t)) if !a.is_link() && !t.trim().is_empty() => blocks.push(json!({
+                            "type": "document",
+                            "source": {"type": "text", "media_type": "text/plain", "data": t},
+                            "title": title,
+                            "citations": {"enabled": true},
+                        })),
+                        _ => {}
                     }
                 }
-                let text = text_with_files(m);
+                let text = text_with_links(m);
                 if !text.trim().is_empty() || blocks.is_empty() {
                     blocks.push(json!({"type": "text", "text": if text.trim().is_empty() { "…".to_string() } else { text }}));
                 }
@@ -204,6 +276,11 @@ pub struct ToolAcc {
     kept_bytes: usize,
     /// The server paused the answer (`pause_turn`); it can be continued.
     paused: bool,
+    /// Text blocks with citations being streamed, by index: the citations and the block's text,
+    /// which is the statement they back (#39).
+    cited: std::collections::BTreeMap<u64, (Vec<Citation>, String)>,
+    /// Citations of this answer so far, for the cap.
+    citations: usize,
 }
 
 impl ToolAcc {
@@ -304,8 +381,56 @@ impl ToolAcc {
             .collect()
     }
 
+    /// Follow the citations of text blocks; a finished block gives its citations with the
+    /// block's text as their statement.
+    fn track_citations(&mut self, v: &Value, ty: &str, idx: u64) -> Option<StreamEvent> {
+        match ty {
+            "content_block_start" if v.pointer("/content_block/type").and_then(Value::as_str) == Some("text") => {
+                let found: Vec<Citation> =
+                    v.pointer("/content_block/citations").and_then(Value::as_array).into_iter().flatten().filter_map(parse_citation).collect();
+                let text = v.pointer("/content_block/text").and_then(Value::as_str).unwrap_or("").chars().take(MAX_CLAIM).collect();
+                self.cited.insert(idx, (found, text));
+                None
+            }
+            "content_block_delta" => {
+                let d = v.get("delta")?;
+                let entry = self.cited.get_mut(&idx)?;
+                match d.get("type").and_then(Value::as_str)? {
+                    "citations_delta" => {
+                        if let Some(c) = d.get("citation").and_then(parse_citation)
+                            && entry.0.len() < MAX_CITATIONS
+                        {
+                            entry.0.push(c);
+                        }
+                    }
+                    "text_delta" => {
+                        let have = entry.1.chars().count();
+                        if have < MAX_CLAIM {
+                            entry.1.extend(d.get("text").and_then(Value::as_str).unwrap_or("").chars().take(MAX_CLAIM - have));
+                        }
+                    }
+                    _ => {}
+                }
+                None
+            }
+            "content_block_stop" => {
+                let (found, text) = self.cited.remove(&idx)?;
+                let room = MAX_CITATIONS.saturating_sub(self.citations);
+                let claim = text.trim().to_string();
+                let citations: Vec<Citation> = found.into_iter().take(room).map(|c| Citation { claim: claim.clone(), ..c }).collect();
+                if citations.is_empty() {
+                    return None;
+                }
+                self.citations += citations.len();
+                Some(StreamEvent::Citations { citations })
+            }
+            _ => None,
+        }
+    }
+
     /// Start the next response of a paused answer: its blocks are numbered from 0 again.
     fn next_response(&mut self) {
+        self.cited.clear();
         let done: Vec<Value> = std::mem::take(&mut self.content).into_values().collect();
         self.prior.extend(done);
         self.server.clear();
@@ -389,6 +514,13 @@ pub fn sse_events_with(event: Option<&str>, data: &str, acc: &mut ToolAcc) -> Re
     let ty = v.get("type").and_then(Value::as_str).or(event).unwrap_or("");
     let idx = v.get("index").and_then(Value::as_u64).unwrap_or(0);
     track_content(&v, ty, idx, acc);
+    let cited = acc.track_citations(&v, ty, idx);
+    let mut out = events_with(&v, event, data, ty, idx, acc)?;
+    out.extend(cited);
+    Ok(out)
+}
+
+fn events_with(v: &Value, event: Option<&str>, data: &str, ty: &str, idx: u64, acc: &mut ToolAcc) -> Result<Vec<StreamEvent>> {
     let block_type = v.pointer("/content_block/type").and_then(Value::as_str).unwrap_or("");
     match ty {
         "content_block_start" if block_type == "server_tool_use" => {
@@ -713,6 +845,7 @@ mod tests {
             tool_calls: vec![],
             tool_result: None,
             thinking: String::new(),
+            citations: Vec::new(),
         };
         let req = ChatRequest {
             conversation_id: "c".into(),
@@ -843,6 +976,7 @@ mod tests {
             tool_calls: vec![],
             tool_result: None,
             thinking: String::new(),
+            citations: Vec::new(),
         };
         let req = ChatRequest {
             conversation_id: "c".into(),
@@ -866,11 +1000,115 @@ mod tests {
         assert!(search.done && search.links.len() == 2, "only web links: {:?}", search.links);
         let cited: Vec<_> = steps.iter().flat_map(|s| &s.links).filter(|l| l.cited).map(|l| l.url.as_str()).collect();
         assert_eq!(cited, ["https://example.org/ferien"]);
+        // #39: the cited page also comes as a citation with the sentence it backs.
+        let cites: Vec<Citation> =
+            events.iter().filter_map(|e| if let StreamEvent::Citations { citations } = e { Some(citations.clone()) } else { None }).flatten().collect();
+        assert_eq!(cites.len(), 1, "{cites:?}");
+        assert_eq!(cites[0].url.as_deref(), Some("https://example.org/ferien"));
+        assert_eq!(cites[0].claim, "Die Ferien beginnen am 1. Juli.");
         let seen = seen.lock().unwrap();
         assert_eq!(seen.len(), 2, "paused once, continued once");
         assert!(seen[0].contains("web_search_20260209") && seen[0].contains("web_fetch_20260209"));
         // The continuation carries the search and its encrypted results back, input as an object.
         assert!(seen[1].contains("\"encrypted_content\":\"ENC1\"") && seen[1].contains("\"query\":\"Ferien Berlin\""));
+    }
+
+    /// #39: attached files go as document blocks with citations on; the citations of a text
+    /// block come at its end with the block's text as the statement they back.
+    #[test]
+    fn document_citations_are_sent_and_parsed() {
+        let file = |name: &str, mime: &str, text: Option<&str>, data: Option<&str>| aiscraft_core::Attachment {
+            name: name.into(),
+            mime: mime.into(),
+            text: text.map(String::from),
+            data_base64: data.map(String::from),
+            ..Default::default()
+        };
+        let user = Message {
+            id: "u".into(),
+            conversation_id: "c".into(),
+            role: Role::User,
+            content: "Was steht drin?".into(),
+            created_at: 0,
+            model: None,
+            attachments: vec![
+                file("igel.txt", "text/plain", Some("Igel halten Winterschlaf."), None),
+                file("plan.pdf", "application/pdf", None, Some("JVBERi0=")),
+                file("leer.txt", "text/plain", Some("  "), None),
+                aiscraft_core::Attachment::link("https://example.org/a"),
+            ],
+            activity: vec![],
+            error: None,
+            usage: None,
+            tool_calls: vec![],
+            tool_result: None,
+            thinking: String::new(),
+            citations: Vec::new(),
+        };
+        let req = ChatRequest {
+            conversation_id: "c".into(),
+            model: DEFAULT_MODEL.into(),
+            system: None,
+            messages: vec![user],
+            tools: vec![],
+            tool_bridge: None,
+            persona: None,
+            web: false,
+            effort: None,
+        };
+        let b = body(&req);
+        let blocks = b.pointer("/messages/0/content").and_then(Value::as_array).unwrap();
+        assert_eq!(blocks.len(), 3, "two documents and the text: {blocks:?}");
+        assert_eq!(blocks[0]["source"], json!({"type": "text", "media_type": "text/plain", "data": "Igel halten Winterschlaf."}));
+        assert_eq!(blocks[0]["title"], "igel.txt");
+        assert_eq!(blocks[1]["source"]["type"], "base64");
+        assert!(blocks[..2].iter().all(|d| d["type"] == "document" && d["citations"]["enabled"] == true));
+        let text = blocks[2]["text"].as_str().unwrap();
+        assert!(text.contains("Link: https://example.org/a") && !text.contains("Winterschlaf"), "the file is not in the text twice: {text}");
+
+        let mut acc = ToolAcc::default();
+        let mut feed = |v: Value| sse_events_with(None, &v.to_string(), &mut acc).unwrap();
+        feed(json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}));
+        let ev = feed(json!({"type": "content_block_delta", "index": 0, "delta": {"type": "citations_delta", "citation": {
+            "type": "char_location", "cited_text": "Igel halten Winterschlaf.", "document_index": 0, "document_title": "igel.txt",
+            "start_char_index": 0, "end_char_index": 25}}}));
+        assert!(ev.is_empty(), "citations wait for their sentence");
+        feed(json!({"type": "content_block_delta", "index": 0, "delta": {"type": "citations_delta", "citation": {
+            "type": "page_location", "cited_text": "Seite drei", "document_index": 1, "document_title": "plan.pdf",
+            "start_page_number": 3, "end_page_number": 5}}}));
+        // Unknown kinds and hostile values are skipped.
+        feed(json!({"type": "content_block_delta", "index": 0, "delta": {"type": "citations_delta", "citation": {"type": "neu", "cited_text": "x"}}}));
+        feed(
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "citations_delta", "citation": {"type": "web_search_result_location", "url": "javascript:x", "cited_text": "x"}}}),
+        );
+        feed(
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "citations_delta", "citation": {"type": "char_location", "cited_text": 5, "start_char_index": -1}}}),
+        );
+        let ev = feed(json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Igel schlafen im Winter."}}));
+        assert_eq!(ev, vec![StreamEvent::Delta { text: "Igel schlafen im Winter.".into() }]);
+        let ev = feed(json!({"type": "content_block_stop", "index": 0}));
+        let [StreamEvent::Citations { citations }] = ev.as_slice() else { panic!("{ev:?}") };
+        assert_eq!(citations.len(), 2);
+        assert_eq!(
+            citations[0],
+            Citation {
+                cited_text: "Igel halten Winterschlaf.".into(),
+                claim: "Igel schlafen im Winter.".into(),
+                title: "igel.txt".into(),
+                chars: Some((0, 25)),
+                document_index: Some(0),
+                ..Default::default()
+            }
+        );
+        assert_eq!(citations[1].pages, Some((3, 4)), "the API's end page is excluded");
+        assert_eq!(citations[1].place(), "S. 3–4");
+        // A block without citations gives none; reversed numbers are made sane.
+        feed(json!({"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": "Mehr."}}));
+        assert!(feed(json!({"type": "content_block_stop", "index": 1})).is_empty());
+        let odd = parse_citation(&json!({"type": "char_location", "cited_text": "a", "start_char_index": 9, "end_char_index": 2})).unwrap();
+        assert_eq!(odd.chars, Some((9, 9)));
+        let one = parse_citation(&json!({"type": "page_location", "cited_text": "a", "start_page_number": 2, "end_page_number": 0})).unwrap();
+        assert_eq!((one.pages, one.place().as_str()), (Some((2, 2)), "S. 2"));
     }
 
     #[test]

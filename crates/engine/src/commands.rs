@@ -69,6 +69,15 @@ static COMMANDS: &[CommandSpec] = &[
         |c, p| Box::pin(crate::quick::run(c, p))
     ),
     cmd!(
+        "message.citation",
+        "Beleg zeigen",
+        "Chat",
+        None,
+        "message_id: string, index: number (der Beleg der Antwort, ab 0) | close: true. Zeigt die belegte Stelle im Dokument",
+        false,
+        |c, p| Box::pin(async move { crate::citations::open(&c, &p) })
+    ),
+    cmd!(
         "chat.find",
         "Im Chat suchen",
         "Chat",
@@ -749,6 +758,7 @@ async fn chat_new(c: Ctx, p: Value) -> Result<Value> {
     c.update(|s| {
         s.current = None;
         s.find = None;
+        s.citation = None;
         s.messages.clear();
         s.variants.clear();
         s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: None, kind, aspect_ratio, temporary: false };
@@ -802,6 +812,7 @@ async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
     c.update(|s| {
         s.current = Some(id.clone());
         s.find = None;
+        s.citation = None;
         s.messages = messages;
         s.variants = variants;
         s.selection = Selection {
@@ -1082,6 +1093,7 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
                 tool_calls: vec![],
                 tool_result: None,
                 thinking: String::new(),
+                citations: Vec::new(),
             })?;
         }
         Ok(())

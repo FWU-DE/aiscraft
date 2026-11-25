@@ -70,6 +70,8 @@ struct Extra {
     tool_result: Option<aiscraft_core::ToolResultInfo>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     thinking: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    citations: Vec<aiscraft_core::Citation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -374,6 +376,7 @@ impl Store {
                     tool_calls: extra.tool_calls,
                     tool_result: extra.tool_result,
                     thinking: extra.thinking,
+                    citations: extra.citations,
                 },
             ));
         }
@@ -481,6 +484,7 @@ impl Store {
             tool_calls: m.tool_calls.clone(),
             tool_result: m.tool_result.clone(),
             thinking: m.thinking.clone(),
+            citations: m.citations.clone(),
         };
         let exists: Option<bool> =
             self.db.query_row("SELECT active FROM messages WHERE id = ?1", [&m.id], |r| r.get::<_, i64>(0).map(|a| a != 0)).optional().map_err(db_err)?;
@@ -1120,6 +1124,7 @@ mod tests {
             tool_calls: vec![],
             tool_result: None,
             thinking: String::new(),
+            citations: Vec::new(),
         }
     }
 
