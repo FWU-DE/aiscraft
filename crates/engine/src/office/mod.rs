@@ -7,6 +7,7 @@
 //! so the model's tools run without asking) and shows in the chat as a download card. Saving it
 //! anywhere else goes through the person's save dialog (`chat.save_file`).
 
+pub mod message;
 pub mod pdf;
 pub mod pptx;
 pub mod xlsx;

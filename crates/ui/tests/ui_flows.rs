@@ -229,6 +229,21 @@ fn readability_line_under_an_answer() {
     click_until(&mut h, "Lesbarkeit", "the line hides", |h| h.query_by_label_contains("11 Wörter · Flesch").is_none());
 }
 
+/// „Speichern als“ under an answer (#46) offers Word, PDF and Markdown; Excel only with a table.
+/// (The items open a save dialog, so the test only looks.)
+#[test]
+fn save_as_menu_under_an_answer() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    answering_backend(&engine, "Nur Text.");
+    engine.call("chat.send", serde_json::json!({"text": "Hallo"})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    click_until(&mut h, "Speichern als", "the menu opens", |h| h.query_by_label("Word (.docx)").is_some());
+    assert!(h.query_by_label("PDF").is_some() && h.query_by_label("Markdown (.md)").is_some());
+    use egui_kittest::kittest::NodeT;
+    assert!(h.get_by_label("Excel (.xlsx)").accesskit_node().is_disabled(), "no table, no Excel");
+}
+
 /// After "Neu erzeugen" the answer shows ‹ 2/2 ›; ‹ brings the first answer back.
 #[test]
 fn variant_switcher_shows_the_old_answer() {

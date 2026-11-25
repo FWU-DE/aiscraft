@@ -76,7 +76,13 @@ pub fn cell_value(s: &str) -> Value {
     let single_decimal = !bare.contains(',') && bare.matches('.').count() == 1;
     let looks = looks && (!int_part.contains('.') || single_decimal || grouped('.', int_part));
     if looks {
-        let normal = if bare.contains(',') { bare.replace('.', "").replace(',', ".") } else if bare.matches('.').count() > 1 { bare.replace('.', "") } else { bare.to_string() };
+        let normal = if bare.contains(',') {
+            bare.replace('.', "").replace(',', ".")
+        } else if bare.matches('.').count() > 1 {
+            bare.replace('.', "")
+        } else {
+            bare.to_string()
+        };
         if let Ok(n) = normal.parse::<f64>()
             && n.is_finite()
         {
@@ -111,7 +117,8 @@ pub fn tables_spec(title: &str, md: &str) -> Result<Value> {
 
 /// A title for the file: the answer's first heading or first words.
 pub fn title_of(md: &str) -> String {
-    let first = md.lines().map(|l| l.trim().trim_start_matches(['#', '-', '*', ' ', '>'])).find(|l| !l.is_empty() && !l.starts_with("```")).unwrap_or("Antwort");
+    let first =
+        md.lines().map(|l| l.trim().trim_start_matches(['#', '-', '*', ' ', '>'])).find(|l| !l.is_empty() && !l.starts_with("```")).unwrap_or("Antwort");
     let t: String = first.replace(['*', '_', '`'], "").chars().take(60).collect();
     if t.trim().is_empty() { "Antwort".into() } else { t.trim().to_string() }
 }
