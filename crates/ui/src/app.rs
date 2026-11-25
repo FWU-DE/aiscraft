@@ -425,6 +425,15 @@ impl AisCraftApp {
             }
             self.focus_find = true;
         }
+        // Esc closes an open handbook or citation first, as it closes a dialog.
+        if self.manual.is_some() && pressed(sc(Modifiers::NONE, Key::Escape)) {
+            self.manual = None;
+            return;
+        }
+        if self.state.citation.is_some() && pressed(sc(Modifiers::NONE, Key::Escape)) {
+            self.run("message.citation", json!({"close": true}));
+            return;
+        }
         if self.find.is_some() && pressed(sc(Modifiers::NONE, Key::Escape)) {
             self.close_find();
             return;
