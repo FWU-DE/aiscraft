@@ -345,6 +345,45 @@ fn detector(c: &Ctx, project: Option<&str>, m: &Mapping, extra: &[String]) -> De
     Detector::new(&people_for(c, project), &m.known(), &manual, year()).with_common_names()
 }
 
+/// Takes out what protection would find, with every class list (all projects), whether
+/// protection is on or not: for text derived from the owner's messages that must not keep names
+/// (the writing style, #20). Findings become „…“; placeholders like `[S1]` go too.
+pub(crate) fn strip_personal(c: &Ctx, text: &str) -> String {
+    let people: Vec<Person> = load_lists(c).into_iter().flat_map(|l| l.people).collect();
+    let d = Detector::new(&people, &[], &[], year());
+    let text = text.get(..text.len().min(MAX_TEXT)).unwrap_or(text);
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for f in d.detect(text) {
+        if f.start < at {
+            continue;
+        }
+        out.push_str(text.get(at..f.start).unwrap_or(""));
+        out.push('…');
+        at = f.end;
+    }
+    out.push_str(text.get(at..).unwrap_or(""));
+    // Placeholders of protected chats name nobody, but they are not style either.
+    let mut clean = String::with_capacity(out.len());
+    let mut rest = out.as_str();
+    while let Some(open) = rest.find('[') {
+        let (before, from) = rest.split_at(open);
+        clean.push_str(before);
+        match from.find(']') {
+            Some(close) if close <= 16 => {
+                clean.push('…');
+                rest = from.get(close + 1..).unwrap_or("");
+            }
+            _ => {
+                clean.push('[');
+                rest = from.get(1..).unwrap_or("");
+            }
+        }
+    }
+    clean.push_str(rest);
+    clean
+}
+
 // ---- protecting -----------------------------------------------------------------------------
 
 /// Replace what `d` finds in `text`, as the person decided (`None`: automatic, everything found

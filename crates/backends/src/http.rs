@@ -24,7 +24,7 @@ pub fn attributed(rb: RequestBuilder, url: &str) -> RequestBuilder {
 
 pub fn net_err(e: reqwest::Error) -> Error {
     if e.is_timeout() {
-        return Error::network("Zeitüberschreitung beim Server");
+        return Error::busy("Zeitüberschreitung beim Server");
     }
     // A server on this computer that refuses or drops the connection has stopped (Ollama, LM
     // Studio, the demo server): say which one and what to do.
@@ -54,7 +54,10 @@ pub async fn status_error(resp: Response, what: &str) -> Error {
     match status {
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Error::auth(msg),
         StatusCode::NOT_FOUND => Error::not_found(msg),
-        StatusCode::TOO_MANY_REQUESTS | StatusCode::PAYMENT_REQUIRED => Error::refused(msg),
+        // Overloaded, rate-limited, out of quota or a server error: the model's, not the content's
+        // (another model may answer, #66).
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::PAYMENT_REQUIRED => Error::busy(msg),
+        s if s.is_server_error() || s.as_u16() == 529 => Error::busy(msg),
         s if s.is_client_error() => Error::invalid(msg),
         _ => Error::protocol(msg),
     }

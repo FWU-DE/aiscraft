@@ -16,6 +16,7 @@ mod collab;
 mod commands;
 mod disk;
 mod ext;
+mod fallback;
 mod files;
 pub mod find;
 pub mod highlights;
@@ -24,6 +25,7 @@ mod knowledge;
 pub mod learn;
 mod links;
 mod local_files;
+mod memory;
 pub mod office;
 mod pictures;
 pub mod privacy;
@@ -31,10 +33,13 @@ mod proactive;
 pub mod quick;
 pub mod readability;
 pub mod research;
+mod schedule_ideas;
+mod schedule_templates;
 mod schedules;
 mod secrets;
 mod skills;
 mod state;
+mod style;
 mod tasks;
 pub mod templates;
 mod temporary;
@@ -63,14 +68,18 @@ pub use attach::{AIS_ACCEPTS, AttachmentPreview, RangeKind};
 pub use chat::{LEFT_OUT, SENT_ALONG};
 pub use commands::{CommandSpec, commands};
 pub use ext::{ConfigField, ExtensionOffer, ExtensionView, ExtensionsState, PackageRule, PluginSkill};
+pub use fallback::{FALLBACK, FallbackModel};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use inbox::InboxItem;
 pub use links::{LINK_CHECK, has_links};
 pub use local_files::LocalFilesState;
+pub use schedule_ideas::ScheduleIdea;
+pub use schedule_templates::{TemplateView, template_views};
 pub use schedules::{Cron, Schedule, next_run as schedule_next_run, parse_when};
 pub use secrets::Secrets;
 pub use skills::Skill;
 pub use state::*;
+pub use tasks::{TASK_RESULT, TaskCard, running_summary, task_card};
 pub use tools::{obsidian_vaults, presets as connector_presets};
 pub use update::{CURRENT_VERSION, finish_update_helper};
 pub use vault::{EntryInfo as VaultEntry, totp_at};
@@ -404,6 +413,15 @@ impl Engine {
         Ok(())
     }
 
+    /// Move one of the owner's messages back in time, as if it had been written then (tests and
+    /// the offscreen demo: schedule ideas need weeks of history). Only for engines in memory.
+    pub fn backdate_message(&self, id: &str, at: i64) -> Result<()> {
+        if self.ctx.0.pictures_online {
+            return Err(Error::refused("Nur ohne Datenordner (Tests, Vorschau) erlaubt"));
+        }
+        if self.ctx.store(|st| st.set_message_time(id, at))? { Ok(()) } else { Err(Error::not_found("Nachricht nicht gefunden")) }
+    }
+
     /// Hand the update check a release list (JSON as GitHub's `/releases` sends it) or the error
     /// it should report, instead of asking GitHub (tests and the offscreen demo). Only for
     /// engines in memory; the real app always asks GitHub.
@@ -690,6 +708,9 @@ mod chatux_tests;
 mod know_tests;
 #[cfg(test)]
 mod local_files_tests;
+
+#[cfg(test)]
+mod nod_tests;
 
 #[cfg(test)]
 pub(crate) fn chat_system_prompt_for_test(c: &Ctx, conv: &aiscraft_core::Conversation, send: bool, takes: bool) -> Option<String> {

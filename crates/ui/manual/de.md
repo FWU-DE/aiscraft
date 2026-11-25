@@ -37,6 +37,8 @@ Ohne passenden Browser: den Sitzungs-Cookie `__Secure-ais-chat-app.authjs.sessio
 
 Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 
+**Ersatzmodelle.** Unter **Einstellungen › Dienste** legst du eine Reihenfolge von Ersatzmodellen fest. Scheitert eine Anfrage am Modell (überlastet, Serverfehler, Zeitüberschreitung, Kontingent aufgebraucht), antwortet das erste passende Ersatzmodell, und unter der Antwort steht „Mit Ersatzmodell … beantwortet, weil …“. Bei Fehlern am Inhalt, etwa wenn AIS.chat eine Anfrage wegen unangemessener Inhalte blockiert, wird nicht gewechselt. Ersatzmodelle bei einem anderen Dienst bekämen den Chat; das passiert nur, wenn du „Auch Ersatzmodelle bei anderen Diensten nutzen“ einschaltest, und nie für AIS.chat-Chats oder Assistenten.
+
 ## Chatten
 
 - **Modell wechseln:** jederzeit über „Dienst · Modell“; die nächste Antwort kommt vom neuen Modell.
@@ -178,6 +180,10 @@ Dokumente und Whiteboards lassen sich live mit anderen bearbeiten. Dafür brauch
 
 Schreib im Chat „Merke dir: …“, und AIS.ChatCraft legt eine Notiz an. Notizen entstehen nur aus deinen eigenen Worten, nie aus Antworten, Webseiten oder Dateien. Jede Notiz zeigt, woher sie stammt. Unter **Einstellungen › Gedächtnis** bearbeitest, ordnest und vergisst du Notizen. Vergessene Notizen lassen sich wiederherstellen.
 
+**Sag es einmal.** Sagst du etwas Neues zu einer Sache, die schon notiert ist („Merke dir: Nicht mehr Anna, sondern Bob macht die Rechnungen“), ersetzt die neue Notiz die alte. Die alte landet bei den vergessenen Notizen mit dem Hinweis „ersetzt durch …“ und lässt sich wiederherstellen. Ob eine Notiz eine ältere ersetzt, prüft das gewählte Modell nur, wenn es deine Notizen ohnehin bekommt; sonst fragt AIS.ChatCraft dich.
+
+**Schreibstil.** „Schreibstil aus meinen Nachrichten lernen“ (Einstellungen › Gedächtnis) liest deine eigenen Nachrichten in Chats mit dem gewählten Dienst und legt eine Stilnotiz an: Anrede und Gruß, du oder Sie, Satzlänge, Ton. Antworten, Dateien, Werkzeug-Ergebnisse und Aufträge von Zeitplänen und Aufgaben zählen nicht. Namen aus Klassenlisten, Namen nach einer Anrede („Liebe Frau …“), E-Mail-Adressen, Telefonnummern und alle Ziffern nimmt AIS.ChatCraft vorher heraus, auch aus der fertigen Notiz. Der Stil geht nur mit, wenn du etwas schreiben lässt (eine Mail, einen Brief, eine Antwort), und lässt sich pro Chat unter „Quellen“ abschalten.
+
 ## Konnektoren und Freigaben
 
 Konnektoren sind MCP-Server, deren Werkzeuge Modelle aufrufen können: Obsidian, Dateien, Webseiten abrufen und viele mehr. Unter **Einstellungen › Konnektoren** gibt es Vorlagen, etwa für deinen Obsidian-Tresor.
@@ -229,7 +235,11 @@ Manche Konnektoren liefern zu einem Ergebnis eine kleine Oberfläche, etwa einen
 
 **Zeitpläne** (Einstellungen › Zeitpläne) schicken einen Auftrag wiederkehrend oder einmal ab, etwa werktags um 7 Uhr: `0 7 * * 1-5`. Die Antwort landet in einem eigenen Chat. **Beobachten** meldet nur, wenn sich etwas geändert hat. Modelle können selbst eine Nachfrage planen („Ich schaue Freitag nach“). Zeitpläne laufen, solange AIS.ChatCraft läuft; Werkzeuge, die eine Freigabe brauchen, sind dabei abgeschaltet.
 
-**Aufgaben** laufen im Hintergrund in einem eigenen Chat (Titel mit ▶), während du weiterchattest. Das Ergebnis kommt in den Chat zurück, aus dem die Aufgabe kam.
+**Vorlagen** unter den Zeitplänen legen einen Zeitplan mit einem Klick an: Morgenüberblick (Termine heute, offene Mails), Wochenvorschau, Mails des Tages und Vertretungsplan beobachten. Fehlt dafür etwas, etwa ein Konnektor für Kalender oder E-Mail oder ein Modell, das Webseiten lesen kann, steht das an der Vorlage, und sie lässt sich erst anlegen, wenn es da ist.
+
+**Ideen aus deinen Bitten.** Bittest du an mindestens drei Tagen um dasselbe, etwa jeden Montag „Fass mir die Mails der Schulleitung zusammen“, schlägt AIS.ChatCraft unter den Zeitplänen einen Zeitplan vor: mit deinem Auftrag, dem Rhythmus und dem Modell, das du dafür genommen hast. „Als Zeitplan anlegen“ legt ihn an, „Anpassen …“ öffnet ihn vorher zum Ändern, „Nein danke“ lässt ihn nie wieder auftauchen. Gesucht wird nur auf diesem Gerät, in deinen eigenen Nachrichten, ohne Modell. Sind die Hinweise an, meldet sich eine neue Idee einmal in den Benachrichtigungen. Das Modell jedes Zeitplans wählst du in seiner Karte.
+
+**Aufgaben** laufen im Hintergrund in einem eigenen Chat (Titel mit ▶), während du weiterchattest. Solange Aufgaben, Zeitpläne oder Beobachtungen laufen, steht über dem Eingabefeld eine Statuszeile, etwa „2 Aufgaben laufen · Elternbrief prüfen …“; ein Klick öffnet den Chat. Das Ergebnis kommt als kleine Karte in den Chat zurück, aus dem die Aufgabe kam: Titel, eine Zeile Ergebnis und „Details“, das den Chat der Aufgabe öffnet.
 
 ## Fähigkeiten und Hinweise
 

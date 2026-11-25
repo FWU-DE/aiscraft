@@ -16,10 +16,16 @@ pub enum MemoryArea {
     People,
     Routines,
     Lessons,
+    /// How the owner writes (#20): learned from their own messages, without names and numbers.
+    /// Goes along only with writing requests, never in the general memory index.
+    Style,
 }
 
 impl MemoryArea {
-    pub const ALL: [MemoryArea; 5] = [MemoryArea::About, MemoryArea::Preferences, MemoryArea::People, MemoryArea::Routines, MemoryArea::Lessons];
+    pub const ALL: [MemoryArea; 6] =
+        [MemoryArea::About, MemoryArea::Preferences, MemoryArea::People, MemoryArea::Routines, MemoryArea::Lessons, MemoryArea::Style];
+    /// The areas of ordinary notes (everything but the writing style).
+    pub const NOTES: [MemoryArea; 5] = [MemoryArea::About, MemoryArea::Preferences, MemoryArea::People, MemoryArea::Routines, MemoryArea::Lessons];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -28,6 +34,7 @@ impl MemoryArea {
             MemoryArea::People => "people",
             MemoryArea::Routines => "routines",
             MemoryArea::Lessons => "lessons",
+            MemoryArea::Style => "style",
         }
     }
     pub fn label(self) -> &'static str {
@@ -37,6 +44,7 @@ impl MemoryArea {
             MemoryArea::People => "Personen",
             MemoryArea::Routines => "Abläufe",
             MemoryArea::Lessons => "Gelerntes",
+            MemoryArea::Style => "Schreibstil",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -57,6 +65,10 @@ pub struct MemoryNote {
     pub created_at: Millis,
     #[serde(default)]
     pub archived: bool,
+    /// The newer note that replaced this one (#21, „Sag es einmal“); set together with
+    /// `archived`, cleared when the owner restores the note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced_by: Option<String>,
 }
 
 const TRIGGERS: [&str; 9] =
@@ -99,14 +111,42 @@ fn guess_area(l: &str) -> MemoryArea {
     }
 }
 
+/// Words that say nothing about what a note is about.
+const STOP: [&str; 40] = [
+    "aber", "alle", "als", "auch", "auf", "aus", "bei", "bin", "bis", "das", "dass", "dem", "den", "der", "die", "ein", "eine", "einen", "für", "hat", "ich",
+    "immer", "ist", "jetzt", "macht", "mehr", "mein", "meine", "mit", "nicht", "noch", "nur", "oder", "sich", "sie", "sind", "und", "von", "wie", "wird",
+];
+
+/// The words of a note that carry its subject: lowercase, at least four letters, no filler.
+fn subject_words(text: &str) -> std::collections::BTreeSet<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .map(str::to_lowercase)
+        .filter(|w| w.chars().count() >= 4 && !STOP.contains(&w.as_str()) && !w.chars().all(|c| c.is_ascii_digit()))
+        .collect()
+}
+
+/// Active notes a new note might replace (#21): they share a subject word with it, most shared
+/// words first, at most eight. Which one it really replaces, if any, the owner or a model decides.
+pub fn replace_candidates<'a>(new: &MemoryNote, notes: &'a [MemoryNote]) -> Vec<&'a MemoryNote> {
+    let words = subject_words(&new.text);
+    let mut scored: Vec<(usize, &MemoryNote)> = notes
+        .iter()
+        .filter(|n| !n.archived && n.id != new.id && n.area != MemoryArea::Style && new.area != MemoryArea::Style)
+        .map(|n| (subject_words(&n.text).intersection(&words).count(), n))
+        .filter(|(k, _)| *k > 0)
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.created_at.cmp(&a.1.created_at)));
+    scored.into_iter().take(8).map(|(_, n)| n).collect()
+}
+
 /// The memory index for a system prompt: every active note, grouped by area.
 pub fn memory_prompt(notes: &[MemoryNote]) -> Option<String> {
-    let active: Vec<&MemoryNote> = notes.iter().filter(|n| !n.archived).collect();
+    let active: Vec<&MemoryNote> = notes.iter().filter(|n| !n.archived && n.area != MemoryArea::Style).collect();
     if active.is_empty() {
         return None;
     }
     let mut out = String::from("Notizen der Person über sich selbst (von ihr selbst so gesagt):\n");
-    for area in MemoryArea::ALL {
+    for area in MemoryArea::NOTES {
         let in_area: Vec<_> = active.iter().filter(|n| n.area == area).collect();
         if in_area.is_empty() {
             continue;
@@ -117,6 +157,48 @@ pub fn memory_prompt(notes: &[MemoryNote]) -> Option<String> {
         }
     }
     Some(out)
+}
+
+/// The writing style for a writing request (#20), when there is a style note.
+pub fn style_prompt(notes: &[MemoryNote]) -> Option<String> {
+    let note = notes.iter().rev().find(|n| !n.archived && n.area == MemoryArea::Style && !n.text.trim().is_empty())?;
+    Some(format!(
+        "Schreibstil der Person (aus ihren eigenen Texten gelernt). Schreibe Entwürfe in ihrem Namen (Mails, Briefe, Antworten) so, ohne ihn zu erwähnen:\n{}",
+        note.text.trim()
+    ))
+}
+
+/// Words that mark a request to write something in the owner's name.
+const WRITING: [&str; 22] = [
+    "schreib",
+    "formulier",
+    "entwurf",
+    "entwirf",
+    "entwerf",
+    "verfass",
+    "mail",
+    "brief",
+    "nachricht an",
+    "antwort an",
+    "antworte ",
+    "einladung",
+    "rundschreiben",
+    "elternbrief",
+    "anschreiben",
+    "glückwunsch",
+    "absage",
+    "zusage",
+    "draft",
+    "write",
+    "reply",
+    "letter",
+];
+
+/// Whether the owner asks for a text in their name (a mail, a letter, a reply): only then the
+/// writing style goes along (#20).
+pub fn is_writing_request(text: &str) -> bool {
+    let l = text.to_lowercase();
+    WRITING.iter().any(|w| l.contains(w))
 }
 
 #[cfg(test)]
@@ -151,10 +233,55 @@ mod tests {
             source_quote: text.into(),
             created_at: 0,
             archived,
+            replaced_by: None,
         };
         let p = memory_prompt(&[n(MemoryArea::About, "Lehrerin", false), n(MemoryArea::People, "alt", true)]).unwrap();
         assert!(p.contains("Über mich:\n- Lehrerin"));
         assert!(!p.contains("alt"));
         assert!(memory_prompt(&[]).is_none());
+    }
+
+    #[test]
+    fn candidates_share_a_subject_word() {
+        let n = |id: &str, text: &str, archived| MemoryNote {
+            id: id.into(),
+            area: MemoryArea::People,
+            text: text.into(),
+            source_message_id: None,
+            source_quote: text.into(),
+            created_at: 0,
+            archived,
+            replaced_by: None,
+        };
+        let notes = [
+            n("a", "Anna macht die Rechnungen", false),
+            n("b", "Ich mag Tee", false),
+            n("c", "Rechnungen alt", true),
+            n("d", "Bob macht die Rechnungen", false),
+        ];
+        let new = &notes[3];
+        let ids: Vec<&str> = replace_candidates(new, &notes).iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(ids, ["a"], "shares „rechnungen“; archived notes, the note itself and fillers like „macht“ do not count");
+    }
+
+    #[test]
+    fn style_goes_only_with_writing_requests() {
+        let style = MemoryNote {
+            id: "s".into(),
+            area: MemoryArea::Style,
+            text: "Kurze Sätze, duzt Kolleginnen".into(),
+            source_message_id: None,
+            source_quote: "Aus 6 deiner eigenen Nachrichten gelernt".into(),
+            created_at: 0,
+            archived: false,
+            replaced_by: None,
+        };
+        assert!(memory_prompt(std::slice::from_ref(&style)).is_none(), "never in the general memory");
+        assert!(style_prompt(std::slice::from_ref(&style)).unwrap().contains("Kurze Sätze"));
+        assert!(style_prompt(&[MemoryNote { archived: true, ..style }]).is_none());
+        assert!(is_writing_request("Schreib eine Mail an die Eltern der 7b"));
+        assert!(is_writing_request("Formuliere eine Absage"));
+        assert!(!is_writing_request("Was ist Photosynthese?"));
+        assert_eq!(MemoryArea::parse("style"), Some(MemoryArea::Style));
     }
 }

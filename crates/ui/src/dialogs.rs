@@ -891,6 +891,8 @@ impl AisCraftApp {
                 if ui.button("Chats aus claude.ai oder ChatGPT übernehmen …").clicked() {
                     self.dialog = Some(Dialog::ImportChats);
                 }
+                ui.add_space(10.0);
+                self.fallback_section(ui);
             }
             SettingsTab::Connectors => {
                 ui.label(muted(&t, "Konnektoren sind MCP-Server. Ihre Werkzeuge können Modelle aufrufen, die das unterstützen (OpenAI-kompatibel, Claude über API). AIS.chat über die Anmeldung und das Claude-Abo nutzen keine eigenen Werkzeuge."));
@@ -991,6 +993,7 @@ impl AisCraftApp {
                             });
                         });
                         ui.label(small_muted(&t, sch.prompt.chars().take(160).collect::<String>()));
+                        self.schedule_model_menu(ui, &sch);
                         let next = aiscraft_engine::schedule_next_run(&sch, now).map(fmt_time).unwrap_or_else(|| "–".into());
                         ui.label(small_muted(&t, format!("Nächster Lauf: {next}{}", sch.last_run.map(|l| format!(" · zuletzt {}", fmt_time(l))).unwrap_or_default())));
                         if let Some(conv) = &sch.conversation_id
@@ -1004,6 +1007,10 @@ impl AisCraftApp {
                 if ui.button("+ Zeitplan anlegen").clicked() {
                     self.dialog = Some(Dialog::AddSchedule { title: String::new(), prompt: String::new(), when: "0 7 * * 1-5".into(), recurring: true, watch: false });
                 }
+                ui.add_space(10.0);
+                self.schedule_ideas_section(ui);
+                ui.add_space(10.0);
+                self.schedule_templates_section(ui);
             }
             SettingsTab::Skills => {
                 let st = self.state.settings.clone();
@@ -1198,7 +1205,7 @@ impl AisCraftApp {
                     }
                 });
                 ui.add_space(6.0);
-                for area in MemoryArea::ALL {
+                for area in MemoryArea::NOTES {
                     let notes: Vec<_> = self.state.memory.iter().filter(|n| n.area == area && !n.archived).cloned().collect();
                     if notes.is_empty() {
                         continue;
@@ -1212,7 +1219,7 @@ impl AisCraftApp {
                                     self.run("memory.archive", json!({"id": n.id}));
                                 }
                                 ui.menu_button("Bereich", |ui| {
-                                    for a in MemoryArea::ALL {
+                                    for a in MemoryArea::NOTES {
                                         if ui.button(a.label()).clicked() {
                                             self.run("memory.update", json!({"id": n.id, "area": a.as_str()}));
                                             ui.close();
@@ -1224,12 +1231,19 @@ impl AisCraftApp {
                     }
                     ui.add_space(4.0);
                 }
+                ui.add_space(6.0);
+                self.style_section(ui);
+                ui.add_space(6.0);
                 let archived: Vec<_> = self.state.memory.iter().filter(|n| n.archived).cloned().collect();
                 if !archived.is_empty() {
                     egui::CollapsingHeader::new(small_muted(&t, format!("Vergessen ({})", archived.len()))).show(ui, |ui| {
                         for n in archived {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label(muted(&t, &n.text));
+                                // #21: which newer note said it again.
+                                if let Some(by) = n.replaced_by.as_ref().and_then(|id| self.state.memory.iter().find(|x| &x.id == id)) {
+                                    ui.label(small_muted(&t, format!("ersetzt durch „{}“", by.text)));
+                                }
                                 if ui.small_button("Wiederherstellen").clicked() {
                                     self.run("memory.restore", json!({"id": n.id}));
                                 }
