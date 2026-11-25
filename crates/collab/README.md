@@ -30,12 +30,16 @@ Yjs client (or y-sweet's protocol code) can still talk to it.
 
 ## Protocol
 
-- `POST /rooms` `{room, kind, title}` (optionally `Authorization: Bearer <create key>`) →
-  `{room, owner_token, token, code}`. The room id is the artifact id.
+- `POST /rooms` `{room, kind, title}` with `Authorization: Bearer <create key>` →
+  `{room, owner_token, token, code}`. The room id is the sharer's artifact id. The relay starts
+  only with a key (`COLLAB_CREATE_KEY`) unless `COLLAB_OPEN_CREATE=true`.
 - `GET /join/<code>` with `Accept: application/json` → `{room, token, kind, title}`; in a browser
-  a page that shows the code, never the token. 20 wrong codes per address and 10 minutes.
-- `GET /r/<room>?token=<token or owner token>`: WebSocket, y-sync. Both sides send step 1 (state
-  vector) and answer the other's with step 2; then updates. Custom message 101 = people in the
+  a page that shows the code, never the token. 20 wrong codes per address (IPv6: per /64) and
+  10 minutes; behind a proxy (`COLLAB_TRUST_PROXY`) the address is the `X-Forwarded-For` entry
+  `COLLAB_PROXY_HOPS` (default 1) from the right, never one the client wrote.
+- `GET /r/<room>` with `Authorization: Bearer <token or owner token>` (the app; older apps and
+  browsers send `?token=…`, which the relay still takes): WebSocket, y-sync. Both sides send
+  step 1 (state vector) and answer the other's with step 2; then updates. Custom message 101 = people in the
   room. Close codes: 4404 room ended, 4413 too large, 4429 full, 4400 unreadable, 1012 restart.
 - `DELETE /rooms/<room>` with `Authorization: Bearer <owner token>` ends the room for everyone.
 - `GET /healthz` → `ok`.

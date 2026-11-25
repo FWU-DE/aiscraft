@@ -1,6 +1,7 @@
 # AIS.ChatCraft collaboration relay on Coolify. Build context is the repository root.
-# Coolify variables (secrets, never in git): COLLAB_CREATE_KEY (who may share; without it anyone
-# who reaches the server can make rooms). Set the domain in Coolify (port 47910); TLS comes from
+# Coolify variables (secrets, never in git): COLLAB_CREATE_KEY (required: who may share; the
+# relay refuses to start without it). COLLAB_PROXY_HOPS: proxies in front that append to
+# X-Forwarded-For (Coolify's Traefik: 1). Set the domain in Coolify (port 47910); TLS comes from
 # its proxy, so the app uses https://<domain> as the server address.
 name: aiscraft-collab
 
@@ -13,8 +14,9 @@ services:
     environment:
       COLLAB_LISTEN: 0.0.0.0:47910
       COLLAB_DATA: /data
-      COLLAB_CREATE_KEY: ${COLLAB_CREATE_KEY:-}
+      COLLAB_CREATE_KEY: ${COLLAB_CREATE_KEY:?}
       COLLAB_TRUST_PROXY: "true"
+      COLLAB_PROXY_HOPS: ${COLLAB_PROXY_HOPS:-1}
       COLLAB_IDLE_DAYS: ${COLLAB_IDLE_DAYS:-180}
       COLLAB_MAX_ROOM_MB: ${COLLAB_MAX_ROOM_MB:-32}
       RUST_LOG: ${RUST_LOG:-info}

@@ -7,6 +7,8 @@ version = "0.2.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
+# Nothing here goes to crates.io (cargo-deny then accepts dependencies by path without a version).
+publish = false
 
 [workspace.dependencies]
 aiscraft-core = { path = "crates/core" }
@@ -65,7 +67,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 # native roots next to the bundled ones: a school or company CA from the system store
 # (TLS-inspecting proxies). The Windows proxy setting: `system-proxy` in crates/backends (Windows only).
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots", "json", "stream", "multipart", "cookies", "http2"] }
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust", "apple-native", "windows-native"] }
 directories = "6"
 regex = "1"
