@@ -263,10 +263,13 @@ Für Zeugnisbemerkungen, Elternbriefe und Förderpläne: Vor dem Senden ersetzt 
 
 - Vornamen allein, Nachnamen allein und ganze Namen aus der Liste, auch „Leas“, „Jonas'“, in Großbuchstaben oder „Müller, Lea“. Dieselbe Person behält im ganzen Chat denselben Platzhalter.
 - E-Mail-Adressen, Telefonnummern (deutsche Schreibweisen), IBAN (mit Prüfsumme), Geburtsdaten (mit „geb.“ oder im Schulalter) und Adressen mit Straße und Hausnummer.
+- Namen, die in keiner Liste stehen: eine eingebaute Liste mit rund 3000 häufigen Vornamen (deutsche und die häufigsten Herkunftssprachen an Schulen, auch ukrainische, arabische und türkische) und Anreden wie „Frau Özdemir“, „Herr Dr. Weber“, „die Schülerin Aylin“ oder „mit Klaus Meier gesprochen“. Aus „Gestern war Klaus wieder unruhig“ wird „Gestern war [Name 1] wieder unruhig“. Vornamen, die auch Wörter sind („Mark“, „Rose“, „Mai“), zählen nur mit Anrede oder einem Verb daneben („Mark hat gefehlt“), nicht in „Das Mark der Knochen“. Diese Treffer sind unsicher. Die Liste läuft auf dem Gerät, ohne Internet.
 
 **Vorschau:** Über dem Eingabefeld steht, was genau rausgeht; Ersetzungen sind markiert. Ein Klick auf einen Treffer lässt ihn stehen oder ersetzt ihn doch. **Unsichere Treffer** (Namen, die auch Wörter sind, wie „Mark“ oder „Koch“, Namen in Kleinbuchstaben, Daten ohne „geb.“) werden ebenfalls ersetzt, damit im Zweifel nichts rausgeht; antippen lässt einen stehen. Auch Zeitpläne und Hintergrund-Aufgaben ersetzen sie. Mit **+ Begriff ersetzen** ergänzt du einen Namen, der in keiner Liste steht; er wird in diesem Chat immer ersetzt.
 
-**Grenzen:** Spitznamen, Tippfehler, Namen außerhalb der Listen und Namen in Bildern oder PDF-Dateien, die als Datei hochgeladen werden, erkennt AIS.ChatCraft nicht. Text aus Dokumenten (Word, Text, Tabellen als CSV) wird mitgeprüft. Die Suche findet geschützte Namen nicht, denn gespeichert ist, was rausging. Von AIS.chat erzeugte Word- oder PDF-Dateien enthalten die Platzhalter. Die Vorschau ist eine Hilfe, keine Garantie: Lies den Text vor dem Senden.
+**Grenzen:** Spitznamen, Tippfehler, seltene Vornamen, Nachnamen ohne Anrede oder Vornamen davor und Namen in Bildern oder PDF-Dateien, die als Datei hochgeladen werden, erkennt AIS.ChatCraft nicht. Text aus Dokumenten (Word, Text, Tabellen als CSV) wird mitgeprüft. Die Suche findet geschützte Namen nicht, denn gespeichert ist, was rausging. Von AIS.chat erzeugte Word- oder PDF-Dateien enthalten die Platzhalter. Die Vorschau ist eine Hilfe, keine Garantie: Lies den Text vor dem Senden.
+
+**Quelle der Vornamenliste:** Vornamen der in Berlin 2012–2021 geborenen Kinder, BerlinOnline GmbH auf Basis von Daten des Landesamts für Bürger- und Ordnungsangelegenheiten (LABO), [github.com/berlin/haeufige-vornamen-berlin](https://github.com/berlin/haeufige-vornamen-berlin), Lizenz [CC BY 3.0 DE](https://creativecommons.org/licenses/by/3.0/de/); zusammengeführt und ergänzt.
 
 **Wo die Zuordnung liegt:** nur in der Datenbank auf diesem Gerät, pro Chat. Sie steht in keinem Protokoll, geht an keinen Dienst und ist nicht im JSON-Export. **Platzhalter des Chats anzeigen** (Befehlspalette) zeigt sie; mit dem Chat wird sie gelöscht.
 
@@ -275,6 +278,8 @@ Für Zeugnisbemerkungen, Elternbriefe und Förderpläne: Vor dem Senden ersetzt 
 **Im offenen Chat:** Strg+F öffnet ein Suchfeld über den Nachrichten. Es zeigt „2 von 5“, Enter (oder ›) springt zum nächsten Treffer, Umschalt+Enter (oder ‹) zum vorigen; die Nachricht mit dem Treffer ist umrandet. Groß- und Kleinschreibung spielt keine Rolle. Esc schließt die Suche.
 
 **Alle Chats:** Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats: zuerst die Titel (alle Wörter müssen darin vorkommen), dann die Nachrichten. Rechtsklick auf einen Chat: umbenennen, anheften, in ein Projekt verschieben, exportieren, löschen.
+
+**Chats aus claude.ai und ChatGPT übernehmen:** Bei claude.ai (Einstellungen › Datenschutz › Daten exportieren) oder ChatGPT (Einstellungen › Datenkontrollen › Daten exportieren) den Datenexport anfordern und die ZIP-Datei aus der E-Mail speichern. Dann **Einstellungen › Dienste › Chats aus claude.ai oder ChatGPT übernehmen** (oder Befehlspalette) und die ZIP-Datei wählen. Die Chats stehen danach in der Seitenleiste, werden durchsucht und lassen sich mit dem gewählten Dienst weiterführen; bei ChatGPT zählt der zuletzt sichtbare Zweig, Bilder erscheinen als „(Bild)“. Ein zweites Einlesen derselben Datei legt nichts doppelt an. „Namen schützen“ wirkt nicht rückwirkend: Übernommene Chats enthalten Namen so, wie sie dort standen; wer einen davon weiterführt, schickt den Verlauf an den gewählten Dienst.
 
 ## Nutzung
 

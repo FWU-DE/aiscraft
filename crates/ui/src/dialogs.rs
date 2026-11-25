@@ -97,6 +97,8 @@ pub enum Dialog {
         id: String,
         values: std::collections::BTreeMap<String, String>,
     },
+    /// Chats from claude.ai or ChatGPT (#42).
+    ImportChats,
 }
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
@@ -593,6 +595,7 @@ impl AisCraftApp {
                 keep
             }
             Dialog::Know(d) => self.know_dialog(ui, d),
+            Dialog::ImportChats => self.import_chats_dialog(ui),
             Dialog::Confirm { text, command, params } => {
                 ui.label(RichText::new(text.as_str()).strong());
                 ui.add_space(8.0);
@@ -884,6 +887,9 @@ impl AisCraftApp {
                 }
                 if ui.button("+ Dienst hinzufügen").clicked() {
                     self.dialog = Some(Dialog::add_backend());
+                }
+                if ui.button("Chats aus claude.ai oder ChatGPT übernehmen …").clicked() {
+                    self.dialog = Some(Dialog::ImportChats);
                 }
                 ui.add_space(10.0);
                 self.fallback_section(ui);

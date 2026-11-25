@@ -477,6 +477,7 @@ Igel, Winterschlaf und Fotosynthese.",
         ("Recherche", "research".to_string(), "Recherche starten"),
         ("Konnektor-Ergebnis", "connector_insert".to_string(), "Konnektor-Ergebnis einfügen"),
         ("Projekt mit Projektwissen", format!("project:{pid}"), "Datei hinzufügen …"),
+        ("Chats übernehmen", "import_chats".to_string(), "Exportdatei wählen …"),
     ] {
         show(&mut h, &tx, &what);
         settle(&mut h, &at(view), |h| label(h, ready));

@@ -1,10 +1,12 @@
 //! Finding personal data in a text without a model (#55): names from class lists (stage a) and
 //! fixed formats by rule and checksum (stage b). Pure functions, no I/O.
 //!
-//! Stage c, a local model for names that are in no list (GLiNER through gline-rs), would be one
-//! more source of [`Found`] items: [`Detector::detect`] merges whatever its sources find, rule
-//! findings first, then names, longest first. A model's findings would go in as names that are
-//! never "sure" on their own (ambiguous until the person confirms them in the preview).
+//! Stage c finds names that are in no list: without a model, a built-in list of common first
+//! names and context rules ([`super::common`], switched on with [`Detector::with_common_names`]).
+//! A local model (GLiNER through gline-rs) would be one more source of [`Found`] items:
+//! [`Detector::detect`] merges whatever its sources find, rule findings first, then class-list
+//! names, longest first, then the common names. Such findings are never "sure" on their own
+//! (replaced by default, the person can keep them in the preview).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
@@ -318,13 +320,13 @@ fn fold(s: &str) -> String {
 
 /// A word of the text: letters and digits, joined by inner hyphens ("Lea-Sophie").
 #[derive(Debug, Clone)]
-struct Tok {
-    start: usize,
-    end: usize,
-    fold: String,
+pub(super) struct Tok {
+    pub start: usize,
+    pub end: usize,
+    pub fold: String,
 }
 
-fn tokens(text: &str) -> Vec<Tok> {
+pub(super) fn tokens(text: &str) -> Vec<Tok> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
     let mut chars = text.char_indices().peekable();
@@ -365,6 +367,7 @@ struct Pattern {
 pub struct Detector {
     patterns: HashMap<String, Vec<Pattern>>,
     year: i32,
+    common: bool,
 }
 
 /// Longest list entries a detector takes (a class list is 30 names, a school maybe 2000).
@@ -423,13 +426,22 @@ impl Detector {
                 patterns.entry(first).or_default().push(p);
             }
         }
-        Detector { patterns, year }
+        Detector { patterns, year, common: false }
+    }
+
+    /// Also find names that are in no list (stage c without a model, [`super::common`]).
+    pub fn with_common_names(mut self) -> Self {
+        self.common = true;
+        self
     }
 
     /// Everything found in `text`, in order, without overlaps.
     pub fn detect(&self, text: &str) -> Vec<Found> {
         let mut found = rules(text, self.year);
-        let names = self.names(text);
+        let mut names = self.names(text);
+        if self.common {
+            names.extend(super::common::find(text));
+        }
         for n in names {
             if !found.iter().any(|f| n.start < f.end && f.start < n.end) {
                 found.push(n);
