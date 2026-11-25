@@ -15,9 +15,14 @@ use gliner::model::params::Parameters;
 use gliner::model::pipeline::span::SpanMode;
 use orp::params::RuntimeParameters;
 
-/// The label the model looks for. GLiNER is zero-shot; "person" is what the PII model was trained
-/// with for names.
-const LABELS: [&str; 1] = ["person"];
+/// The labels the model looks for. GLiNER is zero-shot; on German school sentences the three
+/// together find more names than "person" alone (measured with the real model, 2026-11-25).
+const LABELS: [&str; 3] = ["person", "first name", "last name"];
+/// German names score far lower than English ones with this multilingual model (12–35 % for
+/// „Weber“, „Klaus“, „Mehmet“; „Lena Schmidt“ 65 %), so gline-rs' default of 50 % found none.
+/// At 20 % all of those are found and a class name like „7b“ (11 %) is not. Hits are unsure
+/// anyway: they show in the preview, and a tap keeps a word.
+const THRESHOLD: f32 = 0.2;
 /// A piece of text per model input: GLiNER reads at most 384 words at a time.
 const CHUNK_BYTES: usize = 1200;
 const CHUNKS_PER_RUN: usize = 8;
@@ -39,7 +44,8 @@ impl Model {
         let r = std::panic::catch_unwind(|| -> std::result::Result<GLiNER<SpanMode>, String> {
             ort::init_from(lib.clone()).with_name("aiscraft-ner").commit().map_err(|e| e.to_string())?;
             let threads = std::thread::available_parallelism().map(|n| n.get().clamp(1, 4)).unwrap_or(2);
-            GLiNER::<SpanMode>::new(Parameters::default(), RuntimeParameters::default().with_threads(threads), tokenizer, model).map_err(|e| e.to_string())
+            GLiNER::<SpanMode>::new(Parameters::default().with_threshold(THRESHOLD), RuntimeParameters::default().with_threads(threads), tokenizer, model)
+                .map_err(|e| e.to_string())
         });
         match r {
             Ok(Ok(g)) => Ok(Model { gliner: Mutex::new(g) }),
@@ -143,9 +149,11 @@ mod tests {
     fn real_model_finds_last_names_without_a_form_of_address() {
         let dir = std::path::PathBuf::from(std::env::var("AISCRAFT_NER_DIR").unwrap());
         let m = Model::load(&dir.join(super::super::ner::library_name()), &dir.join("tokenizer.json"), &dir.join("model.onnx")).unwrap();
-        let text = "Gestern hat Weber im Unterricht gefehlt. Klaus war wieder unruhig.";
+        let text = "Gestern hat Weber im Unterricht gefehlt. Klaus war wieder unruhig. Lena Schmidt aus der 7b hat ihre Hausaufgaben vergessen. Ich habe mit Frau Yilmaz über Mehmet gesprochen.";
         let hits: Vec<&str> = m.find(text).into_iter().map(|(a, b)| &text[a..b]).collect();
-        assert!(hits.contains(&"Weber"), "{hits:?}");
-        assert!(hits.contains(&"Klaus"), "{hits:?}");
+        for name in ["Weber", "Klaus", "Lena Schmidt", "Yilmaz", "Mehmet"] {
+            assert!(hits.iter().any(|h| h.contains(name)), "{name} fehlt: {hits:?}");
+        }
+        assert!(!hits.contains(&"7b") && !hits.contains(&"Unterricht"), "{hits:?}");
     }
 }

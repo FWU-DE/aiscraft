@@ -41,14 +41,15 @@ pub fn count() -> usize {
 }
 
 /// Forms of address after which any capitalised word is a name ("Frau Özdemir").
-const ADDRESS: &[&str] =
+pub(super) const ADDRESS: &[&str] =
     &["herr", "herrn", "frau", "schülerin", "mitschülerin", "kollegin", "kollege", "lehrerin", "referendarin", "erzieherin", "mutter", "vater"];
 /// Words after which only a listed name counts ("Schüler" can be plural: "die Schüler Mathe …").
-const ADDRESS_LISTED: &[&str] = &["schüler", "mitschüler", "kollegen", "lehrer", "referendar", "erzieher", "sohn", "tochter", "bruder", "schwester"];
+pub(super) const ADDRESS_LISTED: &[&str] = &["schüler", "mitschüler", "kollegen", "lehrer", "referendar", "erzieher", "sohn", "tochter", "bruder", "schwester"];
 /// Titles between the form of address and the name ("Frau Dr. Weber").
-const TITLES: &[&str] = &["dr", "prof", "professor", "professorin"];
+pub(super) const TITLES: &[&str] = &["dr", "prof", "professor", "professorin"];
 /// Not a name after "Frau"/"Herr" ("Frau Doktor", "Herr Lehrer").
-const NOT_AFTER_ADDRESS: &[&str] = &["doktor", "direktor", "direktorin", "lehrer", "lehrerin", "kollegin", "kollege", "schulleiter", "schulleiterin", "holle"];
+pub(super) const NOT_AFTER_ADDRESS: &[&str] =
+    &["doktor", "direktor", "direktorin", "lehrer", "lehrerin", "kollegin", "kollege", "schulleiter", "schulleiterin", "holle"];
 /// "mit X gesprochen".
 const TALKED: &[&str] = &["gesprochen", "telefoniert", "geredet", "besprochen", "vereinbart", "geschrieben", "getroffen", "gestritten", "geübt", "gelernt"];
 /// Articles, pronouns and prepositions: a word-like name after one of these is the word ("die Rose").

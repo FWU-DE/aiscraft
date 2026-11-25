@@ -472,3 +472,41 @@ fn onboarding_done_is_remembered() {
     drop(engine);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The real download from Hugging Face and PyPI with the pinned checksums, into
+/// `AISCRAFT_NER_DOWNLOAD_DIR` (about 380 MB; only by hand:
+/// `AISCRAFT_NER_DOWNLOAD_DIR=<leerer Ordner> cargo test -p aiscraft-engine --features ner -- --ignored real_download`).
+/// Afterwards `AISCRAFT_NER_DIR=<Ordner>/ner … -- --ignored real_model` runs the model.
+#[cfg(feature = "ner")]
+#[test]
+#[ignore]
+fn real_download_installs_the_name_recognition() {
+    let dir = std::path::PathBuf::from(std::env::var("AISCRAFT_NER_DOWNLOAD_DIR").unwrap());
+    let engine = Engine::open(Options { data_dir: Some(dir.clone()), secrets: Some(crate::Secrets::memory()) }).unwrap();
+    // Test builds never download on their own; this test asks for the real sources.
+    engine.ctx().0.ner.set_source(dir.join("ner"), super::ner::parts().expect("Namenserkennung gibt es für dieses System"));
+    let out = engine.call("privacy.ner_install", json!({"yes": true})).unwrap();
+    assert_eq!(out["installed"], true, "{out}");
+    assert!(dir.join("ner").join("installed.json").is_file());
+}
+
+/// With the real model installed (after `real_download`, same folder): what goes out holds no
+/// name, also without a class list, and the forms of address stay.
+#[cfg(feature = "ner")]
+#[test]
+#[ignore]
+fn real_model_keeps_names_on_the_device() {
+    let dir = std::path::PathBuf::from(std::env::var("AISCRAFT_NER_DOWNLOAD_DIR").unwrap());
+    let engine = Engine::open(Options { data_dir: Some(dir), secrets: Some(crate::Secrets::memory()) }).unwrap();
+    let text = "Gestern hat Weber im Unterricht gefehlt. Ich habe mit Frau Yilmaz über Mehmet gesprochen.";
+    // Without a class list protection is off until switched on for the chat.
+    engine.call("chat.set_sources", json!({"protect": true})).unwrap();
+    let out = engine.call("privacy.preview", json!({"text": text})).unwrap();
+    let sent = out.to_string();
+    assert_eq!(out["active"], true, "{out}");
+    eprintln!("{out:#}");
+    for name in ["Weber", "Yilmaz", "Mehmet"] {
+        assert!(!out["outgoing"].as_str().unwrap_or(&sent).contains(name), "{name} ginge raus: {out}");
+    }
+    assert!(out["outgoing"].as_str().unwrap_or(&sent).contains("Frau"), "{out}");
+}

@@ -586,6 +586,12 @@ pub(super) fn model_hits(text: &str, spans: &[(usize, usize)]) -> Vec<Found> {
             if !word.chars().next().is_some_and(char::is_uppercase) || word.chars().count() < 2 || word.chars().any(|c| c.is_ascii_digit()) {
                 continue;
             }
+            // The model often takes the form of address along („Frau Yilmaz“): that word stays.
+            let lower = word.trim_end_matches('.').to_lowercase();
+            let common = [super::common::ADDRESS, super::common::ADDRESS_LISTED, super::common::TITLES, super::common::NOT_AFTER_ADDRESS];
+            if common.iter().any(|list| list.contains(&lower.as_str())) {
+                continue;
+            }
             if out.iter().any(|f| a < f.end && f.start < b) {
                 continue;
             }
@@ -982,6 +988,14 @@ mod tests {
         let d = Detector::new(&people(), &[], &[], 2026).with_model(Some(std::sync::Arc::new(|t: &str| vec![(0, t.find(' ').unwrap_or(0))])));
         let f = d.detect("Lea kam.");
         assert_eq!((f.len(), f[0].kind), (1, Kind::FirstName));
+        // The form of address the model takes along stays („Frau Dr. Yilmaz“ → only „Yilmaz“).
+        let t = "mit Frau Dr. Yilmaz und Herrn Lehrer Brandt";
+        let f = model_hits(t, &[at_in(t, "Frau Dr. Yilmaz"), at_in(t, "Herrn Lehrer Brandt")]);
+        assert_eq!(f.iter().map(|x| &t[x.start..x.end]).collect::<Vec<_>>(), ["Yilmaz", "Brandt"]);
+    }
+
+    fn at_in(t: &str, w: &str) -> (usize, usize) {
+        t.find(w).map(|i| (i, i + w.len())).unwrap_or((0, 0))
     }
 
     #[test]
