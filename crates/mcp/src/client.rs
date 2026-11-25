@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tokio::sync::{oneshot, watch};
 
 use crate::config::{ServerConfig, Transport};
-use crate::types::{ServerInfo, Tool, ToolResult};
+use crate::types::{ResourceContents, ServerInfo, Tool, ToolResult};
 use crate::{MAX_MESSAGE_BYTES, PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS, http, stdio};
 
 /// Pages of `tools/list` we follow before assuming the server loops.
@@ -348,7 +348,8 @@ impl McpClient {
     async fn handshake(inner: &Arc<Inner>, timeout: Duration) -> Result<(ServerInfo, Option<String>)> {
         let params = json!({
             "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {},
+            // Views of tools (MCP Apps): servers may offer them to clients that say so.
+            "capabilities": { "extensions": { "io.modelcontextprotocol/ui": { "mimeTypes": [crate::APP_MIME] } } },
             "clientInfo": { "name": "AIS.ChatCraft", "version": env!("CARGO_PKG_VERSION") }
         });
         // The spec forbids cancelling `initialize`.
@@ -450,6 +451,14 @@ impl McpClient {
             return Err(Error::protocol(format!("Der Konnektor „{}“ hat ein ungültiges Werkzeug-Ergebnis geschickt.", self.inner.name)));
         }
         Ok(ToolResult::parse(&result))
+    }
+
+    /// Read one resource (`resources/read`), e.g. the `ui://` view of a tool. Untrusted: the
+    /// caller checks type and size.
+    pub async fn read_resource(&self, uri: &str) -> Result<ResourceContents> {
+        let result = request(&self.inner, "resources/read", json!({ "uri": uri }), self.timeout, true).await?;
+        ResourceContents::parse(&result, uri)
+            .ok_or_else(|| Error::protocol(format!("Der Konnektor „{}“ hat für {} keinen Inhalt geschickt.", self.inner.name, preview(uri, 200))))
     }
 
     pub async fn ping(&self) -> Result<()> {

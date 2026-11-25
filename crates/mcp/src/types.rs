@@ -43,6 +43,69 @@ pub struct Tool {
     pub input_schema: Value,
     pub output_schema: Option<Value>,
     pub annotations: ToolAnnotations,
+    /// The interactive view the tool comes with (MCP Apps, SEP-1865), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<ToolUi>,
+}
+
+/// A tool's view (`_meta.ui`): a `ui://` resource, and who may call the tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolUi {
+    pub resource_uri: String,
+    /// `model` and/or `app`; empty = both.
+    pub visibility: Vec<String>,
+}
+
+impl ToolUi {
+    /// The model may see and call the tool.
+    pub fn for_model(&self) -> bool {
+        self.visibility.is_empty() || self.visibility.iter().any(|v| v == "model")
+    }
+
+    /// The view may call the tool.
+    pub fn for_app(&self) -> bool {
+        self.visibility.is_empty() || self.visibility.iter().any(|v| v == "app")
+    }
+
+    fn parse(v: &Value) -> Option<Self> {
+        let meta = v.get("_meta")?;
+        let uri = meta.pointer("/ui/resourceUri").or_else(|| meta.get("ui/resourceUri")).and_then(Value::as_str)?;
+        if !uri.starts_with("ui://") || uri.len() > 2048 || uri.chars().any(char::is_control) {
+            return None;
+        }
+        let visibility = meta
+            .pointer("/ui/visibility")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).filter(|x| matches!(*x, "model" | "app")).map(str::to_string).collect())
+            .unwrap_or_default();
+        Some(Self { resource_uri: uri.to_string(), visibility })
+    }
+}
+
+/// What `resources/read` returned for one address.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ResourceContents {
+    pub uri: String,
+    pub mime_type: Option<String>,
+    pub text: Option<String>,
+    /// Base64 as sent.
+    pub blob: Option<String>,
+    /// The content's `_meta` (an object, `{}` when none).
+    pub meta: Value,
+}
+
+impl ResourceContents {
+    pub(crate) fn parse(result: &Value, uri: &str) -> Option<Self> {
+        let items = result.get("contents")?.as_array()?;
+        let item = items.iter().find(|c| c.get("uri").and_then(Value::as_str) == Some(uri)).or_else(|| items.first())?;
+        Some(Self {
+            uri: string(item, "uri").unwrap_or_default(),
+            mime_type: string(item, "mimeType"),
+            text: string(item, "text"),
+            blob: string(item, "blob"),
+            meta: item.get("_meta").filter(|m| m.is_object()).cloned().unwrap_or_else(|| Value::Object(Map::new())),
+        })
+    }
 }
 
 /// Hints about a tool's behaviour. They come from the server and are not guarantees.
@@ -82,6 +145,7 @@ impl Tool {
             title: string(v, "title").or_else(|| annotations.title.clone()),
             description: string(v, "description"),
             output_schema: v.get("outputSchema").filter(|s| s.is_object()).cloned(),
+            ui: ToolUi::parse(v),
             name,
             input_schema,
             annotations,
@@ -213,6 +277,22 @@ mod tests {
         assert!(Tool::parse(&json!(42)).is_none());
         let plain = Tool::parse(&json!({"name": "x", "annotations": {"readOnlyHint": "yes"}})).unwrap();
         assert!(!plain.annotations.is_read_only());
+        assert!(plain.ui.is_none());
+    }
+
+    #[test]
+    fn tool_views() {
+        let t = Tool::parse(&json!({"name": "k", "_meta": {"ui": {"resourceUri": "ui://k/view.html", "visibility": ["app", "x"]}}})).unwrap();
+        let ui = t.ui.unwrap();
+        assert_eq!(ui.resource_uri, "ui://k/view.html");
+        assert!(ui.for_app() && !ui.for_model());
+        let legacy = Tool::parse(&json!({"name": "k", "_meta": {"ui/resourceUri": "ui://k/a"}})).unwrap().ui.unwrap();
+        assert!(legacy.for_app() && legacy.for_model());
+        assert!(Tool::parse(&json!({"name": "k", "_meta": {"ui": {"resourceUri": "https://evil.example/x"}}})).unwrap().ui.is_none());
+        let r = ResourceContents::parse(&json!({"contents": [{"uri": "ui://a", "text": "x"}, {"uri": "ui://b", "mimeType": "text/html;profile=mcp-app", "text": "<p>", "_meta": {"ui": {}}}]}), "ui://b").unwrap();
+        assert_eq!(r.text.as_deref(), Some("<p>"));
+        assert!(r.meta.get("ui").is_some());
+        assert!(ResourceContents::parse(&json!({"contents": "x"}), "ui://b").is_none());
     }
 
     #[test]

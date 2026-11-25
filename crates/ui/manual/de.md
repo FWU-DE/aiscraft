@@ -192,6 +192,39 @@ Werkzeuge, die nur lesen, laufen direkt. Alles andere läuft nur, wenn du darum 
 
 Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
 
+### Pakete mit einem Klick
+
+MCP-Pakete (`.mcpb`, wie die Erweiterungen von Claude Desktop) installierst du unter **Einstellungen › Konnektoren › Paket installieren …**. Vorher zeigt AIS.ChatCraft, was das Paket darf: welches Programm es startet (mit deinen Rechten, ohne Abschottung), welche Ordner, Dateien und Zugangsdaten es bekommt, und seine Einstellungen. Erst „Installieren und starten“ legt es unter `plugins/` im Datenordner ab und startet es. Zugangsdaten liegen im Schlüsselbund. Versteckte Ordner wie `.ssh` gibt AIS.ChatCraft keinem Paket.
+
+- Seine Werkzeuge folgen denselben Freigaben wie jeder Konnektor. Verbote, die ein Paket mitbringt, gelten als eigene Regeln; Erlaubnisse übernimmt AIS.ChatCraft nie.
+- Abgewiesen werden Pakete mit Pfaden, die aus dem Paket hinausführen, mit Verknüpfungen, mit einem Programm außerhalb des Pakets oder für ein anderes Betriebssystem.
+- Aus- und einschalten oder entfernen geht in derselben Liste; Entfernen löscht Dateien, Einstellungen und Zugangsdaten.
+
+### Plug-ins
+
+Plug-ins erweitern AIS.ChatCraft, ohne es neu zu bauen. Sie folgen dem offenen Format [Agent Plugins](https://agent-plugins.org/specification), das auch Nod nutzt: `plugin.json` beschreibt das Plug-in, `mcp.json` seine Werkzeuge (MCP-Server), `skills/<name>/SKILL.md` seine Fähigkeiten in Markdown. Ein Plug-in-Ordner oder eine ZIP-Datei lässt sich wie ein Paket über **Plug-in-Ordner …** oder **Paket installieren …** prüfen und installieren. Wer Plug-ins von Hand in den Ordner `plugins` im Datenordner legt, findet sie nach **Ordner neu einlesen** in der Liste; sie starten erst, wenn du sie einschaltest.
+
+- Die Werkzeuge folgen denselben Freigaben wie jeder Konnektor; Verbote im Plug-in (`extensions` › `ai.uds.aischatcraft` › `rules`) gelten als deine Regeln, Erlaubnisse nie.
+- Fähigkeiten sind Hinweise für das Modell, wenn eine Bitte dazu passt, nie eine Erlaubnis. Skripte darin führt AIS.ChatCraft nicht aus.
+- Ein fehlerhafter Server oder eine fehlerhafte Fähigkeit wird übergangen und genannt; der Rest lädt. Programme müssen im Plug-in liegen oder ein reiner Programmname sein (etwa `node`); Verknüpfungen nach außen werden nicht übernommen. Das alte HTTP+SSE wird nicht unterstützt.
+
+### Ansichten von Konnektoren
+
+Manche Konnektoren liefern zu einem Ergebnis eine kleine Oberfläche, etwa einen Kalender zum Auswählen oder eine Tabelle zum Filtern (MCP Apps, wie in Claude Desktop). Unter dem Ergebnis erscheint dann die Karte **Ansicht öffnen**. Die Ansicht öffnet im eigenen Vorschaufenster, nie im Hauptfenster, in den Farben deines Looks.
+
+- Netz gibt es dort nur zu den Adressen, die der Konnektor ausdrücklich nennt, sonst keins. Ansichten, die beliebiges Netz (`*`), unverschlüsseltes `http`, fremde eingebettete Seiten, den falschen Typ oder mehr als 2 MB verlangen, öffnet AIS.ChatCraft nicht. Kamera, Mikrofon und Standort gibt es nie.
+- Aktionen aus der Ansicht laufen wie Aufrufe des Modells: Lesendes direkt, alles andere fragt mit genau den Angaben. Eine Ansicht erreicht nur Werkzeuge ihres eigenen Konnektors. Links aus der Ansicht öffnen erst, wenn du auf „Im Browser öffnen“ klickst.
+- Ohne Vorschaufenster (eine Fassung ohne `aiscraft-preview`) bleibt der Text des Ergebnisses im Chat; die Ansicht öffnet dann nicht, auch nicht im Browser.
+- Noch nicht: Nachrichten der Ansicht an den Chat (`ui/message`).
+
+### Lokale Dateien
+
+„Lies die PDF in Downloads und fasse sie zusammen“ oder „Speichere den Bericht in Dokumente“ geht ohne eigenen Konnektor. Lokale Dateien sind zuerst aus. Fragt ein Modell danach, erscheint im Chat eine Frage; „Erlauben“ schaltet sie ein und führt die Aktion aus, „Ablehnen“ lässt sie aus. Aufgaben und Zeitpläne können sie nicht einschalten und greifen nie auf Dateien zu. Abschalten unter **Einstellungen › Konnektoren**.
+
+- Erlaubt sind dein Persönlicher Ordner und externe Laufwerke. Verknüpfungen werden aufgelöst; zählt, wohin sie führen.
+- Immer gesperrt: versteckte Ordner und Dateien (`.ssh`, `.config`, Browserprofile, Schlüsselbund), Programmordner (`Library`, `AppData`), Dateien mit Geheimnissen (`.env`, Schlüssel wie `id_rsa` oder `.pem`, Passwort-Datenbanken wie `.kdbx`), die Daten von AIS.ChatCraft und Ordner, die du unter **Ordner sperren** einträgst.
+- Auflisten läuft ohne Frage. Lesen (Text bis 256 KB, PDF als Text) und Speichern (Text bis 1 MB) folgen den Freigaben oben; Ersetzen einer Datei fragt immer. Programme und Skripte legt AIS.ChatCraft nicht an.
+
 ## Zeitpläne und Aufgaben
 
 **Zeitpläne** (Einstellungen › Zeitpläne) schicken einen Auftrag wiederkehrend oder einmal ab, etwa werktags um 7 Uhr: `0 7 * * 1-5`. Die Antwort landet in einem eigenen Chat. **Beobachten** meldet nur, wenn sich etwas geändert hat. Modelle können selbst eine Nachfrage planen („Ich schaue Freitag nach“). Zeitpläne laufen, solange AIS.ChatCraft läuft; Werkzeuge, die eine Freigabe brauchen, sind dabei abgeschaltet.

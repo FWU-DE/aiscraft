@@ -1082,7 +1082,11 @@ fn every_command_has_a_functional_test() {
         include_str!("privacy/tests.rs"),
         include_str!("trust_tests.rs"),
         include_str!("chatux_tests.rs"),
-        include_str!("know_tests.rs")
+        include_str!("know_tests.rs"),
+        include_str!("local_files_tests.rs"),
+        include_str!("ext/tests.rs"),
+        include_str!("ext/plugin_tests.rs"),
+        include_str!("apps_tests.rs")
     );
     // The panic hunt touches every command; count only calls outside it.
     let hunt_start = src.find("fn panic_hunt_every_command_with_hostile_params").unwrap_or(0);
@@ -2300,7 +2304,8 @@ fn every_engine_file_write_goes_through_disk() {
         if name == "disk.rs" || name.ends_with("tests.rs") {
             continue;
         }
-        let text = std::fs::read_to_string(&f).unwrap();
+        // A Windows checkout may have CRLF line ends.
+        let text = std::fs::read_to_string(&f).unwrap().replace("\r\n", "\n");
         let code = text.split("#[cfg(test)]\nmod tests").next().unwrap_or("");
         for needle in ["craft_atomic::", "std::fs::write(", "fs::write(", "File::create(", "OpenOptions"] {
             if code.contains(needle) {

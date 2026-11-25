@@ -46,6 +46,12 @@ pub struct State {
     /// Increases when any artifact's content changes, so open views reload.
     pub artifact_rev: u64,
     pub connectors: Vec<ConnectorView>,
+    /// Local files (#25): on or off, folders kept out.
+    #[serde(default)]
+    pub local_files: crate::local_files::LocalFilesState,
+    /// Installed connector packages and plug-ins, and the one being installed (#43, #28).
+    #[serde(default)]
+    pub extensions: crate::ext::ExtensionsState,
     /// Tool calls waiting for the owner's yes or no.
     pub approvals: Vec<Approval>,
     pub schedules: Vec<crate::schedules::Schedule>,
@@ -173,6 +179,9 @@ pub struct ConnectorView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub tools: Vec<ConnectorTool>,
+    /// The installed package or plug-in it comes from (#43, #28); managed there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +195,15 @@ pub struct ConnectorTool {
     pub destructive: bool,
     #[serde(skip)]
     pub input_schema: serde_json::Value,
+    /// The `ui://` view the tool comes with (MCP Apps, #74).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_resource: Option<String>,
+    /// Only for the view: the model neither sees nor calls it.
+    #[serde(default)]
+    pub app_only: bool,
+    /// A view of the same connector may call it.
+    #[serde(default)]
+    pub app_callable: bool,
 }
 
 /// A tool call the model wants to make and the owner has to allow.

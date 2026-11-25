@@ -4,6 +4,7 @@
 
 mod action_log;
 mod ai_label;
+mod apps;
 mod artifacts;
 mod attach;
 mod bridge;
@@ -13,6 +14,7 @@ pub mod citations;
 mod collab;
 mod commands;
 mod disk;
+mod ext;
 mod files;
 pub mod find;
 pub mod highlights;
@@ -20,6 +22,7 @@ mod inbox;
 mod knowledge;
 pub mod learn;
 mod links;
+mod local_files;
 pub mod office;
 mod pictures;
 pub mod privacy;
@@ -58,9 +61,11 @@ pub use artifacts::{change_blocks, doc_replace, doc_text, markdown_html, merge_s
 pub use attach::{AIS_ACCEPTS, AttachmentPreview, RangeKind};
 pub use chat::{LEFT_OUT, SENT_ALONG};
 pub use commands::{CommandSpec, commands};
+pub use ext::{ConfigField, ExtensionOffer, ExtensionView, ExtensionsState, PackageRule, PluginSkill};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use inbox::InboxItem;
 pub use links::{LINK_CHECK, has_links};
+pub use local_files::LocalFilesState;
 pub use schedules::{Cron, Schedule, next_run as schedule_next_run, parse_when};
 pub use secrets::Secrets;
 pub use skills::Skill;
@@ -140,6 +145,8 @@ pub(crate) struct Inner {
     cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
     next_notice: std::sync::atomic::AtomicU64,
     tools: tools::ToolRuntime,
+    /// Local files, connector packages, plug-ins and connector views (#25, #43, #28, #74).
+    ext: ext::Runtime,
     bridge: bridge::Bridge,
     voice: voice::Voice,
     research: research::Stops,
@@ -231,6 +238,7 @@ impl Engine {
             cancels: Mutex::new(HashMap::new()),
             next_notice: std::sync::atomic::AtomicU64::new(1),
             tools: Default::default(),
+            ext: ext::Runtime::new(opts.data_dir.clone()),
             bridge: Default::default(),
             voice: Default::default(),
             research: Default::default(),
@@ -284,6 +292,7 @@ impl Engine {
         {
             let _guard = engine._rt.enter();
             tools::load(&engine.ctx);
+            ext::load(&engine.ctx);
             let schedules = schedules::load(&engine.ctx);
             let skills = skills::load(&engine.ctx);
             let inbox = inbox::load(&engine.ctx);
@@ -673,9 +682,13 @@ mod tests;
 mod trust_tests;
 
 #[cfg(test)]
+mod apps_tests;
+#[cfg(test)]
 mod chatux_tests;
 #[cfg(test)]
 mod know_tests;
+#[cfg(test)]
+mod local_files_tests;
 
 #[cfg(test)]
 pub(crate) fn chat_system_prompt_for_test(c: &Ctx, conv: &aiscraft_core::Conversation, send: bool, takes: bool) -> Option<String> {

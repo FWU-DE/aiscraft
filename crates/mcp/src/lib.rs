@@ -18,7 +18,10 @@ use std::time::Duration;
 pub use client::McpClient;
 pub use config::{ServerConfig, Transport};
 pub use names::llm_tool_name;
-pub use types::{Content, EmbeddedResource, ServerInfo, Tool, ToolAnnotations, ToolResult};
+pub use types::{Content, EmbeddedResource, ResourceContents, ServerInfo, Tool, ToolAnnotations, ToolResult, ToolUi};
+
+/// The resource type of an MCP Apps view (SEP-1865).
+pub const APP_MIME: &str = "text/html;profile=mcp-app";
 
 /// The protocol version AIS.ChatCraft asks for in `initialize`.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
