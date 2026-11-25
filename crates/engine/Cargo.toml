@@ -44,6 +44,8 @@ directories.workspace = true
 log.workspace = true
 regex.workspace = true
 base64 = "0.22"
+# Glyph positions from craft-pdf's interpreter (PDF text for project knowledge, #32); already in the tree.
+kurbo = "0.13"
 yrs = "0.28"
 hmac = "0.12"
 sha1 = "0.10"

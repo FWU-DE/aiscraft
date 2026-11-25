@@ -19,6 +19,9 @@ pub struct State {
     pub backends: Vec<BackendView>,
     pub conversations: Vec<Conversation>,
     pub projects: Vec<Project>,
+    /// Files in the projects' knowledge (#32), without their text.
+    #[serde(default)]
+    pub project_files: Vec<aiscraft_core::ProjectFile>,
     pub memory: Vec<MemoryNote>,
     /// The open conversation; `None` = a new chat that starts on the first message.
     pub current: Option<String>,

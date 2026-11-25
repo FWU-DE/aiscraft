@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{Engine, Options};
@@ -169,4 +169,145 @@ fn connector_result_goes_into_the_composer() {
 
     let log = engine.call("log.list", json!({})).unwrap();
     assert!(log.to_string().contains("Kalender"), "the call is in the action log: {log}");
+}
+
+fn temp_dir(tag: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("aiscraft-{tag}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// #32: files in a project: kept, text read (also from a PDF), shown with how much of the
+/// context they take; every chat in the project takes them along (all of it when small, the
+/// fitting parts when large), names protected; switched off per chat; gone with the project.
+#[test]
+fn project_knowledge_goes_along_with_every_chat_in_the_project() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let (url, seen) = scripted(&engine, |line, _| {
+        if line.starts_with("GET") { ("application/json".into(), br#"{"data":[{"id":"m","context_length":10000}]}"#.to_vec()) } else { sse("Gern.") }
+    });
+    engine_at(&engine, &url);
+    let dir = temp_dir("knowledge");
+    let txt = dir.join("lehrplan.txt");
+    std::fs::write(&txt, "Lehrplan Biologie 7: Igel und Winterschlaf. Ansprechpartnerin ist Lea Müller.").unwrap();
+    let pdf = dir.join("arbeitsblatt.pdf");
+    std::fs::write(&pdf, crate::office::pdf::markdown_pdf("Blatt", "# Arbeitsblatt\n\nDie Fotosynthese braucht Licht.").unwrap()).unwrap();
+    let pid = engine.call("project.create", json!({"name": "Bio 7b"})).unwrap()["id"].as_str().unwrap().to_string();
+    let a = engine.call("project.file_add", json!({"project": pid, "path": txt.display().to_string()})).unwrap();
+    engine.call("project.file_add", json!({"project": pid, "path": pdf.display().to_string()})).unwrap();
+    assert!(engine.call("project.file_add", json!({"project": "nope", "path": txt.display().to_string()})).is_err());
+    assert!(engine.call("project.file_add", json!({"project": pid, "path": dir.display().to_string()})).is_err());
+    let listed = engine.call("project.files", json!({"project": pid})).unwrap();
+    assert_eq!(listed["files"].as_array().unwrap().len(), 2);
+    assert!(listed["usage"]["tokens"].as_u64().unwrap() > 0 && listed["usage"]["whole"] == true, "{listed}");
+    assert_eq!(listed["usage"]["window"], 10000);
+
+    // A chat in the project: both files go along, the name protected.
+    engine.call("privacy.list_add", json!({"text": "Lea Müller"})).unwrap();
+    engine.call("chat.new", json!({"project": pid})).unwrap();
+    engine.call("chat.send", json!({"text": "Plane die Stunde"})).unwrap();
+    let body = posts(&seen, "/chat/completions").last().cloned().unwrap();
+    assert!(
+        body.contains("Projektwissen aus AIS.ChatCraft") && body.contains("Igel und Winterschlaf") && body.contains("Fotosynthese braucht Licht"),
+        "{body}"
+    );
+    assert!(!body.contains("Lea") && !body.contains("Müller"), "names stay on the device");
+    let user = engine.state().messages[0].clone();
+    let step = user.activity.iter().find(|s| s.label == "Projektwissen").expect("the message names the knowledge");
+    assert!(step.detail.as_deref().unwrap().contains("lehrplan.txt"));
+
+    // Switched off for this chat: nothing goes along.
+    engine.call("chat.set_sources", json!({"knowledge": false})).unwrap();
+    engine.call("chat.send", json!({"text": "Und noch was"})).unwrap();
+    assert!(!posts(&seen, "/chat/completions").last().unwrap().contains("Projektwissen aus"));
+    // A chat outside the project gets none.
+    engine.call("chat.new", json!({"project": null})).unwrap();
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let body = posts(&seen, "/chat/completions").last().cloned().unwrap();
+    assert!(!body.contains("Winterschlaf") && !body.contains("Projektwissen aus"), "{body}");
+
+    // A large file: only the fitting parts go along (the window is small).
+    let big = dir.join("gross.md");
+    let mut text = String::new();
+    for i in 0..60 {
+        text.push_str(&format!("Abschnitt {i}: {}\n\n", "Füllwort ".repeat(40)));
+    }
+    text.push_str("Abschnitt Spezial: Die Wasserspinne atmet unter Wasser.\n\n");
+    std::fs::write(&big, &text).unwrap();
+    engine.call("project.file_add", json!({"project": pid, "path": big.display().to_string()})).unwrap();
+    assert_eq!(engine.call("project.files", json!({"project": pid})).unwrap()["usage"]["whole"], false);
+    engine.call("chat.new", json!({"project": pid})).unwrap();
+    engine.call("chat.send", json!({"text": "Wie atmet die Wasserspinne?"})).unwrap();
+    let body = posts(&seen, "/chat/completions").last().cloned().unwrap();
+    assert!(body.contains("Wasserspinne atmet"), "the fitting part");
+    assert!(body.matches("Füllwort").count() < 400, "not the whole file");
+
+    engine.call("project.file_remove", json!({"id": a["id"]})).unwrap();
+    assert_eq!(engine.state().project_files.len(), 2);
+    assert!(engine.call("project.file_remove", json!({"id": "nope"})).is_err());
+    engine.call("project.delete", json!({"id": pid})).unwrap();
+    assert!(engine.state().project_files.is_empty());
+    assert!(engine.ctx().store(|st| st.project_files()).unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// #32 with Claude (API): project files go as documents with citations on; a citation of one
+/// opens at the passage in the project file; AIS.chat-like services get each part once.
+#[test]
+fn project_knowledge_is_citable_for_claude() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let (url, seen) = scripted(&engine, |_, body| {
+        let ev = |v: Value| format!("data: {v}\n\n");
+        let mut out = String::new();
+        if body.contains("\"type\":\"document\"") {
+            for v in [
+                json!({"type": "message_start", "message": {"usage": {"input_tokens": 10}}}),
+                json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+                json!({"type": "content_block_delta", "index": 0, "delta": {"type": "citations_delta", "citation": {
+                    "type": "char_location", "cited_text": "Igel halten Winterschlaf.", "document_index": 0, "document_title": "lehrplan.txt",
+                    "start_char_index": 0, "end_char_index": 25}}}),
+                json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Igel schlafen im Winter."}}),
+                json!({"type": "content_block_stop", "index": 0}),
+                json!({"type": "message_stop"}),
+            ] {
+                out.push_str(&ev(v));
+            }
+        } else {
+            out.push_str(&ev(json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Kein Dokument."}})));
+            out.push_str(&ev(json!({"type": "message_stop"})));
+        }
+        ("text/event-stream".into(), out.into_bytes())
+    });
+    let id = engine.call("backend.add", json!({"kind": "anthropic", "base_url": url, "name": "Claude", "secret": "sk-ant-test"})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    engine.call("chat.select_model", json!({"backend": id, "model": "claude-opus-5-5"})).unwrap();
+    let dir = temp_dir("knowledge-claude");
+    let txt = dir.join("lehrplan.txt");
+    std::fs::write(&txt, "Igel halten Winterschlaf. Sie fressen Insekten.").unwrap();
+    let pid = engine.call("project.create", json!({"name": "Bio"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("project.file_add", json!({"project": pid, "path": txt.display().to_string()})).unwrap();
+    engine.call("chat.new", json!({"project": pid})).unwrap();
+    engine.call("chat.send", json!({"text": "Was machen Igel?"})).unwrap();
+    let body = seen.lock().unwrap().iter().rev().find(|s| s.line.starts_with("POST")).unwrap().body.clone();
+    assert!(
+        body.contains("\"type\":\"document\"") && body.contains("\"title\":\"lehrplan.txt\"") && body.contains("\"citations\":{\"enabled\":true}"),
+        "{body}"
+    );
+    let answer = engine.state().messages.last().cloned().unwrap();
+    assert_eq!(answer.citations.len(), 1, "{answer:?}");
+    let v = engine.call("message.citation", json!({"message_id": answer.id, "index": 0})).unwrap();
+    assert_eq!(v["found"], true, "{v}");
+    assert_eq!(v["after"], " Sie fressen Insekten.");
+
+    // Once per chat for services that keep the chat on their server.
+    let conv = engine.state().conversation(engine.state().current.as_ref().unwrap()).cloned().unwrap();
+    let first = crate::knowledge::pick(engine.ctx(), &conv, "Igel", true).unwrap();
+    let mut sources = conv.sources.clone();
+    crate::knowledge::remember(&mut sources, &first.keys);
+    let again = aiscraft_core::Conversation { sources, ..conv };
+    assert!(crate::knowledge::pick(engine.ctx(), &again, "Igel", true).is_none(), "each part goes once");
+    assert!(crate::knowledge::pick(engine.ctx(), &again, "Igel", false).is_some(), "services without a history get it every time");
+    let _ = std::fs::remove_dir_all(dir);
 }

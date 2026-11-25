@@ -1027,6 +1027,12 @@ impl AisCraftApp {
                     format!("Gehen am Anfang deiner nächsten Nachricht mit und bleiben im Verlauf bei {name}; danach nur, wenn sie sich ändern."),
                 ));
             }
+            if self.state.selection.project_id.as_ref().is_some_and(|p| self.state.project_files.iter().any(|f| &f.project_id == p)) {
+                let mut knowledge = src.knowledge;
+                if ui.checkbox(&mut knowledge, "Projektwissen (Dateien des Projekts)").changed() {
+                    set("knowledge", knowledge);
+                }
+            }
             let mut tools = src.tools;
             if ui.checkbox(&mut tools, "Werkzeuge (Dokumente, Whiteboards, Zeitpläne)").changed() {
                 set("tools", tools);

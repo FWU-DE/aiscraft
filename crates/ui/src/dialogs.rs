@@ -362,6 +362,9 @@ impl AisCraftApp {
                         .desired_width(f32::INFINITY),
                 );
                 ui.label(small_muted(&t, "Gehen an Dienste, die Kontext erlauben (nicht an AIS.chat über die Anmeldung)."));
+                if let Some(pid) = id.clone() {
+                    self.project_knowledge(ui, &pid);
+                }
                 ui.add_space(8.0);
                 let mut keep = true;
                 ui.horizontal(|ui| {

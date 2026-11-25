@@ -307,6 +307,7 @@ dependencies = [
  "futures",
  "hmac 0.12.1",
  "keyring",
+ "kurbo",
  "log",
  "notify-rust",
  "pulldown-cmark",

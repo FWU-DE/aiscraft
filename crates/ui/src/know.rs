@@ -313,6 +313,53 @@ impl AisCraftApp {
         keep
     }
 
+    /// The files of a project's knowledge in the project dialog (#32).
+    pub(crate) fn project_knowledge(&mut self, ui: &mut Ui, project: &str) {
+        let t = self.tokens.clone();
+        ui.add_space(8.0);
+        ui.label("Projektwissen");
+        ui.label(small_muted(&t, "Dateien, die jeder Chat im Projekt nutzt: Lehrpläne, Arbeitsblätter, PDFs. Der Text wird auf diesem Gerät gelesen."));
+        let files: Vec<aiscraft_core::ProjectFile> = self.state.project_files.iter().filter(|f| f.project_id == project).cloned().collect();
+        let mut remove = None;
+        egui::ScrollArea::vertical().id_salt("project-files").max_height(160.0).show(ui, |ui| {
+            for f in &files {
+                ui.horizontal(|ui| {
+                    if crate::kit::icon_button(ui, &t, Icon::Trash, &format!("{} entfernen", f.name), t.text2, 15.0, 24.0).clicked() {
+                        remove = Some(f.id.clone());
+                    }
+                    ui.add(egui::Label::new(&f.name).truncate()).on_hover_text(&f.name);
+                    ui.label(small_muted(&t, format!("≈ {} Tokens", crate::home::thousands(f.chars / 4))));
+                });
+            }
+        });
+        if let Some(id) = remove {
+            self.run("project.file_remove", json!({"id": id}));
+        }
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Datei hinzufügen …").clicked()
+                && let Some(paths) = rfd::FileDialog::new().pick_files()
+            {
+                for p in paths {
+                    self.run("project.file_add", json!({"project": project, "path": p.display().to_string()}));
+                }
+            }
+            if !files.is_empty() {
+                let chars: u64 = files.iter().map(|f| f.chars).sum();
+                let sel = &self.state.selection;
+                let window = self.state.backend(&sel.backend_id).and_then(|b| b.models.iter().find(|m| m.id == sel.model_id)).and_then(|m| m.context_window);
+                let text = match window {
+                    Some(w) if w > 0 => {
+                        let pct = (chars / 4).saturating_mul(100) / w;
+                        let how = if pct <= 25 { "geht ganz mit" } else { "passende Abschnitte gehen mit" };
+                        format!("≈ {} Tokens, {pct} % des Kontexts: {how}", crate::home::thousands(chars / 4))
+                    }
+                    _ => format!("≈ {} Tokens", crate::home::thousands(chars / 4)),
+                };
+                ui.label(small_muted(&t, text));
+            }
+        });
+    }
+
     /// Templates on the start page (#54).
     pub(crate) fn templates_section(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
@@ -339,6 +386,13 @@ impl AisCraftApp {
             "template_new" => KnowDialog::edit_template(None),
             w if w.starts_with("template:") => match self.state.templates.iter().find(|t| Some(t.id.as_str()) == w.strip_prefix("template:")) {
                 Some(t) => KnowDialog::use_template(t),
+                None => return false,
+            },
+            w if w.starts_with("project:") => match self.state.projects.iter().find(|p| Some(p.id.as_str()) == w.strip_prefix("project:")) {
+                Some(p) => {
+                    self.dialog = Some(Dialog::project(Some(p)));
+                    return true;
+                }
                 None => return false,
             },
             _ => return false,

@@ -17,6 +17,7 @@ mod files;
 pub mod find;
 pub mod highlights;
 mod inbox;
+mod knowledge;
 pub mod learn;
 mod links;
 pub mod office;
@@ -283,8 +284,10 @@ impl Engine {
             let skills = skills::load(&engine.ctx);
             let inbox = inbox::load(&engine.ctx);
             let templates = templates::load(&engine.ctx);
+            let project_files = knowledge::load(&engine.ctx);
             engine.ctx.update(|s| {
                 s.templates = templates;
+                s.project_files = project_files;
                 s.schedules = schedules;
                 s.skills = skills;
                 s.inbox = inbox;

@@ -4,7 +4,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use aiscraft_core::{Artifact, ArtifactKind, ArtifactVersion, BackendConfig, Conversation, Error, MemoryArea, MemoryNote, Message, Project, Result, Role};
+use aiscraft_core::{
+    Artifact, ArtifactKind, ArtifactVersion, BackendConfig, Conversation, Error, MemoryArea, MemoryNote, Message, Project, ProjectFile, Result, Role,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -49,6 +51,12 @@ CREATE TABLE IF NOT EXISTS artifact_versions (
     artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, version INTEGER NOT NULL,
     created_at INTEGER NOT NULL, note TEXT NOT NULL, state BLOB NOT NULL, PRIMARY KEY (artifact_id, version)
 );
+CREATE TABLE IF NOT EXISTS project_files (
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
+    chars INTEGER NOT NULL, path TEXT NOT NULL, text TEXT NOT NULL, added_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS project_files_project ON project_files(project_id);
+CREATE VIRTUAL TABLE IF NOT EXISTS project_chunks USING fts5(text, file_id UNINDEXED, project_id UNINDEXED, idx UNINDEXED, tokenize = 'unicode61 remove_diacritics 2');
 "#;
 
 /// What a message carries besides its text, stored as one JSON column.
@@ -687,8 +695,10 @@ impl Store {
         Ok(())
     }
 
-    /// Deleting a project keeps its chats; they just leave the project.
+    /// Deleting a project keeps its chats; they just leave the project. Its files go (#32).
     pub fn delete_project(&self, id: &str) -> Result<()> {
+        self.db.execute("DELETE FROM project_chunks WHERE project_id = ?1", [id]).map_err(db_err)?;
+        self.db.execute("DELETE FROM project_files WHERE project_id = ?1", [id]).map_err(db_err)?;
         self.db.execute("UPDATE conversations SET project_id = NULL WHERE project_id = ?1", [id]).map_err(db_err)?;
         self.db.execute("DELETE FROM projects WHERE id = ?1", [id]).map_err(db_err)?;
         Ok(())
@@ -955,6 +965,87 @@ impl Store {
     pub fn delete_setting(&self, key: &str) -> Result<()> {
         self.db.execute("DELETE FROM settings WHERE key = ?1", params![key]).map_err(db_err)?;
         Ok(())
+    }
+}
+
+/// A chunk of project knowledge found for a request: file, position, text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KnowledgeHit {
+    pub file_id: String,
+    pub idx: i64,
+    pub text: String,
+}
+
+impl Store {
+    // ---- project knowledge (#32) ---------------------------------------------------------
+
+    /// Add a project file with its extracted text and the chunks the search finds.
+    pub fn add_project_file(&self, f: &ProjectFile, text: &str, chunks: &[String]) -> Result<()> {
+        let tx = self.db.unchecked_transaction().map_err(db_err)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO project_files (id, project_id, name, mime, size, chars, path, text, added_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![f.id, f.project_id, f.name, f.mime, f.size as i64, f.chars as i64, f.path, text, f.added_at],
+        )
+        .map_err(db_err)?;
+        tx.execute("DELETE FROM project_chunks WHERE file_id = ?1", [&f.id]).map_err(db_err)?;
+        for (i, c) in chunks.iter().enumerate() {
+            tx.execute("INSERT INTO project_chunks (text, file_id, project_id, idx) VALUES (?1, ?2, ?3, ?4)", params![c, f.id, f.project_id, i as i64])
+                .map_err(db_err)?;
+        }
+        tx.commit().map_err(db_err)
+    }
+
+    /// The files of every project (without their text), oldest first.
+    pub fn project_files(&self) -> Result<Vec<ProjectFile>> {
+        let mut st =
+            self.db.prepare("SELECT id, project_id, name, mime, size, chars, path, added_at FROM project_files ORDER BY added_at, name").map_err(db_err)?;
+        let rows = st
+            .query_map([], |r| {
+                Ok(ProjectFile {
+                    id: r.get(0)?,
+                    project_id: r.get(1)?,
+                    name: r.get(2)?,
+                    mime: r.get(3)?,
+                    size: r.get::<_, i64>(4)?.max(0) as u64,
+                    chars: r.get::<_, i64>(5)?.max(0) as u64,
+                    path: r.get(6)?,
+                    added_at: r.get(7)?,
+                })
+            })
+            .map_err(db_err)?;
+        rows.collect::<rusqlite::Result<_>>().map_err(db_err)
+    }
+
+    /// The whole extracted text of a project file.
+    pub fn project_file_text(&self, id: &str) -> Result<Option<String>> {
+        self.db.query_row("SELECT text FROM project_files WHERE id = ?1", [id], |r| r.get(0)).optional().map_err(db_err)
+    }
+
+    pub fn delete_project_file(&self, id: &str) -> Result<bool> {
+        self.db.execute("DELETE FROM project_chunks WHERE file_id = ?1", [id]).map_err(db_err)?;
+        Ok(self.db.execute("DELETE FROM project_files WHERE id = ?1", [id]).map_err(db_err)? > 0)
+    }
+
+    /// Chunks of a project's files where any of the words occurs, best first.
+    pub fn search_knowledge(&self, project_id: &str, words: &[String], limit: usize) -> Result<Vec<KnowledgeHit>> {
+        let terms: Vec<String> = words
+            .iter()
+            .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>())
+            .filter(|w| w.chars().count() >= 3)
+            .take(16)
+            .map(|w| format!("\"{w}\"*"))
+            .collect();
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut st = self
+            .db
+            .prepare("SELECT file_id, idx, text FROM project_chunks WHERE project_chunks MATCH ?1 AND project_id = ?2 ORDER BY rank LIMIT ?3")
+            .map_err(db_err)?;
+        let rows = st
+            .query_map(params![terms.join(" OR "), project_id, limit as i64], |r| Ok(KnowledgeHit { file_id: r.get(0)?, idx: r.get(1)?, text: r.get(2)? }))
+            .map_err(db_err)?;
+        rows.collect::<rusqlite::Result<_>>().map_err(db_err)
     }
 }
 
