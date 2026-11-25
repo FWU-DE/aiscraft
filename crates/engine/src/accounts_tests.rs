@@ -38,7 +38,10 @@ async fn read_request(sock: &mut tokio::net::TcpStream) -> String {
         buf.extend_from_slice(&chunk[..n]);
         let s = String::from_utf8_lossy(&buf).to_string();
         if let Some(end) = s.find("\r\n\r\n") {
-            let len = s[..end].lines().find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+            let len = s[..end]
+                .lines()
+                .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                .unwrap_or(0);
             if buf.len() >= end + 4 + len {
                 break;
             }
@@ -346,7 +349,8 @@ fn a_wrong_state_a_cancel_a_timeout_and_no_browser_are_refused() {
 #[test]
 fn writing_needs_the_tick_and_the_owners_yes() {
     let (engine, shared, _) = setup(Browser::SignsIn, Duration::from_secs(20));
-    let id = engine.call("connector.connect", json!({"entry": "outlook-calendar", "client_id": "cid", "write": true})).unwrap()["id"].as_str().unwrap().to_string();
+    let id =
+        engine.call("connector.connect", json!({"entry": "outlook-calendar", "client_id": "cid", "write": true})).unwrap()["id"].as_str().unwrap().to_string();
     let scope = shared.lock().unwrap().seen.iter().find(|s| s.starts_with("SCOPE")).cloned().unwrap();
     assert!(scope.contains("Calendars.ReadWrite"), "{scope}");
     let create = tool_name(&engine, &id, "calendar_event_create");
@@ -354,7 +358,9 @@ fn writing_needs_the_tick_and_the_owners_yes() {
     let k = engine.state().connectors.iter().find(|k| k.id == id).cloned().unwrap();
     assert!(!k.tools.iter().find(|t| t.name == "calendar_event_create").unwrap().read_only);
     // A write tool never goes into the composer.
-    assert!(engine.call("connector.insert", json!({"tool": create, "arguments": {"title": "x", "start": "2026-12-01T10:00", "end": "2026-12-01T11:00"}})).is_err());
+    assert!(
+        engine.call("connector.insert", json!({"tool": create, "arguments": {"title": "x", "start": "2026-12-01T10:00", "end": "2026-12-01T11:00"}})).is_err()
+    );
 
     let ctx = engine.ctx().clone();
     let call = |name: &str, args: Value| aiscraft_core::ToolCall { id: crate::new_id(), name: name.into(), arguments: args, outcome: None };
@@ -392,10 +398,14 @@ fn caldav_calendars_and_events_from_a_scripted_server() {
     let e = engine.call("connector.connect", json!({"entry": "caldav", "url": url, "username": "lehrerin", "password": "falsch"})).unwrap_err();
     assert_eq!(e.kind, aiscraft_core::ErrorKind::Auth, "{}", e.message);
     assert!(engine.state().connectors.is_empty(), "a password that does not work is not kept");
-    assert!(engine.call("connector.connect", json!({"entry": "caldav", "url": "http://example.org/dav/", "username": "a", "password": "b"})).is_err(), "https only");
+    assert!(
+        engine.call("connector.connect", json!({"entry": "caldav", "url": "http://example.org/dav/", "username": "a", "password": "b"})).is_err(),
+        "https only"
+    );
     assert!(engine.call("connector.connect", json!({"entry": "caldav", "url": url})).is_err(), "user name and password needed");
 
-    let id = engine.call("connector.connect", json!({"entry": "caldav", "url": url, "username": "lehrerin", "password": "app-geheim", "write": true})).unwrap()["id"]
+    let id = engine.call("connector.connect", json!({"entry": "caldav", "url": url, "username": "lehrerin", "password": "app-geheim", "write": true})).unwrap()
+        ["id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -404,7 +414,9 @@ fn caldav_calendars_and_events_from_a_scripted_server() {
     assert!(!serde_json::to_string(&*engine.state()).unwrap().contains("app-geheim"));
     let r = engine.call("connector.insert", json!({"tool": tool_name(&engine, &id, "calendar_list")})).unwrap();
     assert!(r["text"].as_str().unwrap().contains("Schule"), "{r}");
-    let r = engine.call("connector.insert", json!({"tool": tool_name(&engine, &id, "calendar_events"), "arguments": {"from": "2026-12-01", "to": "2026-12-08"}})).unwrap();
+    let r = engine
+        .call("connector.insert", json!({"tool": tool_name(&engine, &id, "calendar_events"), "arguments": {"from": "2026-12-01", "to": "2026-12-08"}}))
+        .unwrap();
     let text = r["text"].as_str().unwrap();
     assert!(text.contains("Elternabend 7b") && text.contains("Aula"), "{text}");
     assert!(shared.lock().unwrap().seen.iter().any(|s| s.starts_with("REPORT /dav/schule/") && s.contains("time-range start=\"2026")));

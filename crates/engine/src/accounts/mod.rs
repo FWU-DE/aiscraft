@@ -214,7 +214,13 @@ static CATALOG: &[CatalogEntry] = &[
         auth: "password",
         runs: "eingebaut (CalDAV)",
         fields: &[
-            CatalogField { key: "url", label: "Adresse", hint: "https://… (CalDAV-Adresse aus den Einstellungen des Kalenders)", secret: false, required: true },
+            CatalogField {
+                key: "url",
+                label: "Adresse",
+                hint: "https://… (CalDAV-Adresse aus den Einstellungen des Kalenders)",
+                secret: false,
+                required: true,
+            },
             CatalogField { key: "username", label: "Benutzername", hint: "", secret: false, required: true },
             CatalogField { key: "password", label: "App-Passwort", hint: "ein eigenes App-Passwort, nicht das Hauptpasswort", secret: true, required: true },
         ],

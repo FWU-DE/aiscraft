@@ -129,7 +129,10 @@ pub async fn start(c: &Client) -> Result<Pending> {
 /// The browser's answer, read from its request line.
 #[derive(Debug, PartialEq)]
 enum Callback {
-    Code { code: String, state: String },
+    Code {
+        code: String,
+        state: String,
+    },
     Denied(String),
     /// Something else (a favicon): answered 404, keep waiting.
     Other,
@@ -252,7 +255,8 @@ impl Pending {
 }
 
 fn tokens_from(v: &Value, old_refresh: Option<&str>, now_ms: i64) -> Result<Tokens> {
-    let access_token = v.get("access_token").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| Error::protocol("Die Anmeldung lieferte kein Zugriffstoken"))?;
+    let access_token =
+        v.get("access_token").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| Error::protocol("Die Anmeldung lieferte kein Zugriffstoken"))?;
     let expires_in = v.get("expires_in").and_then(|e| e.as_i64().or_else(|| e.as_str().and_then(|s| s.parse().ok()))).unwrap_or(0).clamp(0, 400 * 24 * 3600);
     Ok(Tokens {
         access_token: access_token.chars().take(16_384).collect(),
@@ -314,10 +318,7 @@ mod tests {
     fn encoding_and_callback_parsing() {
         assert_eq!(encode("a b/ä"), "a%20b%2F%C3%A4");
         assert_eq!(decode("a%20b+c%C3%A4%zz"), "a b cä%zz");
-        assert_eq!(
-            parse_request("GET /callback?code=x%2By&state=s1 HTTP/1.1\r\nHost: x\r\n\r\n"),
-            Callback::Code { code: "x+y".into(), state: "s1".into() }
-        );
+        assert_eq!(parse_request("GET /callback?code=x%2By&state=s1 HTTP/1.1\r\nHost: x\r\n\r\n"), Callback::Code { code: "x+y".into(), state: "s1".into() });
         assert_eq!(parse_request("GET /favicon.ico HTTP/1.1\r\n\r\n"), Callback::Other);
         assert_eq!(parse_request("GET /callback?error=access_denied HTTP/1.1\r\n\r\n"), Callback::Denied("access_denied".into()));
         assert_eq!(parse_request("POST /callback?code=1&state=2 HTTP/1.1"), Callback::Other);

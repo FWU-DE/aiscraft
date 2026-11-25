@@ -65,6 +65,7 @@ use aiscraft_store::Store;
 use futures::future::BoxFuture;
 use serde_json::Value;
 
+pub use accounts::{BUILTIN_GOOGLE_CLIENT_ID, BUILTIN_MICROSOFT_CLIENT_ID, CatalogEntry, CatalogField, catalog as connector_catalog, catalog_categories};
 pub use aiscraft_backends::SESSION_COOKIE;
 pub use artifacts::{change_blocks, doc_replace, doc_text, markdown_html, merge_states};
 pub use attach::{AIS_ACCEPTS, AttachmentPreview, RangeKind};
@@ -83,7 +84,6 @@ pub use secrets::Secrets;
 pub use skills::Skill;
 pub use state::*;
 pub use tasks::{TASK_RESULT, TaskCard, running_summary, task_card};
-pub use accounts::{BUILTIN_GOOGLE_CLIENT_ID, BUILTIN_MICROSOFT_CLIENT_ID, CatalogEntry, CatalogField, catalog as connector_catalog, catalog_categories};
 pub use tools::{obsidian_vaults, presets as connector_presets};
 pub use update::{CURRENT_VERSION, finish_update_helper};
 pub use vault::{EntryInfo as VaultEntry, totp_at};
@@ -781,6 +781,8 @@ mod tests;
 mod trust_tests;
 
 #[cfg(test)]
+mod accounts_tests;
+#[cfg(test)]
 mod apps_tests;
 #[cfg(test)]
 mod archive_tests;
@@ -790,8 +792,6 @@ mod chatux_tests;
 mod know_tests;
 #[cfg(test)]
 mod local_files_tests;
-#[cfg(test)]
-mod accounts_tests;
 
 #[cfg(test)]
 mod nod_tests;

@@ -70,15 +70,49 @@ fn s_folder() -> Value {
     json!({"type": "object", "properties": {"path": {"type": "string", "description": "Ordnerpfad, z. B. Unterricht/Mathe; leer: oberste Ebene"}}, "additionalProperties": false})
 }
 
-const MAIL_LIST: ToolDef = ToolDef { name: "mail_list", title: "Mails auflisten", description: "Listet Mails (neueste zuerst) oder sucht nach Wörtern. Liefert Datum, Absender, Betreff, Vorschau und ID.", write: false, schema: s_mail_list };
-const MAIL_READ: ToolDef = ToolDef { name: "mail_read", title: "Mail lesen", description: "Liest eine Mail ganz (Absender, Empfänger, Datum, Text).", write: false, schema: s_id };
-const MAIL_DRAFT: ToolDef = ToolDef { name: "mail_draft", title: "Mail-Entwurf anlegen", description: "Legt einen Entwurf im Postfach an. Es wird nichts gesendet; die Person prüft und sendet selbst.", write: true, schema: s_draft };
-const CAL_LIST: ToolDef = ToolDef { name: "calendar_list", title: "Kalender auflisten", description: "Listet die Kalender mit Namen und ID.", write: false, schema: s_none };
-const CAL_EVENTS: ToolDef = ToolDef { name: "calendar_events", title: "Termine lesen", description: "Liest die Termine eines Zeitraums (Ortszeit).", write: false, schema: s_events };
-const CAL_CREATE: ToolDef = ToolDef { name: "calendar_event_create", title: "Termin anlegen", description: "Legt einen Termin im Hauptkalender an.", write: true, schema: s_event_create };
-const FILES_SEARCH: ToolDef = ToolDef { name: "files_search", title: "Dateien suchen", description: "Sucht Dateien nach Namen und Inhalt. Liefert Name, Art, Änderungsdatum und ID.", write: false, schema: s_search };
-const FILES_LIST: ToolDef = ToolDef { name: "files_list", title: "Ordner auflisten", description: "Listet die Dateien und Ordner eines Ordners.", write: false, schema: s_folder };
-const FILE_READ: ToolDef = ToolDef { name: "file_read", title: "Datei lesen", description: "Liest eine Datei als Text (Textdateien bis 1 MB, Google Docs, Tabellen als CSV).", write: false, schema: s_id };
+const MAIL_LIST: ToolDef = ToolDef {
+    name: "mail_list",
+    title: "Mails auflisten",
+    description: "Listet Mails (neueste zuerst) oder sucht nach Wörtern. Liefert Datum, Absender, Betreff, Vorschau und ID.",
+    write: false,
+    schema: s_mail_list,
+};
+const MAIL_READ: ToolDef =
+    ToolDef { name: "mail_read", title: "Mail lesen", description: "Liest eine Mail ganz (Absender, Empfänger, Datum, Text).", write: false, schema: s_id };
+const MAIL_DRAFT: ToolDef = ToolDef {
+    name: "mail_draft",
+    title: "Mail-Entwurf anlegen",
+    description: "Legt einen Entwurf im Postfach an. Es wird nichts gesendet; die Person prüft und sendet selbst.",
+    write: true,
+    schema: s_draft,
+};
+const CAL_LIST: ToolDef =
+    ToolDef { name: "calendar_list", title: "Kalender auflisten", description: "Listet die Kalender mit Namen und ID.", write: false, schema: s_none };
+const CAL_EVENTS: ToolDef =
+    ToolDef { name: "calendar_events", title: "Termine lesen", description: "Liest die Termine eines Zeitraums (Ortszeit).", write: false, schema: s_events };
+const CAL_CREATE: ToolDef = ToolDef {
+    name: "calendar_event_create",
+    title: "Termin anlegen",
+    description: "Legt einen Termin im Hauptkalender an.",
+    write: true,
+    schema: s_event_create,
+};
+const FILES_SEARCH: ToolDef = ToolDef {
+    name: "files_search",
+    title: "Dateien suchen",
+    description: "Sucht Dateien nach Namen und Inhalt. Liefert Name, Art, Änderungsdatum und ID.",
+    write: false,
+    schema: s_search,
+};
+const FILES_LIST: ToolDef =
+    ToolDef { name: "files_list", title: "Ordner auflisten", description: "Listet die Dateien und Ordner eines Ordners.", write: false, schema: s_folder };
+const FILE_READ: ToolDef = ToolDef {
+    name: "file_read",
+    title: "Datei lesen",
+    description: "Liest eine Datei als Text (Textdateien bis 1 MB, Google Docs, Tabellen als CSV).",
+    write: false,
+    schema: s_id,
+};
 
 static MAIL: &[ToolDef] = &[MAIL_LIST, MAIL_READ, MAIL_DRAFT];
 static CALENDAR: &[ToolDef] = &[CAL_LIST, CAL_EVENTS, CAL_CREATE];
@@ -119,7 +153,11 @@ pub(crate) async fn run(c: &Ctx, acc: &Account, tool: &str, a: &Value) -> Result
         ("google-drive", "file_read") => drive_read(c, acc, a).await,
         ("caldav", "calendar_list") => {
             let cals = caldav_calendars(c, acc, &load_secret(c, &acc.id)).await?;
-            Ok(if cals.is_empty() { "Keine Kalender gefunden.".into() } else { cals.iter().map(|(href, name)| format!("- {name} (ID {href})")).collect::<Vec<_>>().join("\n") })
+            Ok(if cals.is_empty() {
+                "Keine Kalender gefunden.".into()
+            } else {
+                cals.iter().map(|(href, name)| format!("- {name} (ID {href})")).collect::<Vec<_>>().join("\n")
+            })
         }
         ("caldav", "calendar_events") => caldav_events(c, acc, a).await,
         _ => Err(Error::not_found(format!("Werkzeug {tool} gibt es nicht"))),
@@ -298,7 +336,13 @@ async fn graph_mail_list(c: &Ctx, acc: &Account, a: &Value) -> Result<String> {
         .iter()
         .map(|m| {
             let when = DateTime::parse_from_rfc3339(&s(m, "/receivedDateTime")).map(|t| local(t.with_timezone(&Utc))).unwrap_or_default();
-            format!("- {when} · {} · {} (ID {})\n  {}", graph_who(m.get("from").unwrap_or(&Value::Null)), s(m, "/subject"), s(m, "/id"), s(m, "/bodyPreview").chars().take(200).collect::<String>())
+            format!(
+                "- {when} · {} · {} (ID {})\n  {}",
+                graph_who(m.get("from").unwrap_or(&Value::Null)),
+                s(m, "/subject"),
+                s(m, "/id"),
+                s(m, "/bodyPreview").chars().take(200).collect::<String>()
+            )
         })
         .collect::<Vec<_>>()
         .join("\n"))
@@ -336,7 +380,11 @@ async fn graph_mail_draft(c: &Ctx, acc: &Account, a: &Value) -> Result<String> {
 async fn graph_calendars(c: &Ctx, acc: &Account) -> Result<String> {
     let v = get(c, acc, &graph(c, "/me/calendars?$select=id,name&$top=100"), &[]).await?;
     let list = items(&v, "value");
-    Ok(if list.is_empty() { "Keine Kalender gefunden.".into() } else { list.iter().map(|k| format!("- {} (ID {})", s(k, "/name"), s(k, "/id"))).collect::<Vec<_>>().join("\n") })
+    Ok(if list.is_empty() {
+        "Keine Kalender gefunden.".into()
+    } else {
+        list.iter().map(|k| format!("- {} (ID {})", s(k, "/name"), s(k, "/id"))).collect::<Vec<_>>().join("\n")
+    })
 }
 
 async fn graph_events(c: &Ctx, acc: &Account, a: &Value) -> Result<String> {
@@ -345,7 +393,11 @@ async fn graph_events(c: &Ctx, acc: &Account, a: &Value) -> Result<String> {
     let base = if cal.is_empty() { "/me/calendarView".to_string() } else { format!("/me/calendars/{}/calendarView", encode(&cal)) };
     let url = graph(
         c,
-        &format!("{base}?startDateTime={}&endDateTime={}&$select=subject,start,end,location,isAllDay&$orderby=start/dateTime&$top=200", encode(&zulu(from)), encode(&zulu(to))),
+        &format!(
+            "{base}?startDateTime={}&endDateTime={}&$select=subject,start,end,location,isAllDay&$orderby=start/dateTime&$top=200",
+            encode(&zulu(from)),
+            encode(&zulu(to))
+        ),
     );
     let v = get(c, acc, &url, &[]).await?;
     let list = items(&v, "value");
@@ -404,7 +456,11 @@ async fn onedrive_search(c: &Ctx, acc: &Account, a: &Value) -> Result<String> {
 async fn onedrive_list(c: &Ctx, acc: &Account, a: &Value) -> Result<String> {
     let path = arg(a, "path");
     let segs: Vec<String> = path.split(['/', '\\']).filter(|p| !p.is_empty() && *p != "." && *p != "..").map(encode).collect();
-    let url = if segs.is_empty() { graph(c, "/me/drive/root/children?$top=200") } else { graph(c, &format!("/me/drive/root:/{}:/children?$top=200", segs.join("/"))) };
+    let url = if segs.is_empty() {
+        graph(c, "/me/drive/root/children?$top=200")
+    } else {
+        graph(c, &format!("/me/drive/root:/{}:/children?$top=200", segs.join("/")))
+    };
     let v = get(c, acc, &url, &[]).await?;
     let list = items(&v, "value");
     Ok(if list.is_empty() { "Der Ordner ist leer.".into() } else { list.iter().map(drive_item).collect::<Vec<_>>().join("\n") })
@@ -453,8 +509,20 @@ async fn gmail_list(c: &Ctx, acc: &Account, a: &Value) -> Result<String> {
     }
     let mut out = Vec::new();
     for id in ids {
-        let m = get(c, acc, &gmail(c, &format!("/messages/{}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date", encode(&id))), &[]).await?;
-        out.push(format!("- {} · {} · {} (ID {id})\n  {}", header(&m, "Date"), header(&m, "From"), header(&m, "Subject"), s(&m, "/snippet").chars().take(200).collect::<String>()));
+        let m = get(
+            c,
+            acc,
+            &gmail(c, &format!("/messages/{}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date", encode(&id))),
+            &[],
+        )
+        .await?;
+        out.push(format!(
+            "- {} · {} · {} (ID {id})\n  {}",
+            header(&m, "Date"),
+            header(&m, "From"),
+            header(&m, "Subject"),
+            s(&m, "/snippet").chars().take(200).collect::<String>()
+        ));
     }
     Ok(out.join("\n"))
 }
@@ -518,7 +586,11 @@ fn gcal(c: &Ctx, path: &str) -> String {
 async fn gcal_calendars(c: &Ctx, acc: &Account) -> Result<String> {
     let v = get(c, acc, &gcal(c, "/users/me/calendarList?maxResults=100"), &[]).await?;
     let list = items(&v, "items");
-    Ok(if list.is_empty() { "Keine Kalender gefunden.".into() } else { list.iter().map(|k| format!("- {} (ID {})", s(k, "/summary"), s(k, "/id"))).collect::<Vec<_>>().join("\n") })
+    Ok(if list.is_empty() {
+        "Keine Kalender gefunden.".into()
+    } else {
+        list.iter().map(|k| format!("- {} (ID {})", s(k, "/summary"), s(k, "/id"))).collect::<Vec<_>>().join("\n")
+    })
 }
 
 fn gcal_time(v: &Value) -> String {
@@ -533,7 +605,12 @@ async fn gcal_events(c: &Ctx, acc: &Account, a: &Value) -> Result<String> {
     let cal = Some(arg(a, "calendar")).filter(|x| !x.is_empty()).unwrap_or_else(|| "primary".into());
     let url = gcal(
         c,
-        &format!("/calendars/{}/events?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=250", encode(&cal), encode(&zulu(from)), encode(&zulu(to))),
+        &format!(
+            "/calendars/{}/events?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=250",
+            encode(&cal),
+            encode(&zulu(from)),
+            encode(&zulu(to))
+        ),
     );
     let v = get(c, acc, &url, &[]).await?;
     let list = items(&v, "items");
@@ -575,7 +652,8 @@ fn drive(c: &Ctx, path: &str) -> String {
 async fn drive_search(c: &Ctx, acc: &Account, a: &Value) -> Result<String> {
     let q = req(a, "query")?.replace('\\', "\\\\").replace('\'', "\\'");
     let query = format!("fullText contains '{q}' and trashed = false");
-    let v = get(c, acc, &drive(c, &format!("/files?q={}&pageSize={MAX_LIST}&fields={}", encode(&query), encode("files(id,name,mimeType,modifiedTime)"))), &[]).await?;
+    let v = get(c, acc, &drive(c, &format!("/files?q={}&pageSize={MAX_LIST}&fields={}", encode(&query), encode("files(id,name,mimeType,modifiedTime)"))), &[])
+        .await?;
     let list = items(&v, "files");
     if list.is_empty() {
         return Ok("Keine Dateien gefunden.".into());
@@ -627,7 +705,13 @@ fn strip_html(html: &str) -> String {
         if rest.starts_with('<') {
             let tag_end = rest.find('>').map(|e| e + 1).unwrap_or(rest.len());
             let tag = rest.get(..tag_end).unwrap_or("");
-            if tag.starts_with("<br") || tag.starts_with("<p") || tag.starts_with("</p") || tag.starts_with("<div") || tag.starts_with("<li") || tag.starts_with("<tr") {
+            if tag.starts_with("<br")
+                || tag.starts_with("<p")
+                || tag.starts_with("</p")
+                || tag.starts_with("<div")
+                || tag.starts_with("<li")
+                || tag.starts_with("<tr")
+            {
                 out.push('\n');
             }
             i += tag_end;
@@ -654,11 +738,7 @@ fn strip_html(html: &str) -> String {
 pub(crate) fn check_caldav_url(url: &str) -> Result<()> {
     let u = reqwest::Url::parse(url.trim()).map_err(|_| Error::invalid("Die CalDAV-Adresse ist keine gültige Adresse (https://…)"))?;
     let local = u.host_str().is_some_and(aiscraft_core::is_loopback_host);
-    if u.scheme() == "https" || (u.scheme() == "http" && local) {
-        Ok(())
-    } else {
-        Err(Error::invalid("Die CalDAV-Adresse muss mit https:// beginnen"))
-    }
+    if u.scheme() == "https" || (u.scheme() == "http" && local) { Ok(()) } else { Err(Error::invalid("Die CalDAV-Adresse muss mit https:// beginnen")) }
 }
 
 const PROPFIND: &str = r#"<?xml version="1.0" encoding="utf-8"?><d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:resourcetype/><d:displayname/><d:current-user-principal/><c:calendar-home-set/></d:prop></d:propfind>"#;
@@ -729,8 +809,11 @@ async fn caldav_events(c: &Ctx, acc: &Account, a: &Value) -> Result<String> {
     let (from, to) = span(a)?;
     let secret = load_secret(c, &acc.id);
     let want = arg(a, "calendar");
-    let cals: Vec<(String, String)> =
-        caldav_calendars(c, acc, &secret).await?.into_iter().filter(|(href, name)| want.is_empty() || *href == want || name.eq_ignore_ascii_case(&want)).collect();
+    let cals: Vec<(String, String)> = caldav_calendars(c, acc, &secret)
+        .await?
+        .into_iter()
+        .filter(|(href, name)| want.is_empty() || *href == want || name.eq_ignore_ascii_case(&want))
+        .collect();
     if cals.is_empty() {
         return Err(Error::not_found(if want.is_empty() { "Keine Kalender gefunden".to_string() } else { format!("Kalender „{want}“ nicht gefunden") }));
     }
@@ -741,8 +824,9 @@ async fn caldav_events(c: &Ctx, acc: &Account, a: &Value) -> Result<String> {
     let mut out = Vec::new();
     for (href, name) in cals.iter().take(20) {
         let root = dav(acc, &secret, "REPORT", href, "1", query.clone()).await?;
-        let data: Vec<String> =
-            craft_dav::responses(&root).flat_map(|r| craft_dav::properties(r).filter(|p| p.name == "c:calendar-data").map(|p| p.text().into_owned()).collect::<Vec<_>>()).collect();
+        let data: Vec<String> = craft_dav::responses(&root)
+            .flat_map(|r| craft_dav::properties(r).filter(|p| p.name == "c:calendar-data").map(|p| p.text().into_owned()).collect::<Vec<_>>())
+            .collect();
         let text = crate::attach::docs::calendar(name, data.join("\r\n").as_bytes());
         if !text.is_empty() {
             out.push(text);

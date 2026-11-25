@@ -571,7 +571,10 @@ async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> O
                 finish("uncertain");
                 c.notice(NoticeLevel::Warning, format!("{UNCERTAIN}: {} · {}. Ob die Aktion ausgeführt wurde, ist nicht klar.", r.conn.name, r.tool.title));
                 (
-                    format!("{UNCERTAIN}: Es ist nicht klar, ob die Aktion ausgeführt wurde ({}). Nicht erneut versuchen; sag der Person, dass sie das Ergebnis prüfen soll.", e.message),
+                    format!(
+                        "{UNCERTAIN}: Es ist nicht klar, ob die Aktion ausgeführt wurde ({}). Nicht erneut versuchen; sag der Person, dass sie das Ergebnis prüfen soll.",
+                        e.message
+                    ),
                     true,
                     "uncertain",
                 )
