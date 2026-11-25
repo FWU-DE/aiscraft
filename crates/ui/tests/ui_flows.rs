@@ -149,6 +149,11 @@ fn counting_backend(engine: &Engine) -> String {
 
 /// A local OpenAI-compatible server that always answers `answer`; the engine is set up to use it.
 fn answering_backend(engine: &Engine, answer: &str) {
+    answering_backend_with_key(engine, answer, None);
+}
+
+/// Like [`answering_backend`], with an API key for the backend when `key` is given.
+fn answering_backend_with_key(engine: &Engine, answer: &str, key: Option<&str>) {
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let answer = answer.to_string();
@@ -194,9 +199,34 @@ fn answering_backend(engine: &Engine, answer: &str) {
         format!("http://{addr}/v1")
     });
     let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"})).unwrap()["id"].as_str().unwrap().to_string();
+    if let Some(key) = key {
+        engine.call("backend.login", json!({"id": id, "secret": key})).unwrap();
+    }
     engine.call("backend.check", json!({"id": id})).unwrap();
     engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
     engine.call("chat.new", json!({})).unwrap();
+}
+
+/// „Vorlesen“ under an answer only where a service can speak (an OpenAI-compatible backend
+/// with a key, or AIS.chat with speech); without one the button is not there.
+#[test]
+fn read_aloud_only_with_a_speech_service() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    answering_backend(&engine, "Ohne Stimme.");
+    engine.call("chat.send", serde_json::json!({"text": "Hallo"})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    assert!(h.query_by_label_contains("Ohne Stimme.").is_some(), "the answer is shown");
+    assert!(h.query_by_label_contains("Kopieren").is_some(), "the answer's buttons are shown");
+    assert!(h.query_by_label_contains("Vorlesen").is_none(), "no speech service, no „Vorlesen“");
+
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    answering_backend_with_key(&engine, "Mit Stimme.", Some("sk-test"));
+    engine.call("chat.send", serde_json::json!({"text": "Hallo"})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    assert!(h.query_by_label_contains("Mit Stimme.").is_some(), "the answer is shown");
+    assert!(h.query_by_label_contains("Vorlesen").is_some(), "with a key, „Vorlesen“ shows");
 }
 
 /// An answer with an `aiscraft-board` block (#56) shows a card instead of the JSON; „Whiteboard

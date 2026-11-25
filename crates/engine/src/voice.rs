@@ -110,11 +110,8 @@ pub(crate) fn devices_allowed(c: &Ctx) -> Result<()> {
 pub(crate) fn tts_provider(c: &Ctx) -> Result<(BackendKind, String, String)> {
     let s = c.state();
     // AIS.chat only where its speech feature is on for the person's state.
-    let ais_speech = |b: &crate::BackendView| match &b.status {
-        crate::BackendStatus::Ready { account } => account.server_tools.is_empty() || account.server_tools.iter().any(|t| t.id == "speech" && t.enabled),
-        _ => false,
-    };
-    if let Some(b) = s.backends.iter().find(|b| b.config.kind == BackendKind::AisChat && ais_speech(b))
+    // The same rule decides `State::speech_available` (the „Vorlesen“ button).
+    if let Some(b) = s.backends.iter().find(|b| b.ais_speech())
         && let Some(cookie) = c.0.secrets.get(&b.config.id)?
     {
         return Ok((BackendKind::AisChat, b.config.base_url.clone(), cookie));
@@ -126,7 +123,7 @@ pub(crate) fn openai_with_key(c: &Ctx) -> Option<(BackendKind, String, String)> 
     c.state()
         .backends
         .iter()
-        .filter(|b| b.config.kind == BackendKind::OpenAi && b.has_secret)
+        .filter(|b| b.openai_speech())
         .find_map(|b| c.0.secrets.get(&b.config.id).ok().flatten().map(|k| (BackendKind::OpenAi, b.config.base_url.clone(), k)))
 }
 

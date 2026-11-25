@@ -1372,9 +1372,14 @@ fn voice_refuses_devices_in_tests_and_picks_providers() {
     }
     assert!(!engine.state().recording);
     assert!(crate::voice::tts_provider(engine.ctx()).is_err(), "no key yet");
+    assert!(!engine.state().speech_available(), "no key, no „Vorlesen“");
     let id = engine.state().selection.backend_id.clone();
+    // AIS.chat that is not signed in cannot speak either.
+    engine.call("backend.add", json!({"kind": "ais_chat", "base_url": "http://127.0.0.1:9"})).unwrap();
+    assert!(!engine.state().speech_available(), "AIS.chat signed out, no „Vorlesen“");
     engine.call("backend.login", json!({"id": id, "secret": "sk-x"})).unwrap();
     assert_eq!(crate::voice::tts_provider(engine.ctx()).unwrap().0, aiscraft_core::BackendKind::OpenAi);
+    assert!(engine.state().speech_available(), "with a key the button shows");
     assert_eq!(engine.mic_level(), 0.0);
 }
 
