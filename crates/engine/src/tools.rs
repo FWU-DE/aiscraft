@@ -796,7 +796,7 @@ fn target_of(t: &Transport) -> String {
     }
 }
 
-fn view_of(cfg: &ServerConfig) -> ConnectorView {
+pub(crate) fn view_of(cfg: &ServerConfig) -> ConnectorView {
     ConnectorView {
         id: cfg.id.clone(),
         name: cfg.name.clone(),
@@ -805,6 +805,7 @@ fn view_of(cfg: &ServerConfig) -> ConnectorView {
         status: if cfg.enabled { "connecting".into() } else { "off".into() },
         error: None,
         tools: vec![],
+        extension: None,
     }
 }
 
@@ -819,15 +820,30 @@ pub(crate) fn load(c: &Ctx) {
     }
 }
 
+/// The connectors the person added and those of installed packages (#43, #28).
+fn all_configs(c: &Ctx) -> Vec<ServerConfig> {
+    let mut all = load_configs(c);
+    all.extend(crate::ext::server_configs(c));
+    all
+}
+
 async fn client_for(c: &Ctx, id: &str) -> Result<Arc<McpClient>> {
     if let Some(cl) = c.0.tools.clients.lock().unwrap_or_else(PoisonError::into_inner).get(id).filter(|cl| !cl.is_closed()).cloned() {
         return Ok(cl);
     }
-    let cfg = load_configs(c).into_iter().find(|x| x.id == id).ok_or_else(|| Error::not_found("Konnektor nicht gefunden"))?;
+    let cfg = all_configs(c).into_iter().find(|x| x.id == id).ok_or_else(|| Error::not_found("Konnektor nicht gefunden"))?;
     connect(c, &cfg).await
 }
 
-async fn connect(c: &Ctx, cfg: &ServerConfig) -> Result<Arc<McpClient>> {
+/// Close a connector's connection (a package switched off or removed).
+pub(crate) async fn disconnect(c: &Ctx, id: &str) {
+    let removed = c.0.tools.clients.lock().unwrap_or_else(PoisonError::into_inner).remove(id);
+    if let Some(cl) = removed {
+        cl.close().await;
+    }
+}
+
+pub(crate) async fn connect(c: &Ctx, cfg: &ServerConfig) -> Result<Arc<McpClient>> {
     let set = |status: &str, error: Option<String>, tools: Option<Vec<ConnectorTool>>| {
         let (status, id) = (status.to_string(), cfg.id.clone());
         c.update(move |s| {
@@ -986,7 +1002,7 @@ pub(crate) async fn toggle(c: Ctx, p: Value) -> Result<Value> {
 pub(crate) async fn refresh(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     c.0.tools.clients.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
-    let cfg = load_configs(&c).into_iter().find(|x| x.id == id).ok_or_else(|| Error::not_found("Konnektor nicht gefunden"))?;
+    let cfg = all_configs(&c).into_iter().find(|x| x.id == id).ok_or_else(|| Error::not_found("Konnektor nicht gefunden"))?;
     connect(&c, &cfg).await?;
     Ok(json!({}))
 }

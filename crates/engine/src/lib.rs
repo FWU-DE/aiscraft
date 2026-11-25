@@ -60,6 +60,7 @@ pub use artifacts::{change_blocks, doc_replace, doc_text, markdown_html, merge_s
 pub use attach::{AIS_ACCEPTS, AttachmentPreview, RangeKind};
 pub use chat::{LEFT_OUT, SENT_ALONG};
 pub use commands::{CommandSpec, commands};
+pub use ext::{ConfigField, ExtensionOffer, ExtensionView, ExtensionsState, PackageRule, PluginSkill};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use inbox::InboxItem;
 pub use links::{LINK_CHECK, has_links};

@@ -401,6 +401,7 @@ pub(crate) fn view() -> ConnectorView {
         status: "connected".into(),
         error: None,
         tools: Vec::new(),
+        extension: None,
     }
 }
 

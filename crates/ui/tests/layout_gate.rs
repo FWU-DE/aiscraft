@@ -375,6 +375,31 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
     }
     show(&mut h, &tx, "none");
 
+    // Installing a connector package (#43): what it may do and its settings, before it runs.
+    let pkg = std::env::temp_dir().join(format!("aiscraft-gate-paket-{}-{}", std::process::id(), theme));
+    std::fs::create_dir_all(pkg.join("server")).unwrap();
+    std::fs::write(pkg.join("server/index.js"), "// leer").unwrap();
+    let manifest = json!({
+        "manifest_version": "0.3", "name": "stundenplan", "display_name": "Stundenplan und Vertretungen der Gesamtschule am Stadtpark",
+        "version": "1.2.0", "description": "Liest Stundenplan und Vertretungsplan aus dem Schulverwaltungsprogramm und trägt Termine ein.",
+        "author": {"name": "Beispiel-Schulträger"},
+        "server": {"type": "node", "entry_point": "server/index.js", "mcp_config": {"command": "node", "args": ["${__dirname}/server/index.js", "${user_config.folders}"], "env": {"TOKEN": "${user_config.token}"}}},
+        "user_config": {
+            "token": {"type": "string", "title": "Zugangsschlüssel des Schulverwaltungsprogramms", "sensitive": true, "required": true},
+            "folders": {"type": "directory", "title": "Ordner", "multiple": true},
+            "limit": {"type": "number", "title": "Höchstzahl", "default": 5},
+            "read_only": {"type": "boolean", "title": "Nur lesen", "default": true}
+        }
+    });
+    std::fs::write(pkg.join("manifest.json"), manifest.to_string()).unwrap();
+    call(&engine, "extension.inspect", json!({"path": pkg.display().to_string()}));
+    settle(&mut h, &at("Paket installieren"), |h| label(h, "Installieren und starten"));
+    check(&mut h, &at("Paket installieren"));
+    call(&engine, "extension.cancel", json!({}));
+    settle(&mut h, &at("Paket abgebrochen"), |h| !label(h, "Installieren und starten"));
+    show(&mut h, &tx, "none");
+    let _ = std::fs::remove_dir_all(&pkg);
+
     // Templates, connector results, research, project knowledge (#54, #53, #37, #32).
     let pid = call(&engine, "project.create", json!({"name": "Biologie 7b mit einem recht langen Namen"}))["id"].as_str().unwrap().to_string();
     let file = std::env::temp_dir().join(format!("aiscraft-gate-lehrplan-{}-{}.md", std::process::id(), theme));

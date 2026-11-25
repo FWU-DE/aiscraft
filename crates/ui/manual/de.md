@@ -192,6 +192,14 @@ Werkzeuge, die nur lesen, laufen direkt. Alles andere läuft nur, wenn du darum 
 
 Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
 
+### Pakete mit einem Klick
+
+MCP-Pakete (`.mcpb`, wie die Erweiterungen von Claude Desktop) installierst du unter **Einstellungen › Konnektoren › Paket installieren …**. Vorher zeigt AIS.ChatCraft, was das Paket darf: welches Programm es startet (mit deinen Rechten, ohne Abschottung), welche Ordner, Dateien und Zugangsdaten es bekommt, und seine Einstellungen. Erst „Installieren und starten“ legt es unter `plugins/` im Datenordner ab und startet es. Zugangsdaten liegen im Schlüsselbund. Versteckte Ordner wie `.ssh` gibt AIS.ChatCraft keinem Paket.
+
+- Seine Werkzeuge folgen denselben Freigaben wie jeder Konnektor. Verbote, die ein Paket mitbringt, gelten als eigene Regeln; Erlaubnisse übernimmt AIS.ChatCraft nie.
+- Abgewiesen werden Pakete mit Pfaden, die aus dem Paket hinausführen, mit Verknüpfungen, mit einem Programm außerhalb des Pakets oder für ein anderes Betriebssystem.
+- Aus- und einschalten oder entfernen geht in derselben Liste; Entfernen löscht Dateien, Einstellungen und Zugangsdaten.
+
 ### Lokale Dateien
 
 „Lies die PDF in Downloads und fasse sie zusammen“ oder „Speichere den Bericht in Dokumente“ geht ohne eigenen Konnektor. Lokale Dateien sind zuerst aus. Fragt ein Modell danach, erscheint im Chat eine Frage; „Erlauben“ schaltet sie ein und führt die Aktion aus, „Ablehnen“ lässt sie aus. Aufgaben und Zeitpläne können sie nicht einschalten und greifen nie auf Dateien zu. Abschalten unter **Einstellungen › Konnektoren**.

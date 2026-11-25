@@ -92,6 +92,11 @@ pub enum Dialog {
     },
     /// Templates, connector results, research (#37, #53, #54).
     Know(crate::know::KnowDialog),
+    /// A connector package or plug-in before it is installed (#43, #28): its settings as typed.
+    Install {
+        id: String,
+        values: std::collections::BTreeMap<String, String>,
+    },
 }
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
@@ -179,6 +184,7 @@ const DIALOG_SCREEN_GAP: f32 = 24.0;
 
 impl AisCraftApp {
     pub(crate) fn dialogs(&mut self, ctx: &egui::Context) {
+        self.sync_install_dialog();
         let Some(mut dialog) = self.dialog.take() else { return };
         let mut keep = true;
         let settings = matches!(dialog, Dialog::Settings { .. });
@@ -188,6 +194,7 @@ impl AisCraftApp {
                 Dialog::Settings { .. } => (ctx.content_rect().width() - 48.0).clamp(600.0, 940.0),
                 Dialog::Welcome { .. } => 640.0,
                 Dialog::Login { .. } | Dialog::WelcomeSignIn => 520.0,
+                Dialog::Install { .. } => 600.0,
                 _ => 460.0,
             });
             keep = self.dialog_body(ui, &mut dialog);
@@ -397,6 +404,10 @@ impl AisCraftApp {
                     }
                 });
                 keep
+            }
+            Dialog::Install { id, values } => {
+                let id = id.clone();
+                self.install_body(ui, &id, values)
             }
             Dialog::AddConnector { name, command, env, url, headers, http } => {
                 ui.heading("Konnektor hinzufügen");
@@ -888,6 +899,8 @@ impl AisCraftApp {
                 ui.add_space(8.0);
                 self.local_files_section(ui);
                 ui.add_space(8.0);
+                self.extensions_section(ui);
+                ui.add_space(8.0);
                 for k in self.state.connectors.clone() {
                     card(&t).show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -901,6 +914,11 @@ impl AisCraftApp {
                             ui.label(RichText::new(&k.name).strong());
                             ui.label(small_muted(&t, format!("{} Werkzeuge", k.tools.len())));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                // A package's connector is switched and removed with its package.
+                                if k.extension.is_some() {
+                                    ui.label(small_muted(&t, "aus einem Paket"));
+                                    return;
+                                }
                                 if ui.small_button("Entfernen").clicked() {
                                     self.dialog = Some(Dialog::Confirm { text: format!("Konnektor {} entfernen?", k.name), command: "connector.remove".into(), params: json!({"id": k.id}) });
                                 }

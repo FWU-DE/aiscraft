@@ -49,6 +49,9 @@ pub struct State {
     /// Local files (#25): on or off, folders kept out.
     #[serde(default)]
     pub local_files: crate::local_files::LocalFilesState,
+    /// Installed connector packages and plug-ins, and the one being installed (#43, #28).
+    #[serde(default)]
+    pub extensions: crate::ext::ExtensionsState,
     /// Tool calls waiting for the owner's yes or no.
     pub approvals: Vec<Approval>,
     pub schedules: Vec<crate::schedules::Schedule>,
@@ -176,6 +179,9 @@ pub struct ConnectorView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub tools: Vec<ConnectorTool>,
+    /// The installed package or plug-in it comes from (#43, #28); managed there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
