@@ -195,6 +195,8 @@ Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
 
 **Zeitpläne** (Einstellungen › Zeitpläne) schicken einen Auftrag wiederkehrend oder einmal ab, etwa werktags um 7 Uhr: `0 7 * * 1-5`. Die Antwort landet in einem eigenen Chat. **Beobachten** meldet nur, wenn sich etwas geändert hat. Modelle können selbst eine Nachfrage planen („Ich schaue Freitag nach“). Zeitpläne laufen, solange AIS.ChatCraft läuft; Werkzeuge, die eine Freigabe brauchen, sind dabei abgeschaltet.
 
+**Vorlagen** unter den Zeitplänen legen einen Zeitplan mit einem Klick an: Morgenüberblick (Termine heute, offene Mails), Wochenvorschau, Mails des Tages und Vertretungsplan beobachten. Fehlt dafür etwas, etwa ein Konnektor für Kalender oder E-Mail oder ein Modell, das Webseiten lesen kann, steht das an der Vorlage, und sie lässt sich erst anlegen, wenn es da ist.
+
 **Aufgaben** laufen im Hintergrund in einem eigenen Chat (Titel mit ▶), während du weiterchattest. Das Ergebnis kommt in den Chat zurück, aus dem die Aufgabe kam.
 
 ## Fähigkeiten und Hinweise

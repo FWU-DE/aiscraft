@@ -129,3 +129,42 @@ fn style_is_learned_from_own_words_only() {
     let err = fresh.call("style.learn", json!({})).unwrap_err();
     assert!(err.message.contains("zu wenige"), "{}", err.message);
 }
+
+/// #27: briefing templates create a schedule with one call, and say what is missing instead.
+#[test]
+fn briefing_templates_say_what_is_missing() {
+    let (engine, _) = engine_with_recording("ok");
+    let list = engine.call("schedule.templates", json!({})).unwrap();
+    let by_id = |id: &str| list.as_array().unwrap().iter().find(|t| t["id"] == id).cloned().unwrap();
+    let missing = by_id("morgen")["missing"].as_array().unwrap().clone();
+    assert_eq!(missing.len(), 2, "{missing:?}");
+    assert!(by_id("vertretung")["missing"].as_array().unwrap().is_empty(), "this model reads pages with the built-in reader");
+    assert_eq!(by_id("vertretung")["needs_url"], true);
+
+    let err = engine.call("schedule.from_template", json!({"template": "morgen"})).unwrap_err();
+    assert!(err.message.contains("Kalender") && err.message.contains("E-Mail") && err.message.contains("Konnektoren"), "{}", err.message);
+    assert!(engine.state().schedules.is_empty(), "nothing half-working is created");
+
+    // A connector for calendar and mail (set up, even if not reachable now) meets both needs.
+    engine.call("connector.add", json!({"name": "Outlook Kalender und Mail", "url": "http://127.0.0.1:9/mcp"})).unwrap();
+    engine.call("schedule.from_template", json!({"template": "morgen"})).unwrap();
+    let s = engine.state().schedules.last().cloned().unwrap();
+    assert_eq!((s.title.as_str(), s.cron.as_deref()), ("Morgenüberblick", Some("0 7 * * 1-5")));
+
+    // The page watch needs the page; it becomes a watch.
+    assert!(engine.call("schedule.from_template", json!({"template": "vertretung"})).unwrap_err().message.contains("Adresse"));
+    assert!(engine.call("schedule.from_template", json!({"template": "vertretung", "url": "kein link"})).is_err());
+    engine.call("schedule.from_template", json!({"template": "vertretung", "url": "https://schule.example/plan"})).unwrap();
+    let w = engine.state().schedules.last().cloned().unwrap();
+    assert!(w.watch && w.prompt.contains("https://schule.example/plan"));
+    // The owner's changes count.
+    engine.call("schedule.from_template", json!({"template": "woche", "title": "Meine Woche", "cron": "0 17 * * 0"})).unwrap();
+    let mine = engine.state().schedules.last().cloned().unwrap();
+    assert_eq!((mine.title.as_str(), mine.cron.as_deref()), ("Meine Woche", Some("0 17 * * 0")));
+    assert!(engine.call("schedule.from_template", json!({"template": "gibtsnicht"})).is_err());
+
+    // Without tools no page can be read: the template says so.
+    engine.call("settings.set", json!({"key": "tools", "value": false})).unwrap();
+    let list = engine.call("schedule.templates", json!({})).unwrap();
+    assert!(!list.as_array().unwrap().iter().find(|t| t["id"] == "vertretung").unwrap()["missing"].as_array().unwrap().is_empty());
+}

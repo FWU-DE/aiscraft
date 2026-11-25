@@ -540,6 +540,24 @@ static COMMANDS: &[CommandSpec] = &[
         false,
         |c, p| Box::pin(crate::schedules::edit(c, p))
     ),
+    cmd!(
+        "schedule.templates",
+        "Vorlagen für Zeitpläne",
+        "Zeitpläne",
+        None,
+        "Antwort: id, title, prompt, cron, rhythm, watch, needs, missing (was fehlt und was zu tun ist), needs_url",
+        false,
+        |c, p| Box::pin(crate::schedule_templates::list(c, p))
+    ),
+    cmd!(
+        "schedule.from_template",
+        "Zeitplan aus Vorlage anlegen",
+        "Zeitpläne",
+        None,
+        "template: morgen|woche|mails|vertretung, url?: string (Seite, für vertretung), title?: string, prompt?: string, cron?: string. Fehlt ein Konnektor oder ein Modell, das Webseiten liest, sagt der Befehl, was zu tun ist",
+        false,
+        |c, p| Box::pin(crate::schedule_templates::create(c, p))
+    ),
     cmd!("schedule.delete", "Zeitplan löschen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::delete(c, p))),
     cmd!("schedule.run", "Zeitplan jetzt ausführen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::run_now(c, p))),
     cmd!("log.list", "Aktionsprotokoll", "App", None, "limit?: number (Standard 100), conversation?: string", false, |c, p| Box::pin(crate::action_log::list(

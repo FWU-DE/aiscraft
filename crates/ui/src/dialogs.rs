@@ -964,6 +964,8 @@ impl AisCraftApp {
                 if ui.button("+ Zeitplan anlegen").clicked() {
                     self.dialog = Some(Dialog::AddSchedule { title: String::new(), prompt: String::new(), when: "0 7 * * 1-5".into(), recurring: true, watch: false });
                 }
+                ui.add_space(10.0);
+                self.schedule_templates_section(ui);
             }
             SettingsTab::Skills => {
                 let st = self.state.settings.clone();
