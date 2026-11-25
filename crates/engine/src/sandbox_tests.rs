@@ -365,10 +365,17 @@ fn a_newer_pinned_nod_runtime_is_offered_and_installed_only_after_yes() {
     let creates = |f: &Fake| f.calls().iter().filter(|c| matches!(c, FakeCall::Create(_))).count();
     assert_eq!(creates(&fake), 1);
 
+    // What the older version left: unpacked assets and a broken download.
+    let dir = ctx.0.sandbox.dir().to_path_buf();
+    std::fs::create_dir_all(dir.join("nod/guest-packages")).unwrap();
+    std::fs::write(dir.join("nod/guest-packages/alt_1.0_amd64.deb"), b"alt").unwrap();
+    std::fs::write(dir.join("lima.tar.gz.part"), b"abgebrochen").unwrap();
     // The yes: the old computer goes, the new one is created, the version is recorded.
     engine.call("sandbox.update", json!({"yes": true})).unwrap();
     assert_eq!(creates(&fake), 2);
-    assert!(fake.calls().contains(&FakeCall::Destroy));
+    assert!(fake.calls().contains(&FakeCall::Destroy), "the old computer goes, with every image on its disk");
+    assert!(!dir.join("nod").exists() && !dir.join("lima.tar.gz.part").exists(), "nothing of the old version is left");
+    assert!(dir.join("installed.json").is_file());
     let s = engine.state().sandbox.clone();
     assert!(s.update.is_none() && s.installed && s.enabled && s.version == offered, "{s:?}");
     assert!(engine.call("sandbox.update", json!({})).unwrap()["updated"] == false);

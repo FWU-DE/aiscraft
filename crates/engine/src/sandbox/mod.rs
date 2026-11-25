@@ -423,10 +423,13 @@ async fn set_up(c: Ctx, p: Value, updating: bool) -> Result<Value> {
         step(&c, Some("Abbild wird geladen"));
         let (files, sha256) = image::fetch(&c, &src, &rt.dir).await?;
         step(&c, Some("Rechner wird angelegt"));
-        // A leftover of a broken setup (it is ours by name) goes first.
+        // The older computer (an update, or a leftover of a broken setup; it is ours by name) goes
+        // first, with its disk and so every old image in it. Only now: a failed download above
+        // leaves it working.
         if machine.exists().await {
             machine.destroy().await?;
         }
+        remove_leftovers(&rt.dir, &files)?;
         let created = machine.create(files.clone(), rt.dir.join("machine")).await;
         // The downloads are in the machine now (or not needed any more): 1 to 2 GB back.
         for f in &files {
@@ -461,6 +464,22 @@ async fn set_up(c: Ctx, p: Value, updating: bool) -> Result<Value> {
         },
     );
     Ok(offer(&c))
+}
+
+/// Everything an older version left in `<data>/sandbox` except the fresh downloads `keep`:
+/// unpacked runtimes and assets (`nod`, `lima`), the old disk folder, older or broken downloads.
+/// The marker stays until the new computer replaces it.
+fn remove_leftovers(dir: &Path, keep: &[PathBuf]) -> Result<()> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Ok(()) };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.file_name().is_some_and(|n| n == MARKER) || keep.contains(&path) {
+            continue;
+        }
+        let removed = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+        removed.map_err(|e| Error::io(path.display(), &e))?;
+    }
+    Ok(())
 }
 
 /// `sandbox.set`: on only once installed; the network switch at any time.

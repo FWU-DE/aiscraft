@@ -35,7 +35,8 @@ pub(crate) const CONVERT_SCRIPT: &str =
 pub(crate) const LIST_SCRIPT: &str = r#"cd -- "$1" && find . -mindepth 1 -maxdepth 4 -printf '%y %s %P\n' | head -n 500"#;
 
 /// In the private computer as root, before a container: Docker running, the workspace image
-/// loaded (only after its tar matched the pinned checksum, as Nod does), Nod's images we never
+/// loaded (only after its tar matched the pinned checksum, as Nod does), every other image (an
+/// older workspace) and Nod's images we never
 /// use removed, the network for the switch there, the chat's folder there and owned by the
 /// container's user. `$1` image id (`Workspace::image`), `$2` chat (may be empty), `$3` the image tar, `$4` its
 /// SHA-256, `$5` `1` when the network switch is on.
@@ -55,6 +56,7 @@ if [ "$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null)" != "$1" ]; th
   [ "$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null)" = "$1" ] || { echo "Das geladene Abbild ist nicht das erwartete." >&2; exit 3; }
 fi
 rm -f /opt/nod-assets/images/browser.tar.zst /opt/nod-assets/images/postgres.tar.zst 2>/dev/null || true
+docker image ls --no-trunc --format '{{.ID}}' | grep -vx "$1" | xargs -r docker image rm -f >/dev/null 2>&1 || true
 if [ "$5" = 1 ]; then docker network inspect aiscraft-net >/dev/null 2>&1 || docker network create aiscraft-net >/dev/null; fi
 if [ -n "$2" ]; then install -d -o 1000 -g 1000 -m 0700 "/work/$2"; fi"#;
 /// Remove a chat's working folder. `$1` chat.
