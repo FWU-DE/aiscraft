@@ -271,11 +271,8 @@ static COMMANDS: &[CommandSpec] = &[
             }
             let area = opt_str(&p, "area").and_then(|a| MemoryArea::parse(&a)).unwrap_or(MemoryArea::About);
             // Typed by the owner into the memory panel: the note is its own source.
-            let note = MemoryNote { id: new_id(), area, source_quote: text.clone(), text, source_message_id: None, created_at: now_ms(), archived: false };
-            c.store(|st| st.save_memory(&note))?;
-            let id = note.id.clone();
-            c.update(|s| s.memory.push(note));
-            Ok(json!({"id": id}))
+            let note = crate::memory::add_from_owner(&c, area, text.clone(), None, text)?;
+            Ok(json!({"id": note.id}))
         }
     )),
     cmd!("memory.update", "Notiz ändern", "Gedächtnis", None, "id: string, text?: string, area?: string", false, |c, p| Box::pin(async move {
@@ -293,8 +290,20 @@ static COMMANDS: &[CommandSpec] = &[
         edit_memory(&c, &req_str(&p, "id")?, |n| n.archived = true)
     })),
     cmd!("memory.restore", "Notiz wiederherstellen", "Gedächtnis", None, "id: string", false, |c, p| Box::pin(async move {
-        edit_memory(&c, &req_str(&p, "id")?, |n| n.archived = false)
+        edit_memory(&c, &req_str(&p, "id")?, |n| {
+            n.archived = false;
+            n.replaced_by = None;
+        })
     })),
+    cmd!(
+        "memory.replace",
+        "Notiz durch neuere ersetzen",
+        "Gedächtnis",
+        None,
+        "id: string (die ältere Notiz), by: string (die neuere). Die ältere wird vergessen und zeigt „ersetzt durch“",
+        false,
+        |c, p| Box::pin(async move { crate::memory::replace(&c, &req_str(&p, "id")?, &req_str(&p, "by")?) })
+    ),
     cmd!(
         "backend.add",
         "Backend hinzufügen",

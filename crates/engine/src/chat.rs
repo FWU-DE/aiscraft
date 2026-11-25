@@ -4,8 +4,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use aiscraft_core::{
-    ChatRequest, Conversation, ConversationKind, Error, ErrorKind, MemoryNote, Message, Result, Role, StreamEvent, ToolCall, extract_explicit_memory,
-    memory_prompt, title_from,
+    ChatRequest, Conversation, ConversationKind, Error, ErrorKind, Message, Result, Role, StreamEvent, ToolCall, extract_explicit_memory, memory_prompt,
+    title_from,
 };
 use futures::StreamExt;
 use serde_json::{Value, json};
@@ -345,18 +345,9 @@ pub(crate) async fn send_full(
         && !temporary
         && let Some((area, note_text)) = extract_explicit_memory(&raw)
     {
-        let note = MemoryNote {
-            id: new_id(),
-            area,
-            text: note_text.clone(),
-            source_message_id: Some(user.id.clone()),
-            source_quote: raw.clone(),
-            created_at: now_ms(),
-            archived: false,
-        };
-        c.store(|st| st.save_memory(&note))?;
+        // A note that replaces an older one archives it (#21), checked in the background.
+        let note = crate::memory::add_from_owner(&c, area, note_text.clone(), Some(user.id.clone()), raw.clone())?;
         let nid = note.id.clone();
-        c.update(|s| s.memory.push(note));
         c.notice_with(
             NoticeLevel::Success,
             format!("Gemerkt ({}): {note_text}", area.label()),

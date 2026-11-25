@@ -1173,8 +1173,12 @@ impl AisCraftApp {
                 if !archived.is_empty() {
                     egui::CollapsingHeader::new(small_muted(&t, format!("Vergessen ({})", archived.len()))).show(ui, |ui| {
                         for n in archived {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label(muted(&t, &n.text));
+                                // #21: which newer note said it again.
+                                if let Some(by) = n.replaced_by.as_ref().and_then(|id| self.state.memory.iter().find(|x| &x.id == id)) {
+                                    ui.label(small_muted(&t, format!("ersetzt durch „{}“", by.text)));
+                                }
                                 if ui.small_button("Wiederherstellen").clicked() {
                                     self.run("memory.restore", json!({"id": n.id}));
                                 }

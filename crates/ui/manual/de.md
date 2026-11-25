@@ -173,6 +173,8 @@ Dokumente und Whiteboards lassen sich live mit anderen bearbeiten. Dafür brauch
 
 Schreib im Chat „Merke dir: …“, und AIS.ChatCraft legt eine Notiz an. Notizen entstehen nur aus deinen eigenen Worten, nie aus Antworten, Webseiten oder Dateien. Jede Notiz zeigt, woher sie stammt. Unter **Einstellungen › Gedächtnis** bearbeitest, ordnest und vergisst du Notizen. Vergessene Notizen lassen sich wiederherstellen.
 
+**Sag es einmal.** Sagst du etwas Neues zu einer Sache, die schon notiert ist („Merke dir: Nicht mehr Anna, sondern Bob macht die Rechnungen“), ersetzt die neue Notiz die alte. Die alte landet bei den vergessenen Notizen mit dem Hinweis „ersetzt durch …“ und lässt sich wiederherstellen. Ob eine Notiz eine ältere ersetzt, prüft das gewählte Modell nur, wenn es deine Notizen ohnehin bekommt; sonst fragt AIS.ChatCraft dich.
+
 ## Konnektoren und Freigaben
 
 Konnektoren sind MCP-Server, deren Werkzeuge Modelle aufrufen können: Obsidian, Dateien, Webseiten abrufen und viele mehr. Unter **Einstellungen › Konnektoren** gibt es Vorlagen, etwa für deinen Obsidian-Tresor.

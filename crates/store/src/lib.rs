@@ -204,6 +204,13 @@ impl Store {
             tx.commit().map_err(db_err)?;
         }
         db.execute_batch("CREATE INDEX IF NOT EXISTS messages_parent ON messages(conversation_id, parent_id)").map_err(db_err)?;
+        // Notes replaced by a newer one (#21). An added column older versions simply do not read,
+        // so the schema version stays.
+        let has_replaced: bool =
+            db.prepare("SELECT 1 FROM pragma_table_info('memory') WHERE name = 'replaced_by'").and_then(|mut st| st.exists([])).map_err(db_err)?;
+        if !has_replaced {
+            db.execute_batch("ALTER TABLE memory ADD COLUMN replaced_by TEXT").map_err(db_err)?;
+        }
         db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}")).map_err(db_err)?;
         Ok(Self { db, temp: None, temp_ids: Default::default() })
     }
@@ -697,8 +704,10 @@ impl Store {
     // ---- memory ---------------------------------------------------------------------------
 
     pub fn memory(&self) -> Result<Vec<MemoryNote>> {
-        let mut st =
-            self.db.prepare("SELECT id, area, text, source_message_id, source_quote, created_at, archived FROM memory ORDER BY created_at").map_err(db_err)?;
+        let mut st = self
+            .db
+            .prepare("SELECT id, area, text, source_message_id, source_quote, created_at, archived, replaced_by FROM memory ORDER BY created_at")
+            .map_err(db_err)?;
         let rows = st
             .query_map([], |r| {
                 Ok((
@@ -709,12 +718,13 @@ impl Store {
                     r.get::<_, String>(4)?,
                     r.get::<_, i64>(5)?,
                     r.get::<_, i64>(6)?,
+                    r.get::<_, Option<String>>(7)?,
                 ))
             })
             .map_err(db_err)?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, area, text, source_message_id, source_quote, created_at, archived) = row.map_err(db_err)?;
+            let (id, area, text, source_message_id, source_quote, created_at, archived, replaced_by) = row.map_err(db_err)?;
             out.push(MemoryNote {
                 id,
                 area: MemoryArea::parse(&area).unwrap_or(MemoryArea::Lessons),
@@ -723,6 +733,7 @@ impl Store {
                 source_quote,
                 created_at,
                 archived: archived != 0,
+                replaced_by,
             });
         }
         Ok(out)
@@ -731,9 +742,9 @@ impl Store {
     pub fn save_memory(&self, n: &MemoryNote) -> Result<()> {
         self.db
             .execute(
-                "INSERT INTO memory (id, area, text, source_message_id, source_quote, created_at, archived) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(id) DO UPDATE SET area = excluded.area, text = excluded.text, archived = excluded.archived",
-                params![n.id, n.area.as_str(), n.text, n.source_message_id, n.source_quote, n.created_at, n.archived as i64],
+                "INSERT INTO memory (id, area, text, source_message_id, source_quote, created_at, archived, replaced_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(id) DO UPDATE SET area = excluded.area, text = excluded.text, archived = excluded.archived, replaced_by = excluded.replaced_by",
+                params![n.id, n.area.as_str(), n.text, n.source_message_id, n.source_quote, n.created_at, n.archived as i64, n.replaced_by],
             )
             .map_err(db_err)?;
         Ok(())
@@ -1338,11 +1349,14 @@ mod tests {
             source_quote: "merke dir: Lehrerin".into(),
             created_at: 0,
             archived: false,
+            replaced_by: None,
         };
         s.save_memory(&n).unwrap();
         n.archived = true;
+        n.replaced_by = Some("neu".into());
         s.save_memory(&n).unwrap();
         assert!(s.memory().unwrap()[0].archived);
+        assert_eq!(s.memory().unwrap()[0].replaced_by.as_deref(), Some("neu"), "#21: the replacing note is kept");
 
         s.set_setting("theme", &serde_json::json!("dark")).unwrap();
         assert_eq!(s.setting("theme").unwrap(), Some(serde_json::json!("dark")));

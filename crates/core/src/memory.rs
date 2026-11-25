@@ -57,6 +57,10 @@ pub struct MemoryNote {
     pub created_at: Millis,
     #[serde(default)]
     pub archived: bool,
+    /// The newer note that replaced this one (#21, „Sag es einmal“); set together with
+    /// `archived`, cleared when the owner restores the note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced_by: Option<String>,
 }
 
 const TRIGGERS: [&str; 9] =
@@ -97,6 +101,34 @@ fn guess_area(l: &str) -> MemoryArea {
     } else {
         MemoryArea::Lessons
     }
+}
+
+/// Words that say nothing about what a note is about.
+const STOP: [&str; 40] = [
+    "aber", "alle", "als", "auch", "auf", "aus", "bei", "bin", "bis", "das", "dass", "dem", "den", "der", "die", "ein", "eine", "einen", "für", "hat", "ich",
+    "immer", "ist", "jetzt", "macht", "mehr", "mein", "meine", "mit", "nicht", "noch", "nur", "oder", "sich", "sie", "sind", "und", "von", "wie", "wird",
+];
+
+/// The words of a note that carry its subject: lowercase, at least four letters, no filler.
+fn subject_words(text: &str) -> std::collections::BTreeSet<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .map(str::to_lowercase)
+        .filter(|w| w.chars().count() >= 4 && !STOP.contains(&w.as_str()) && !w.chars().all(|c| c.is_ascii_digit()))
+        .collect()
+}
+
+/// Active notes a new note might replace (#21): they share a subject word with it, most shared
+/// words first, at most eight. Which one it really replaces, if any, the owner or a model decides.
+pub fn replace_candidates<'a>(new: &MemoryNote, notes: &'a [MemoryNote]) -> Vec<&'a MemoryNote> {
+    let words = subject_words(&new.text);
+    let mut scored: Vec<(usize, &MemoryNote)> = notes
+        .iter()
+        .filter(|n| !n.archived && n.id != new.id)
+        .map(|n| (subject_words(&n.text).intersection(&words).count(), n))
+        .filter(|(k, _)| *k > 0)
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.created_at.cmp(&a.1.created_at)));
+    scored.into_iter().take(8).map(|(_, n)| n).collect()
 }
 
 /// The memory index for a system prompt: every active note, grouped by area.
@@ -151,10 +183,34 @@ mod tests {
             source_quote: text.into(),
             created_at: 0,
             archived,
+            replaced_by: None,
         };
         let p = memory_prompt(&[n(MemoryArea::About, "Lehrerin", false), n(MemoryArea::People, "alt", true)]).unwrap();
         assert!(p.contains("Über mich:\n- Lehrerin"));
         assert!(!p.contains("alt"));
         assert!(memory_prompt(&[]).is_none());
+    }
+
+    #[test]
+    fn candidates_share_a_subject_word() {
+        let n = |id: &str, text: &str, archived| MemoryNote {
+            id: id.into(),
+            area: MemoryArea::People,
+            text: text.into(),
+            source_message_id: None,
+            source_quote: text.into(),
+            created_at: 0,
+            archived,
+            replaced_by: None,
+        };
+        let notes = [
+            n("a", "Anna macht die Rechnungen", false),
+            n("b", "Ich mag Tee", false),
+            n("c", "Rechnungen alt", true),
+            n("d", "Bob macht die Rechnungen", false),
+        ];
+        let new = &notes[3];
+        let ids: Vec<&str> = replace_candidates(new, &notes).iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(ids, ["a"], "shares „rechnungen“; archived notes, the note itself and fillers like „macht“ do not count");
     }
 }

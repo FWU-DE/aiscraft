@@ -18,6 +18,7 @@ pub mod highlights;
 mod inbox;
 pub mod learn;
 mod links;
+mod memory;
 pub mod office;
 mod pictures;
 pub mod privacy;
@@ -660,6 +661,9 @@ mod trust_tests;
 
 #[cfg(test)]
 mod chatux_tests;
+
+#[cfg(test)]
+mod nod_tests;
 
 #[cfg(test)]
 pub(crate) fn chat_system_prompt_for_test(c: &Ctx, conv: &aiscraft_core::Conversation, send: bool, takes: bool) -> Option<String> {
