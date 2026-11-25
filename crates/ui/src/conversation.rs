@@ -1534,7 +1534,19 @@ impl AisCraftApp {
                 send = true;
             }
             let newline = if enter_sends { KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter) } else { KeyboardShortcut::new(Modifiers::NONE, Key::Enter) };
-            let hint = if image_mode {
+            // „Erstellen“ chosen with nothing typed: the next text is its topic.
+            let create_hint = self.create_pending.map(|(_, what)| format!("Thema für {what}, z. B. Brüche vergleichen, Klasse 6"));
+            if let Some((_, what)) = self.create_pending {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{what} erstellen: Thema eingeben, dann Enter")).color(t.accent).strong());
+                    if ui.small_button("Abbrechen").on_hover_text("Wieder eine normale Nachricht schreiben").clicked() {
+                        self.create_pending = None;
+                    }
+                });
+            }
+            let hint = if let Some(h) = create_hint.as_deref() {
+                h
+            } else if image_mode {
                 "Beschreibe das Bild, das entstehen soll …"
             } else if big {
                 "Frag etwas oder beschreib, was du brauchst …"
@@ -1567,6 +1579,19 @@ impl AisCraftApp {
         });
         if !big {
             self.context_hint(ui);
+        }
+        // The topic for a pending „Erstellen“ goes to its command, not into the chat as a message.
+        if send
+            && !generating
+            && let Some((cmd, _)) = self.create_pending
+        {
+            if crate::learn_panel::topic_usable(&self.composer) {
+                let topic = std::mem::take(&mut self.composer).trim().to_string();
+                self.create_pending = None;
+                self.run(cmd, json!({"topic": topic}));
+            }
+            self.focus_composer = true;
+            send = false;
         }
         if send && !generating {
             let text = std::mem::take(&mut self.composer);
