@@ -13,11 +13,6 @@
 
 use aiscraft_core::{Error, Result};
 
-/// The workspace image of the pinned Nod runtime, started by its id (never by a tag that a
-/// later load could point elsewhere).
-pub(crate) const IMAGE: &str = super::image::WORKSPACE_ID;
-/// Where Nod's runtime keeps the image until it is loaded into Docker.
-pub(crate) const IMAGE_TAR: &str = super::image::WORKSPACE_TAR;
 /// The network containers use while the network switch is on (Nod's runtime turns Docker's
 /// default bridge off).
 pub(crate) const NETWORK: &str = "aiscraft-net";
@@ -47,9 +42,10 @@ pub(crate) const FSIZE: &str = "fsize=2147483648";
 pub(crate) const LIST_SCRIPT: &str = r#"cd -- "$1" && find . -mindepth 1 -maxdepth 4 -printf '%y %s %P\n' | head -n 500"#;
 
 /// In the private computer as root, before a container: Docker running, the workspace image
-/// loaded (only after its tar matched the pinned checksum, as Nod does), Nod's images we never
+/// loaded (only after its tar matched the pinned checksum, as Nod does), every other image (an
+/// older workspace) and Nod's images we never
 /// use removed, the network for the switch there, the chat's folder there and owned by the
-/// container's user. `$1` image id, `$2` chat (may be empty), `$3` the image tar, `$4` its
+/// container's user. `$1` image id (`Workspace::image`), `$2` chat (may be empty), `$3` the image tar, `$4` its
 /// SHA-256, `$5` `1` when the network switch is on, `$6` and `$7` the most a chat's folder and all
 /// folders may hold (MB): beyond that nothing runs until the person makes room.
 pub(crate) const PREPARE_SCRIPT: &str = r#"set -e
@@ -80,7 +76,8 @@ if [ "$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null)" != "$1" ]; th
   docker load --input "$3" >/dev/null
   [ "$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null)" = "$1" ] || { echo "Das geladene Abbild ist nicht das erwartete." >&2; exit 3; }
 fi
-rm -f /opt/nod-assets/images/browser.tar.zst /opt/nod-assets/images/postgres.tar.zst
+rm -f /opt/nod-assets/images/browser.tar.zst /opt/nod-assets/images/postgres.tar.zst 2>/dev/null || true
+docker image ls --no-trunc --format '{{.ID}}' | grep -vx "$1" | xargs -r docker image rm -f >/dev/null 2>&1 || true
 if [ "$5" = 1 ]; then docker network inspect aiscraft-net >/dev/null 2>&1 || docker network create aiscraft-net >/dev/null; fi
 if [ -n "$2" ]; then
   # With userns-remap the container's user 1000 is dockremap's first id + 1000 here.
@@ -143,7 +140,7 @@ pub(crate) fn rel_path(raw: &str) -> Result<String> {
 }
 
 /// The one way a container is started. `name` lets a time limit stop it (`docker kill`).
-pub(crate) fn docker_run(chat: &str, name: &str, network: bool, script: &str, args: &[&str]) -> Vec<String> {
+pub(crate) fn docker_run(chat: &str, name: &str, network: bool, image: &str, script: &str, args: &[&str]) -> Vec<String> {
     let mut v: Vec<String> = [
         "docker",
         "run",
@@ -184,7 +181,7 @@ pub(crate) fn docker_run(chat: &str, name: &str, network: bool, script: &str, ar
     .collect();
     v.push("--mount".into());
     v.push(format!("type=bind,src=/work/{chat},dst=/work"));
-    v.push(IMAGE.into());
+    v.push(image.into());
     v.extend(machine_script(script, args));
     v
 }
@@ -215,7 +212,7 @@ mod tests {
             PREPARE_SCRIPT.contains("\"userns-remap\":\"default\"") && PREPARE_SCRIPT.contains("pkill -x dockerd"),
             "every computer maps container users to an unprivileged range"
         );
-        let argv = docker_run("c1", "aiscraft-x", false, RUN_SCRIPT, &[".", "ls"]);
+        let argv = docker_run("c1", "aiscraft-x", false, "sha256:abc", RUN_SCRIPT, &[".", "ls"]);
         let joined = argv.join(" ");
         for need in [
             "--network none",
@@ -231,6 +228,6 @@ mod tests {
         }
         assert_eq!(argv.iter().filter(|a| a.as_str() == "--mount").count(), 1, "one mount only");
         assert!(!joined.contains("--privileged") && !joined.contains("docker.sock"));
-        assert!(docker_run("c1", "n", true, RUN_SCRIPT, &[]).join(" ").contains("--network aiscraft-net"));
+        assert!(docker_run("c1", "n", true, "sha256:abc", RUN_SCRIPT, &[]).join(" ").contains("--network aiscraft-net"));
     }
 }

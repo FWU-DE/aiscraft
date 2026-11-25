@@ -12,25 +12,20 @@
 //! the Windows command line can change what a command means.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
+
 use std::time::Duration;
 
 use aiscraft_core::{Error, Result};
 use futures::future::BoxFuture;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
+use super::process::{DECODER, b64};
 use super::runtime::{Output, SandboxRuntime};
 
 /// What the distribution's `/etc/wsl.conf` says: no Windows drives, no Windows programs, root.
 pub(crate) const WSL_CONF: &str = "[automount]\nenabled = false\nmountFsTab = false\n\n[interop]\nenabled = false\nappendWindowsPath = false\n\n[user]\ndefault = root\n\n[boot]\nsystemd = false\n";
 
-/// Decodes the base64 arguments and runs them (`$0` is `aiscraft`).
-const DECODER: &str = r#"for a do set -- "$@" "$(printf %s "$a" | base64 -d)"; shift; done; exec "$@""#;
-
 /// Fails when a Windows drive is mounted (`/mnt/c` and the like).
 const NO_DRIVES: &str = r#"! grep -Eq '^[^ ]+ /mnt/[a-zA-Z] ' /proc/mounts"#;
-
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub(crate) const MISSING: &str = "WSL fehlt auf diesem Rechner. Eine Administratorin oder ein Administrator richtet es einmal ein: Eingabeaufforderung als Administrator öffnen, „wsl --install --no-distribution“ ausführen und den Rechner neu starten. Danach hier noch einmal „Einrichten“.";
 pub(crate) const TOO_OLD: &str = "Die WSL-Version auf diesem Rechner ist zu alt. Eine Administratorin oder ein Administrator führt einmal „wsl --update“ aus; danach hier noch einmal „Einrichten“.";
@@ -48,56 +43,9 @@ impl Wsl {
     }
 }
 
-/// Run a program: stdin fed in, both streams capped, ended at the time limit.
+/// Run `wsl.exe` (its own messages in UTF-8).
 pub(crate) async fn run_program(exe: &Path, args: &[String], stdin: Vec<u8>, timeout: Duration, max: usize) -> Result<Output> {
-    let mut cmd = tokio::process::Command::new(exe);
-    cmd.args(args).env("WSL_UTF8", "1").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
-    #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    let mut child =
-        cmd.spawn().map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { Error::unsupported(MISSING) } else { Error::io(exe.display(), &e) })?;
-    let mut input = child.stdin.take();
-    let out = child.stdout.take();
-    let err = child.stderr.take();
-    let feed = async move {
-        if let Some(i) = input.as_mut() {
-            let _ = i.write_all(&stdin).await;
-            let _ = i.shutdown().await;
-        }
-        drop(input);
-    };
-    let work = async {
-        let (_, (o, ocut), (e, ecut)) = tokio::join!(feed, read_capped(out, max), read_capped(err, max));
-        let status = child.wait().await;
-        (o, ocut || ecut, e, status)
-    };
-    match tokio::time::timeout(timeout, work).await {
-        Ok((stdout, truncated, stderr, status)) => {
-            let status = status.map_err(|e| Error::io(exe.display(), &e))?;
-            Ok(Output { code: status.code(), stdout, stderr, timed_out: false, truncated })
-        }
-        // The child is dropped and killed with the future.
-        Err(_) => Ok(Output { code: None, timed_out: true, ..Default::default() }),
-    }
-}
-
-async fn read_capped<R: AsyncRead + Unpin>(r: Option<R>, max: usize) -> (Vec<u8>, bool) {
-    let Some(mut r) = r else { return (Vec::new(), false) };
-    let mut out = Vec::new();
-    let mut cut = false;
-    let mut buf = vec![0u8; 16 * 1024];
-    loop {
-        match r.read(&mut buf).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => {
-                let room = max.saturating_sub(out.len());
-                out.extend_from_slice(buf.get(..n.min(room)).unwrap_or(&[]));
-                // Keep reading (and dropping), so the program is not stuck on a full pipe.
-                cut |= n > room;
-            }
-        }
-    }
-    (out, cut)
+    super::process::run(exe, args, &[("WSL_UTF8", "1".into())], stdin, timeout, max, MISSING).await
 }
 
 /// `wsl.exe`'s own output: UTF-8 with `WSL_UTF8`, UTF-16 from older versions.
@@ -127,11 +75,6 @@ pub(crate) fn import_error(out: &Output) -> String {
         let short: String = text.trim().chars().take(300).collect();
         format!("Der eigene Rechner ließ sich nicht anlegen: {short}")
     }
-}
-
-fn b64(s: &str) -> String {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD.encode(s.as_bytes())
 }
 
 impl Wsl {
@@ -186,7 +129,8 @@ impl SandboxRuntime for Wsl {
         })
     }
 
-    fn create(&self, image: PathBuf, dir: PathBuf) -> BoxFuture<'static, Result<()>> {
+    fn create(&self, files: Vec<PathBuf>, dir: PathBuf) -> BoxFuture<'static, Result<()>> {
+        let image = files.into_iter().next().unwrap_or_default();
         let (exe, distro, guard) = (self.exe.clone(), self.distro.clone(), self.guard());
         let exec_conf = self.exec_args(&super::container::machine_script("umask 022; cat > /etc/wsl.conf", &[]));
         let check = self.exec_args(&super::container::machine_script(NO_DRIVES, &[]));

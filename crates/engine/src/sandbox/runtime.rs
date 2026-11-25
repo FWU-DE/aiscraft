@@ -1,11 +1,10 @@
-//! The private Linux computer the workspace runs in (#94), behind one trait: WSL2 on Windows
-//! (`wsl.rs`), Lima on macOS and Linux later ([`Unsupported`] until then), and a fake for tests
-//! ([`Fake`]) that never starts anything.
+//! The private Linux computer the workspace runs in (#94, #102), behind one trait: WSL2 on
+//! Windows (`wsl.rs`), Lima with QEMU/KVM on Linux (`lima.rs`), not yet on macOS
+//! ([`Unsupported`]), and a fake for tests ([`Fake`]) that never starts anything.
 //!
-//! A runtime knows one machine (on Windows the distribution `aiscraft-<profil>`) and can create
-//! it from an image, run a program in it as its root, stop and remove it. What runs in the
-//! machine (Docker, the locked-down container) is decided in `container.rs`, the same for every
-//! runtime.
+//! A runtime knows one machine (`aiscraft-<profil>`) and can create it from the checked
+//! downloads, run a program in it as its root, stop and remove it. What runs in the machine
+//! (Docker, the locked-down container) is decided in `container.rs`, the same for every runtime.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -43,11 +42,27 @@ impl Output {
     }
 }
 
+/// The workspace image a machine runs: what `docker run` names, where its tar lies in the
+/// machine, and the tar's pinned checksum (checked before it is loaded).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Workspace {
+    pub image: String,
+    pub tar: &'static str,
+    pub tar_sha256: &'static str,
+}
+
+impl Workspace {
+    /// Nod's Windows runtime (also what the fake runs).
+    pub(crate) fn windows() -> Workspace {
+        Workspace { image: super::image::WORKSPACE_ID.into(), tar: super::image::WORKSPACE_TAR, tar_sha256: super::image::WORKSPACE_TAR_SHA256 }
+    }
+}
+
 /// One private computer.
 pub(crate) trait SandboxRuntime: Send + Sync {
-    /// How people call it („WSL2“).
+    /// How people call it („WSL2“, „Lima“).
     fn kind(&self) -> &'static str;
-    /// Whether this system has a way to run it at all (false: macOS and Linux until Lima).
+    /// Whether this system has a way to run it at all (false: macOS until Lima with `vz`).
     fn supported(&self) -> bool {
         true
     }
@@ -58,8 +73,13 @@ pub(crate) trait SandboxRuntime: Send + Sync {
     fn probe(&self) -> BoxFuture<'static, std::result::Result<(), String>>;
     /// Whether the machine exists.
     fn exists(&self) -> BoxFuture<'static, bool>;
-    /// Create the machine from the checked image `image`, its disk in `dir`.
-    fn create(&self, image: PathBuf, dir: PathBuf) -> BoxFuture<'static, Result<()>>;
+    /// Create the machine from the checked downloads `files` (in the order of the source's
+    /// parts), its disk in `dir`.
+    fn create(&self, files: Vec<PathBuf>, dir: PathBuf) -> BoxFuture<'static, Result<()>>;
+    /// The workspace image this machine runs.
+    fn workspace(&self) -> Result<Workspace> {
+        Ok(Workspace::windows())
+    }
     /// Run `argv` in the machine as its root, `stdin` fed in, at most `timeout`, at most
     /// `max_output` bytes kept per stream.
     fn exec(&self, argv: Vec<String>, stdin: Vec<u8>, timeout: Duration, max_output: usize) -> BoxFuture<'static, Result<Output>>;
@@ -71,27 +91,33 @@ pub(crate) trait SandboxRuntime: Send + Sync {
 
 pub(crate) type Shared = Arc<dyn SandboxRuntime>;
 
-/// The runtime for this system, for the real app.
-pub(crate) fn for_this_system(machine: String) -> Shared {
+/// The runtime for this system, for the real app. `dir` is `<data>/sandbox`.
+pub(crate) fn for_this_system(machine: String, dir: PathBuf) -> Shared {
     #[cfg(windows)]
     {
+        let _ = dir;
         Arc::new(super::wsl::Wsl::new(machine))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
     {
+        Arc::new(super::lima::Lima::new(machine, dir))
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = dir;
         Arc::new(Unsupported { machine })
     }
 }
 
-/// macOS and Linux until the Lima runtime exists.
-#[cfg_attr(windows, allow(dead_code))]
+/// macOS until the Lima runtime with Apple's virtualization (`vz`) exists.
+#[cfg_attr(any(windows, target_os = "linux"), allow(dead_code))]
 pub(crate) struct Unsupported {
-    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) machine: String,
 }
 
-#[cfg_attr(windows, allow(dead_code))]
-pub(crate) const NOT_YET: &str = "Auf macOS und Linux ist der eigene Rechner noch nicht verfügbar (geplant über Lima). Unter Windows läuft er über WSL2.";
+#[cfg_attr(any(windows, target_os = "linux"), allow(dead_code))]
+pub(crate) const NOT_YET: &str =
+    "Auf macOS ist der eigene Rechner noch nicht verfügbar (geplant über Lima). Unter Windows läuft er über WSL2, unter Linux über Lima mit QEMU/KVM.";
 
 impl SandboxRuntime for Unsupported {
     fn supported(&self) -> bool {
@@ -109,7 +135,7 @@ impl SandboxRuntime for Unsupported {
     fn exists(&self) -> BoxFuture<'static, bool> {
         Box::pin(async { false })
     }
-    fn create(&self, _image: PathBuf, _dir: PathBuf) -> BoxFuture<'static, Result<()>> {
+    fn create(&self, _files: Vec<PathBuf>, _dir: PathBuf) -> BoxFuture<'static, Result<()>> {
         Box::pin(async { Err(Error::unsupported(NOT_YET)) })
     }
     fn exec(&self, _argv: Vec<String>, _stdin: Vec<u8>, _timeout: Duration, _max: usize) -> BoxFuture<'static, Result<Output>> {
@@ -128,7 +154,7 @@ impl SandboxRuntime for Unsupported {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum FakeCall {
     Probe,
-    Create(PathBuf),
+    Create(Vec<PathBuf>),
     Exec(Vec<String>),
     Stop,
     Destroy,
@@ -190,7 +216,8 @@ impl Fake {
             return ok(b"");
         }
         // `docker run … IMAGE /bin/sh -c SCRIPT aiscraft ARGS…`
-        let Some(at) = argv.iter().position(|a| a == k::IMAGE) else {
+        let image = Workspace::windows().image;
+        let Some(at) = argv.iter().position(|a| *a == image) else {
             return ok(b"");
         };
         let mount = argv.iter().find_map(|a| a.strip_prefix("type=bind,src=")).and_then(|m| m.split(',').next()).unwrap_or("/work/x").to_string();
@@ -268,8 +295,8 @@ impl SandboxRuntime for Fake {
         let e = *self.exists.lock().unwrap_or_else(PoisonError::into_inner);
         Box::pin(async move { e })
     }
-    fn create(&self, image: PathBuf, _dir: PathBuf) -> BoxFuture<'static, Result<()>> {
-        self.record(FakeCall::Create(image));
+    fn create(&self, files: Vec<PathBuf>, _dir: PathBuf) -> BoxFuture<'static, Result<()>> {
+        self.record(FakeCall::Create(files));
         *self.exists.lock().unwrap_or_else(PoisonError::into_inner) = true;
         Box::pin(async { Ok(()) })
     }
