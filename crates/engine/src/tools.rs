@@ -31,7 +31,8 @@ pub(crate) struct ToolRuntime {
     files: Mutex<HashMap<String, Vec<aiscraft_core::Attachment>>>,
     /// Views of tool results (#74) by call id, until the chat loop puts them on the tool message.
     views: Mutex<HashMap<String, aiscraft_core::ToolView>>,
-    /// Structured results of calls from a view, by tool name, until the view gets them.
+    /// Structured results of calls from a view, by call id, until the view that made the call
+    /// gets them (two views calling the same tool never get each other's).
     structured: Mutex<HashMap<String, Value>>,
     /// Views open right now (#74), for host events.
     pub(crate) open_views: crate::apps::OpenViews,
@@ -947,8 +948,8 @@ fn remember_view(c: &Ctx, r: &Ready, res: &aiscraft_mcp::ToolResult) {
             s.clear();
         }
         match structured {
-            Some(v) => s.insert(r.call.name.clone(), v),
-            None => s.remove(&r.call.name),
+            Some(v) => s.insert(r.call.id.clone(), v),
+            None => s.remove(&r.call.id),
         };
     }
 }
@@ -958,19 +959,36 @@ pub(crate) fn take_view(c: &Ctx, call_id: &str) -> Option<aiscraft_core::ToolVie
     c.0.tools.views.lock().unwrap_or_else(PoisonError::into_inner).remove(call_id)
 }
 
-/// The structured result of a view's last call of this tool.
-pub(crate) fn take_structured(c: &Ctx, llm_name: &str) -> Option<Value> {
-    c.0.tools.structured.lock().unwrap_or_else(PoisonError::into_inner).remove(llm_name)
+/// The structured result of the view call `call_id`, taken out (once).
+fn take_structured(c: &Ctx, call_id: &str) -> Option<Value> {
+    c.0.tools.structured.lock().unwrap_or_else(PoisonError::into_inner).remove(call_id)
+}
+
+/// Tests: a structured result waiting for another view's call.
+#[cfg(test)]
+pub(crate) fn plant_structured(c: &Ctx, call_id: &str, v: Value) -> bool {
+    let mut s = c.0.tools.structured.lock().unwrap_or_else(PoisonError::into_inner);
+    s.insert(call_id.to_string(), v);
+    s.contains_key(call_id)
+}
+
+/// Tests: whether a structured result still waits for `call_id`.
+#[cfg(test)]
+pub(crate) fn structured_waits(c: &Ctx, call_id: &str) -> bool {
+    c.0.tools.structured.lock().unwrap_or_else(PoisonError::into_inner).contains_key(call_id)
 }
 
 const VIEW_CALL: &str = "view-";
 
 /// A call from a view (#74): the same rules as a call of the model with no request of the
-/// person behind it, so a read runs and everything else asks.
-pub(crate) async fn run_from_view(c: &Ctx, conv: &str, llm_name: &str, arguments: Value) -> Outcome {
+/// person behind it, so a read runs and everything else asks. Also gives the call's structured
+/// result, found by this call's own id, so a view never gets the result of another view's call
+/// of the same tool.
+pub(crate) async fn run_from_view(c: &Ctx, conv: &str, llm_name: &str, arguments: Value) -> (Outcome, Option<Value>) {
     let call = ToolCall { id: format!("{VIEW_CALL}{}", new_id()), name: llm_name.to_string(), arguments, outcome: None };
     let ev = crate::trust::Evidence { from_view: true, ..Default::default() };
-    run(c, conv, &call, &ev, true).await
+    let out = run(c, conv, &call, &ev, true).await;
+    (out, take_structured(c, &call.id))
 }
 
 /// The text of a tool result without the marks for the model.

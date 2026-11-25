@@ -12,6 +12,8 @@ rust-version.workspace = true
 wry = "0.57"
 tao = "0.37"
 serde_json.workspace = true
+# The view's network grants follow the engine's rules (layer 0: data only, no I/O).
+aiscraft-core.workspace = true
 
 [lints]
 workspace = true
