@@ -301,6 +301,19 @@ Mit dem eigenen Rechner kann ein Modell Befehle ausführen, ohne deinen Computer
 
 **Anhalten** beendet alles, was gerade darin läuft; die Arbeitsordner bleiben. **Entfernen** löscht den Rechner mit allen Arbeitsordnern. Wird ein Chat endgültig gelöscht, geht sein Arbeitsordner mit.
 
+#### Browser im eigenen Rechner
+
+Im eigenen Rechner kann auch ein Browser laufen, mit dem das Modell Webseiten öffnet, liest und Formulare ausfüllt, zum Beispiel auf einer Lernplattform. Du schaltest ihn unter **Einstellungen › Fähigkeiten › Browser im eigenen Rechner** ein; aus ist er, bis du das tust. Es ist der Browser aus der Laufzeit von n8n Nod (Chromium, gesteuert über agent-browser); er ist schon im Download enthalten.
+
+- **Nur bei Bedarf und unsichtbar:** Der Browser startet erst, wenn das Modell ihn zum ersten Mal braucht, läuft ohne sichtbares Fenster auf einem eigenen, privaten Bildschirm im eigenen Rechner und endet nach 10 Minuten ohne Nutzung. Dabei verschwindet alles darin: Anmeldungen, Cookies, offene Seiten. **Browser beenden** in den Einstellungen beendet ihn sofort.
+- **Abgeschottet:** ein eigener Container wie der Arbeitsbereich (ohne Rechte, schreibgeschützt, 2 GB Arbeitsspeicher, 2 Prozessorkerne), ohne gemeinsamen Ordner mit dem Arbeitsbereich. Er erreicht nur öffentliche Adressen im Internet, nicht dein Schulnetz, deinen Router oder deinen Computer.
+- **Text statt Bild:** Das Modell liest Seiten als Text (die Bedienelemente mit Nummern wie `@e12`). Ein **Bildschirmfoto** legt es als Anhang in den Chat, damit du die Seite siehst.
+- **Freigaben:** Öffnen, Lesen und Warten laufen ohne Frage. **Klicken, Eingeben und Herunterladen** können etwas absenden, bezahlen oder ändern; dafür fragt AIS.ChatCraft dich mit der Seite, dem Ziel des Formulars und dem eingegebenen Wert, oder es deckt deine eigene Bitte im Chat. Aufgaben und Zeitpläne nutzen den Browser nie. Seiteninhalte sind fremde Daten; mit „Namen schützen“ gehen Namen darin nur als Platzhalter an das Modell.
+- **Passwörter** schreibt das Modell nur als Platzhalter aus dem **Tresor** (`{{vault:Name}}`); die App setzt den Wert selbst ein, das Modell sieht ihn nie, und es braucht immer deine Freigabe.
+- **Downloads** landen nur über den ausdrücklichen Schritt „Herunterladen“ (mit Freigabe) im Arbeitsordner des Chats unter `/work/downloads`, nie von selbst.
+
+**Übernehmen:** Braucht die Seite dich (Anmeldung, Captcha, Bestätigung auf dem Telefon), übergibt das Modell dir den Browser. Die Aufgabe wartet, und unter der Nachricht erscheint das Live-Bild des Browsers. Klicke ins Bild, dann klickst, scrollst und tippst du direkt im Browser. Solange du steuerst, tut das Modell nichts. Mit **Zurück an AIS.ChatCraft** gibst du ihn zurück; das Modell sieht sich die Seite neu an und macht weiter. Ohne diesen Fall siehst du vom Browser nichts.
+
 ## Tresor
 
 Im Tresor (Einstellungen › Tresor) liegen Zugangsdaten und Einmalcodes, die AIS.ChatCraft selbst in Konnektor-Aufrufe einsetzt. Das Modell schreibt nur Platzhalter wie `{{vault:schulportal.password}}` und sieht die Werte nie; jeder Aufruf mit Tresor-Daten fragt vorher. Einträge lassen sich aus einem Bitwarden-CSV-Export übernehmen. Die CSV-Datei danach löschen.

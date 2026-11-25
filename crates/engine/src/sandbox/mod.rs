@@ -16,7 +16,9 @@
 //!   time limit, or the owner's own request. Background work refuses. What comes back is
 //!   untrusted data and goes out to the model through „Namen schützen“ like every tool result.
 //! - AIS.chat gives the model no tools (#70), so there the workspace is not offered.
+//! - A browser runs in a second container only when the model needs it (`browser.rs`, #107).
 
+pub mod browser;
 pub(crate) mod container;
 pub mod image;
 pub(crate) mod lima;
@@ -90,6 +92,12 @@ pub struct SandboxState {
     /// Set up by v0.2.2 with AIS.ChatCraft's own image: it must be switched to Nod's runtime
     /// (`sandbox.update`) before it runs anything.
     pub legacy: bool,
+    /// The browser in the computer is switched on (#107; off by default: it reaches the internet).
+    pub browser: bool,
+    /// The browser container runs now (it starts on first use and ends when idle).
+    pub browser_running: bool,
+    /// The teacher has the browser: the task waits, the chat shows the live picture.
+    pub takeover: Option<browser::Takeover>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -97,6 +105,7 @@ pub struct SandboxState {
 struct Saved {
     enabled: bool,
     network: bool,
+    browser: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -115,6 +124,8 @@ pub(crate) struct Runtime {
     machine: Mutex<Option<runtime::Shared>>,
     source: Mutex<Option<image::Source>>,
     busy: AtomicBool,
+    /// The browser container (#107).
+    pub(crate) browser: browser::Browser,
 }
 
 /// `aiscraft-default` for the usual data folder, else a short hash of the folder (portable).
@@ -139,6 +150,7 @@ impl Runtime {
             machine: Mutex::new(real.then(|| runtime::for_this_system(machine_name(data_dir), data_dir.map(|d| d.join("sandbox")).unwrap_or_default()))),
             source: Mutex::new(if real { image::Source::github() } else { None }),
             busy: AtomicBool::new(false),
+            browser: browser::Browser::default(),
         }
     }
 
@@ -224,6 +236,7 @@ pub(crate) fn refresh(c: &Ctx) {
         st.legacy = marker.as_ref().is_some_and(|m| m.version.is_empty());
         st.enabled = saved.enabled && installed && !st.legacy;
         st.network = saved.network;
+        st.browser = saved.browser;
         st.supported = machine.as_ref().is_some_and(|m| m.supported());
         st.kind = machine.as_ref().map(|m| m.kind().to_string()).unwrap_or_default();
         st.machine = machine.as_ref().map(|m| m.machine()).unwrap_or_default();
@@ -273,6 +286,10 @@ pub(crate) fn offer(c: &Ctx) -> Value {
         "version": s.version,
         "update": s.update,
         "legacy": s.legacy,
+        "browser": s.browser,
+        "browser_running": s.browser_running,
+        "browser_can": browser::CAN,
+        "browser_cannot": browser::CANNOT,
     })
 }
 
@@ -311,7 +328,7 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         label: "Eigener Rechner ein/aus, Netz",
         group: "Fähigkeiten",
         shortcut: None,
-        params: "enabled?: bool, network?: bool (Netz für den Arbeitsbereich; aus: kein Netz)",
+        params: "enabled?: bool, network?: bool (Netz für den Arbeitsbereich; aus: kein Netz), browser?: bool (Browser im eigenen Rechner, nur öffentliche Adressen; aus beendet ihn)",
         palette: false,
         run: |c, p| Box::pin(set(c, p)),
     },
@@ -486,8 +503,9 @@ fn remove_leftovers(dir: &Path, keep: &[PathBuf]) -> Result<()> {
 async fn set(c: Ctx, p: Value) -> Result<Value> {
     let enabled = p.get("enabled").and_then(Value::as_bool);
     let network = p.get("network").and_then(Value::as_bool);
-    if enabled.is_none() && network.is_none() {
-        return Err(Error::invalid("enabled oder network (ja/nein) fehlt"));
+    let browser_on = p.get("browser").and_then(Value::as_bool);
+    if enabled.is_none() && network.is_none() && browser_on.is_none() {
+        return Err(Error::invalid("enabled, network oder browser (ja/nein) fehlt"));
     }
     if enabled == Some(true) && read_marker(&c).is_none() {
         return Err(Error::invalid("Der eigene Rechner ist noch nicht eingerichtet. Erst „Einrichten …“ (lädt das Abbild nach deiner Zustimmung)."));
@@ -499,8 +517,15 @@ async fn set(c: Ctx, p: Value) -> Result<Value> {
     if let Some(n) = network {
         st.network = n;
     }
+    if let Some(b) = browser_on {
+        st.browser = b;
+    }
+    // Switching the computer or its browser off ends the browser now.
+    if (enabled == Some(false) || browser_on == Some(false)) && c.state().sandbox.takeover.is_none() {
+        browser::stop(&c).await?;
+    }
     save(&c, &st)?;
-    Ok(json!({"enabled": c.state().sandbox.enabled, "network": st.network}))
+    Ok(json!({"enabled": c.state().sandbox.enabled, "network": st.network, "browser": st.browser}))
 }
 
 async fn stop(c: Ctx) -> Result<Value> {
@@ -508,6 +533,8 @@ async fn stop(c: Ctx) -> Result<Value> {
         return Ok(json!({"stopped": false}));
     };
     m.stop().await?;
+    c.0.sandbox.browser.forget();
+    c.update(|s| s.sandbox.browser_running = false);
     Ok(json!({"stopped": true}))
 }
 
@@ -523,6 +550,11 @@ async fn remove(c: Ctx) -> Result<Value> {
         m.destroy().await?;
         removed = true;
     }
+    rt.browser.forget();
+    c.update(|s| {
+        s.sandbox.browser_running = false;
+        s.sandbox.takeover = None;
+    });
     // The marker first: a half-removed folder is never "installed".
     let _ = std::fs::remove_file(rt.dir.join(MARKER));
     if rt.dir.exists() {
@@ -570,7 +602,9 @@ pub(crate) fn forget(c: &Ctx, conv: &str) {
 /// Docker running, the image loaded, the chat's folder there (idempotent, cheap when ready).
 async fn prepare(m: &runtime::Shared, chat: Option<&str>, network: bool) -> Result<()> {
     let ws = m.workspace()?;
-    let args = [ws.image.as_str(), chat.unwrap_or(""), ws.tar, ws.tar_sha256, if network { "1" } else { "0" }];
+    // The browser's image stays loaded (#107); without a readable id nothing else is kept.
+    let browser_id = m.browser().map(|b| b.image).unwrap_or_default();
+    let args = [ws.image.as_str(), chat.unwrap_or(""), ws.tar, ws.tar_sha256, if network { "1" } else { "0" }, browser_id.as_str()];
     // Loading the 2 GB workspace image the first time takes a while.
     let out = m.exec(k::machine_script(k::PREPARE_SCRIPT, &args), Vec::new(), Duration::from_secs(900), 16 * 1024).await?;
     if out.ok() {
@@ -597,13 +631,24 @@ fn usable(c: &Ctx) -> Result<(runtime::Shared, bool)> {
 
 // ---- the tools ------------------------------------------------------------------------------
 
+/// A tool of the private computer: the workspace's or its browser's (#107).
 pub(crate) fn is_tool(name: &str) -> bool {
-    matches!(name, RUN | WRITE | READ | CONVERT | LIST)
+    matches!(name, RUN | WRITE | READ | CONVERT | LIST) || browser::is_tool(name)
 }
 
 /// Listing and reading change nothing; the rest needs the owner.
 pub(crate) fn read_only(name: &str) -> bool {
-    matches!(name, READ | LIST)
+    matches!(name, READ | LIST) || browser::read_only(name)
+}
+
+/// The connector view of a tool: the workspace or the browser.
+pub(crate) fn view_for(name: &str) -> ConnectorView {
+    if browser::is_tool(name) { browser::view() } else { view() }
+}
+
+/// The connector tool of a tool name of the computer.
+pub(crate) fn tool_for(name: &str) -> ConnectorTool {
+    if browser::is_tool(name) { browser::tool(name) } else { tool(name) }
 }
 
 /// Offered while it is on (and the chat allows it).
@@ -650,6 +695,9 @@ pub(crate) fn specs() -> Vec<ToolSpec> {
 /// The arguments as they run: folder and time limit filled in, so the trust check, the approval
 /// card and the action log name exactly what will run.
 pub(crate) fn normalize(name: &str, args: &Value) -> Value {
+    if browser::is_tool(name) {
+        return browser::normalize(name, args);
+    }
     let mut a = args.clone();
     if let Some(o) = a.as_object_mut() {
         match name {
@@ -717,6 +765,9 @@ fn arg<'a>(args: &'a Value, key: &str) -> &'a str {
 /// Before anything is asked: refuse what never runs (background work, switched off, bad
 /// arguments) and give the tool for the call.
 pub(crate) fn prepare_call(c: &Ctx, name: &str, args: &Value, interactive: bool) -> std::result::Result<ConnectorTool, String> {
+    if browser::is_tool(name) {
+        return browser::prepare_call(c, name, args, interactive);
+    }
     if !interactive {
         return Err("Abgelehnt: Arbeit im Hintergrund nutzt den eigenen Rechner nicht.".into());
     }
@@ -759,7 +810,10 @@ fn container_name() -> String {
 }
 
 /// Run one call that may run. Files that come out become attachments of the answer.
-pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value) -> Result<(String, Vec<Attachment>)> {
+pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value, secrets: &[String]) -> Result<(String, Vec<Attachment>)> {
+    if browser::is_tool(name) {
+        return browser::execute(c, conv, name, args, secrets).await;
+    }
     let (m, network) = usable(c)?;
     let chat = k::chat_folder(conv)?;
     prepare(&m, Some(&chat), network).await?;
@@ -876,6 +930,18 @@ async fn read_file(m: &runtime::Shared, start: &impl Fn(&str, &[&str]) -> Vec<St
     }
     let text: String = String::from_utf8_lossy(&out.stdout).split_whitespace().collect();
     base64::engine::general_purpose::STANDARD.decode(text.as_bytes()).map_err(|e| Error::protocol(format!("/work/{path}: unlesbare Antwort ({e})")))
+}
+
+/// Write `bytes` to `path` (relative to `/work`) in the chat's working folder, through a
+/// locked-down workspace container without network (the browser's downloads, #107).
+async fn write_file(c: &Ctx, conv: &str, path: &str, bytes: Vec<u8>) -> Result<()> {
+    let (m, network) = usable(c)?;
+    let chat = k::chat_folder(conv)?;
+    prepare(&m, Some(&chat), network).await?;
+    let image = m.workspace()?.image;
+    let argv = k::docker_run(&chat, &container_name(), false, &image, k::WRITE_SCRIPT, &[path]);
+    let out = m.exec(argv, bytes, Duration::from_secs(120), 16 * 1024).await?;
+    if out.ok() { Ok(()) } else { Err(Error::storage(format!("/work/{path} nicht gespeichert: {}", out.why()))) }
 }
 
 /// Files that are never shown as text.

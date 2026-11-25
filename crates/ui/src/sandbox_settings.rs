@@ -1,6 +1,7 @@
 //! „Eigener Rechner (Sandbox)“ (#94), in Einstellungen › Fähigkeiten: what it can do and what it
 //! cannot see, size, source and licence; the download starts only after the second click
-//! („Ja, laden und einrichten“). Once set up: on or off, the network switch, stop, remove.
+//! („Ja, laden und einrichten“). Once set up: on or off, the network switch, the browser in the
+//! computer (#107), stop, remove.
 
 use egui::{RichText, Ui};
 use serde_json::json;
@@ -58,6 +59,21 @@ impl AisCraftApp {
                 },
             ));
             ui.label(small_muted(&t, CANNOT));
+            // The browser in the computer (#107): off until switched on, starts only when needed.
+            let mut browser = s.browser;
+            if ui.add_enabled(s.enabled, egui::Checkbox::new(&mut browser, "Browser im eigenen Rechner (nur öffentliche Adressen)")).changed() {
+                self.run("sandbox.set", json!({"browser": browser}));
+            }
+            ui.label(small_muted(&t, aiscraft_engine::sandbox::browser::CAN));
+            ui.label(small_muted(&t, aiscraft_engine::sandbox::browser::CANNOT));
+            if s.browser_running {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(small_muted(&t, "Der Browser läuft gerade."));
+                    if ui.small_button("Browser beenden").clicked() {
+                        self.run("browser.stop", json!({}));
+                    }
+                });
+            }
             if !s.version.is_empty() {
                 ui.label(small_muted(&t, format!("Laufzeit: n8n Nod {}", s.version.trim_start_matches("nod-"))));
             }

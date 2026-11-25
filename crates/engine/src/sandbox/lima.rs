@@ -22,7 +22,7 @@ use std::time::Duration;
 use aiscraft_core::{Error, Result};
 use futures::future::BoxFuture;
 
-use super::image::{LINUX_GUEST_FILES, LINUX_WORKSPACE_TAR_SHA256, WORKSPACE_TAR};
+use super::image::{BROWSER_TAR, LINUX_BROWSER_TAR_SHA256, LINUX_GUEST_FILES, LINUX_WORKSPACE_TAR_SHA256, WORKSPACE_TAR};
 use super::process::{DECODER, b64, run};
 use super::runtime::{Output, SandboxRuntime, Workspace};
 
@@ -248,6 +248,11 @@ async fn check_guest_files(assets: PathBuf) -> Result<()> {
 
 /// The workspace image's id from Nod's `manifest.json` (checked against its pin first).
 pub(crate) fn workspace_id(manifest: &Path) -> Result<String> {
+    image_id(manifest, "workspace")
+}
+
+/// The id of Nod's image `name` (`workspace`, `browser`) from its pinned `manifest.json`.
+pub(crate) fn image_id(manifest: &Path, name: &str) -> Result<String> {
     let pin = LINUX_GUEST_FILES.iter().find(|(p, ..)| *p == "manifest.json").map(|(_, s, _)| *s).unwrap_or("");
     let got = super::image::sha256_file(manifest).map_err(|e| Error::io(manifest.display(), &e))?;
     if got != pin {
@@ -260,12 +265,12 @@ pub(crate) fn workspace_id(manifest: &Path) -> Result<String> {
     let id = v
         .get("images")
         .and_then(serde_json::Value::as_array)
-        .and_then(|a| a.iter().find(|i| i.get("name").and_then(serde_json::Value::as_str) == Some("workspace")))
+        .and_then(|a| a.iter().find(|i| i.get("name").and_then(serde_json::Value::as_str) == Some(name)))
         .and_then(|i| i.get("id"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
     let ok = id.strip_prefix("sha256:").is_some_and(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit()));
-    if ok { Ok(id.to_string()) } else { Err(Error::protocol("In Nods manifest.json fehlt die Abbild-ID des Arbeitsbereichs.")) }
+    if ok { Ok(id.to_string()) } else { Err(Error::protocol(format!("In Nods manifest.json fehlt die Abbild-ID von „{name}“."))) }
 }
 
 impl SandboxRuntime for Lima {
@@ -321,6 +326,10 @@ impl SandboxRuntime for Lima {
 
     fn workspace(&self) -> Result<Workspace> {
         Ok(Workspace { image: workspace_id(&self.assets().join("manifest.json"))?, tar: WORKSPACE_TAR, tar_sha256: LINUX_WORKSPACE_TAR_SHA256 })
+    }
+
+    fn browser(&self) -> Result<Workspace> {
+        Ok(Workspace { image: image_id(&self.assets().join("manifest.json"), "browser")?, tar: BROWSER_TAR, tar_sha256: LINUX_BROWSER_TAR_SHA256 })
     }
 
     fn exec(&self, argv: Vec<String>, stdin: Vec<u8>, timeout: Duration, max_output: usize) -> BoxFuture<'static, Result<Output>> {

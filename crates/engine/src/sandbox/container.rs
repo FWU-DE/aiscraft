@@ -36,10 +36,11 @@ pub(crate) const LIST_SCRIPT: &str = r#"cd -- "$1" && find . -mindepth 1 -maxdep
 
 /// In the private computer as root, before a container: Docker running, the workspace image
 /// loaded (only after its tar matched the pinned checksum, as Nod does), every other image (an
-/// older workspace) and Nod's images we never
-/// use removed, the network for the switch there, the chat's folder there and owned by the
-/// container's user. `$1` image id (`Workspace::image`), `$2` chat (may be empty), `$3` the image tar, `$4` its
-/// SHA-256, `$5` `1` when the network switch is on.
+/// older workspace) and Nod's database image we never use removed, the network for the switch
+/// there, the chat's folder there and owned by the container's user. Nod's browser image and its
+/// tar stay: the browser loads it when the model first needs it (#107).
+/// `$1` image id (`Workspace::image`), `$2` chat (may be empty), `$3` the image tar, `$4` its
+/// SHA-256, `$5` `1` when the network switch is on, `$6` the pinned browser image id (kept).
 pub(crate) const PREPARE_SCRIPT: &str = r#"set -e
 if ! docker info >/dev/null 2>&1; then
   (setsid dockerd </dev/null >/var/log/aiscraft-dockerd.log 2>&1 &)
@@ -55,8 +56,8 @@ if [ "$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null)" != "$1" ]; th
   docker load --input "$3" >/dev/null
   [ "$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null)" = "$1" ] || { echo "Das geladene Abbild ist nicht das erwartete." >&2; exit 3; }
 fi
-rm -f /opt/nod-assets/images/browser.tar.zst /opt/nod-assets/images/postgres.tar.zst 2>/dev/null || true
-docker image ls --no-trunc --format '{{.ID}}' | grep -vx "$1" | xargs -r docker image rm -f >/dev/null 2>&1 || true
+rm -f /opt/nod-assets/images/postgres.tar.zst 2>/dev/null || true
+docker image ls --no-trunc --format '{{.ID}}' | grep -vx -e "$1" -e "${6:-$1}" | xargs -r docker image rm -f >/dev/null 2>&1 || true
 if [ "$5" = 1 ]; then docker network inspect aiscraft-net >/dev/null 2>&1 || docker network create aiscraft-net >/dev/null; fi
 if [ -n "$2" ]; then install -d -o 1000 -g 1000 -m 0700 "/work/$2"; fi"#;
 /// Remove a chat's working folder. `$1` chat.
@@ -151,6 +152,126 @@ pub(crate) fn docker_run(chat: &str, name: &str, network: bool, image: &str, scr
     v.push(image.into());
     v.extend(machine_script(script, args));
     v
+}
+
+// ---- the browser (#107) ---------------------------------------------------------------------
+//
+// A second container from Nod's browser image, started only when the model first needs the
+// browser and ended after a while without use (`browser.rs`). As in Nod it shares nothing with
+// the workspace: no folder, no network. Chromium runs headed on a private virtual display (Xvfb)
+// inside it, driven by agent-browser through Nod's worker on `/data/control.sock`.
+
+/// The browser container's name (one per private computer; chats are sessions in it).
+pub(crate) const BROWSER_NAME: &str = "aiscraft-browser";
+/// Its own network (bridge `aiscraft-br0`, 172.31.92.0/24, made by `BROWSER_PREPARE_SCRIPT`): no
+/// other container on it, containers on it cannot reach each other, and the rules there keep it
+/// to public addresses.
+pub(crate) const BROWSER_NETWORK: &str = "aiscraft-browser";
+/// Nod's local desktop limits for the browser.
+pub(crate) const BROWSER_PIDS: &str = "768";
+
+/// As root in the private computer, before the browser starts: the pinned browser image loaded
+/// (only after its tar matched the pinned checksum), the browser's network there and kept to
+/// public addresses, as Nod's `protectNetworks` does: every private, loopback, link-local,
+/// carrier-grade and multicast range is rejected, nothing reaches the computer itself. If the
+/// rules cannot be set, the browser does not start.
+///
+/// Seam for the allowlist (#106): the chain `AISCRAFT-BROWSER` is where every new connection of
+/// the browser passes; an allowlist proxy replaces its last rule (`RETURN`, „every public
+/// address“) with its own, and nothing else here changes.
+/// `$1` image id, `$2` the image tar, `$3` its SHA-256.
+pub(crate) const BROWSER_PREPARE_SCRIPT: &str = r#"set -e
+if [ "$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null)" != "$1" ]; then
+  [ -f "$2" ] || { echo "Das Browser-Abbild fehlt im eigenen Rechner. Bitte unter Einstellungen › Fähigkeiten den eigenen Rechner entfernen und neu einrichten." >&2; exit 4; }
+  echo "$3  $2" | sha256sum -c --quiet - >/dev/null 2>&1 || { echo "Das Browser-Abbild ist beschädigt. Bitte den eigenen Rechner entfernen und neu einrichten." >&2; exit 3; }
+  docker load --input "$2" >/dev/null
+  [ "$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null)" = "$1" ] || { echo "Das geladene Browser-Abbild ist nicht das erwartete." >&2; exit 3; }
+fi
+docker network inspect aiscraft-browser >/dev/null 2>&1 || docker network create --driver bridge --subnet 172.31.92.0/24 --opt com.docker.network.bridge.name=aiscraft-br0 --opt com.docker.network.bridge.enable_icc=false aiscraft-browser >/dev/null
+fail() { echo "Die Sperre privater Adressen für den Browser ließ sich nicht setzen; der Browser startet nicht." >&2; exit 5; }
+{
+  printf '%s\n' '*filter' ':AISCRAFT-BROWSER - [0:0]' '-F AISCRAFT-BROWSER'
+  for range in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/3; do
+    printf '%s\n' "-A AISCRAFT-BROWSER -d $range -j REJECT"
+  done
+  printf '%s\n' '-A AISCRAFT-BROWSER -j RETURN' 'COMMIT'
+} | iptables-restore --wait 10 --noflush || fail
+iptables -w 10 -C DOCKER-USER -i aiscraft-br0 -j AISCRAFT-BROWSER 2>/dev/null || iptables -w 10 -I DOCKER-USER 1 -i aiscraft-br0 -j AISCRAFT-BROWSER || fail
+iptables -w 10 -C INPUT -i aiscraft-br0 -j DROP 2>/dev/null || iptables -w 10 -I INPUT 1 -i aiscraft-br0 -j DROP || fail"#;
+
+/// Wait until Nod's worker in the browser answers on its socket. `$1` the check (`READY_JS`).
+pub(crate) const BROWSER_READY_SCRIPT: &str = r#"i=0
+until docker exec aiscraft-browser node -e "$1" >/dev/null 2>&1; do
+  [ "$(docker inspect --format '{{.State.Running}}' aiscraft-browser 2>/dev/null)" = true ] || { echo "Der Browser hat sich beim Start beendet." >&2; exit 1; }
+  i=$((i+1))
+  if [ $i -gt 120 ]; then echo "Der Browser antwortet nicht." >&2; exit 1; fi
+  sleep 0.5
+done"#;
+
+/// Nod's own readiness check: the worker's socket accepts a connection.
+pub(crate) const READY_JS: &str =
+    r#"const s=require("node:net").connect("/data/control.sock");s.on("connect",()=>{s.end();process.exit(0)});s.on("error",()=>process.exit(1))"#;
+
+/// One request to Nod's worker, as Nod's stdin bridge does it but with the request as an
+/// argument: `$1` the request frame, `$2` an optional second frame (input during a take-over),
+/// `$3` an optional marker: the first line holding it ends the call (a view frame, an input's
+/// answer). Every line the worker sends is printed; the worker ends the connection after its
+/// answer.
+pub(crate) const BRIDGE_JS: &str = r#"const [req,extra,stop]=process.argv.slice(1);const s=require("node:net").connect("/data/control.sock");let b="";s.setEncoding("utf8");s.on("connect",()=>{s.write(req+"\n");if(extra)s.write(extra+"\n")});s.on("data",d=>{b+=d;for(let i=b.indexOf("\n");i>=0;i=b.indexOf("\n")){const l=b.slice(0,i);b=b.slice(i+1);process.stdout.write(l+"\n");if(stop&&l.includes(stop)){s.destroy();return}}});s.on("end",()=>{if(b)process.stdout.write(b+"\n")});s.on("error",e=>{process.stderr.write("Der Browser antwortet nicht: "+e.message+"\n");process.exitCode=2})"#;
+
+/// The one way the browser container is started: the same hardening as the workspace (no
+/// capabilities, no new privileges, an unprivileged user, a read-only root, limits), Nod's
+/// browser limits, its own network, and no mount at all: `/tmp`, the home folder and `/data`
+/// (the worker's socket, Chromium's profile) live in memory and are gone when it ends.
+pub(crate) fn browser_run(image: &str) -> Vec<String> {
+    let mut v: Vec<String> = [
+        "docker",
+        "run",
+        "-d",
+        "--rm",
+        "--name",
+        BROWSER_NAME,
+        "--init",
+        "--network",
+        BROWSER_NETWORK,
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--user",
+        USER,
+        "--read-only",
+        "--memory",
+        MEMORY,
+        "--memory-swap",
+        MEMORY,
+        "--cpus",
+        CPUS,
+        "--pids-limit",
+        BROWSER_PIDS,
+        "--shm-size",
+        "256m",
+        "--tmpfs",
+        "/tmp:rw,nosuid,nodev,size=1g",
+        "--tmpfs",
+        "/home/node:rw,nosuid,nodev,uid=1000,gid=1000,mode=700,size=256m",
+        "--tmpfs",
+        "/data:rw,nosuid,nodev,uid=1000,gid=1000,mode=700,size=512m",
+        "--env",
+        "TZ=Europe/Berlin",
+        "--log-driver",
+        "none",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    v.push(image.into());
+    v
+}
+
+/// A call into the running browser: `docker exec` as its unprivileged user, never as root.
+pub(crate) fn browser_exec(request: &str, extra: &str, stop: &str) -> Vec<String> {
+    ["docker", "exec", "-i", "--user", "node", BROWSER_NAME, "node", "-e", BRIDGE_JS, request, extra, stop].iter().map(|s| s.to_string()).collect()
 }
 
 /// Formats `workspace_convert` makes, as LibreOffice names them.

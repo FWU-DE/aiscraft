@@ -13,8 +13,10 @@
 //!   `manifest.json` with the image's id. Only the guest parts are unpacked; the macOS programs
 //!   in the archive are never used.
 //!
-//! AIS.ChatCraft uses only the workspace image (Debian 12 with Python 3, LibreOffice, Tesseract,
-//! qpdf, Ghostscript, Noto fonts) and starts it locked down (`container.rs`).
+//! AIS.ChatCraft uses the workspace image (Debian 12 with Python 3, LibreOffice, Tesseract,
+//! qpdf, Ghostscript, Noto fonts) and, only when the model first needs it, Nod's browser image
+//! (Chromium on a private virtual display, driven by agent-browser, #107); both start locked down
+//! (`container.rs`). Nod's database image is never used.
 //!
 //! Pinned like Nod pins it: every download's SHA-256 and size are fixed below; where the
 //! publisher has a sums file (Nod's `SHA256SUMS-win32-x64`, Lima's `SHA256SUMS`) the line must
@@ -44,6 +46,9 @@ pub const RUNTIME_BYTES: u64 = 1332058697;
 pub const WORKSPACE_ID: &str = "sha256:8da90f7a2e66134dc6405f363529d8e0ffba0da0ef2c8798825697d98a2439cd";
 pub const WORKSPACE_TAR: &str = "/opt/nod-assets/images/workspace.tar.zst";
 pub const WORKSPACE_TAR_SHA256: &str = "6575a1360af55fc762a37befa23a90db4b50fc1e306873cc29ee7cc7d0f5f8cc";
+pub const BROWSER_ID: &str = "sha256:d007854a6a21cca971f525372d9acd8d1413c11744b3fe3289e74aae5a43a107";
+pub const BROWSER_TAR: &str = "/opt/nod-assets/images/browser.tar.zst";
+pub const BROWSER_TAR_SHA256: &str = "d81ac698f19552aa08818d15e67a6e6f98975c95bb040e3eb4290a0128bb77bc";
 // ---- end of the pinned Nod release ---------------------------------------------------------------
 
 // ---- Linux (#102): Lima and the guest parts of Nod's x86-64 runtime ------------------------------
@@ -70,8 +75,10 @@ pub const LINUX_GUEST_FILES: &[(&str, &str, u64)] = &[
     ("guest-packages/libnfnetlink0_1.0.2-3build1_amd64.deb", "e76b638fef2c1ebf78260972a52c4716df5752b29a952aeddc0c091a74f179c2", 15078),
     ("guest-packages/libnftnl11_1.3.1-1_amd64.deb", "a2f4d4a4ce3fac7e473c8de60a3d8948a58e9850cd8e2ced17263aa73dda7199", 72288),
     ("images/workspace.tar.zst", "3bc8bae74df3582d49dc66bbdb59960c634ba8fef8a827f36c5ccbfd0e7bfd97", 653537446),
+    ("images/browser.tar.zst", "c3a3f973be7ce65f43d36fa2e169351691378821ed63109256a41bec7c24b699", 453948431),
 ];
 pub const LINUX_WORKSPACE_TAR_SHA256: &str = "3bc8bae74df3582d49dc66bbdb59960c634ba8fef8a827f36c5ccbfd0e7bfd97";
+pub const LINUX_BROWSER_TAR_SHA256: &str = "c3a3f973be7ce65f43d36fa2e169351691378821ed63109256a41bec7c24b699";
 /// How people read the Linux version.
 pub const LINUX_VERSION: &str = "nod-v0.9.5 (Linux, Lima 2.2.0)";
 // ---- end of the Linux pins -----------------------------------------------------------------------
@@ -80,14 +87,14 @@ pub const LINUX_VERSION: &str = "nod-v0.9.5 (Linux, Lima 2.2.0)";
 pub const SUMS: &str = "SHA256SUMS-win32-x64";
 /// What the question says before the download, for this system.
 pub const APPROX_MB: u64 = if cfg!(target_os = "linux") { (LIMA_BYTES + NOD_ARCHIVE_BYTES).div_ceil(1_000_000) } else { RUNTIME_BYTES.div_ceil(1_000_000) };
-pub const DISK_MB: u64 = if cfg!(target_os = "linux") { 8000 } else { 5000 };
+pub const DISK_MB: u64 = if cfg!(target_os = "linux") { 9500 } else { 7000 };
 pub const LICENSE: &str = if cfg!(target_os = "linux") {
-    "Lima (Apache-2.0); Laufzeit von n8n Nod (Apache-2.0): Ubuntu (freie Lizenzen, überwiegend GPL) mit Docker Engine (Apache-2.0); Arbeitsbereich: Debian 12 mit Python 3 (PSF), LibreOffice (MPL-2.0), Tesseract (Apache-2.0), ffmpeg (LGPL/GPL), qpdf (Apache-2.0), Ghostscript (AGPL-3.0), Noto-Schriften (OFL-1.1); QEMU vom System (GPL-2.0)"
+    "Lima (Apache-2.0); Laufzeit von n8n Nod (Apache-2.0): Ubuntu (freie Lizenzen, überwiegend GPL) mit Docker Engine (Apache-2.0); Arbeitsbereich: Debian 12 mit Python 3 (PSF), LibreOffice (MPL-2.0), Tesseract (Apache-2.0), ffmpeg (LGPL/GPL), qpdf (Apache-2.0), Ghostscript (AGPL-3.0), Noto-Schriften (OFL-1.1); Browser: Chromium (BSD-3-Clause u. a.), agent-browser (Apache-2.0), Node.js (MIT), Xvfb (MIT); QEMU vom System (GPL-2.0)"
 } else {
-    "Laufzeit von n8n Nod (Apache-2.0): Ubuntu 24.04 (freie Lizenzen, überwiegend GPL) mit Docker Engine (Apache-2.0); Arbeitsbereich: Debian 12 mit Python 3 (PSF), LibreOffice (MPL-2.0), Tesseract (Apache-2.0), ffmpeg (LGPL/GPL), qpdf (Apache-2.0), Ghostscript (AGPL-3.0), Noto-Schriften (OFL-1.1)"
+    "Laufzeit von n8n Nod (Apache-2.0): Ubuntu 24.04 (freie Lizenzen, überwiegend GPL) mit Docker Engine (Apache-2.0); Arbeitsbereich: Debian 12 mit Python 3 (PSF), LibreOffice (MPL-2.0), Tesseract (Apache-2.0), ffmpeg (LGPL/GPL), qpdf (Apache-2.0), Ghostscript (AGPL-3.0), Noto-Schriften (OFL-1.1); Browser: Chromium (BSD-3-Clause u. a.), agent-browser (Apache-2.0), Node.js (MIT), Xvfb (MIT)"
 };
 pub const SOURCE_TEXT: &str = if cfg!(target_os = "linux") {
-    "github.com/lima-vm/lima (Lima 2.2.0 für Linux) und github.com/n8n-io/nod (die Laufzeit von n8n Nod, davon nur der Linux-Rechner und der Arbeitsbereich), unverändert, mit festen Prüfsummen"
+    "github.com/lima-vm/lima (Lima 2.2.0 für Linux) und github.com/n8n-io/nod (die Laufzeit von n8n Nod, davon nur der Linux-Rechner, der Arbeitsbereich und der Browser), unverändert, mit festen Prüfsummen"
 } else {
     "github.com/n8n-io/nod, die Windows-Laufzeit von n8n Nod (nod-Runtime-win32-x64.tar.gz), unverändert, mit fester Prüfsumme"
 };
@@ -311,6 +318,7 @@ mod tests {
         let hexes = |s: &str| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase());
         assert!(NOD_TAG.starts_with("nod-v") && hexes(RUNTIME_SHA256) && hexes(WORKSPACE_TAR_SHA256));
         assert!(WORKSPACE_ID.strip_prefix("sha256:").is_some_and(hexes));
+        assert!(BROWSER_ID.strip_prefix("sha256:").is_some_and(hexes) && hexes(BROWSER_TAR_SHA256) && BROWSER_TAR.starts_with("/opt/nod-assets/images/"));
         assert!(RUNTIME_BYTES > 100_000_000 && WORKSPACE_TAR.starts_with("/opt/nod-assets/images/"));
         if let Some(s) = Source::github() {
             assert!(s.parts.iter().all(|p| p.url.starts_with("https://github.com/") && p.sha256.as_deref().is_some_and(hexes) && p.bytes.is_some()));
@@ -329,6 +337,7 @@ mod tests {
             assert!(LINUX_GUEST_FILES.iter().any(|(p, ..)| *p == need), "{need}");
         }
         assert!(LINUX_GUEST_FILES.iter().any(|(p, s, _)| *p == "images/workspace.tar.zst" && *s == LINUX_WORKSPACE_TAR_SHA256));
+        assert!(LINUX_GUEST_FILES.iter().any(|(p, s, _)| *p == "images/browser.tar.zst" && *s == LINUX_BROWSER_TAR_SHA256));
         let parts = linux_parts();
         assert_eq!(parts.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["lima-2.2.0-Linux-x86_64.tar.gz", "nod-Runtime-darwin-x64-f1e9db832de9.tar.gz"]);
     }
