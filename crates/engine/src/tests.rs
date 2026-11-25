@@ -1812,7 +1812,9 @@ fn collab_two_engines_converge() {
     let _ = std::fs::remove_dir_all(&dir);
     let relay = a.block_on(async {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        aiscraft_collab_server::start(l, aiscraft_collab_server::Config::new(dir.clone())).await.unwrap()
+        let mut cfg = aiscraft_collab_server::Config::new(dir.clone());
+        cfg.open_create = true;
+        aiscraft_collab_server::start(l, cfg).await.unwrap()
     });
     let url = format!("http://{}", relay.addr);
     assert_eq!(a.call("collab.set_server", json!({"url": url, "key": ""})).unwrap()["server"], url.as_str());
@@ -1860,6 +1862,14 @@ fn collab_two_engines_converge() {
     b.call("collab.leave", json!({"id": board})).unwrap();
     assert!(b.state().share(&board).is_none());
     assert!(text_of(&b, &board).contains("Fuchs"));
+    // Joining again: B's kept copy has the room's id but is no longer shared, so it stays local
+    // and the room gets a fresh artifact. Joining the same room twice opens the one share.
+    let again = b.call("collab.join", json!({"code": code})).unwrap()["id"].as_str().unwrap().to_string();
+    assert_ne!(again, board, "a local artifact with the room's id is never attached to the relay");
+    assert!(b.state().share(&board).is_none() && b.state().share(&again).is_some());
+    assert!(eventually(|| text_of(&b, &again).contains("Fuchs")));
+    assert_eq!(b.call("collab.join", json!({"code": code})).unwrap()["id"], again.as_str());
+    b.call("collab.leave", json!({"id": again})).unwrap();
     assert!(b.call("collab.leave", json!({"id": doc, "end": true})).is_err(), "only the owner ends a room");
     a.call("collab.leave", json!({"id": board, "end": true})).unwrap();
     assert!(b.call("collab.join", json!({"code": code})).is_err(), "the room is gone");
