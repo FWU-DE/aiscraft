@@ -109,10 +109,10 @@ pub(crate) async fn fetch(c: &Ctx, src: &Source, dir: &Path) -> Result<(PathBuf,
     if !sums_resp.status().is_success() {
         return Err(Error::network(format!("Prüfsummen von {host} nicht geladen: Antwort {}.", sums_resp.status())));
     }
-    let sums_bytes = sums_resp.bytes().await.map_err(net)?;
-    if sums_bytes.len() > MAX_SUMS {
-        return Err(Error::protocol("Die Prüfsummendatei ist zu groß; nichts geladen."));
-    }
+    // Read capped while it arrives: a server (or a redirect target) cannot fill the memory.
+    let sums_bytes = aiscraft_backends::http::read_bytes_capped(sums_resp, MAX_SUMS, "Die Prüfsummendatei")
+        .await
+        .map_err(|e| if e.kind == aiscraft_core::ErrorKind::Protocol { Error::protocol("Die Prüfsummendatei ist zu groß; nichts geladen.") } else { e })?;
     let expected = sum_for(&String::from_utf8_lossy(&sums_bytes), &src.asset)
         .ok_or_else(|| Error::protocol(format!("{} fehlt in der Prüfsummendatei; nichts geladen.", src.asset)))?;
     if let Some(pin) = &src.pinned

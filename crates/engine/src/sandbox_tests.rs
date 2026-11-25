@@ -170,6 +170,14 @@ fn nothing_is_downloaded_or_started_before_the_yes() {
     assert!(!fake.calls().iter().any(|c| matches!(c, FakeCall::Create(_) | FakeCall::Exec(_))));
     assert!(!engine.state().sandbox.installed);
 
+    // A checksum file far bigger than any real one: read capped, refused, the image never asked for.
+    let huge = format!("{}  image.tar.gz\n", sha(IMAGE)).repeat(4000);
+    let (url, count) = release(&engine, IMAGE.to_vec(), huge);
+    ctx.0.sandbox.set_source(&url, "image.tar.gz", Some(&sha(IMAGE)));
+    let e = engine.call("sandbox.install", json!({"yes": true})).unwrap_err();
+    assert!(e.message.contains("zu groß"), "{e}");
+    assert_eq!(*count.lock().unwrap(), 1, "only the sums file was asked for");
+
     // The published sums disagree with the pinned checksum: refused before the download.
     let (url, count) = release(&engine, IMAGE.to_vec(), format!("{}  image.tar.gz\n", sha(IMAGE)));
     ctx.0.sandbox.set_source(&url, "image.tar.gz", Some(&sha(b"gepinnt")));
