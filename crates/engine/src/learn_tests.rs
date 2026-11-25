@@ -57,7 +57,11 @@ fn route(req: &str) -> Vec<Value> {
         return tool("board_create", json!({"board": board_json()}));
     }
     if req.contains("reparierst ein Whiteboard") {
-        return text(&if req.contains("NOCHMAL") { "```aiscraft-board\n{\"title\":\"NOCHMAL\",\"nodes\":[]}\n```".to_string() } else { format!("```aiscraft-board\n{}\n```", board_json()) });
+        return text(&if req.contains("NOCHMAL") {
+            "```aiscraft-board\n{\"title\":\"NOCHMAL\",\"nodes\":[]}\n```".to_string()
+        } else {
+            format!("```aiscraft-board\n{}\n```", board_json())
+        });
     }
     if req.contains("Whiteboard zum Thema: Dauerkaputt") && !has_tool_result {
         return text("```aiscraft-board\n{\"title\":\"NOCHMAL\",\"nodes\":[]}\n```");
@@ -278,6 +282,23 @@ fn whiteboard_format_one_round_one_repair_at_most() {
     let out = engine.call("board.request", json!({"topic": "Wasserkreislauf"})).unwrap();
     assert_eq!(out["created"], true, "{out}");
     assert!(crate::learn::tool_specs(true).iter().any(|t| t.name == "board_create" && t.description.contains("aiscraft-board")));
+}
+
+/// AIS.chat has no tools: the format description travels in the message text, once per format
+/// request and never with a plain message.
+#[test]
+fn ais_chat_gets_the_format_in_the_message_text() {
+    let (engine, posted) = super::ais_engine();
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let plain = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(!plain.contains("aiscraft-board"), "{plain}");
+    engine.call("chat.new", json!({})).unwrap();
+    let out = engine.call("board.request", json!({"topic": "Wasserkreislauf"})).unwrap();
+    assert_eq!(out["created"], false, "the scripted answer has no block: {out}");
+    let sent = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(sent.contains("Whiteboard zum Thema: Wasserkreislauf") && sent.contains("aiscraft-board"), "{sent}");
+    assert!(!sent.contains("board_create"), "no tool wording for AIS.chat");
+    assert!(engine.state().notices.iter().any(|n| n.text.contains("kein Whiteboard")));
 }
 
 fn tmp_dir(name: &str) -> std::path::PathBuf {

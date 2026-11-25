@@ -187,12 +187,11 @@ pub fn from_value(v: &Value) -> Result<(BoardSpec, Vec<String>), String> {
     let obj = v.as_object().ok_or("das JSON ist kein Objekt")?;
     let mut problems = Vec::new();
     let mut spec = BoardSpec { title: clean_text(obj.get("title").and_then(Value::as_str).unwrap_or(""), MAX_TITLE), ..BoardSpec::default() };
-    match obj.get("layout").and_then(Value::as_str) {
-        Some(l) => match SpecLayout::parse(l) {
+    if let Some(l) = obj.get("layout").and_then(Value::as_str) {
+        match SpecLayout::parse(l) {
             Some(l) => spec.layout = l,
             None => problems.push(format!("Anordnung „{}“ unbekannt, als Mindmap gezeichnet", clean_text(l, 30))),
-        },
-        None => {}
+        }
     }
     let empty = Vec::new();
     let groups = obj.get("groups").and_then(Value::as_array).unwrap_or(&empty);
@@ -523,8 +522,8 @@ fn layout_elements(spec: &BoardSpec) -> Vec<Element> {
                     let x = k as f64 * step;
                     let y = if k % 2 == 0 { axis_y - GAP - h } else { axis_y + GAP };
                     let c = note(el_id(n), &n.text, x, y, &node_color(n, "orange"));
-                    let mut tick = Element::segment(Kind::Line, (x + NODE_W / 2.0, axis_y), (x + NODE_W / 2.0, if k % 2 == 0 { y + h } else { y }))
-                        .with_color("gray");
+                    let mut tick =
+                        Element::segment(Kind::Line, (x + NODE_W / 2.0, axis_y), (x + NODE_W / 2.0, if k % 2 == 0 { y + h } else { y })).with_color("gray");
                     tick.id = format!("st{k}");
                     els.push(tick);
                     placed.insert(n.id.clone(), c.clone());

@@ -2,8 +2,8 @@
 //! block (content only, see [`aiscraft_board::spec`]), AIS.ChatCraft lays it out. Backends with
 //! tools get `board_create` from the same description.
 
-use aiscraft_board::spec::{self, BoardSpec};
 use aiscraft_board::Board;
+use aiscraft_board::spec::{self, BoardSpec};
 use aiscraft_core::{Artifact, ArtifactKind, Error, Result, ToolSpec};
 use serde_json::{Value, json};
 
