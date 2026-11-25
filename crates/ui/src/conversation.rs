@@ -193,11 +193,13 @@ impl AisCraftApp {
                     }
                 } else {
                     // A temporary chat (#34): switched on before the first message.
+                    // Not with AIS.chat: it keeps every chat in its own history.
                     let temp = self.state.selection.temporary;
                     let (kind, label) = if temp { (crate::kit::Pill::Accent2, "Temporär: an") } else { (crate::kit::Pill::Ghost, "Temporärer Chat") };
-                    if crate::kit::pill(ui, &t, kind, None, label, 12.5, None)
-                        .on_hover_text("Wird nicht gespeichert, nicht durchsucht und legt keine Notizen an; beim Schließen ist er weg.")
-                        .clicked()
+                    if (temp || self.state.temporary_possible(&self.state.selection.backend_id))
+                        && crate::kit::pill(ui, &t, kind, None, label, 12.5, None)
+                            .on_hover_text("Wird nicht gespeichert, nicht durchsucht und legt keine Notizen an; beim Schließen ist er weg.")
+                            .clicked()
                     {
                         self.run("chat.temporary", json!({"on": !temp}));
                     }
