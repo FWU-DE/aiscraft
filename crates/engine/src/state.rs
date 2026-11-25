@@ -48,6 +48,9 @@ pub struct State {
     pub open_artifact: Option<String>,
     /// Increases when any artifact's content changes, so open views reload.
     pub artifact_rev: u64,
+    /// Contents in their own window (#75), in the order they were lifted out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detached: Vec<crate::windows::DetachedView>,
     pub connectors: Vec<ConnectorView>,
     /// Local files (#25): on or off, folders kept out.
     #[serde(default)]

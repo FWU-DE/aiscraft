@@ -40,6 +40,7 @@ mod trust_rules;
 mod update;
 mod views;
 mod widgets;
+mod windows;
 pub mod worksheet;
 
 pub use app::{AisCraftApp, PanelLayout, UiRequest};

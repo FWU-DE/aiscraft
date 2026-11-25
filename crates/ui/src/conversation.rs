@@ -769,7 +769,11 @@ impl AisCraftApp {
         if !generating {
             let blocks = aiscraft_engine::change_blocks(&m.content);
             for (kind, content) in blocks {
-                let target = self.state.open_artifact.clone().filter(|id| self.state.artifacts.iter().any(|a| &a.id == id && a.kind == kind));
+                // The panel's content, or the one going along from its own window (#75).
+                let target = [self.panel_artifact(), self.attach_artifact.clone()]
+                    .into_iter()
+                    .flatten()
+                    .find(|id| self.state.artifacts.iter().any(|a| &a.id == id && a.kind == kind));
                 ui.horizontal(|ui| match (kind, target) {
                     (aiscraft_core::ArtifactKind::Document, Some(id)) => {
                         if accent_button(ui, &t, "Ins Dokument übernehmen")
@@ -1437,9 +1441,7 @@ impl AisCraftApp {
                     self.link_input = None;
                 }
             }
-            if self.attach_artifact
-                && let Some(a) = self.state.open_artifact.as_ref().and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id))
-            {
+            if let Some(a) = self.attach_artifact.as_ref().and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id)) {
                 ui.label(small_muted(&t, format!("📄 {} geht als Kontext mit", a.title)));
             }
             self.composer_bars(ui);
@@ -1495,7 +1497,13 @@ impl AisCraftApp {
             self.link_input = None;
             if !text.trim().is_empty() || !files.is_empty() || !links.is_empty() {
                 self.save_if_dirty();
-                let artifact = if self.attach_artifact { self.state.open_artifact.clone() } else { None };
+                // In its own window the content saves there; send what is typed there too (#75).
+                if let Some(id) = self.attach_artifact.clone()
+                    && self.state.detached.iter().any(|d| d.id == id)
+                {
+                    self.save_window_if_dirty(&id);
+                }
+                let artifact = self.attach_artifact.clone();
                 let privacy = self.privacy.params();
                 self.privacy.clear();
                 self.run("chat.send", json!({"text": text, "files": files, "links": links, "artifact": artifact, "privacy": privacy}));

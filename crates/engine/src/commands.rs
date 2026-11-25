@@ -526,13 +526,24 @@ static COMMANDS: &[CommandSpec] = &[
         if !c.state().artifacts.iter().any(|a| a.id == id) {
             return Err(Error::not_found("Artefakt nicht gefunden"));
         }
-        c.update(|s| s.open_artifact = Some(id));
+        // In its own window already (#75): that window comes to the front instead.
+        c.update(|s| match s.detached.iter_mut().find(|d| d.id == id) {
+            Some(d) => d.focus = d.focus.wrapping_add(1),
+            None => s.open_artifact = Some(id),
+        });
         Ok(json!({}))
     })),
     cmd!("artifact.close", "Artefakt schließen", "Artefakte", None, "", false, |c, _| Box::pin(async move {
         c.update(|s| s.open_artifact = None);
         Ok(json!({}))
     })),
+    cmd!("artifact.detach", "In eigenem Fenster öffnen", "Artefakte", None, "id?: string (sonst das offene), present?: bool (Whiteboard präsentieren)", true, |c, p| {
+        Box::pin(crate::windows::detach(c, p))
+    }),
+    cmd!("artifact.attach", "Zurück ins Panel", "Artefakte", None, "id?: string (sonst das zuletzt gelöste)", true, |c, p| Box::pin(crate::windows::attach(c, p))),
+    cmd!("artifact.window", "Fensterplatz merken", "Artefakte", None, "id: string, x: number, y: number, width: number, height: number", false, |c, p| {
+        Box::pin(crate::windows::place(c, p))
+    }),
     cmd!("artifact.get", "Artefakt lesen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::get(c, p))),
     cmd!("artifact.save", "Artefakt speichern", "Artefakte", None, "id: string, text?: string, state_b64?: string, version?: string", false, |c, p| Box::pin(
         crate::artifacts::save(c, p)

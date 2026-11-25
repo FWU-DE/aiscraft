@@ -50,6 +50,7 @@ mod usage;
 mod vault;
 mod voice;
 pub mod voice_mode;
+mod windows;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -83,6 +84,7 @@ pub use tasks::{TASK_RESULT, TaskCard, running_summary, task_card};
 pub use tools::{obsidian_vaults, presets as connector_presets};
 pub use update::{CURRENT_VERSION, finish_update_helper};
 pub use vault::{EntryInfo as VaultEntry, totp_at};
+pub use windows::{DetachedView, WindowPlace};
 
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
