@@ -85,6 +85,9 @@ pub struct SandboxState {
     pub version: String,
     /// A newer pinned Nod runtime than the installed one (`sandbox.update`), as people read it.
     pub update: Option<String>,
+    /// Set up by v0.2.2 with AIS.ChatCraft's own image: it must be switched to Nod's runtime
+    /// (`sandbox.update`) before it runs anything.
+    pub legacy: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -200,13 +203,15 @@ pub(crate) fn refresh(c: &Ctx) {
     let installed = marker.is_some();
     // As Nod compares its guest: the installed runtime against the pinned one.
     let update = match (&marker, c.0.sandbox.source()) {
-        (Some(m), Some(src)) if src.pinned.as_deref().is_some_and(|p| p != m.sha256) => Some(src.version.clone()),
+        (Some(m), Some(src)) if m.version.is_empty() || src.pinned.as_deref().is_some_and(|p| p != m.sha256) => Some(src.version.clone()),
         _ => None,
     };
     c.update(|s| {
         let st = &mut s.sandbox;
         st.installed = installed;
-        st.enabled = saved.enabled && installed;
+        // A computer from v0.2.2 (own image, no Nod version) runs nothing until it is switched.
+        st.legacy = marker.as_ref().is_some_and(|m| m.version.is_empty());
+        st.enabled = saved.enabled && installed && !st.legacy;
         st.network = saved.network;
         st.supported = machine.as_ref().is_some_and(|m| m.supported());
         st.kind = machine.as_ref().map(|m| m.kind().to_string()).unwrap_or_default();
@@ -218,7 +223,10 @@ pub(crate) fn refresh(c: &Ctx) {
 
 pub(crate) fn load(c: &Ctx) {
     refresh(c);
-    if let Some(v) = c.state().sandbox.update.clone() {
+    let s = c.state().sandbox.clone();
+    if s.legacy {
+        c.notice(NoticeLevel::Warning, LEGACY);
+    } else if let Some(v) = s.update {
         c.notice(NoticeLevel::Info, format!("Für den eigenen Rechner gibt es eine neue Version ({v}). Einstellungen › Fähigkeiten › Aktualisieren."));
     }
 }
@@ -253,6 +261,7 @@ pub(crate) fn offer(c: &Ctx) -> Value {
         "problem": s.problem,
         "version": s.version,
         "update": s.update,
+        "legacy": s.legacy,
     })
 }
 
@@ -348,6 +357,9 @@ async fn status_cmd(c: Ctx, _p: Value) -> Result<Value> {
 fn step(c: &Ctx, what: Option<&str>) {
     c.update(|s| s.sandbox.step = what.map(str::to_string));
 }
+
+/// A computer set up by v0.2.2 (AIS.ChatCraft's own image) before the switch to Nod's runtime.
+pub const LEGACY: &str = "Der eigene Rechner läuft noch mit dem früheren Abbild von AIS.ChatCraft und muss auf die Laufzeit von n8n Nod umgestellt werden: Einstellungen › Fähigkeiten › Aktualisieren. Bis dahin führt er nichts aus.";
 
 /// What an update does to the working folders.
 pub const UPDATE_NOTE: &str = "Der eigene Rechner wird dabei neu angelegt; die Arbeitsordner der Chats werden geleert (Anhänge im Chat bleiben).";
@@ -540,6 +552,9 @@ async fn prepare(m: &runtime::Shared, chat: Option<&str>, network: bool) -> Resu
 /// The machine when it is on and installed, and whether the network is allowed.
 fn usable(c: &Ctx) -> Result<(runtime::Shared, bool)> {
     let s = c.state().sandbox.clone();
+    if s.legacy {
+        return Err(Error::refused(LEGACY));
+    }
     if !s.enabled {
         return Err(Error::refused("Der eigene Rechner ist aus. Die Person schaltet ihn in den Einstellungen › Fähigkeiten ein."));
     }

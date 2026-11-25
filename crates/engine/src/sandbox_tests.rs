@@ -369,6 +369,34 @@ fn a_newer_pinned_nod_runtime_is_offered_and_installed_only_after_yes() {
     assert!(engine.call("sandbox.update", json!({})).unwrap()["updated"] == false);
 }
 
+/// A computer set up by v0.2.2 (AIS.ChatCraft's own image `sandbox-v1`, a marker without a Nod
+/// version) runs nothing after the switch to Nod's runtime: the tools are gone, a call says why,
+/// and „Aktualisieren“ (only after a yes) replaces it with the pinned Nod runtime.
+#[test]
+fn a_computer_from_v0_2_2_is_switched_to_nods_runtime_only_after_yes() {
+    let (engine, fake) = installed();
+    let ctx = engine.ctx().clone();
+    // What v0.2.2 wrote: layout, machine and the own image's checksum, no version.
+    let marker = ctx.0.sandbox.dir().join("installed.json");
+    let own = "5aad495000000000000000000000000000000000000000000000000000000000";
+    std::fs::write(&marker, json!({"layout": 1, "machine": "aiscraft-test", "sha256": own}).to_string()).unwrap();
+    crate::sandbox::refresh(&ctx);
+    let s = engine.state().sandbox.clone();
+    assert!(s.installed && s.legacy && !s.enabled && s.update.is_some(), "{s:?}");
+    assert!(!crate::tools::specs(&ctx).iter().any(|t| t.name == RUN), "no tools on the old image");
+    let before = fake.calls().len();
+    let (text, err, _) = direct(&engine, LIST, json!({}));
+    assert!(err && text.contains("Nod"), "{text}");
+    assert_eq!(fake.calls().len(), before, "nothing runs on the old image");
+    assert!(engine.call("sandbox.update", json!({})).unwrap()["needs_yes"] == true);
+    // The yes: the old computer goes, Nod's runtime comes, it is on again.
+    engine.call("sandbox.update", json!({"yes": true})).unwrap();
+    assert!(fake.calls().contains(&FakeCall::Destroy));
+    let s = engine.state().sandbox.clone();
+    assert!(s.installed && !s.legacy && s.enabled && s.update.is_none() && !s.version.is_empty(), "{s:?}");
+    assert!(!direct(&engine, LIST, json!({})).1);
+}
+
 /// An OpenAI-compatible server: on „Lies die Notiz“ the model reads a file from the workspace,
 /// then answers; every request is recorded.
 fn model(engine: &Engine) -> (String, Arc<Mutex<Vec<String>>>) {
@@ -468,7 +496,7 @@ fn workspace_output_passes_name_protection() {
 
 /// Live (Windows, not in CI): imports a real WSL2 distribution `aiscraft-livetest` from an image
 /// and runs `echo` in a locked-down container, then removes it again. Downloads and installs:
-/// run only on request, with `AISCRAFT_SANDBOX_IMAGE` set to a local image (`packaging/sandbox`)
+/// run only on request, with `AISCRAFT_SANDBOX_IMAGE` set to an already downloaded Nod runtime (`nod-Runtime-win32-x64.tar.gz`)
 /// or unset to use the published release.
 ///
 /// `cargo test -p aiscraft-engine real_wsl_runs_echo_in_the_container -- --ignored --nocapture`

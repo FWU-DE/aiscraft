@@ -38,8 +38,11 @@ impl AisCraftApp {
                 }
             }
         } else if s.installed {
+            if s.legacy {
+                ui.label(RichText::new(aiscraft_engine::sandbox::LEGACY).small().color(t.danger));
+            }
             let mut on = s.enabled;
-            if ui.checkbox(&mut on, format!("Eigenen Rechner nutzen ({})", s.machine)).changed() {
+            if ui.add_enabled(!s.legacy, egui::Checkbox::new(&mut on, format!("Eigenen Rechner nutzen ({})", s.machine))).changed() {
                 self.run("sandbox.set", json!({"enabled": on}));
             }
             let mut net = s.network;
