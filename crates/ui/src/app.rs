@@ -101,6 +101,8 @@ pub struct AisCraftApp {
     pub(crate) explore: Option<crate::explore::ExploreView>,
     /// Persona pictures asked for already, by picture key.
     pub(crate) pictures_requested: std::collections::HashSet<String>,
+    /// Persona pictures asked for that have not arrived yet, with egui's input time of the ask.
+    pub(crate) pictures_pending: std::collections::HashMap<String, f64>,
     /// Small persona textures by file (`None`: could not be read).
     pub(crate) persona_textures: std::collections::HashMap<String, Option<egui::TextureHandle>>,
     /// Pictures still to decode this frame, so a full grid never stalls one frame.
@@ -260,6 +262,7 @@ impl AisCraftApp {
             personas_requested: Default::default(),
             explore: None,
             pictures_requested: Default::default(),
+            pictures_pending: Default::default(),
             persona_textures: Default::default(),
             decode_budget: 0,
             last_current: None,
