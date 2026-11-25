@@ -51,6 +51,7 @@ pub fn commands() -> &'static [CommandSpec] {
         all.extend(crate::local_files::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::ext::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::apps::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::archive::COMMANDS.iter().map(CommandSpec::copy));
         all
     })
 }
@@ -199,7 +200,6 @@ static COMMANDS: &[CommandSpec] = &[
         edit_conversation(&c, &req_str(&p, "id")?, |conv| conv.project_id = project)?;
         Ok(json!({}))
     })),
-    cmd!("chat.delete", "Chat löschen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_delete(c, p))),
     cmd!("chat.export", "Chat exportieren", "Chat", Some("Ctrl+Shift+E"), "id?: string, format?: markdown|json, path?: string", true, |c, p| Box::pin(
         chat_export(c, p)
     )),
@@ -305,7 +305,7 @@ static COMMANDS: &[CommandSpec] = &[
         c.update(|s| {
             s.projects.retain(|x| x.id != id);
             s.project_files.retain(|f| f.project_id != id);
-            for conv in s.conversations.iter_mut().filter(|x| x.project_id.as_deref() == Some(&id)) {
+            for conv in s.conversations.iter_mut().chain(s.trash.iter_mut()).filter(|x| x.project_id.as_deref() == Some(&id)) {
                 conv.project_id = None;
             }
             if s.selection.project_id.as_deref() == Some(&id) {
@@ -457,7 +457,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Einstellung ändern",
         "Einstellungen",
         None,
-        "key: theme|transparency|look_chosen|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|check_links|proactive|quiet_start|quiet_end|update_check|worksheet_points|ai_label|ai_label_prompt, value: any",
+        "key: theme|transparency|look_chosen|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|recall_archived|check_links|proactive|quiet_start|quiet_end|update_check|worksheet_points|ai_label|ai_label_prompt, value: any",
         false,
         |c, p| Box::pin(async move {
             let key = req_str(&p, "key")?;
@@ -976,6 +976,9 @@ async fn chat_close(c: Ctx) -> Result<Value> {
 async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let conv = c.state().conversation(&id).cloned().or(c.store(|st| st.conversation(&id))?).ok_or_else(|| Error::not_found("Chat nicht gefunden"))?;
+    if conv.deleted_at.is_some() {
+        return Err(Error::invalid("Der Chat liegt im Papierkorb. Stelle ihn zuerst wieder her."));
+    }
     let messages = c.store(|st| st.messages(&id))?;
     let variants = c.store(|st| st.variants(&id))?;
     let n = messages.len();
@@ -1108,25 +1111,6 @@ async fn set_style(c: Ctx, p: Value) -> Result<Value> {
         edit_conversation(&c, &id, |conv| conv.sources = s2)?;
     }
     Ok(json!({"style": src.style, "sample": src.style_sample}))
-}
-
-async fn chat_delete(c: Ctx, p: Value) -> Result<Value> {
-    let id = req_str(&p, "id")?;
-    chat::stop(&c, &id);
-    if c.state().conversation(&id).is_some_and(|x| x.temporary) {
-        crate::temporary::discard(&c, &id);
-    }
-    c.store(|st| st.delete_conversation(&id))?;
-    crate::privacy::forget(&c, &id);
-    c.update(|s| {
-        s.conversations.retain(|x| x.id != id);
-        if s.current.as_deref() == Some(&id) {
-            s.current = None;
-            s.messages.clear();
-            s.variants.clear();
-        }
-    });
-    Ok(json!({}))
 }
 
 pub(crate) fn markdown_export(title: &str, messages: &[Message]) -> String {
@@ -1272,6 +1256,8 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
         kind,
         remote_id: None,
         temporary: false,
+        archived: false,
+        deleted_at: None,
     };
     c.store(|st| {
         st.save_conversation(&conv)?;
@@ -1323,6 +1309,7 @@ fn search_chats(c: &Ctx, query: &str) -> Result<Vec<aiscraft_store::SearchHit>> 
                     title,
                     snippet: "Treffer im Titel".into(),
                     backend_id: conv.backend_id.clone(),
+                    archived: conv.archived,
                 });
                 if hits.len() >= LIMIT {
                     return Ok(hits);

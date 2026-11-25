@@ -119,6 +119,8 @@ pub(crate) async fn start(c: Ctx, p: Value) -> Result<Value> {
         kind: Default::default(),
         remote_id: None,
         temporary: false,
+        archived: false,
+        deleted_at: None,
     };
     c.store(|st| st.save_conversation(&conv))?;
     let task_id = conv.id.clone();

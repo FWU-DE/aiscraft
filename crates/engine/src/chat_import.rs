@@ -304,6 +304,8 @@ pub(crate) async fn import(c: Ctx, p: Value) -> Result<Value> {
             kind: Default::default(),
             remote_id: None,
             temporary: false,
+            archived: false,
+            deleted_at: None,
         };
         c.store(|st| {
             st.save_conversation(&conv)?;

@@ -5,6 +5,7 @@
 mod action_log;
 mod ai_label;
 mod apps;
+mod archive;
 mod artifacts;
 mod attach;
 mod bridge;
@@ -291,6 +292,8 @@ impl Engine {
                 .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-attachments-{}", std::process::id()))),
         }));
         ctx.load()?;
+        // Chats longer than 30 days in the trash go for good (#77).
+        archive::purge_expired(&ctx);
         // Leftovers of a run that ended without closing (engines in memory share a folder, skip).
         if opts.data_dir.is_some() {
             temporary::clean_up(&ctx);
@@ -651,9 +654,12 @@ impl Ctx {
     }
 
     fn load(&self) -> Result<()> {
-        let (mut backends, conversations, projects, memory, settings, artifacts) = self.store(|st| {
+        let (mut backends, conversations, trash, projects, memory, settings, artifacts) = self.store(|st| {
             let settings: Settings = st.setting("settings")?.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
-            Ok((st.backends()?, st.conversations(500)?, st.projects()?, st.memory()?, settings, st.artifacts()?))
+            // Archived chats come along (marked), so they open and are found by title (#77).
+            let mut conversations = st.conversations(500)?;
+            conversations.extend(st.archived_conversations(2000)?);
+            Ok((st.backends()?, conversations, st.trashed_conversations(2000)?, st.projects()?, st.memory()?, settings, st.artifacts()?))
         })?;
         if backends.is_empty() {
             let ais = BackendConfig {
@@ -670,6 +676,7 @@ impl Ctx {
         let selection = self.store(|st| Ok(st.setting("selection")?.and_then(|v| serde_json::from_value::<Selection>(v).ok())))?;
         self.update(|s| {
             s.conversations = conversations;
+            s.trash = trash;
             s.projects = projects;
             s.memory = memory;
             s.settings = settings;
@@ -726,6 +733,8 @@ mod trust_tests;
 
 #[cfg(test)]
 mod apps_tests;
+#[cfg(test)]
+mod archive_tests;
 #[cfg(test)]
 mod chatux_tests;
 #[cfg(test)]

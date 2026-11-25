@@ -100,6 +100,12 @@ pub struct AisCraftApp {
     pub(crate) personas_requested: std::collections::HashSet<String>,
     /// The "Entdecken" page, when open (replaces the chat column).
     pub(crate) explore: Option<crate::explore::ExploreView>,
+    /// The archive or trash page, when open (replaces the chat column, #77).
+    pub(crate) archive: Option<crate::archive_view::ArchiveView>,
+    /// Chats picked in the sidebar with Strg or Umschalt (#77), in the order picked.
+    pub(crate) selected_chats: Vec<String>,
+    /// Where a range picked with Umschalt starts.
+    pub(crate) select_anchor: Option<String>,
     /// Persona pictures asked for already, by picture key.
     pub(crate) pictures_requested: std::collections::HashSet<String>,
     /// Persona pictures asked for that have not arrived yet, with egui's input time of the ask.
@@ -279,6 +285,9 @@ impl AisCraftApp {
             remote_open: false,
             personas_requested: Default::default(),
             explore: None,
+            archive: None,
+            selected_chats: Vec::new(),
+            select_anchor: None,
             pictures_requested: Default::default(),
             pictures_pending: Default::default(),
             persona_textures: Default::default(),
@@ -389,7 +398,7 @@ impl AisCraftApp {
         if modal_open {
             return;
         }
-        if self.explore_keys(ctx) {
+        if self.archive_keys(ctx) || self.explore_keys(ctx) {
             return;
         }
         if pressed(sc(Modifiers::COMMAND, Key::N)) {
@@ -470,6 +479,7 @@ impl AisCraftApp {
 
     pub(crate) fn new_chat(&mut self) {
         self.explore = None;
+        self.archive = None;
         self.run("chat.new", json!({}));
         self.composer.clear();
         self.pending_files.clear();
@@ -482,6 +492,7 @@ impl AisCraftApp {
     /// Back to the start page.
     pub(crate) fn close_chat(&mut self) {
         self.explore = None;
+        self.archive = None;
         self.run("chat.close", json!({}));
         self.composer.clear();
         self.editing = None;
@@ -692,6 +703,10 @@ impl AisCraftApp {
                             self.open_explore();
                             true
                         }
+                        "archive" | "trash" => {
+                            self.open_archive(what == "trash");
+                            true
+                        }
                         // "persona:<kind>:<id>": the page with one entry's details.
                         w if w.starts_with("persona:") => {
                             let mut parts = w.splitn(3, ':').skip(1);
@@ -756,6 +771,7 @@ impl eframe::App for AisCraftApp {
             self.editing = None;
             self.focus_composer = true;
             self.explore = None;
+            self.archive = None;
         }
         self.control_requests(&ctx);
         self.quick_entry(&ctx);
@@ -833,7 +849,9 @@ impl eframe::App for AisCraftApp {
                 if let Some(g) = &t.glass {
                     crate::backdrop::glass_edge(ui.painter(), ui.max_rect(), f32::from(t.r_panel), g.edge);
                 }
-                if self.explore.is_some() {
+                if self.archive.is_some() {
+                    self.archive_page(ui);
+                } else if self.explore.is_some() {
                     self.explore_page(ui);
                 } else {
                     self.conversation(ui);

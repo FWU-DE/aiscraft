@@ -778,7 +778,7 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                     } else if req.starts_with("GET / ") {
                         ("200 OK", "text/html", page("app", r#"3:{"usedBudget":10,"maxBudget":100,"models":[{"id":"m-uuid","name":"gpt","displayName":"GPT","priceMetadata":{"type":"text"}},{"id":"m-other","name":"other","displayName":"Anderes","priceMetadata":{"type":"text"}}]}"#))
                     } else if req.starts_with("GET /_next/static/chunks/app.js") {
-                        ("200 OK", "application/javascript", reference(0x7f, "sendChatMessageAction"))
+                        ("200 OK", "application/javascript", reference(0x7f, "sendChatMessageAction") + &reference(0x5d, "deleteConversationAction"))
                     } else if req.starts_with("GET /_next/static/chunks/assistants.js") {
                         ("200 OK", "application/javascript", reference(0x11, "getAssistantsByFilterAction") + &reference(0x66, "setFavoriteAction"))
                     } else if req.starts_with("GET /_next/static/chunks/characters.js") {
@@ -813,6 +813,13 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                                 flight(r#"{"success":false,"error":{"name":"ForbiddenError","message":"Kein Zugriff"}}"#)
                             } else {
                                 flight(r#"{"success":true}"#)
+                            }
+                        } else if action == id(0x5d) {
+                            // deleteConversationAction({conversationId}) (#77).
+                            if req.contains("geschuetzt") {
+                                flight(r#"{"success":false,"error":{"name":"ForbiddenError","message":"Kein Zugriff"}}"#)
+                            } else {
+                                flight(r#"{"success":true,"value":null}"#)
                             }
                         } else if action == id(0x7f) {
                             static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -1107,10 +1114,11 @@ fn every_command_has_a_functional_test() {
         include_str!("ext/tests.rs"),
         include_str!("ext/plugin_tests.rs"),
         include_str!("apps_tests.rs"),
+        include_str!("archive_tests.rs"),
         include_str!("chat_import.rs")
-    );
-    // Line endings differ between checkouts (CRLF on Windows); the search below wants "\n".
-    let src = src.replace("\r\n", "\n");
+    )
+    // A Windows checkout may mix CRLF and LF files; the end of the hunt is found by "\n}\n".
+    .replace("\r\n", "\n");
     // The panic hunt touches every command; count only calls outside it.
     let hunt_start = src.find("fn panic_hunt_every_command_with_hostile_params").unwrap_or(0);
     let hunt_end = src[hunt_start..].find("\n}\n").map(|e| hunt_start + e).unwrap_or(hunt_start);

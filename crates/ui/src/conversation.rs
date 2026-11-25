@@ -247,6 +247,10 @@ impl AisCraftApp {
                             } else {
                                 meta.push(aiscraft_engine::friendly_time(c.updated_at, aiscraft_engine::now_ms()));
                             }
+                            // An archived chat opened from the archive or the search (#77).
+                            if c.archived {
+                                meta.push("Archiviert".to_string());
+                            }
                             ui.add(egui::Label::new(RichText::new(meta.join(" · ")).size(13.0).color(t.muted)).truncate());
                         });
                     });

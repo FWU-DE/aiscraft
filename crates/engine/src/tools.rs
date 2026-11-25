@@ -141,7 +141,10 @@ async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<Stri
         WEB_FETCH => web_fetch(c, a).await,
         "history_search" => {
             let q = a.get("query").and_then(Value::as_str).unwrap_or("").to_string();
+            // Like recall: archived chats only with the switch (#77).
+            let with_archived = c.state().settings.recall_archived;
             c.store(|st| st.search(&q, 12)).map(|hits| {
+                let hits: Vec<_> = hits.into_iter().filter(|h| with_archived || !h.archived).collect();
                 if hits.is_empty() {
                     return "Keine Treffer.".to_string();
                 }

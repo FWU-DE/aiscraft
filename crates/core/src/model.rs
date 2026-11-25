@@ -260,7 +260,17 @@ pub struct Conversation {
     /// recalled, no memory notes; gone once it is closed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub temporary: bool,
+    /// Archived (#77): out of the sidebar and „Zuletzt bearbeitet“, kept whole; recalled only
+    /// with the setting `recall_archived`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
+    /// In the trash since (#77); purged [`TRASH_DAYS`] days later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<Millis>,
 }
+
+/// Days a deleted chat stays in the trash before it is purged (#77).
+pub const TRASH_DAYS: i64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
