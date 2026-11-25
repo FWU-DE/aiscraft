@@ -47,7 +47,7 @@ impl AisCraftApp {
                     ui.label(small_muted(&t, tpl.rhythm));
                 });
                 ui.add(egui::Label::new(small_muted(&t, tpl.prompt.replace("{url}", "…"))).wrap());
-                let url_id = egui::Id::new(("schedule-template-url", tpl.id));
+                let url_id = egui::Id::unique(("schedule-template-url", tpl.id));
                 let mut url: String = ui.data_mut(|d| d.get_temp::<String>(url_id)).unwrap_or_default();
                 let ready = tpl.missing.is_empty() && (!tpl.needs_url || !url.trim().is_empty());
                 let mut create = false;
@@ -65,10 +65,7 @@ impl AisCraftApp {
                     ui.add(egui::Label::new(RichText::new(format!("Fehlt – {m}")).small().color(t.warning)).wrap());
                 }
                 if create {
-                    let mut p = json!({"template": tpl.id});
-                    if tpl.needs_url {
-                        p["url"] = json!(url.trim());
-                    }
+                    let p = if tpl.needs_url { json!({"template": tpl.id, "url": url.trim()}) } else { json!({"template": tpl.id}) };
                     self.run("schedule.from_template", p);
                     ui.data_mut(|d| d.remove::<String>(url_id));
                 }

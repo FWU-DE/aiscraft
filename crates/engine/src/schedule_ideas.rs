@@ -137,7 +137,7 @@ pub fn find(msgs: &[OwnMessage], now: i64) -> Vec<ScheduleIdea> {
             days: days(&picked),
         });
     }
-    out.sort_by(|a, b| b.days.cmp(&a.days));
+    out.sort_by_key(|i| std::cmp::Reverse(i.days));
     out
 }
 
