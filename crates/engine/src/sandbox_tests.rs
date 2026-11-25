@@ -270,7 +270,7 @@ fn workspace_tools_follow_nods_rule() {
     // The question names the command, the folder and the time limit, filled in.
     let rx = run_async(&engine, call(RUN, json!({"command": "rm -rf /work/*", "folder": "daten"})));
     let a = answer(&engine, false);
-    assert_eq!(a.arguments, json!({"command": "rm -rf /work/*", "folder": "/work/daten", "timeout_s": 60, "network": false}));
+    assert_eq!(a.arguments, json!({"command": "rm -rf /work/*", "folder": "/work/daten", "timeout_s": 60, "network": "none"}));
     let shown: Vec<(String, String)> = a.highlights.iter().map(|h| (h.label.clone(), h.value.clone())).collect();
     assert_eq!(shown[0], ("Befehl".to_string(), "rm -rf /work/*".to_string()), "the command is checked first: {shown:?}");
     assert!(shown.contains(&("Zeitlimit".to_string(), "60 s".to_string())), "{shown:?}");
