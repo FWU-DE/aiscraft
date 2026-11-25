@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct State {
+    /// The last quick entry (#35): the window comes to the front with a new chat.
+    pub quick: Option<crate::quick::QuickEntry>,
     /// The search in the open chat (Strg+F, #41).
     pub find: Option<crate::find::FindState>,
     /// Increases with every change; surfaces redraw when it moves.

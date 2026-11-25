@@ -247,3 +247,24 @@ fn find_in_the_open_chat() {
     engine.call("chat.new", json!({})).unwrap();
     assert!(engine.state().find.is_none(), "a search belongs to its chat");
 }
+
+/// #35: a quick entry with text opens a new chat and sends it; without text the chat waits, the
+/// window is asked to come to the front each time. Screenshots are refused in tests.
+#[test]
+fn quick_entry_sends_or_waits() {
+    let (engine, seen) = engine_with(plain);
+    engine.call("chat.send", json!({"text": "Alter Chat"})).unwrap();
+    let old = engine.state().current.clone().unwrap();
+    let r = engine.call("chat.quick_ask", json!({"text": "Schnelle Frage"})).unwrap();
+    assert_eq!(r["sent"], true);
+    assert_ne!(engine.state().current.as_ref(), Some(&old), "a new chat");
+    assert!(!last_chat_request(&seen, "Schnelle Frage").contains("Alter Chat"));
+    assert_eq!(engine.state().quick.as_ref().unwrap().seq, 1);
+    let r = engine.call("chat.quick_ask", json!({})).unwrap();
+    assert_eq!(r["sent"], false);
+    assert!(engine.state().current.is_none());
+    assert_eq!(engine.state().quick.as_ref().unwrap().seq, 2);
+    let e = engine.call("chat.quick_ask", json!({"screenshot": true})).unwrap_err();
+    assert!(e.message.contains("Bildschirmfoto"), "{}", e.message);
+    assert!(engine.call("chat.quick_ask", json!({"text": 5})).is_err());
+}

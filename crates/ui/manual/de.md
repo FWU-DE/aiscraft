@@ -68,6 +68,23 @@ Bis zu fünf Favoriten stehen als Abkürzung in der Seitenleiste. Bilder speiche
 
 Chats von AIS.chat tragen in der Seitenleiste das AIS.chat-Zeichen. Über „AIS.CHAT – VERLAUF“ holst du ältere AIS.chat-Chats herüber und schreibst darin weiter.
 
+## Schnelleingabe
+
+Eine Frage von überall stellen, ohne erst das Fenster zu suchen: Lege im Desktop ein Tastenkürzel an, das `aiscraft --quick` startet. Das Fenster kommt mit einem neuen Chat nach vorn, der Cursor steht im Eingabefeld. Läuft AIS.ChatCraft noch nicht, startet es so. Eine schon laufende App nimmt die Frage an, wenn sie über die Schnelleingabe oder mit `aiscraft --control` gestartet wurde (sie hört dann auf 127.0.0.1, geschützt durch die Datei `control-token`); sonst trägst du `--control` im Starter ein.
+
+- **Mit Bildschirmfoto:** `aiscraft --quick --screenshot`. Das Foto liegt dann als Anhang im Eingabefeld; du schreibst deine Frage dazu.
+- **Frage gleich mitgeben:** `aiscraft --quick Was heißt Photosynthese auf Englisch?` schickt sie sofort ab.
+
+AIS.ChatCraft liest dafür keine Tasten mit; das Kürzel gehört deinem Desktop. So legst du es an:
+
+- **Hyprland:** in `~/.config/hypr/hyprland.conf` (bei Omarchy `~/.config/hypr/bindings.conf`): `bind = SUPER, A, exec, aiscraft --quick` und für das Foto `bind = SUPER SHIFT, A, exec, aiscraft --quick --screenshot`. Fotos macht `grim`.
+- **GNOME:** Einstellungen › Tastatur › Tastenkürzel anpassen › Eigene Tastenkürzel › „+“, Befehl `aiscraft --quick`. Fotos macht `gnome-screenshot` (nachinstallieren, falls es fehlt).
+- **KDE Plasma:** Systemeinstellungen › Tastatur › Tastenkürzel › Neu › Befehl oder Skript, Befehl `aiscraft --quick`. Fotos macht Spectacle.
+- **Windows:** Rechtsklick auf die Verknüpfung von AIS.ChatCraft › Eigenschaften › Ziel um ` --quick` ergänzen, darunter „Tastenkombination“ setzen (Strg+Alt+…). Fotos macht Windows selbst.
+- **macOS:** In der App „Kurzbefehle“ einen Kurzbefehl „Shell-Skript ausführen“ mit `/Applications/AIS.ChatCraft.app/Contents/MacOS/aiscraft --quick` anlegen und ihm in den Details ein Tastenkürzel geben. Das erste Bildschirmfoto fragt nach der Erlaubnis „Bildschirmaufnahme“.
+
+Unter Wayland erlauben manche Desktops einem Programm nicht, sein Fenster selbst nach vorn zu holen; dann blinkt es in der Leiste. Bei Hyprland hilft `bind = SUPER, A, exec, aiscraft --quick && hyprctl dispatch focuswindow class:ai.uds.aiscraft`.
+
 ## Quellen pro Chat
 
 Über **Quellen** im Eingabefeld legst du fest, was dieser Chat nutzen darf:
@@ -273,6 +290,7 @@ Andere Backends bekommen Dateien wie bisher; was sie gar nicht lesen könnten (e
 - `aiscraft-cli chat "Text"` schickt eine Nachricht und gibt die Antwort aus; `aiscraft-cli status`, `search`, `export`, `call <befehl> '<json>'`.
 - `aiscraft-cli mcp` ist ein MCP-Server mit allen Befehlen als Werkzeuge.
 - `aiscraft --control` startet einen JSON-Steuerkanal auf 127.0.0.1 (Token in der Datei `control-token` im Datenordner).
+- `aiscraft --quick [--screenshot] [Frage]` gibt eine Frage über diesen Kanal an die laufende App (Befehl `chat.quick_ask`), siehe „Schnelleingabe“.
 - `aiscraft-cli manual` gibt dieses Handbuch aus.
 
 ## Wenn etwas nicht klappt

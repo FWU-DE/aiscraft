@@ -21,6 +21,7 @@ pub mod office;
 mod pictures;
 pub mod privacy;
 mod proactive;
+pub mod quick;
 mod schedules;
 mod secrets;
 mod skills;
@@ -264,6 +265,7 @@ impl Engine {
         // Leftovers of a run that ended without closing (engines in memory share a folder, skip).
         if opts.data_dir.is_some() {
             temporary::clean_up(&ctx);
+            quick::clean_up(&ctx);
         }
         if let Some(n) = secret_notice {
             ctx.notice(NoticeLevel::Warning, n);

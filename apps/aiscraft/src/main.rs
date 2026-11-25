@@ -8,6 +8,10 @@
 //! the token check are the Craft suite's (craft-control-protocol): every request carries the
 //! token, a wrong one or a line that is not a request closes the connection.
 //! Besides every engine command: `ui.screenshot {path}` and `ui.show {what}`.
+//!
+//! `aiscraft --quick [--screenshot] [Frage …]` is for a desktop shortcut (#35): it hands the
+//! question to the running app through the control channel (`chat.quick_ask`), or starts the app
+//! with it when none is running. No global keyboard hooks.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -49,7 +53,7 @@ fn main() {
     let args: Vec<String> = raw.iter().map(|a| a.to_string_lossy().into_owned()).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "AIS.ChatCraft {}\n\n  aiscraft                 Fenster öffnen\n  aiscraft --control [port] mit JSON-Steuerkanal auf 127.0.0.1 (Standard {DEFAULT_PORT})",
+            "AIS.ChatCraft {}\n\n  aiscraft                 Fenster öffnen\n  aiscraft --control [port] mit JSON-Steuerkanal auf 127.0.0.1 (Standard {DEFAULT_PORT})\n  aiscraft --quick [--screenshot] [Frage]  Schnelleingabe (für ein Tastenkürzel des Desktops)",
             env!("CARGO_PKG_VERSION")
         );
         return;
@@ -58,10 +62,21 @@ fn main() {
         println!("aiscraft {}", env!("CARGO_PKG_VERSION"));
         return;
     }
-    let control_port = args.iter().position(|a| a == "--control").map(|i| args.get(i + 1).and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT));
+    let mut control_port = args.iter().position(|a| a == "--control").map(|i| args.get(i + 1).and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT));
 
     let opts = Options::default_dirs();
     let data_dir = opts.data_dir.clone();
+    // Quick entry: to the running app; without one, this start opens with it.
+    let quick = args.iter().any(|a| a == "--quick").then(|| quick_params(&args));
+    if let Some(params) = &quick {
+        match send_quick(data_dir.as_deref(), control_port.unwrap_or(DEFAULT_PORT), params) {
+            Ok(()) => return,
+            Err(e) => {
+                log::info!("Schnelleingabe: keine laufende App ({e}), starte sie");
+                control_port.get_or_insert(DEFAULT_PORT);
+            }
+        }
+    }
     let engine = match Engine::open(opts) {
         Ok(e) => e,
         Err(e) => {
@@ -72,6 +87,10 @@ fn main() {
 
     #[cfg(feature = "preview")]
     engine.set_preview_program(preview_program());
+
+    if let Some(params) = quick {
+        engine.dispatch("chat.quick_ask", params);
+    }
 
     let (ui_tx, ui_rx) = mpsc::channel::<UiRequest>();
     if let Some(port) = control_port {
@@ -94,6 +113,53 @@ fn main() {
         eprintln!("AIS.ChatCraft: {e}");
         std::process::exit(1);
     }
+}
+
+/// `chat.quick_ask` params from `--quick [--screenshot] [Frage …]`.
+fn quick_params(args: &[String]) -> Value {
+    let screenshot = args.iter().any(|a| a == "--screenshot");
+    let start = args.iter().position(|a| a == "--quick").map(|i| i + 1).unwrap_or(args.len());
+    let mut words = Vec::new();
+    let mut skip_port = false;
+    for a in args.get(start..).unwrap_or_default() {
+        if skip_port {
+            skip_port = false;
+            if a.parse::<u16>().is_ok() {
+                continue;
+            }
+        }
+        match a.as_str() {
+            "--screenshot" => {}
+            "--control" => skip_port = true,
+            _ => words.push(a.as_str()),
+        }
+    }
+    json!({"text": words.join(" "), "screenshot": screenshot})
+}
+
+/// Hand a quick entry to the running app through its control channel. `Err` only when no app
+/// took it (no token, nobody listening): then this start opens the window itself. Once the
+/// request is out, the running app has it, whatever the reply says or how long it takes.
+fn send_quick(data_dir: Option<&std::path::Path>, port: u16, params: &Value) -> std::io::Result<()> {
+    use std::io::{BufRead, BufReader};
+    let dir = data_dir.map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let token = std::fs::read_to_string(dir.join("control-token"))?;
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(1))?;
+    let line = json!({"token": token.trim(), "id": 1, "method": "chat.quick_ask", "params": params});
+    stream.write_all(format!("{line}\n").as_bytes())?;
+    // The screenshot and the answer can take a while; wait a little for an error to show.
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+    let mut reply = String::new();
+    if BufReader::new(stream).read_line(&mut reply).is_ok()
+        && let Ok(v) = serde_json::from_str::<Value>(&reply)
+        && v.get("ok").and_then(Value::as_bool) != Some(true)
+    {
+        // A wrong token closes the connection without a reply; any other error the app shows too.
+        let msg = v.pointer("/error/message").and_then(Value::as_str).unwrap_or("unbekannter Fehler");
+        eprintln!("Schnelleingabe: {msg}");
+    }
+    Ok(())
 }
 
 fn start_control(engine: Engine, ui: mpsc::Sender<UiRequest>, port: u16, data_dir: Option<PathBuf>) -> std::io::Result<PathBuf> {
@@ -174,5 +240,50 @@ mod tests {
         assert_eq!(replies[1]["error"]["message"], "Fenster ist geschlossen");
         assert_eq!(replies[2]["ok"], false, "a wrong token closes the connection");
         assert!(craft_control_protocol::valid_token(&token));
+    }
+
+    /// #35: the quick entry goes through the control channel: a new chat, the window to the front;
+    /// a screenshot is refused by an engine without a data folder (no test touches the screen).
+    #[test]
+    fn quick_entry_through_the_control_channel() {
+        let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+        let (ui, _) = mpsc::channel::<UiRequest>();
+        let token = "cd".repeat(32);
+        let input = format!(
+            "{}\n{}\n",
+            json!({"id": 1, "token": token, "method": "chat.quick_ask", "params": quick_params(&["--quick".to_string()])}),
+            json!({"id": 2, "token": token, "method": "chat.quick_ask", "params": {"screenshot": true}}),
+        );
+        let mut out = Vec::new();
+        serve(input.as_bytes(), &mut out, &engine, &ui, &token);
+        let replies: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(replies[0]["ok"], true, "{replies:?}");
+        assert_eq!(replies[0]["result"]["sent"], false);
+        assert_eq!(engine.state().quick.as_ref().map(|q| q.seq), Some(1), "the window is asked to come to the front");
+        assert!(engine.state().current.is_none(), "a new chat waits for the question");
+        assert_eq!(replies[1]["ok"], false);
+        assert!(replies[1]["error"]["message"].as_str().unwrap().contains("Bildschirmfoto"), "{replies:?}");
+        // The arguments of a desktop shortcut.
+        let args: Vec<String> = ["--quick", "--screenshot", "Was", "ist", "das?"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(quick_params(&args), json!({"text": "Was ist das?", "screenshot": true}));
+    }
+
+    /// #35: `aiscraft --quick` reaches a running app over 127.0.0.1 with the token from the data
+    /// folder; without a running app it says so, and that start opens the window itself.
+    #[test]
+    fn quick_entry_finds_the_running_app() {
+        let dir = std::env::temp_dir().join(format!("aiscraft-quick-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let params = quick_params(&["--quick".to_string()]);
+        assert!(send_quick(Some(&dir), 1, &params).is_err(), "no token: no app");
+        let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+        let (ui, _rx) = mpsc::channel::<UiRequest>();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        start_control(engine.clone(), ui, port, Some(dir.clone())).unwrap();
+        send_quick(Some(&dir), port, &params).unwrap();
+        assert_eq!(engine.state().quick.as_ref().map(|q| q.seq), Some(1));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

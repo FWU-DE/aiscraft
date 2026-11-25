@@ -60,6 +60,15 @@ static COMMANDS: &[CommandSpec] = &[
     )),
     cmd!("chat.open", "Chat öffnen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_open(c, p))),
     cmd!(
+        "chat.quick_ask",
+        "Schnelleingabe",
+        "Chat",
+        None,
+        "text?: string (wird gleich gesendet), screenshot?: bool (Bildschirmfoto mitschicken). Holt das Fenster mit einem neuen Chat nach vorn; für ein Tastenkürzel des Desktops: aiscraft --quick",
+        false,
+        |c, p| Box::pin(crate::quick::run(c, p))
+    ),
+    cmd!(
         "chat.find",
         "Im Chat suchen",
         "Chat",

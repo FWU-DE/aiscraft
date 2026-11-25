@@ -72,6 +72,8 @@ pub struct AisCraftApp {
     /// Web links for the next message, and the address being typed (`Some` while the field is open).
     pub(crate) pending_links: Vec<String>,
     pub(crate) link_input: Option<String>,
+    /// The quick entry last brought to the front (#35).
+    pub(crate) quick_seen: u64,
     /// The search field of Strg+F in the open chat (#41), while it is open.
     pub(crate) find: Option<String>,
     pub(crate) focus_find: bool,
@@ -236,6 +238,7 @@ impl AisCraftApp {
             pending_files: Vec::new(),
             pending_links: Vec::new(),
             link_input: None,
+            quick_seen: 0,
             find: None,
             focus_find: false,
             find_scrolled: None,
@@ -416,6 +419,26 @@ impl AisCraftApp {
         self.find_scrolled = None;
         self.run("chat.find", json!({"close": true}));
         self.focus_composer = true;
+    }
+
+    /// A quick entry (#35, `aiscraft --quick`): the window to the front, a new chat, the composer
+    /// focused, a screenshot waiting in it.
+    fn quick_entry(&mut self, ctx: &egui::Context) {
+        let Some(q) = self.state.quick.clone() else { return };
+        if q.seq == self.quick_seen {
+            return;
+        }
+        self.quick_seen = q.seq;
+        self.explore = None;
+        self.manual = None;
+        self.composer.clear();
+        self.pending_files.clear();
+        self.pending_links.clear();
+        self.take_files(q.files.iter().map(PathBuf::from).collect());
+        self.focus_composer = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 
     pub(crate) fn new_chat(&mut self) {
@@ -682,6 +705,7 @@ impl eframe::App for AisCraftApp {
             self.explore = None;
         }
         self.control_requests(&ctx);
+        self.quick_entry(&ctx);
         self.sync_theme(&ctx);
         self.shortcuts(&ctx);
         self.dropped_files(&ctx);
