@@ -23,7 +23,7 @@ fn call(name: &str, args: Value) -> aiscraft_core::ToolCall {
 }
 
 fn ev(turn: &str, words: &str) -> Evidence {
-    Evidence { messages: vec![OwnerMessage { n: 1, text: words.into(), answered: None }], turn: turn.into(), from_view: false }
+    Evidence { messages: vec![OwnerMessage { n: 1, text: words.into(), answered: None, id: turn.into() }], turn: turn.into(), from_view: false }
 }
 
 /// An engine with a scripted model for the trust check and a fake desktop with one Word window.
