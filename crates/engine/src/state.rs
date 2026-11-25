@@ -393,6 +393,11 @@ pub struct Settings {
     /// The owner's own rules for the trust check (#22); changed with `trust.rule_add` and
     /// `trust.rule_remove`.
     pub trust_rules: Vec<TrustRule>,
+    /// Backup models in order (#66): when a model request fails because of the model, the answer
+    /// continues on the first one that may take it. Changed with `fallback.set`.
+    pub fallback_models: Vec<crate::fallback::FallbackModel>,
+    /// Backup models at another service may get the chat (off by default).
+    pub fallback_other_services: bool,
 }
 
 /// What a rule does: let matching actions run without asking, or never let them run.
@@ -440,6 +445,8 @@ impl Default for Settings {
             update_check: true,
             worksheet_points: true,
             trust_rules: Vec::new(),
+            fallback_models: Vec::new(),
+            fallback_other_services: false,
         }
     }
 }

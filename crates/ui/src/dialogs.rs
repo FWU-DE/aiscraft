@@ -860,6 +860,8 @@ impl AisCraftApp {
                 if ui.button("+ Dienst hinzufügen").clicked() {
                     self.dialog = Some(Dialog::add_backend());
                 }
+                ui.add_space(10.0);
+                self.fallback_section(ui);
             }
             SettingsTab::Connectors => {
                 ui.label(muted(&t, "Konnektoren sind MCP-Server. Ihre Werkzeuge können Modelle aufrufen, die das unterstützen (OpenAI-kompatibel, Claude über API). AIS.chat über die Anmeldung und das Claude-Abo nutzen keine eigenen Werkzeuge."));

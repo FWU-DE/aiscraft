@@ -134,8 +134,8 @@ pub fn line_events(line: &str) -> Result<Vec<StreamEvent>> {
                 let lower = msg.to_lowercase();
                 return Err(if lower.contains("login") || lower.contains("auth") {
                     Error::auth(format!("{msg} – im Terminal `claude auth login` ausführen"))
-                } else if lower.contains("limit") {
-                    Error::refused(msg.to_string())
+                } else if lower.contains("limit") || lower.contains("overloaded") {
+                    Error::busy(msg.to_string())
                 } else {
                     Error::protocol(msg.to_string())
                 });

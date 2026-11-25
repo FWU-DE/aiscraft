@@ -723,6 +723,10 @@ impl AisCraftApp {
             }
         }
         sources_row(ui, &t, m);
+        // #66: which backup model answered, and why.
+        if let Some(note) = m.activity.iter().find(|s| s.label == aiscraft_engine::FALLBACK).and_then(|s| s.detail.as_deref()) {
+            ui.add(egui::Label::new(small_muted(&t, note)).wrap());
+        }
         self.citations_row(ui, m);
         dead_links_row(ui, &t, m);
         if let Some(err) = &m.error {

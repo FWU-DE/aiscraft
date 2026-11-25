@@ -410,6 +410,9 @@ static COMMANDS: &[CommandSpec] = &[
             if key == "trust_rules" {
                 return Err(Error::invalid("Regeln ändern trust.rule_add und trust.rule_remove"));
             }
+            if key == "fallback_models" || key == "fallback_other_services" {
+                return Err(Error::invalid("Ersatzmodelle ändert fallback.set"));
+            }
             let value = p.get("value").cloned().unwrap_or(Value::Null);
             let mut settings = serde_json::to_value(&c.state().settings)?;
             let Some(obj) = settings.as_object_mut().filter(|o| o.contains_key(&key)) else {
@@ -435,6 +438,15 @@ static COMMANDS: &[CommandSpec] = &[
             c.update(|s| s.settings = parsed);
             Ok(json!({}))
         })
+    ),
+    cmd!(
+        "fallback.set",
+        "Ersatzmodelle festlegen",
+        "Einstellungen",
+        None,
+        "models?: [{backend, model}] (in dieser Reihenfolge, höchstens 5), other_services?: bool (Ersatzmodelle bei anderen Diensten dürfen den Chat bekommen)",
+        false,
+        |c, p| Box::pin(crate::fallback::set(c, p))
     ),
     cmd!("notice.dismiss", "Hinweis schließen", "App", None, "id: number", false, |c, p| Box::pin(async move {
         let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| Error::invalid("id fehlt"))?;

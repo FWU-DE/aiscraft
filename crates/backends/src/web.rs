@@ -133,7 +133,9 @@ pub async fn check(url: &str, allow_private: bool, timeout: Duration) -> LinkSta
     for _ in 0..=MAX_REDIRECTS {
         let client = match client_for(&url, allow_private, timeout).await {
             Ok((c, _)) => c,
-            Err(e) if e.kind == aiscraft_core::ErrorKind::Refused || e.kind == aiscraft_core::ErrorKind::Invalid => return LinkState::Skipped(e.message),
+            Err(e) if matches!(e.kind, aiscraft_core::ErrorKind::Refused | aiscraft_core::ErrorKind::Invalid | aiscraft_core::ErrorKind::Busy) => {
+                return LinkState::Skipped(e.message);
+            }
             Err(e) => return LinkState::Dead(e.message),
         };
         let mut resp = client.head(url.clone()).send().await;

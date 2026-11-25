@@ -37,6 +37,8 @@ Ohne passenden Browser: den Sitzungs-Cookie `__Secure-ais-chat-app.authjs.sessio
 
 Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 
+**Ersatzmodelle.** Unter **Einstellungen › Dienste** legst du eine Reihenfolge von Ersatzmodellen fest. Scheitert eine Anfrage am Modell (überlastet, Serverfehler, Zeitüberschreitung, Kontingent aufgebraucht), antwortet das erste passende Ersatzmodell, und unter der Antwort steht „Mit Ersatzmodell … beantwortet, weil …“. Bei Fehlern am Inhalt, etwa wenn AIS.chat eine Anfrage wegen unangemessener Inhalte blockiert, wird nicht gewechselt. Ersatzmodelle bei einem anderen Dienst bekämen den Chat; das passiert nur, wenn du „Auch Ersatzmodelle bei anderen Diensten nutzen“ einschaltest, und nie für AIS.chat-Chats oder Assistenten.
+
 ## Chatten
 
 - **Modell wechseln:** jederzeit über „Dienst · Modell“; die nächste Antwort kommt vom neuen Modell.

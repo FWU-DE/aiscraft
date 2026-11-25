@@ -396,3 +396,61 @@ fn running_tasks_show_in_the_status_line_and_end_as_a_card() {
     r3.store(true, Ordering::SeqCst);
     assert!(engine.wait_for(Duration::from_secs(20), |s| s.running.is_empty()));
 }
+
+/// #66: a backup model steps in when the model fails (503), never for a content error, and never
+/// at another service without the owner's consent.
+#[test]
+fn a_backup_model_steps_in_when_the_model_fails() {
+    let (engine, first, seen) = engine_with(r#"{"data":[{"id":"m"},{"id":"b"},{"id":"f"}]}"#, |body| {
+        if body.contains(r#""model":"m""#) {
+            Reply::Status(503, r#"{"error":{"message":"Das Modell ist überlastet"}}"#)
+        } else if body.contains(r#""model":"f""#) {
+            Reply::Status(400, r#"{"error":{"message":"Vom Inhaltsfilter blockiert"}}"#)
+        } else {
+            Reply::Text("Antwort vom Ersatzmodell")
+        }
+    });
+    let last = |e: &Engine| e.state().messages.last().cloned().unwrap();
+    // Without backup models the error stays.
+    assert!(engine.call("chat.send", json!({"text": "Hallo"})).is_err());
+    assert!(last(&engine).error.unwrap().contains("überlastet"));
+
+    engine.call("fallback.set", json!({"models": [{"backend": first, "model": "b"}]})).unwrap();
+    engine.call("chat.send", json!({"text": "Noch einmal bitte"})).unwrap();
+    let a = last(&engine);
+    assert_eq!(a.content, "Antwort vom Ersatzmodell");
+    assert!(a.error.is_none());
+    assert_eq!(a.model.as_deref(), Some("b"));
+    let note = a.activity.iter().find(|s| s.label == crate::FALLBACK).and_then(|s| s.detail.clone()).unwrap();
+    assert!(note.contains("Ersatzmodell b") && note.contains("überlastet"), "{note}");
+    let models: Vec<&str> = seen.lock().unwrap().iter().rev().take(2).map(|r| if r.contains(r#""model":"b""#) { "b" } else { "m" }).collect();
+    assert_eq!(models, ["b", "m"], "first the chosen model, then the backup");
+
+    // A content error never switches.
+    engine.call("chat.select_model", json!({"backend": first, "model": "f"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    let before = seen.lock().unwrap().len();
+    assert!(engine.call("chat.send", json!({"text": "Hallo"})).is_err());
+    assert_eq!(seen.lock().unwrap().len(), before + 1, "no second request");
+    assert!(last(&engine).activity.iter().all(|s| s.label != crate::FALLBACK));
+
+    // Another service gets the chat only with consent.
+    let (url, seen2) = scripted(&engine, r#"{"data":[{"id":"x"}]}"#, |_| Reply::Text("Antwort vom anderen Dienst"));
+    let second = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Zweiter Dienst"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": second})).unwrap();
+    engine.call("fallback.set", json!({"models": [{"backend": second, "model": "x"}]})).unwrap();
+    engine.call("chat.select_model", json!({"backend": first, "model": "m"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    assert!(engine.call("chat.send", json!({"text": "Hallo"})).is_err());
+    assert!(seen2.lock().unwrap().is_empty(), "the other service got nothing");
+    engine.call("fallback.set", json!({"other_services": true})).unwrap();
+    engine.call("chat.send", json!({"text": "Und jetzt?"})).unwrap();
+    let a = last(&engine);
+    assert_eq!(a.content, "Antwort vom anderen Dienst");
+    assert!(a.activity.iter().any(|s| s.detail.as_deref().is_some_and(|d| d.contains("(Zweiter Dienst)"))));
+
+    // Checks on the list.
+    assert!(engine.call("fallback.set", json!({"models": [{"backend": "nix", "model": "x"}]})).is_err());
+    assert!(engine.call("fallback.set", json!({"models": [{"backend": first, "model": ""}]})).is_err());
+    assert!(engine.call("settings.set", json!({"key": "fallback_other_services", "value": true})).is_err(), "only through fallback.set");
+}

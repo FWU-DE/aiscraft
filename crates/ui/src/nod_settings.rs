@@ -1,6 +1,6 @@
 //! Settings sections for features taken from Nod (AGENTS.md §5), kept out of `dialogs.rs`: the
 //! writing style (#20), briefing templates for schedules (#27), schedule ideas and the model per
-//! schedule (#68).
+//! schedule (#68), backup models (#66).
 
 use aiscraft_core::MemoryArea;
 use egui::{RichText, Ui};
@@ -145,5 +145,66 @@ impl AisCraftApp {
                 self.run("schedule.update", json!({"id": sch.id, "backend": backend, "model": model}));
             }
         });
+    }
+
+    /// Einstellungen › Dienste: backup models in order (#66).
+    pub(crate) fn fallback_section(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        ui.label(RichText::new("Ersatzmodelle").strong());
+        ui.label(small_muted(
+            &t,
+            "Scheitert eine Anfrage am Modell (überlastet, Serverfehler, Zeitüberschreitung, Kontingent aufgebraucht), antwortet das erste passende Ersatzmodell. Bei Fehlern am Inhalt, etwa einem Inhaltsfilter, wird nicht gewechselt. Unter der Antwort steht, welches Modell eingesprungen ist.",
+        ));
+        let list = self.state.settings.fallback_models.clone();
+        let as_param = |l: &[aiscraft_engine::FallbackModel]| l.iter().map(|f| json!({"backend": f.backend_id, "model": f.model_id})).collect::<Vec<_>>();
+        let mut change: Option<Vec<aiscraft_engine::FallbackModel>> = None;
+        for (i, f) in list.iter().enumerate() {
+            let service = self.state.backend(&f.backend_id).map(|b| b.config.name.clone()).unwrap_or_default();
+            let name = format!("{}. {} · {service}", i + 1, self.state.model_name(&f.backend_id, &f.model_id));
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("Entfernen").on_hover_text(name.clone()).clicked() {
+                        let mut l = list.clone();
+                        l.remove(i);
+                        change = Some(l);
+                    }
+                    if i > 0 && ui.small_button("Nach oben").on_hover_text(name.clone()).clicked() {
+                        let mut l = list.clone();
+                        l.swap(i, i - 1);
+                        change = Some(l);
+                    }
+                    ui.add(egui::Label::new(name.clone()).truncate());
+                });
+            });
+        }
+        if list.len() < 5 {
+            let mut add = None;
+            egui::ComboBox::from_id_salt("fallback-add").selected_text("Ersatzmodell hinzufügen").show_ui(ui, |ui| {
+                for b in &self.state.backends {
+                    for m in &b.models {
+                        let f = aiscraft_engine::FallbackModel { backend_id: b.config.id.clone(), model_id: m.id.clone() };
+                        if !list.contains(&f) && ui.selectable_label(false, format!("{} · {}", m.name, b.config.name)).clicked() {
+                            add = Some(f);
+                        }
+                    }
+                }
+            });
+            if let Some(f) = add {
+                let mut l = list.clone();
+                l.push(f);
+                change = Some(l);
+            }
+        }
+        if let Some(l) = change {
+            self.run("fallback.set", json!({"models": as_param(&l)}));
+        }
+        let mut others = self.state.settings.fallback_other_services;
+        if ui.checkbox(&mut others, "Auch Ersatzmodelle bei anderen Diensten nutzen").changed() {
+            self.run("fallback.set", json!({"other_services": others}));
+        }
+        ui.label(small_muted(
+            &t,
+            "Dann bekommt der andere Dienst den Chat. Nie für Chats, deren Verlauf beim Dienst liegt (AIS.chat), und nie für Assistenten. Aus: nur Ersatzmodelle beim selben Dienst.",
+        ));
     }
 }

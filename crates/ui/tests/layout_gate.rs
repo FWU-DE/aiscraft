@@ -352,6 +352,23 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
         settle(&mut h, &at("Panel geschlossen"), |h| h.state().panel_layout().artifact.is_none());
     }
 
+    // What the settings show once used (#20, #66, #68): a style note, a backup model, a schedule
+    // idea from a request made on three earlier weeks.
+    call(
+        &engine,
+        "memory.add",
+        json!({"text": "Kurze Sätze, duzt Kolleginnen, grüßt mit „Viele Grüße“, keine Emojis, neue Absätze nach zwei oder drei Sätzen", "area": "style"}),
+    );
+    call(&engine, "fallback.set", json!({"models": [{"backend": id, "model": "m"}]}));
+    for weeks in 1..=3 {
+        call(&engine, "chat.new", json!({}));
+        call(&engine, "chat.send", json!({"text": "Fass mir die Mails der Schulleitung von dieser Woche zusammen"}));
+        let user = engine.state().messages.iter().find(|m| m.role == aiscraft_core::Role::User).map(|m| m.id.clone()).unwrap();
+        engine.backdate_message(&user, aiscraft_engine::now_ms() - weeks * 7 * 86_400_000).unwrap();
+    }
+    assert_eq!(call(&engine, "schedule.ideas", json!({})).as_array().map(Vec::len), Some(1), "a schedule idea to show");
+    call(&engine, "chat.open", json!({"id": chat}));
+
     // Settings, every tab.
     show(&mut h, &tx, "settings");
     settle(&mut h, &at("Einstellungen"), |h| h.query(By::new().label("Dienste").role(Role::Tab)).is_some());

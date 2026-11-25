@@ -829,7 +829,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         }),
         _ => system,
     };
-    let model_name = c.state().model_name(&conv.backend_id, &conv.model_id);
+    let mut model_name = c.state().model_name(&conv.backend_id, &conv.model_id);
     let tools_on = c.state().settings.tools && conv.sources.tools;
     let mut tools = if caps.tools && tools_on { crate::tools::specs_for(&c, &conv.sources) } else { vec![] };
     // Backends without web tools of their own read pages with the built-in reader.
@@ -911,6 +911,10 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     // What the trust check may rely on: the owner's own messages as stored (no attached text,
     // no tool results, no names swapped for placeholders), each with the answer it replied to.
     let evidence = crate::trust::evidence(&c.store(|st| st.messages(&conv_id))?);
+    // Backup models (#66): where the request goes now, and who may step in when the model fails.
+    let mut fallbacks = crate::fallback::chain(&c, &conv);
+    let (mut active, mut active_id, mut model_id) = (backend.clone(), conv.backend_id.clone(), conv.model_id.clone());
+    let mut fallback_step: Option<aiscraft_core::ActivityStep> = None;
     for round in 0..MAX_TOOL_ROUNDS {
         let mut history = c.store(|st| st.messages(&conv_id))?;
         history.retain(|m| m.id != answer.id);
@@ -925,20 +929,28 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
             last.content = format!("{ctx_block}\n\n{}", last.content);
         }
         // The last round offers no tools, so the model has to answer.
-        let round_tools = if round + 1 == MAX_TOOL_ROUNDS { vec![] } else { tools.clone() };
+        let same = active_id == conv.backend_id;
+        let active_caps = active.capabilities();
+        let round_tools = if round + 1 == MAX_TOOL_ROUNDS || !active_caps.tools { vec![] } else { tools.clone() };
         let req = ChatRequest {
             conversation_id: conv_id.clone(),
-            model: conv.model_id.clone(),
+            model: model_id.clone(),
             system: system.clone(),
             messages: history,
             tools: round_tools,
-            tool_bridge: bridge.as_ref().map(|(b, _)| b.clone()),
-            persona: conv.persona.clone(),
-            web: caps.web_search && conv.sources.web,
+            tool_bridge: if same { bridge.as_ref().map(|(b, _)| b.clone()) } else { None },
+            persona: if same { conv.persona.clone() } else { None },
+            web: active_caps.web_search && conv.sources.web,
             effort: conv.sources.effort.clone(),
         };
-        let round_result = stream_round(&c, &backend, req, &mut answer, &conv_id, &mut cancel_rx).await;
-        crate::action_log::model(&c, &conv_id, &conv.backend_id, &model_name, answer.usage, "Antwort");
+        let round_result = stream_round(&c, &active, req, &mut answer, &conv_id, &mut cancel_rx).await;
+        crate::action_log::model(&c, &conv_id, &active_id, &model_name, answer.usage, "Antwort");
+        // The server's own steps replace the list; the note on the backup model stays.
+        if let Some(step) = &fallback_step
+            && !answer.activity.iter().any(|s| s.label == crate::fallback::FALLBACK)
+        {
+            answer.activity.push(step.clone());
+        }
         match round_result {
             Ok(calls) if calls.is_empty() => break,
             Ok(calls) => {
@@ -977,6 +989,26 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
                     answer.activity =
                         vec![aiscraft_core::ActivityStep { label: "Webseiten gelesen".into(), done: true, links: read_pages.clone(), ..Default::default() }];
                 }
+                answer.activity.extend(fallback_step.clone());
+                put_message(&c, &conv_id, &answer);
+            }
+            // The model failed (overloaded, 5xx, timeout, quota) before it said anything: the next
+            // backup model takes over, and the answer says so (#66).
+            Err(e) if crate::fallback::switches(&e) && answer.content.is_empty() && answer.tool_calls.is_empty() && !fallbacks.is_empty() => {
+                let next = fallbacks.remove(0);
+                let service =
+                    (next.backend_id != conv.backend_id).then(|| c.state().backend(&next.backend_id).map(|b| b.config.name.clone()).unwrap_or_default());
+                let step = aiscraft_core::ActivityStep {
+                    label: crate::fallback::FALLBACK.into(),
+                    detail: Some(crate::fallback::note(&next.name, service.as_deref(), &e)),
+                    done: true,
+                    ..Default::default()
+                };
+                (active, active_id, model_id, model_name) = (next.backend, next.backend_id, next.model_id, next.name);
+                answer.model = Some(model_name.clone());
+                answer.activity.retain(|s| s.label != crate::fallback::FALLBACK);
+                answer.activity.push(step.clone());
+                fallback_step = Some(step);
                 put_message(&c, &conv_id, &answer);
             }
             Err(e) => {
