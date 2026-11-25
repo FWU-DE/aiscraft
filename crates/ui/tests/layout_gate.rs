@@ -463,6 +463,28 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
     }
     show(&mut h, &tx, "none");
 
+    // The setup of „Namen schützen“ (#73), every step, with a class list with a long name.
+    let list = call(
+        &engine,
+        "privacy.list_add",
+        json!({"name": "Klasse 7b der Gesamtschule am Stadtpark, Schuljahr 2026/27, Biologie", "text": "Lea Müller\nSchmidt, Jonas"}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for (step, title) in
+        ["So schützt AIS.ChatCraft Namen", "Klassenlisten (freiwillig)", "Namenserkennung (freiwillig)", "Weitere Einstellungen", "Zusammenfassung"]
+            .iter()
+            .enumerate()
+    {
+        let what = at(&format!("Namen schützen einrichten › {title}"));
+        show(&mut h, &tx, &format!("privacy_setup:{step}"));
+        settle(&mut h, &what, |h| label(h, title) && label(h, "Einrichtung abbrechen"));
+        check(&mut h, &what);
+    }
+    show(&mut h, &tx, "none");
+    call(&engine, "privacy.list_remove", json!({"id": list}));
+
     // Installing a connector package (#43): what it may do and its settings, before it runs.
     let pkg = std::env::temp_dir().join(format!("aiscraft-gate-paket-{}-{}", std::process::id(), theme));
     std::fs::create_dir_all(pkg.join("server")).unwrap();

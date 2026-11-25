@@ -450,3 +450,25 @@ fn the_name_recognition_downloads_only_after_yes_and_checks_checksums() {
     assert!(!engine.call("privacy.ner_status", json!({})).unwrap()["installed"].as_bool().unwrap());
     assert_eq!(engine.call("privacy.ner_remove", json!({})).unwrap()["removed"], false);
 }
+
+/// The setup of „Namen schützen“ (#73): not done on a fresh profile, done with
+/// `privacy.onboarding_done`, kept across a restart, and brought back with `done: false`.
+#[test]
+fn onboarding_done_is_remembered() {
+    let dir = std::env::temp_dir().join(format!("aiscraft-privacy-onboarding-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let open = || Engine::open(Options { data_dir: Some(dir.clone()), secrets: Some(crate::Secrets::memory()) }).unwrap();
+    let engine = open();
+    assert!(!engine.state().settings.privacy_onboarded, "a fresh profile gets the setup");
+    assert_eq!(engine.call("privacy.onboarding_done", json!({})).unwrap()["done"], true);
+    assert!(engine.state().settings.privacy_onboarded);
+    assert!(engine.call("privacy.onboarding_done", json!({"done": "ja"})).is_err(), "only true or false");
+    assert!(engine.state().settings.privacy_onboarded, "a refused value changes nothing");
+    drop(engine);
+    let engine = open();
+    assert!(engine.state().settings.privacy_onboarded, "kept across a restart");
+    engine.call("privacy.onboarding_done", json!({"done": false})).unwrap();
+    assert!(!engine.state().settings.privacy_onboarded);
+    drop(engine);
+    let _ = std::fs::remove_dir_all(&dir);
+}

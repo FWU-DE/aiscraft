@@ -14,7 +14,7 @@ pub enum UiRequest {
     /// Save a PNG of the window.
     Screenshot { path: PathBuf, reply: std::sync::mpsc::Sender<Result<Value, String>> },
     /// Open a dialog by name: settings, memory, login, add_backend, palette, welcome, look, share
-    /// (the open artifact's), join.
+    /// (the open artifact's), join, privacy_setup[:step].
     Show { what: String, reply: std::sync::mpsc::Sender<Result<Value, String>> },
 }
 
@@ -658,6 +658,12 @@ impl AisCraftApp {
                         }
                         "privacy" => {
                             self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Privacy, new_note: String::new() });
+                            true
+                        }
+                        // The setup of „Namen schützen“ (#73), "privacy_setup:<n>" at step n.
+                        w if w == "privacy_setup" || w.starts_with("privacy_setup:") => {
+                            let step = w.strip_prefix("privacy_setup:").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
+                            self.dialog = Some(self.privacy_setup(step, false));
                             true
                         }
                         "appearance" => {
