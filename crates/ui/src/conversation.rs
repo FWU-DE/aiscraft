@@ -839,7 +839,8 @@ impl AisCraftApp {
                 if message_action(ui, &t, "🗐", "Kopieren").on_hover_text("Antwort in die Zwischenablage").clicked() {
                     ui.ctx().copy_text(m.content.clone());
                 }
-                if can_speak && message_action(ui, &t, "🔊", "Vorlesen").on_hover_text("Antwort vorlesen (AIS.chat oder OpenAI-kompatibler Dienst)").clicked() {
+                if can_speak && message_action(ui, &t, "🔊", "Vorlesen").on_hover_text("Antwort vorlesen (AIS.chat oder OpenAI-kompatibler Dienst)").clicked()
+                {
                     self.run("voice.speak", json!({"message_id": m.id}));
                 }
                 if message_action(ui, &t, "📄", "Als Dokument").on_hover_text("Antwort neben dem Chat als bearbeitbares Dokument öffnen").clicked() {
