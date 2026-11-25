@@ -15,6 +15,16 @@ impl AisCraftApp {
             self.empty_state(ui);
             return;
         }
+        if self.find.is_some() && self.state.current.is_some() {
+            egui::Panel::top("find-bar").show_separator_line(false).frame(Frame::new().inner_margin(Margin { left: 0, right: 0, top: 0, bottom: 6 })).show(
+                ui,
+                |ui| {
+                    centered(ui, |ui| self.find_bar(ui));
+                },
+            );
+        } else if self.find.is_some() {
+            self.find = None;
+        }
         egui::Panel::bottom("composer-panel")
             .show_separator_line(false)
             .frame(Frame::new().inner_margin(Margin { left: 0, right: 0, top: 6, bottom: 10 }))
@@ -28,12 +38,27 @@ impl AisCraftApp {
                 // Placeholders of „Namen schützen“ shown, copied and edited as the names (#55).
                 let msgs = self.engine.shown_messages(&self.state);
                 let last_assistant = msgs.iter().rposition(|m| m.role == Role::Assistant);
+                // The message with the current hit of Strg+F (#41): marked, and scrolled to once per step.
+                let hit =
+                    self.find.as_ref().and(self.state.find.as_ref()).and_then(|f| f.current_hit().map(|h| (f.query.clone(), f.current, h.message_id.clone())));
                 for (i, m) in msgs.iter().enumerate() {
+                    let top = ui.cursor().min.y;
                     match m.role {
                         Role::User => self.user_message(ui, m),
                         // Tool results are shown as chips on the call, not as messages.
                         Role::Tool => continue,
                         _ => self.assistant_message(ui, m, Some(i) == last_assistant),
+                    }
+                    if let Some((q, n, id)) = &hit
+                        && *id == m.id
+                    {
+                        let rect = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().min.y).expand2(egui::vec2(6.0, 4.0));
+                        ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(2.0, self.tokens.accent), egui::StrokeKind::Outside);
+                        let key = (q.clone(), *n);
+                        if self.find_scrolled.as_ref() != Some(&key) {
+                            ui.scroll_to_rect(rect, Some(Align::Center));
+                            self.find_scrolled = Some(key);
+                        }
                     }
                     ui.add_space(18.0);
                 }
@@ -62,6 +87,64 @@ impl AisCraftApp {
             aiscraft_core::ais_conversation_path(c.persona.as_ref(), &c.id)
         };
         Some(format!("{}{path}", b.config.base_url.trim_end_matches('/')))
+    }
+
+    /// Strg+F (#41): the search field, „2 von 5“, previous and next hit, close.
+    fn find_bar(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        let found = self.state.find.clone().unwrap_or_default();
+        let mut step = None;
+        let mut close = false;
+        let mut changed = None;
+        Frame::new().fill(t.surface_hi).corner_radius(CornerRadius::same(10)).inner_margin(Margin::symmetric(10, 6)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let Some(query) = self.find.as_mut() else { return };
+                let (r, ()) = crate::widgets::field_then_buttons(
+                    ui,
+                    |ui| {
+                        if ui.small_button("Schließen").clicked() {
+                            close = true;
+                        }
+                        let any = !found.hits.is_empty();
+                        if ui.add_enabled(any, egui::Button::new("›").small()).on_hover_text("Nächster Treffer (Enter)").clicked() {
+                            step = Some("next");
+                        }
+                        if ui.add_enabled(any, egui::Button::new("‹").small()).on_hover_text("Voriger Treffer (Umschalt+Enter)").clicked() {
+                            step = Some("prev");
+                        }
+                        let count = if found.query.trim().is_empty() {
+                            String::new()
+                        } else if found.hits.is_empty() {
+                            "keine Treffer".to_string()
+                        } else {
+                            format!("{} von {}", found.current + 1, found.hits.len())
+                        };
+                        ui.label(small_muted(&t, count));
+                    },
+                    |ui, w| ui.add(egui::TextEdit::singleline(query).id(egui::Id::unique("find-field")).hint_text("Im Chat suchen").desired_width(w)),
+                );
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Im Chat suchen"));
+                if r.changed() {
+                    changed = Some(query.clone());
+                }
+                if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    step = Some(if ui.input(|i| i.modifiers.shift) { "prev" } else { "next" });
+                    r.request_focus();
+                }
+                if self.focus_find {
+                    r.request_focus();
+                    self.focus_find = false;
+                }
+            });
+        });
+        if close {
+            self.close_find();
+        } else if let Some(q) = changed {
+            self.run("chat.find", json!({"query": q}));
+        } else if let Some(s) = step {
+            let q = self.find.clone().unwrap_or_default();
+            self.run("chat.find", json!({"query": q, "step": s}));
+        }
     }
 
     /// The title in Bold with project chip and model · time underneath; on the
@@ -106,6 +189,16 @@ impl AisCraftApp {
                         self.context_meter(ui);
                     }
                 } else {
+                    // A temporary chat (#34): switched on before the first message.
+                    let temp = self.state.selection.temporary;
+                    let (kind, label) =
+                        if temp { (crate::kit::Pill::Accent2, "Vorübergehend: an") } else { (crate::kit::Pill::Ghost, "Vorübergehender Chat") };
+                    if crate::kit::pill(ui, &t, kind, None, label, 12.5, None)
+                        .on_hover_text("Wird nicht gespeichert, nicht durchsucht und legt keine Notizen an; beim Schließen ist er weg.")
+                        .clicked()
+                    {
+                        self.run("chat.temporary", json!({"on": !temp}));
+                    }
                     let unread = self.state.inbox.iter().filter(|i| !i.read).count();
                     if unread > 0 {
                         let label = if unread == 1 { "1 neue Benachrichtigung".to_string() } else { format!("{unread} neue Benachrichtigungen") };
@@ -143,7 +236,11 @@ impl AisCraftApp {
                             } else if !self.state.selection.model_id.is_empty() {
                                 meta.push(self.state.model_name(&self.state.selection.backend_id, &self.state.selection.model_id));
                             }
-                            meta.push(aiscraft_engine::friendly_time(c.updated_at, aiscraft_engine::now_ms()));
+                            if c.temporary {
+                                meta.push("Vorübergehend, wird nicht gespeichert".to_string());
+                            } else {
+                                meta.push(aiscraft_engine::friendly_time(c.updated_at, aiscraft_engine::now_ms()));
+                            }
                             ui.add(egui::Label::new(RichText::new(meta.join(" · ")).size(13.0).color(t.muted)).truncate());
                         });
                     });
@@ -483,13 +580,27 @@ impl AisCraftApp {
             }
             self.variant_switcher(ui, &m.id);
         });
-        if !m.activity.is_empty() {
+        // What the model thought (#30): Claude's summarised thinking, the reasoning of
+        // OpenAI-compatible servers, or AIS.chat's analysis steps. Folded; open while it thinks.
+        let thinking = thinking_text(m);
+        if !thinking.is_empty() {
+            let still = generating && m.content.is_empty();
+            let title = if still { "Denkt nach …" } else { "Nachgedacht" };
+            egui::CollapsingHeader::new(small_muted(&t, title)).id_salt(("think", &m.id)).default_open(false).show(ui, |ui| {
+                Frame::new().stroke(Stroke::new(1.0, t.border)).inner_margin(Margin { left: 10, right: 4, top: 2, bottom: 2 }).show(ui, |ui| {
+                    ui.add(egui::Label::new(RichText::new(thinking.as_str()).size(13.5).color(t.text2)).wrap());
+                });
+            });
+        }
+        let shown_steps: Vec<(usize, &aiscraft_core::ActivityStep)> =
+            m.activity.iter().enumerate().filter(|(_, s)| !(is_analysis(s) && m.thinking.trim().is_empty())).collect();
+        if !shown_steps.is_empty() {
             let open_default = generating;
-            egui::CollapsingHeader::new(small_muted(&t, format!("Arbeitsschritte ({})", m.activity.len())))
+            egui::CollapsingHeader::new(small_muted(&t, format!("Arbeitsschritte ({})", shown_steps.len())))
                 .id_salt(("act", &m.id))
                 .default_open(open_default)
                 .show(ui, |ui| {
-                    for (i, s) in m.activity.iter().enumerate() {
+                    for (i, s) in shown_steps {
                         ui.horizontal_wrapped(|ui| {
                             let mark = if s.failed {
                                 RichText::new("×").color(t.danger)
@@ -937,6 +1048,22 @@ impl AisCraftApp {
                     set("web", web);
                 }
             }
+            // How much Claude thinks before it answers (#30): per chat.
+            if self.state.backend(&self.state.selection.backend_id).is_some_and(|b| b.config.kind == BackendKind::Anthropic) {
+                ui.separator();
+                ui.label(small_muted(&t, "Nachdenken vor der Antwort"));
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add(egui::Button::selectable(src.effort.is_none(), "Standard")).clicked() {
+                        self.engine.dispatch("chat.set_sources", json!({"effort": null}));
+                    }
+                    for (id, label) in aiscraft_core::EFFORTS {
+                        if ui.add(egui::Button::selectable(src.effort.as_deref() == Some(id), label)).clicked() {
+                            self.engine.dispatch("chat.set_sources", json!({"effort": id}));
+                        }
+                    }
+                });
+                ui.label(small_muted(&t, "Gründlicher dauert länger und kostet mehr."));
+            }
             let conns = self.state.connectors.clone();
             if !conns.is_empty() {
                 ui.separator();
@@ -991,6 +1118,68 @@ impl AisCraftApp {
                     missing.push("Werkzeuge und Konnektoren");
                 }
                 ui.label(small_muted(&t, format!("{name} nimmt {} nicht an.", missing.join(" und "))));
+            }
+        });
+    }
+
+    /// How answers are written (#31): normal, concise, explanatory, formal, or after an example.
+    fn style_menu(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        let src = self.state.selection.sources.clone();
+        let current = src.style.as_deref().and_then(|s| aiscraft_core::STYLES.iter().find(|(id, _)| *id == s)).map(|(_, l)| *l);
+        let label = match current {
+            Some(l) => format!("Stil: {l}"),
+            None => "Stil".to_string(),
+        };
+        let toggle = crate::kit::pill(ui, &t, crate::kit::Pill::Chip, None, &label, 13.5, Some(crate::icons::Icon::ChevronDown))
+            .on_hover_text("Wie die Antworten geschrieben sind");
+        let popup_id = egui::Popup::default_response_id(&toggle);
+        egui::Popup::from_toggle_button_response(&toggle).close_behavior(egui::PopupCloseBehavior::IgnoreClicks).show(|ui| {
+            ui.set_min_width(260.0);
+            ui.set_max_width(320.0);
+            ui.horizontal(|ui| {
+                ui.label(small_muted(&t, "Wie dieser Chat antwortet"));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.small_button("Schließen").clicked() {
+                        self.style_draft = None;
+                        egui::Popup::close_id(ui.ctx(), popup_id);
+                    }
+                });
+            });
+            if ui.add(egui::Button::selectable(src.style.is_none(), "Normal")).clicked() {
+                self.run("chat.set_style", json!({"style": "normal"}));
+            }
+            for (id, label) in aiscraft_core::STYLES {
+                if id == "custom" {
+                    continue;
+                }
+                if ui.add(egui::Button::selectable(src.style.as_deref() == Some(id), label)).clicked() {
+                    self.run("chat.set_style", json!({"style": id}));
+                }
+            }
+            let custom = src.style.as_deref() == Some("custom");
+            if ui.add(egui::Button::selectable(custom, "Eigener Stil …")).clicked() && self.style_draft.is_none() {
+                self.style_draft = Some(src.style_sample.clone().unwrap_or_default());
+            }
+            if let Some(draft) = self.style_draft.as_mut() {
+                ui.label(small_muted(&t, "Füge einen Text ein, dessen Stil die Antworten übernehmen sollen (etwa einen eigenen Elternbrief)."));
+                ui.add(egui::TextEdit::multiline(draft).desired_rows(4).desired_width(f32::INFINITY).hint_text("Beispieltext"));
+                let mut apply = false;
+                ui.horizontal(|ui| {
+                    apply = ui.add_enabled(!draft.trim().is_empty(), egui::Button::new("Stil übernehmen")).clicked();
+                });
+                if apply {
+                    let sample = draft.clone();
+                    self.style_draft = None;
+                    self.run("chat.set_style", json!({"style": "custom", "sample": sample}));
+                }
+            } else if custom {
+                ui.label(small_muted(&t, "Antwortet im Stil deines Beispieltexts."));
+            }
+            let takes = self.state.backend(&self.state.selection.backend_id).is_none_or(|b| b.capabilities.system_prompt);
+            if !takes && src.style.is_some() {
+                let name = self.state.backend(&self.state.selection.backend_id).map(|b| b.config.name.clone()).unwrap_or_default();
+                ui.label(small_muted(&t, format!("Geht als Hinweis in deiner nächsten Nachricht an {name} mit.")));
             }
         });
     }
@@ -1125,6 +1314,9 @@ impl AisCraftApp {
             .inner_margin(m)
             .shadow(t.composer_shadow);
         frame.show(ui, |ui| {
+            if self.state.selection.temporary {
+                ui.label(small_muted(&t, "Vorübergehender Chat: wird nicht gespeichert und ist beim Schließen weg."));
+            }
             if !self.pending_files.is_empty() {
                 let remove = self.attachment_chips(ui);
                 if let Some(i) = remove {
@@ -1342,6 +1534,7 @@ impl AisCraftApp {
                         });
                     } else {
                         self.sources_menu(ui);
+                        self.style_menu(ui);
                         self.privacy_switch(ui);
                         if !compact {
                             self.create_menu(ui);
@@ -1440,6 +1633,19 @@ fn dead_links_row(ui: &mut Ui, t: &crate::theme::Tokens, m: &Message) {
 }
 
 /// A link as people read it: host and path, without the scheme, shortened.
+/// AIS.chat's analysis steps („Analyse“, „Zusammenfassung“): its counterpart to thinking.
+fn is_analysis(s: &aiscraft_core::ActivityStep) -> bool {
+    (s.label == "Analyse" || s.label == "Zusammenfassung") && s.detail.as_deref().is_some_and(|d| !d.trim().is_empty())
+}
+
+/// The thinking to show above an answer: the backend's own, else AIS.chat's analysis steps.
+fn thinking_text(m: &Message) -> String {
+    if !m.thinking.trim().is_empty() {
+        return m.thinking.trim().to_string();
+    }
+    m.activity.iter().filter(|s| is_analysis(s)).filter_map(|s| s.detail.as_deref()).map(str::trim).collect::<Vec<_>>().join("\n\n")
+}
+
 fn short_url(url: &str) -> String {
     let s = url.split_once("://").map(|(_, r)| r).unwrap_or(url).trim_end_matches('/');
     if s.chars().count() > 48 { format!("{}…", s.chars().take(47).collect::<String>()) } else { s.to_string() }

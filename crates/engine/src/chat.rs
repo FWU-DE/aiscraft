@@ -66,6 +66,7 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
         persona: sel.persona.clone(),
         kind: sel.kind,
         remote_id: None,
+        temporary: sel.temporary,
     };
     // A character opens with its greeting, as in AIS.chat; it goes along as the first answer.
     let greeting = conv.persona.as_ref().and_then(|p| state.persona_info(&sel.backend_id, p)).and_then(|i| i.initial_message.clone()).map(|text| Message {
@@ -81,6 +82,7 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
         usage: None,
         tool_calls: vec![],
         tool_result: None,
+        thinking: String::new(),
     });
     c.store(|st| st.save_conversation(&conv))?;
     if let Some(g) = &greeting {
@@ -145,6 +147,7 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
         usage: None,
         tool_calls: vec![],
         tool_result: None,
+        thinking: String::new(),
     };
     let req = ChatRequest {
         conversation_id: new_id(),
@@ -155,6 +158,7 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
         tool_bridge: None,
         persona: None,
         web: false,
+        effort: None,
     };
     let mut stream = backend.chat(req).await?;
     let mut out = String::new();
@@ -279,7 +283,12 @@ pub(crate) async fn send_full(
     let mut attachments = Vec::new();
     for prep in prepared {
         // Keep a copy: the bytes are not stored in the database and are read back per request.
-        let copy = files::keep_copy(&c.0.attachments_dir, Path::new(&prep.name), &prep.bytes)?;
+        let dir = if state.selection.temporary || state.current.as_ref().and_then(|id| state.conversation(id)).is_some_and(|x| x.temporary) {
+            crate::temporary::attachments_dir(&c)
+        } else {
+            c.0.attachments_dir.clone()
+        };
+        let copy = files::keep_copy(&dir, Path::new(&prep.name), &prep.bytes)?;
         let mut a = crate::attach::attachment(&prep, &copy, !caps.uploads);
         if caps.uploads {
             a.remote_id = Some(backend.upload(a.name.clone(), a.mime.clone(), prep.bytes).await?);
@@ -309,6 +318,7 @@ pub(crate) async fn send_full(
         usage: None,
         tool_calls: vec![],
         tool_result: None,
+        thinking: String::new(),
     };
     if let Some((p, _)) = &protection {
         crate::privacy::save_mapping(&c, &conv, &p.mapping)?;
@@ -326,7 +336,10 @@ pub(crate) async fn send_full(
         }
     });
 
+    // A temporary chat leaves no notes behind (#34).
+    let temporary = c.state().conversation(&conv).is_some_and(|x| x.temporary);
     if c.state().settings.memory
+        && !temporary
         && let Some((area, note_text)) = extract_explicit_memory(&raw)
     {
         let note = MemoryNote {
@@ -395,6 +408,7 @@ pub(crate) async fn send_background(c: &Ctx, conv_id: &str, prompt: &str) -> Res
         usage: None,
         tool_calls: vec![],
         tool_result: None,
+        thinking: String::new(),
     };
     c.store(|st| st.save_message(&user))?;
     put_message(c, conv_id, &user);
@@ -516,6 +530,8 @@ pub(crate) struct InlineContext {
     pub labels: Vec<String>,
     /// Fitting chats with another service left out (no consent), as people read them.
     pub withheld: Vec<String>,
+    /// Fingerprint of the answer style, when its hint goes along (again).
+    pub style_print: Option<String>,
 }
 
 /// Recall keys a chat remembers as sent at most.
@@ -553,6 +569,15 @@ pub(crate) fn inline_context(c: &Ctx, conv: &Conversation, takes_system: bool, r
             print = Some(p);
         }
     }
+    // The answer style (#31): once, and again when it changes (also back to normal).
+    let mut style_print = None;
+    let style = conv.sources.style_instruction();
+    let style_fp = fingerprint(style.as_deref().unwrap_or(""));
+    if conv.sources.style_sent.as_deref() != Some(style_fp.as_str()) && (style.is_some() || conv.sources.style_sent.is_some()) {
+        parts.push(style.unwrap_or_else(|| "Antwortstil: wieder wie üblich, ohne besondere Vorgabe.".to_string()));
+        labels.push("Antwortstil".to_string());
+        style_print = Some(style_fp);
+    }
     let mut recalled = Vec::new();
     let mut withheld = Vec::new();
     if state.settings.recall && !request.trim().is_empty() {
@@ -578,13 +603,16 @@ pub(crate) fn inline_context(c: &Ctx, conv: &Conversation, takes_system: bool, r
     } else {
         format!("[Hinweise der Person für diesen Chat, aus AIS.ChatCraft]\n{}\n[Ende der Hinweise]", parts.join("\n\n"))
     };
-    Some(InlineContext { block, print, recalled, labels, withheld })
+    Some(InlineContext { block, print, recalled, labels, withheld, style_print })
 }
 
 /// Remember what went along inline (after the backend took the message).
 fn remember_inline(sources: &mut aiscraft_core::Sources, sent: &InlineContext) {
     if let Some(p) = &sent.print {
         sources.inline_sent = Some(p.clone());
+    }
+    if let Some(p) = &sent.style_print {
+        sources.style_sent = Some(p.clone());
     }
     sources.inline_recalled.extend(sent.recalled.iter().cloned());
     let extra = sources.inline_recalled.len().saturating_sub(MAX_RECALLED_KEYS);
@@ -635,6 +663,9 @@ fn system_prompt_for(c: &Ctx, conv: &Conversation, send_context: bool, takes_sys
     (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
+/// The most thinking kept for one answer.
+const MAX_THINKING: usize = 256 * 1024;
+
 /// At most this many model rounds per answer (each round may call tools).
 const MAX_TOOL_ROUNDS: usize = 10;
 
@@ -652,6 +683,7 @@ fn new_answer(conv_id: &str, model_name: &str) -> Message {
         usage: None,
         tool_calls: vec![],
         tool_result: None,
+        thinking: String::new(),
     }
 }
 
@@ -675,10 +707,11 @@ async fn stream_round(
     let mut dirty = false;
     let mut usage = answer.usage.unwrap_or_default();
     let flush = |answer: &Message| {
-        let (content, activity) = (answer.content.clone(), answer.activity.clone());
+        let (content, activity, thinking) = (answer.content.clone(), answer.activity.clone(), answer.thinking.clone());
         patch_message(c, conv_id, &answer.id, |m| {
             m.content = content;
             m.activity = activity;
+            m.thinking = thinking;
         });
     };
     loop {
@@ -699,6 +732,13 @@ async fn stream_round(
             StreamEvent::Delta { text } => {
                 answer.content.push_str(&text);
                 dirty = true;
+            }
+            // The thinking is shown folded above the answer (#30); a runaway one is cut.
+            StreamEvent::Thinking { text } => {
+                if answer.thinking.len() + text.len() <= MAX_THINKING {
+                    answer.thinking.push_str(&text);
+                    dirty = true;
+                }
             }
             StreamEvent::MessageId { id } => {
                 c.store(|st| st.rename_message(&answer.id, &id))?;
@@ -747,6 +787,14 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     let last_user = c.store(|st| st.messages(&conv_id))?.into_iter().rev().find(|m| m.role == Role::User);
     let request = last_user.as_ref().map(|m| m.content.clone()).unwrap_or_default();
     let system = system_prompt_for(&c, &conv, backend.config().send_context, caps.system_prompt, &request);
+    // The answer style (#31) goes into the system prompt; without one (AIS.chat) into the message.
+    let system = match (caps.system_prompt, conv.sources.style_instruction()) {
+        (true, Some(style)) => Some(match system {
+            Some(s) => format!("{s}\n\n{style}"),
+            None => style,
+        }),
+        _ => system,
+    };
     let model_name = c.state().model_name(&conv.backend_id, &conv.model_id);
     let tools_on = c.state().settings.tools && conv.sources.tools;
     let mut tools = if caps.tools && tools_on { crate::tools::specs_for(&c, &conv.sources) } else { vec![] };
@@ -853,6 +901,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
             tool_bridge: bridge.as_ref().map(|(b, _)| b.clone()),
             persona: conv.persona.clone(),
             web: caps.web_search && conv.sources.web,
+            effort: conv.sources.effort.clone(),
         };
         let round_result = stream_round(&c, &backend, req, &mut answer, &conv_id, &mut cancel_rx).await;
         crate::action_log::model(&c, &conv_id, &conv.backend_id, &model_name, answer.usage, "Antwort");
@@ -930,7 +979,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     }
     crate::tools::deny_all(&c, &conv_id);
     // Several tool steps went well: maybe there is a procedure worth keeping.
-    if result.is_ok() && c.state().settings.learn_skills && (caps.tools || caps.tools_via_mcp) {
+    if result.is_ok() && c.state().settings.learn_skills && (caps.tools || caps.tools_via_mcp) && !conv.temporary {
         let ctx = c.clone();
         let id = conv_id.clone();
         c.spawn(async move {
@@ -1011,6 +1060,7 @@ fn plain_message(conv: &str, role: Role, text: &str) -> Message {
         usage: None,
         tool_calls: vec![],
         tool_result: None,
+        thinking: String::new(),
     }
 }
 

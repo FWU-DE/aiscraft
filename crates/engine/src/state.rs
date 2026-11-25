@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct State {
+    /// The search in the open chat (Strg+F, #41).
+    pub find: Option<crate::find::FindState>,
     /// Increases with every change; surfaces redraw when it moves.
     pub revision: u64,
     pub backends: Vec<BackendView>,
@@ -242,6 +244,9 @@ pub struct Selection {
     /// Aspect ratio for the next image (`quadratic`, `landscape`, `portrait`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub aspect_ratio: String,
+    /// The next new chat is temporary (#34): not kept, not searched, no memory notes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub temporary: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

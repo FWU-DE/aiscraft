@@ -331,6 +331,7 @@ mod tests {
             usage: None,
             tool_calls: vec![],
             tool_result: None,
+            thinking: String::new(),
         }
     }
 
@@ -345,6 +346,7 @@ mod tests {
             tool_bridge: None,
             persona: None,
             web: false,
+            effort: None,
         };
         let v = input_message(&req);
         let text = v.pointer("/message/content/0/text").and_then(Value::as_str).unwrap();
@@ -396,6 +398,7 @@ mod tests {
             tool_bridge: None,
             persona: None,
             web: false,
+            effort: None,
         };
         // Another test thread may still hold the fresh script open for writing (ETXTBSY).
         let mut stream = None;
@@ -454,6 +457,7 @@ mod tests {
             tool_bridge: None,
             persona: None,
             web: false,
+            effort: None,
         };
         let mut s = b.chat(req).await.unwrap();
         let mut text = String::new();

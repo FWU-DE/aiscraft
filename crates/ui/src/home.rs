@@ -627,7 +627,7 @@ impl AisCraftApp {
             Artifact(String),
         }
         let mut items: Vec<(i64, Icon, String, String, Item)> = Vec::new();
-        for c in &self.state.conversations {
+        for c in self.state.conversations.iter().filter(|c| !c.temporary) {
             let title = if c.title.trim().is_empty() { "Ohne Titel".to_string() } else { c.title.clone() };
             items.push((c.updated_at, Icon::Chat, title, "Chat".into(), Item::Chat(c.id.clone())));
         }

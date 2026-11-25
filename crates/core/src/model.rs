@@ -125,6 +125,10 @@ pub struct Message {
     /// For `Role::Tool`: which call this answers and whether it failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_result: Option<ToolResultInfo>,
+    /// What the model thought before answering, as the backend summarises it (Claude's thinking,
+    /// `reasoning_content` of OpenAI-compatible servers). Shown folded above the answer.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub thinking: String,
 }
 
 /// A tool the model may call.
@@ -184,6 +188,10 @@ pub struct Conversation {
     /// whose id the server picks).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_id: Option<String>,
+    /// A temporary chat (#34): kept in memory only, never written to disk, not searched or
+    /// recalled, no memory notes; gone once it is closed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub temporary: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -355,6 +363,21 @@ pub struct Sources {
     /// `None` = automatic: on once a class list for the chat's project (or for all chats) exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protect: Option<bool>,
+    /// How much the model thinks before answering (#30): `low`, `medium`, `high`, `max`;
+    /// `None` = the model's default. Only backends with a thinking switch (Claude) use it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// How answers are written (#31): `concise`, `explanatory`, `formal` or `custom` (after
+    /// `style_sample`); `None` = normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    /// The example text a custom style imitates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_sample: Option<String>,
+    /// For backends without a system prompt (AIS.chat): fingerprint of the style hint last sent in
+    /// a message; the hint goes along again only when the style changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_sent: Option<String>,
 }
 
 impl Default for Sources {
@@ -371,6 +394,10 @@ impl Default for Sources {
             inline_recalled: Vec::new(),
             other_services: false,
             protect: None,
+            effort: None,
+            style: None,
+            style_sample: None,
+            style_sent: None,
         }
     }
 }
@@ -638,6 +665,9 @@ pub struct ChatRequest {
     /// Let the backend search and read the web itself (see [`Capabilities::web_search`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub web: bool,
+    /// How much to think (see [`Sources::effort`]); backends without such a switch ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -671,6 +701,37 @@ pub struct ImageResult {
     pub message_id: Option<String>,
 }
 
+/// Thinking depths a chat can choose (#30): id and label.
+pub const EFFORTS: [(&str, &str); 4] = [("low", "Wenig"), ("medium", "Mittel"), ("high", "Gründlich"), ("max", "Sehr gründlich")];
+
+/// Answer styles a chat can choose (#31): id and label. Without one, answers are normal.
+pub const STYLES: [(&str, &str); 4] = [("concise", "Knapp"), ("explanatory", "Erklärend"), ("formal", "Formell"), ("custom", "Eigener Stil")];
+
+/// Longest example text for a custom style.
+pub const MAX_STYLE_SAMPLE: usize = 4000;
+
+impl Sources {
+    /// The instruction for the chosen answer style, or `None` for normal answers.
+    pub fn style_instruction(&self) -> Option<String> {
+        Some(match self.style.as_deref()? {
+            "concise" => "Antwortstil: knapp. Kurze Sätze, nur das Wichtigste, keine Einleitung und keine Zusammenfassung am Ende.".to_string(),
+            "explanatory" => {
+                "Antwortstil: erklärend. Schritt für Schritt, mit Beispielen und dem Warum, so dass auch Einsteigerinnen und Einsteiger folgen können."
+                    .to_string()
+            }
+            "formal" => "Antwortstil: formell. Sachlich und höflich, in vollständigen Sätzen, ohne Umgangssprache; Personen mit „Sie“ ansprechen.".to_string(),
+            "custom" => {
+                let sample = self.style_sample.as_deref().map(str::trim).filter(|s| !s.is_empty())?;
+                let sample: String = sample.chars().take(MAX_STYLE_SAMPLE).collect();
+                format!(
+                    "Antwortstil: wie im folgenden Beispieltext (Ton, Satzlänge, Wortwahl, Aufbau). Übernimm nur den Stil, nicht den Inhalt.\n<beispiel>\n{sample}\n</beispiel>"
+                )
+            }
+            _ => return None,
+        })
+    }
+}
+
 /// The aspect ratios AIS.chat offers for images.
 pub const ASPECT_RATIOS: [(&str, &str); 3] = [("quadratic", "Quadratisch"), ("landscape", "Querformat"), ("portrait", "Hochformat")];
 
@@ -683,6 +744,10 @@ pub enum StreamEvent {
         id: String,
     },
     Delta {
+        text: String,
+    },
+    /// A piece of the model's thinking (summarised), shown folded above the answer.
+    Thinking {
         text: String,
     },
     /// The full list of activity steps so far (replaces the previous list).

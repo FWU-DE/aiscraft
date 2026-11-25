@@ -72,6 +72,13 @@ pub struct AisCraftApp {
     /// Web links for the next message, and the address being typed (`Some` while the field is open).
     pub(crate) pending_links: Vec<String>,
     pub(crate) link_input: Option<String>,
+    /// The search field of Strg+F in the open chat (#41), while it is open.
+    pub(crate) find: Option<String>,
+    pub(crate) focus_find: bool,
+    /// The hit last scrolled to (query, index), so the view jumps once per step.
+    pub(crate) find_scrolled: Option<(String, usize)>,
+    /// The example text being written for a custom answer style (#31).
+    pub(crate) style_draft: Option<String>,
     /// „Namen schützen“: the person's choices in the preview for the next message (#55).
     pub(crate) privacy: crate::privacy_panel::Choices,
     pub(crate) sidebar_open: bool,
@@ -229,6 +236,10 @@ impl AisCraftApp {
             pending_files: Vec::new(),
             pending_links: Vec::new(),
             link_input: None,
+            find: None,
+            focus_find: false,
+            find_scrolled: None,
+            style_draft: None,
             privacy: Default::default(),
             sidebar_open: true,
             search_text: String::new(),
@@ -352,6 +363,17 @@ impl AisCraftApp {
         if pressed(sc(Modifiers::COMMAND, Key::N)) {
             self.new_chat();
         }
+        // Strg+F: find in the open chat (#41); Esc closes the search first.
+        if self.state.current.is_some() && pressed(sc(Modifiers::COMMAND, Key::F)) {
+            if self.find.is_none() {
+                self.find = Some(self.state.find.as_ref().map(|f| f.query.clone()).unwrap_or_default());
+            }
+            self.focus_find = true;
+        }
+        if self.find.is_some() && pressed(sc(Modifiers::NONE, Key::Escape)) {
+            self.close_find();
+            return;
+        }
         if pressed(sc(Modifiers::COMMAND, Key::B)) {
             self.sidebar_open = !self.sidebar_open;
         }
@@ -387,6 +409,13 @@ impl AisCraftApp {
         {
             self.close_chat();
         }
+    }
+
+    pub(crate) fn close_find(&mut self) {
+        self.find = None;
+        self.find_scrolled = None;
+        self.run("chat.find", json!({"close": true}));
+        self.focus_composer = true;
     }
 
     pub(crate) fn new_chat(&mut self) {

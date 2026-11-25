@@ -95,6 +95,7 @@ mod tests {
             usage: None,
             tool_calls: vec![],
             tool_result: None,
+            thinking: String::new(),
         };
         hydrate(std::slice::from_mut(&mut m));
         assert_eq!(m.attachments[0].data_base64.as_deref(), Some(base64::engine::general_purpose::STANDARD.encode(png).as_str()));

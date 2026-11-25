@@ -34,6 +34,7 @@ pub(crate) async fn start(c: Ctx, p: Value) -> Result<Value> {
         persona: None,
         kind: Default::default(),
         remote_id: None,
+        temporary: false,
     };
     c.store(|st| st.save_conversation(&conv))?;
     let task_id = conv.id.clone();
@@ -69,6 +70,7 @@ pub(crate) async fn start(c: Ctx, p: Value) -> Result<Value> {
                 usage: None,
                 tool_calls: vec![],
                 tool_result: None,
+                thinking: String::new(),
             };
             if !ok {
                 m.error = Some(summary.clone());
