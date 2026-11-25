@@ -305,6 +305,7 @@ fn purge(c: &Ctx, id: &str, forget_notes: bool) -> Result<usize> {
     }
     c.store(|st| st.delete_conversation(id))?;
     crate::privacy::forget(c, id);
+    crate::sandbox::forget(c, id);
     let id = id.to_string();
     c.update(|s| {
         s.trash.retain(|x| x.id != id);

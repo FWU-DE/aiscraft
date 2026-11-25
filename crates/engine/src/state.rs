@@ -63,6 +63,9 @@ pub struct State {
     /// Local files (#25): on or off, folders kept out.
     #[serde(default)]
     pub local_files: crate::local_files::LocalFilesState,
+    /// „Eigener Rechner (Sandbox)“ (#94): installed, on, network, what is missing.
+    #[serde(default)]
+    pub sandbox: crate::sandbox::SandboxState,
     /// Installed connector packages and plug-ins, and the one being installed (#43, #28).
     #[serde(default)]
     pub extensions: crate::ext::ExtensionsState,

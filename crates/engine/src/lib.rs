@@ -35,6 +35,7 @@ mod proactive;
 pub mod quick;
 pub mod readability;
 pub mod research;
+pub mod sandbox;
 mod schedule_ideas;
 mod schedule_templates;
 mod schedules;
@@ -205,6 +206,8 @@ pub(crate) struct Inner {
     pub(crate) privacy_maps: Mutex<HashMap<String, Arc<privacy::Mapping>>>,
     /// The downloadable name recognition (#73): its folder, source and the loaded model.
     pub(crate) ner: privacy::ner::Runtime,
+    /// „Eigener Rechner“ (#94): the private machine, where its image comes from.
+    pub(crate) sandbox: sandbox::Runtime,
 }
 
 /// What commands and tasks hold. It never owns the runtime, so it can be dropped anywhere.
@@ -307,6 +310,7 @@ impl Engine {
             preview: Mutex::new(None),
             privacy_maps: Mutex::new(HashMap::new()),
             ner: privacy::ner::Runtime::new(opts.data_dir.as_deref()),
+            sandbox: sandbox::Runtime::new(opts.data_dir.as_deref()),
             previews: Mutex::new(Vec::new()),
             // Engines in memory get a folder of their own, so tests never share an install.
             h5p_player_dir: opts
@@ -357,6 +361,7 @@ impl Engine {
             vault::refresh(&engine.ctx);
             tools::settle_claims(&engine.ctx);
             privacy::refresh(&engine.ctx);
+            sandbox::load(&engine.ctx);
             update::start(&engine.ctx);
             learn::h5p_player::refresh(&engine.ctx);
             #[cfg(feature = "collab")]
@@ -795,6 +800,8 @@ mod local_files_tests;
 
 #[cfg(test)]
 mod nod_tests;
+#[cfg(test)]
+mod sandbox_tests;
 
 #[cfg(test)]
 pub(crate) fn chat_system_prompt_for_test(c: &Ctx, conv: &aiscraft_core::Conversation, send: bool, takes: bool) -> Option<String> {
