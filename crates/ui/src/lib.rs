@@ -35,6 +35,7 @@ pub mod plot;
 mod privacy_panel;
 mod privacy_setup;
 mod rich;
+mod sandbox_settings;
 mod share;
 mod sidebar;
 mod status_line;

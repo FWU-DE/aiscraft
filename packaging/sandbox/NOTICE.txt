@@ -1,0 +1,11 @@
+AIS.ChatCraft – Eigener Rechner (Sandbox), Abbild 1
+
+Dieses Abbild enthält Ubuntu 24.04 und Pakete aus den Ubuntu-Archiven, unverändert:
+Docker Engine (docker.io, Apache-2.0), LibreOffice (MPL-2.0), Python 3 (PSF) mit pandas,
+openpyxl, matplotlib und pypdf (BSD/MIT), qpdf (Apache-2.0), Ghostscript (AGPL-3.0),
+Poppler (GPL-2.0), Noto-Schriften (OFL-1.1) und weitere freie Software.
+
+Lizenztexte stehen im Abbild unter /usr/share/doc/<Paket>/copyright; die Quellen gibt es
+in den Ubuntu-Archiven (apt-get source <Paket>) zu den hier verwendeten Versionen.
+
+Gebaut von packaging/sandbox/build.sh im Repository FWU-DE/aiscraft.

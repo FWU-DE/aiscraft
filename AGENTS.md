@@ -42,6 +42,9 @@ apps/
                     needs WebKitGTK 4.1 on Linux
 deploy/autocraft  Coolify compose for AutoCraft
 deploy/collab     Dockerfile and Coolify compose for the collab relay
+packaging/sandbox image of the optional own computer (#94): Ubuntu 24.04 + Docker + the workspace
+                  image (LibreOffice, Python, qpdf, Ghostscript, Noto), built and published by
+                  .github/workflows/sandbox-image.yml (tag sandbox-v1), never in the app package
 docs/craft-libs.md  which shared Craft libraries we use, defer or reject, and why
 ```
 
@@ -66,7 +69,7 @@ itself; keep that block in step with craft-libs' root `Cargo.toml` when bumping 
 3. **Every command has a functional test.** `every_command_has_a_functional_test` fails when a
    command id does not appear in a test outside the panic hunt. The panic hunt calls every command
    with hostile params and must stay green.
-4. **Tests never open windows, start browsers, use the mic or speakers.** In-memory engines refuse
+4. **Tests never open windows, start browsers, VMs or containers, use the mic or speakers.** In-memory engines refuse
    such commands (`browser_allowed`); exhaustive fuzzers keep a skip list; real-device paths are
    `#[ignore]` tests that run headless. Test servers send `connection: close`.
 5. **Never chain `cargo test && git commit`.** Run the tests, read the result, then commit.
@@ -150,8 +153,18 @@ connectors (MCP, also for the Claude subscription via the tool bridge), connecte
 Microsoft 365, Google, CalDAV; OAuth in the system browser, `engine/src/accounts`), schedules, page watches,
 check-ins, usage ledger with monthly limit, history search and recall, learned skills, background
 tasks, voice in and out, hints (nudges) with quiet hours, vault with placeholders and TOTP.
-Not adopted on purpose: Nod's own sandbox computer and browser (AIS.ChatCraft runs no code itself; learning
-apps run only in the locked-down preview process or the browser), WhatsApp/Telegram channels (out of scope for a school client). Nod's repo (`n8n-io/nod`, Apache-2.0) is a reference for behaviour, not for
+Nod's own sandbox computer (workspace) is adopted as an **optional add-on, off by default** (#94,
+owner's decision 2026-11-25, `engine/src/sandbox`): a private Linux computer the app downloads only
+after the owner's yes (image built and published by `.github/workflows/sandbox-image.yml` from
+`packaging/sandbox`, SHA-256 checked), on Windows an own WSL2 distribution `aiscraft-<profil>`
+(never the default distribution or global WSL settings), Docker only inside it, each command in a
+locked-down container (`sandbox/container.rs`: user 1000, no capabilities, `no-new-privileges`,
+`--network none` unless the owner switches the network on, 2 GB RAM, 2 CPUs, 1024 processes, only
+the chat's folder `/work/<chat>` mounted); tools `workspace_run`, `workspace_write`,
+`workspace_read`, `workspace_convert`, `workspace_list` under rule 2.7. macOS and Linux (Lima) say
+„noch nicht verfügbar“; `SandboxRuntime` is the seam for them. The app itself still runs no code
+on the host; learning apps run only in the locked-down preview process or the browser.
+Not adopted on purpose: Nod's own browser, WhatsApp/Telegram channels (out of scope for a school client). Nod's repo (`n8n-io/nod`, Apache-2.0) is a reference for behaviour, not for
 code; it is Node/Electron, AIS.ChatCraft is Rust.
 
 Last compared with Nod's releases: **nod-v0.9.6 (2026-11-24)**; issues #63–#69. Check `gh release list -R n8n-io/nod` for newer ones and update this line.
@@ -178,6 +191,8 @@ a slow path comes with such a gate.
 | Panels keep their size | In every main view (start page, chat with a long Markdown answer, chat + document, H5P, learning app, whiteboard, worksheet, each of these but the learning app in its own window (#75, drawn with `show_as_window`), the link field, every settings tab, the chat import dialog, the archive and the trash, Entdecken, the welcome) at 100 % (1280×800) and 150 % (1333×889), in Modern, Glas and Omarchy: no panel grows from frame to frame, sidebar and artifact panel keep their default width, no control sticks out of the window or across a panel edge, no two controls of one row lie on each other. Rows with trailing buttons use `widgets::field_then_buttons` (buttons first, the field takes the rest), never `available_width() - N` | `layout_gate_modern`, `layout_gate_glas`, `layout_gate_omarchy` (ui, `tests/layout_gate.rs`; `AisCraftApp::panel_layout`) |
 | UI tests don't depend on load or on each other | No process-wide state the UI reads per frame: each app has its own Omarchy theme source (`theme::OmarchyTheme`, tests pass theirs through `common::app`), and toasts and the theme watcher count egui's input time, not the wall clock. `cargo test -p aiscraft-ui --test ui_flows --no-run`, then `seq 1 16 \| xargs -P 8` over the test binary (and `layout_gate`): 0 failures | `each_app_reads_its_own_omarchy_theme` (ui, `tests/ui_flows.rs`); the stress run before a change to the UI tests |
 | Deleted means gone, archived means out of the way (#77) | `chat.delete` puts a chat into the trash for 30 days (undo toast, `chat.restore`); after `chat.purge`, `chat.empty_trash` or the 30 days nothing of it is left: no conversation or message (any branch) in the store, no FTS entry and so no recall excerpt, no attachment copy in the data folder, no „Namen schützen“ placeholder mapping; memory notes stay unless asked (`forget_notes`), documents stay. Archived chats are not in the sidebar or „Zuletzt bearbeitet“ and not recalled while `recall_archived` is off; the trash is never searched or recalled. AIS.chat's history is touched only with `ais_chat: true` for one chat | `a_purged_chat_leaves_nothing_behind`, `archived_chats_leave_the_sidebar_and_recall_but_stay_whole`, `deleting_in_ais_chat_needs_an_explicit_yes_for_one_chat` (engine, `archive_tests.rs`), `archive_and_trash_keep_chats_out_of_lists_and_recall` (store) |
+| Own computer only on a yes (#94) | Nothing is downloaded, no computer created and no container started before the owner answered the question with what it can do, what it cannot see, size, source and licence; engines in memory never download or start one (tests hand them a fake machine); the image matches its line in the release's `SHA256SUMS.txt` and the pinned SHA-256, a wrong one keeps nothing; without WSL2 the message names what is missing and the next step | `nothing_is_downloaded_or_started_before_the_yes` (engine, `sandbox_tests.rs`) |
+| Every workspace container is locked down (#94) | Every start comes from `container::docker_run`: `--network none` unless the network switch is on, `--cap-drop ALL`, `no-new-privileges`, user 1000:1000, `--read-only`, 2 GB RAM without extra swap, 2 CPUs, 1024 processes, one mount (the chat's folder); the distribution mounts no Windows drive and runs no Windows program (`wsl.conf`, checked after the import); running, writing and converting ask with command, folder and time limit, background work refuses | `every_container_start_is_locked_down`, `workspace_tools_follow_nods_rule`, `workspace_output_passes_name_protection` (engine, `sandbox_tests.rs`); live: `real_wsl_runs_echo_in_the_container` (`#[ignore]`, downloads and installs) |
 | Never crash on hostile input | Caps on every size, no panics | workspace lints, panic hunt |
 | Tests stay off the desktop | No windows, browser, mic or speakers | rule 2.4, `browser_allowed` |
 
