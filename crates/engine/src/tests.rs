@@ -2048,7 +2048,8 @@ fn notifications_list_read_and_clear() {
 }
 
 /// A release list as GitHub's `/repos/FWU-DE/aiscraft/releases` sends it: a draft (CI makes
-/// those) and a pre-release that must not count, and the published 99.0.0 with the CI assets.
+/// those) and a pre-release that must not count, and the published 99.0.0 with the packages
+/// release.yml builds (craft-update's names, packaging/).
 fn release_list() -> String {
     let asset = |name: &str| json!({"name": name, "size": 1000, "browser_download_url": format!("https://github.com/FWU-DE/aiscraft/releases/download/v99.0.0/{name}")});
     json!([
@@ -2056,8 +2057,11 @@ fn release_list() -> String {
         {"tag_name": "v99.1.0-rc.1", "draft": false, "prerelease": true, "assets": []},
         {"tag_name": "v99.0.0", "name": "AIS.ChatCraft 99.0.0", "draft": false, "prerelease": false,
          "html_url": "https://github.com/FWU-DE/aiscraft/releases/tag/v99.0.0", "published_at": "2026-11-24T10:00:00Z",
-         "body": "## Neu\n\n- Startseite", "assets": [asset("aischatcraft-linux-x86_64.tar.gz"), asset("aischatcraft-macos-arm64.tar.gz"),
-         asset("aischatcraft-macos-x86_64.tar.gz"), asset("aischatcraft-windows-x86_64.zip")]},
+         "body": "## Neu\n\n- Startseite", "assets": [asset("aischatcraft-99.0.0-linux-x86_64.AppImage"), asset("aischatcraft-99.0.0-linux-x86_64.AppImage.zsync"),
+         asset("aischatcraft-99.0.0-linux-aarch64.AppImage"), asset("aischatcraft-99.0.0-linux-x86_64.deb"), asset("aischatcraft-99.0.0-linux-x86_64.tar.gz"),
+         asset("aischatcraft-99.0.0-macos-universal.dmg"), asset("aischatcraft-cli-99.0.0-macos-universal.zip"),
+         asset("aischatcraft-99.0.0-windows-x64.msi"), asset("aischatcraft-99.0.0-windows-x64-portable.zip"),
+         asset("aischatcraft-99.0.0-windows-arm64.msi"), asset("SHA256SUMS.txt")]},
         {"tag_name": "v0.0.1", "draft": false, "prerelease": false, "assets": []}
     ])
     .to_string()
@@ -2081,7 +2085,16 @@ fn update_check_offers_skips_and_stays_quiet() {
     let u = engine.state().update.clone();
     let a = u.available.clone().unwrap();
     assert_eq!(a.url, "https://github.com/FWU-DE/aiscraft/releases/tag/v99.0.0");
-    assert!(a.download.starts_with("https://github.com/FWU-DE/aiscraft/releases/download/v99.0.0/aischatcraft-"), "{}", a.download);
+    let package = if cfg!(windows) {
+        if cfg!(target_arch = "aarch64") { "aischatcraft-99.0.0-windows-arm64.msi" } else { "aischatcraft-99.0.0-windows-x64.msi" }
+    } else if cfg!(target_os = "macos") {
+        "aischatcraft-99.0.0-macos-universal.dmg"
+    } else if cfg!(target_arch = "aarch64") {
+        "aischatcraft-99.0.0-linux-aarch64.AppImage"
+    } else {
+        "aischatcraft-99.0.0-linux-x86_64.AppImage"
+    };
+    assert_eq!(a.download, format!("https://github.com/FWU-DE/aiscraft/releases/download/v99.0.0/{package}"), "this computer's package");
     assert!(a.notes.contains("Startseite"));
     assert!(u.message.unwrap().contains("99.0.0"));
     assert!(u.last_check > 0);

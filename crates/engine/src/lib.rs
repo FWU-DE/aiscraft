@@ -53,7 +53,7 @@ pub use secrets::Secrets;
 pub use skills::Skill;
 pub use state::*;
 pub use tools::{obsidian_vaults, presets as connector_presets};
-pub use update::CURRENT_VERSION;
+pub use update::{CURRENT_VERSION, finish_update_helper};
 pub use vault::{EntryInfo as VaultEntry, totp_at};
 
 pub fn now_ms() -> i64 {

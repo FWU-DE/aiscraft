@@ -36,7 +36,17 @@ fn preview_program() -> Option<std::path::PathBuf> {
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // craft-update's restart helper (an update on Windows) runs this program with its own
+    // arguments: finish the update, start the new copy, and end here.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(done) = aiscraft_engine::finish_update_helper(&raw) {
+        if let Err(e) = done {
+            eprintln!("Update nicht abgeschlossen: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    let args: Vec<String> = raw.iter().map(|a| a.to_string_lossy().into_owned()).collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
             "AIS.ChatCraft {}\n\n  aiscraft                 Fenster öffnen\n  aiscraft --control [port] mit JSON-Steuerkanal auf 127.0.0.1 (Standard {DEFAULT_PORT})",

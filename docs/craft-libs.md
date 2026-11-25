@@ -85,18 +85,23 @@ settings key `update`; `update_check` in `Settings` switches it off. Engines in 
 `cfg!(test)` builds never ask GitHub; tests hand them release JSON (`Engine::set_update_feed`),
 which goes through craft-update's `parse_github_release_list` and `version::offers_update`, the
 same as `check_for_update` (its own HTTP client is HTTPS-only outside craft-update's tests, so a
-local scripted server can't stand in). `App` id `aischatcraft` (the CI asset stem),
+local scripted server can't stand in). `App` id `aischatcraft` (the release asset stem),
 `bundle_id_override` `ai.uds.aischatcraft`. craft-update brings its own HTTP stack (ureq, rustls
 with ring, platform verifier) next to reqwest.
 
-Not adopted yet: the self-update (`self_update::prepare_update`, `Updater`). It would need asset
-names `pick_asset` reads, `<stem>-<version>-<os>-<arch>.<ext>`: our CI's
-`aischatcraft-linux-x86_64.tar.gz` lacks the version (→ `aischatcraft-0.2.0-linux-x86_64.tar.gz`),
-and Windows is `windows-x64` with the portable zip named `…-windows-x64-portable.zip`. Further
-release assets in the forms it installs (AppImage, `.deb`/`.rpm`, `.dmg` for a macOS `.app`, MSI
-or the Windows portable zip with `portable.txt`; a standalone `.tar.gz` only where the program
-and its `share` files are writable), `SHA256SUMS.txt` in the release, a restart helper wired
-into `main` (`self_update::finish`), and signed Windows builds.
+Release packages (#58) come from craft-common-actions' shared `release.yml`
+(`.github/workflows/release.yml` calls it on tags `v*`; our `packaging/` scripts build them) and
+carry the names `pick_asset` reads, `aischatcraft-<version>-<os>-<arch>.<ext>`: AppImage, `.deb`,
+`.rpm`, Flatpak and `.tar.gz` for Linux (x86_64, aarch64), a universal `.dmg` for macOS, MSI and
+`…-windows-<arch>-portable.zip` (with `portable.txt`) for Windows x64 and arm64, and
+`SHA256SUMS.txt`. `app.update_open` picks this computer's package with `pick_asset`. `main` runs
+`self_update::finish` first (`aiscraft_engine::finish_update_helper`), so the restart helper works
+once the self-update is switched on.
+
+Not adopted yet: the self-update itself (`self_update::prepare_update`, `Updater`). Missing: signed
+Windows builds (unsigned copies get no update offered; the signing secrets go into the repo's
+`release` environment), the portable data folder beside the exe when `portable.txt` is there, and
+dialogs without ArtCraft branding.
 
 Worksheets (`engine/src/learn/print.rs`) print through the same writer: the worksheet becomes
 Markdown (answer lines as escaped underscores, `( )`/`[ ]` instead of ballot boxes, which

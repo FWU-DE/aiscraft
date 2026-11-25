@@ -182,5 +182,16 @@ and push. If the user runs the app, reinstall it with `packaging/install.sh` (bi
 `~/.local/bin`, launcher entry and icons under `~/.local/share`) and restart it.
 
 Packaging: `packaging/install.sh` (per user, no sudo), `packaging/PKGBUILD` (Arch), the launcher
-entry `packaging/ai.uds.aischatcraft.desktop` and icons in `packaging/icons/` (the AIS.chat logo
+entry `packaging/linux/ai.uds.aischatcraft.desktop` and icons in `packaging/icons/` (the AIS.chat logo
 from FWU-DE/ais-chat on a white tile, rendered with `rsvg-convert`).
+
+Releases: set `[workspace.package] version` in `Cargo.toml`, commit, push a tag `v<version>`.
+`.github/workflows/release.yml` checks that tag against the version and calls the Craft suite's
+shared release workflow (`storytold/craft-common-actions`, `release.yml`), which runs our
+`packaging/linux/package.sh`, `packaging/linux/flatpak-bundle.sh`, `packaging/macos/package.sh` and
+`packaging/windows/package.ps1` and creates a draft release with `SHA256SUMS.txt`. Package names
+follow craft-update (`aischatcraft-<version>-<os>-<arch>.<ext>`); `update.rs` finds them with
+`pick_asset`. Windows (Azure Trusted Signing or a PFX) and macOS (Developer ID, notarization) are
+signed once their secrets are in the repository's `release` environment; the shared workflow signs
+Linux packages only on a `release` branch, so tag builds stay unsigned there. "Run workflow" on
+Release with dry-run builds everything except macOS and publishes nothing.

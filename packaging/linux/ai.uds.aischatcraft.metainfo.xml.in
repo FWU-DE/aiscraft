@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata (software centres, Flatpak). package.sh substitutes @VERSION@ and @DATE@. -->
+<component type="desktop-application">
+  <id>ai.uds.aischatcraft</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>AIS.ChatCraft</name>
+  <summary>Chatten mit AIS.chat und anderen KI-Diensten</summary>
+  <developer id="de.fwu">
+    <name>FWU</name>
+  </developer>
+  <description>
+    <p>
+      AIS.ChatCraft ist ein nativer Desktop-Client für AIS.chat und weitere KI-Dienste
+      (OpenAI-kompatible Server, Claude). Ein Community-Experiment, kein offizielles Werkzeug
+      des AIS.chat-Teams.
+    </p>
+    <ul>
+      <li>Chats, Assistenten, Dialogpartner und Lernszenarien von AIS.chat</li>
+      <li>Dokumente, Arbeitsblätter, H5P-Aufgaben, Lern-Apps und Whiteboards</li>
+      <li>Gedächtnis, Zeitpläne, Konnektoren (MCP) und Spracheingabe</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">ai.uds.aischatcraft.desktop</launchable>
+  <icon type="stock">ai.uds.aischatcraft</icon>
+  <url type="homepage">https://github.com/FWU-DE/aiscraft</url>
+  <url type="bugtracker">https://github.com/FWU-DE/aiscraft/issues</url>
+  <categories>
+    <category>Network</category>
+    <category>Chat</category>
+  </categories>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <provides>
+    <binary>aiscraft</binary>
+    <binary>aiscraft-cli</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

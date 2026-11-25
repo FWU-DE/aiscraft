@@ -1,0 +1,39 @@
+# Flatpak manifest for the single-file bundle attached to every GitHub release
+# (aischatcraft-<version>-linux-<arch>.flatpak). Built by packaging/linux/flatpak-bundle.sh in
+# craft-common-actions' release.yml (job "Flatpak").
+#
+# It repackages the release's own Linux tarball (built on Ubuntu 22.04 by package.sh) instead of
+# compiling inside flatpak-builder: no network and no vendored crates during the build, and the
+# same binaries as the AppImage/deb/rpm. GNOME's runtime, because aiscraft links GTK 3 (file
+# dialogs) and aiscraft-preview links WebKitGTK 4.1, both part of it.
+id: ai.uds.aischatcraft
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+command: aiscraft
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # AIS.chat, the other chat services and the update check.
+  - --share=network
+  # GPU access for the wgpu UI.
+  - --device=dri
+  # Voice input and read-aloud.
+  - --socket=pulseaudio
+  # Session cookies and API keys live in the desktop's keychain (Secret Service).
+  - --talk-name=org.freedesktop.secrets
+  # Exports land in Downloads; other files go through the file-chooser portal.
+  - --filesystem=xdg-download
+modules:
+  - name: aischatcraft
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 -t /app/bin bin/aiscraft bin/aiscraft-cli bin/aiscraft-preview bin/aiscraft-collab-server
+      - install -Dm644 share/applications/ai.uds.aischatcraft.desktop /app/share/applications/ai.uds.aischatcraft.desktop
+      # Already has the release's version and date substituted by package.sh.
+      - install -Dm644 share/metainfo/ai.uds.aischatcraft.metainfo.xml /app/share/metainfo/ai.uds.aischatcraft.metainfo.xml
+      - mkdir -p /app/share/icons /app/share/doc && cp -R share/icons/hicolor /app/share/icons/ && cp -R share/doc/aischatcraft /app/share/doc/
+    sources:
+      - type: dir
+        path: stage
