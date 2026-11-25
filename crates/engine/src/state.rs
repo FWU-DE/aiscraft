@@ -52,6 +52,9 @@ pub struct State {
     pub skills: Vec<crate::skills::Skill>,
     /// Dictation is recording.
     pub recording: bool,
+    /// The voice mode (#40), while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_mode: Option<crate::voice_mode::VoiceModeView>,
     /// Vault entries, without their secrets.
     pub vault: Vec<crate::vault::EntryInfo>,
     /// „Namen schützen“: class lists (without names) and the composer's preview (#55).

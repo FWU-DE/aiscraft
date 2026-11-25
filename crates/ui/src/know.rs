@@ -2,7 +2,7 @@
 //! (#53) and templates (#54): the dialogs, bars and sections. The engine does the work; this
 //! file only draws and dispatches commands.
 
-use egui::{Id, Ui};
+use egui::{Id, RichText, Ui};
 use serde_json::{Value, json};
 
 use crate::app::AisCraftApp;
@@ -411,6 +411,33 @@ impl AisCraftApp {
     /// The voice mode while it runs (#40), and research in the background (#37), above the field.
     pub(crate) fn composer_bars(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
+        if let Some(v) = self.state.voice_mode.clone() {
+            ui.horizontal(|ui| {
+                let (r, ended) = crate::widgets::field_then_buttons(
+                    ui,
+                    |ui| {
+                        let end = ui.small_button("Beenden").clicked();
+                        let next = if v.phase == "speaking" { "Unterbrechen" } else { "Fertig gesprochen" };
+                        if v.phase != "thinking" && ui.small_button(next).clicked() {
+                            self.run("voice.mode_next", json!({}));
+                        }
+                        end
+                    },
+                    |ui, w| {
+                        let mut text = format!("Sprachmodus: {}", v.label());
+                        if !v.heard.is_empty() {
+                            text.push_str(&format!(" · „{}“", v.heard.chars().take(60).collect::<String>()));
+                        }
+                        ui.add_sized([w.max(40.0), 20.0], egui::Label::new(RichText::new(text).color(t.accent_ink)).truncate())
+                    },
+                );
+                let _ = r;
+                if ended {
+                    self.run("voice.mode", json!({"on": false}));
+                }
+            });
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        }
         let runs: Vec<aiscraft_engine::research::Run> = self.state.research.runs.iter().take(3).cloned().collect();
         for run in runs {
             ui.horizontal(|ui| {
@@ -474,6 +501,16 @@ impl AisCraftApp {
         };
         self.dialog = Some(Dialog::Know(d));
         true
+    }
+
+    /// The voice mode's button next to the microphone (#40).
+    pub(crate) fn voice_mode_button(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        let on = self.state.voice_mode.is_some();
+        let name = if on { "Sprachmodus beenden" } else { "Sprachmodus: freihändig sprechen" };
+        if crate::kit::icon_button(ui, &t, Icon::Speaker, name, if on { t.accent } else { t.text2 }, 19.0, 36.0).clicked() {
+            self.run("voice.mode", json!({"on": !on}));
+        }
     }
 }
 

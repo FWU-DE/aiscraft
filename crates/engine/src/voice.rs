@@ -21,6 +21,7 @@ enum AudioCmd {
     CancelRecording,
     Play(Vec<u8>, mpsc::Sender<Result<()>>),
     StopPlaying,
+    IsPlaying(mpsc::Sender<bool>),
 }
 
 #[derive(Default)]
@@ -28,6 +29,10 @@ pub(crate) struct Voice {
     tx: Mutex<Option<mpsc::Sender<AudioCmd>>>,
     /// Microphone level 0..1, as f32 bits, for the meter.
     pub level: Arc<AtomicU32>,
+    /// Test devices for the voice mode (#40): set only by tests, never a real microphone there.
+    pub(crate) test_devices: Mutex<Option<Arc<dyn crate::voice_mode::Devices>>>,
+    /// The voice mode's stop and "next" signals while it runs.
+    pub(crate) mode: Mutex<Option<Arc<crate::voice_mode::Signals>>>,
 }
 
 impl Voice {
@@ -81,6 +86,9 @@ fn audio_thread(rx: mpsc::Receiver<AudioCmd>, level: Arc<AtomicU32>) {
                     p.stop();
                 }
             }
+            Ok(AudioCmd::IsPlaying(reply)) => {
+                let _ = reply.send(player.as_ref().is_some_and(|p| p.is_playing()));
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
@@ -90,7 +98,7 @@ fn audio_thread(rx: mpsc::Receiver<AudioCmd>, level: Arc<AtomicU32>) {
     }
 }
 
-fn devices_allowed(c: &Ctx) -> Result<()> {
+pub(crate) fn devices_allowed(c: &Ctx) -> Result<()> {
     if c.0.browser_allowed && std::env::var_os("AISCRAFT_NO_DEVICES").is_none() {
         Ok(())
     } else {
@@ -114,7 +122,7 @@ pub(crate) fn tts_provider(c: &Ctx) -> Result<(BackendKind, String, String)> {
     openai_with_key(c).ok_or_else(|| Error::unsupported("Zum Vorlesen bei AIS.chat anmelden oder ein OpenAI-kompatibles Backend mit Schlüssel hinzufügen"))
 }
 
-fn openai_with_key(c: &Ctx) -> Option<(BackendKind, String, String)> {
+pub(crate) fn openai_with_key(c: &Ctx) -> Option<(BackendKind, String, String)> {
     c.state()
         .backends
         .iter()
@@ -179,6 +187,57 @@ pub(crate) async fn record_stop(c: Ctx, p: Value) -> Result<Value> {
     let (_, base, key) = openai_with_key(&c).ok_or_else(|| Error::unsupported("Kein Backend für Transkription"))?;
     let text = aiscraft_voice::transcribe_openai(&base, Some(&key), "whisper-1", wav, Some("de")).await?;
     Ok(json!({"text": text}))
+}
+
+/// The real microphone and speakers, through the audio thread.
+pub(crate) struct RealDevices(pub Ctx);
+
+impl crate::voice_mode::Devices for RealDevices {
+    fn start(&self) -> Result<()> {
+        let (tx, rx) = mpsc::channel();
+        self.0.0.voice.sender().send(AudioCmd::StartRecording(tx)).map_err(|_| Error::protocol("Audio nicht verfügbar"))?;
+        rx.recv().map_err(|_| Error::protocol("Audio nicht verfügbar"))?
+    }
+    fn level(&self) -> f32 {
+        level(&self.0)
+    }
+    fn stop(&self) -> Result<Vec<u8>> {
+        let (tx, rx) = mpsc::channel();
+        self.0.0.voice.sender().send(AudioCmd::StopRecording(tx)).map_err(|_| Error::protocol("Audio nicht verfügbar"))?;
+        rx.recv().map_err(|_| Error::protocol("Audio nicht verfügbar"))?
+    }
+    fn cancel(&self) {
+        let _ = self.0.0.voice.sender().send(AudioCmd::CancelRecording);
+    }
+    fn play(&self, audio: Vec<u8>) -> Result<()> {
+        let (tx, rx) = mpsc::channel();
+        self.0.0.voice.sender().send(AudioCmd::Play(audio, tx)).map_err(|_| Error::protocol("Audio nicht verfügbar"))?;
+        rx.recv().map_err(|_| Error::protocol("Audio nicht verfügbar"))?
+    }
+    fn playing(&self) -> bool {
+        let (tx, rx) = mpsc::channel();
+        if self.0.0.voice.sender().send(AudioCmd::IsPlaying(tx)).is_err() {
+            return false;
+        }
+        rx.recv().unwrap_or(false)
+    }
+    fn stop_playing(&self) {
+        let _ = self.0.0.voice.sender().send(AudioCmd::StopPlaying);
+    }
+}
+
+/// Speech for `text` from the configured provider (AIS.chat or OpenAI-compatible).
+pub(crate) async fn synthesize(c: &Ctx, text: &str) -> Result<Vec<u8>> {
+    let spoken = aiscraft_voice::speakable(text);
+    if spoken.trim().is_empty() {
+        return Err(Error::invalid("Nichts zum Vorlesen"));
+    }
+    let (kind, base, secret) = tts_provider(c)?;
+    let stream = match kind {
+        BackendKind::AisChat => aiscraft_voice::speak_ais(&base, &secret, &spoken, None, None).await?,
+        _ => aiscraft_voice::speak_openai(&base, Some(&secret), "gpt-4o-mini-tts", "alloy", &spoken).await?,
+    };
+    aiscraft_voice::collect_audio(stream).await
 }
 
 /// The microphone level for the meter, 0..1.

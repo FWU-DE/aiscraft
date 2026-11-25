@@ -1489,6 +1489,9 @@ impl AisCraftApp {
                         *send = true;
                     }
                 }
+                if !image_mode && !self.state.recording {
+                    self.voice_mode_button(ui);
+                }
                 if self.state.recording {
                     if crate::kit::pill(ui, &t, crate::kit::Pill::Accent2, Some(crate::icons::Icon::Stop), "Diktat beenden", 13.5, None).clicked() {
                         let engine = self.engine.clone();

@@ -396,3 +396,109 @@ fn research_searches_reads_and_writes_a_report_with_sources() {
     engine.call("research.set_search", json!({"url": ""})).unwrap();
     assert!(engine.state().research.search_url.is_empty());
 }
+
+/// Test devices for the voice mode: the microphone plays back a list of levels and records a
+/// small WAV; the speakers keep what they were given and finish at once. No real device.
+#[derive(Default)]
+struct TestDevices {
+    levels: Mutex<std::collections::VecDeque<f32>>,
+    recording: std::sync::atomic::AtomicBool,
+    recordings: std::sync::atomic::AtomicU32,
+    played: Mutex<Vec<Vec<u8>>>,
+}
+
+impl TestDevices {
+    /// One spoken turn: quiet, speech, then the pause that ends it.
+    fn speak_once(&self) {
+        let mut l = self.levels.lock().unwrap();
+        l.extend([0.0, 0.0, 0.3, 0.4, 0.3]);
+        l.extend(std::iter::repeat_n(0.0, 12));
+    }
+}
+
+impl crate::voice_mode::Devices for TestDevices {
+    fn start(&self) -> aiscraft_core::Result<()> {
+        self.recording.store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+    fn level(&self) -> f32 {
+        self.levels.lock().unwrap().pop_front().unwrap_or(0.0)
+    }
+    fn stop(&self) -> aiscraft_core::Result<Vec<u8>> {
+        self.recording.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.recordings.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        aiscraft_voice::encode_wav(&[0i16; 160], 16_000, 1)
+    }
+    fn cancel(&self) {
+        self.recording.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn play(&self, audio: Vec<u8>) -> aiscraft_core::Result<()> {
+        self.played.lock().unwrap().push(audio);
+        Ok(())
+    }
+    fn playing(&self) -> bool {
+        false
+    }
+    fn stop_playing(&self) {}
+    fn fast(&self) -> bool {
+        true
+    }
+}
+
+/// #40: the voice mode listens, sends what was said, reads the answer aloud and listens again,
+/// until the person says it should end, or switches it off; with test devices only.
+#[test]
+fn voice_mode_listens_answers_reads_aloud_and_listens_again() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let turn = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let t2 = turn.clone();
+    let (url, seen) = scripted(&engine, move |line, _| {
+        if line.starts_with("GET") {
+            return models();
+        }
+        if line.contains("/audio/transcriptions") {
+            let n = t2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let text = ["Wie lange schlafen Igel?", "Und was fressen sie?", "Sprachmodus beenden."].get(n as usize).copied().unwrap_or("Sprachmodus beenden.");
+            return ("application/json".into(), json!({"text": text}).to_string().into_bytes());
+        }
+        if line.contains("/audio/speech") {
+            return ("audio/mpeg".into(), b"ID3-test-audio".to_vec());
+        }
+        sse("Igel schlafen von November bis März.")
+    });
+    engine_at(&engine, &url);
+    // Without devices allowed (a test engine) and without test devices: refused, no microphone.
+    assert!(engine.call("voice.mode", json!({})).is_err());
+    let dev = Arc::new(TestDevices::default());
+    for _ in 0..3 {
+        dev.speak_once();
+    }
+    *engine.ctx().0.voice.test_devices.lock().unwrap() = Some(dev.clone());
+    assert!(engine.call("voice.mode_next", json!({})).is_err(), "off");
+    engine.call("voice.mode", json!({"on": true})).unwrap();
+    assert!(engine.state().voice_mode.is_some());
+    assert!(engine.wait_for(std::time::Duration::from_secs(20), |s| s.voice_mode.is_none()), "ends after „Sprachmodus beenden“");
+    let s = engine.state();
+    let users: Vec<&str> = s.messages.iter().filter(|m| m.role == aiscraft_core::Role::User).map(|m| m.content.as_str()).collect();
+    assert_eq!(users, ["Wie lange schlafen Igel?", "Und was fressen sie?"], "two turns sent, the end words not");
+    assert_eq!(dev.played.lock().unwrap().len(), 2, "both answers read aloud");
+    assert_eq!(dev.recordings.load(std::sync::atomic::Ordering::Relaxed), 3);
+    assert_eq!(posts(&seen, "/audio/speech").len(), 2);
+    assert!(!dev.recording.load(std::sync::atomic::Ordering::Relaxed), "the microphone is off at the end");
+
+    // Switched off while listening; „weiter“ ends a turn without waiting for the pause.
+    engine.call("voice.mode", json!({})).unwrap();
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.voice_mode.as_ref().is_some_and(|v| v.phase == "listening")));
+    engine.call("voice.mode_next", json!({})).unwrap();
+    assert!(engine.wait_for(std::time::Duration::from_secs(20), |s| s.voice_mode.is_none()), "the end words came as the next transcript");
+    engine.call("voice.mode", json!({})).unwrap();
+    engine.call("voice.mode", json!({"on": false})).unwrap();
+    assert!(engine.state().voice_mode.is_none(), "off at once");
+    for _ in 0..500 {
+        if !dev.recording.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(!dev.recording.load(std::sync::atomic::Ordering::Relaxed), "the loop let go of the microphone");
+}

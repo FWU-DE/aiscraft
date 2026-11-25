@@ -253,7 +253,7 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
     call(&engine, "settings.set", json!({"key": "theme", "value": theme}));
     call(&engine, "settings.set", json!({"key": "look_chosen", "value": true}));
     let url = answer_backend(&engine, LONG_ANSWER);
-    let id = call(&engine, "backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"}))["id"].as_str().unwrap().to_string();
+    let id = call(&engine, "backend.add", json!({"kind": "openai", "base_url": url, "name": "Test", "secret": "sk-test"}))["id"].as_str().unwrap().to_string();
     call(&engine, "backend.check", json!({"id": id}));
     call(&engine, "chat.select_model", json!({"backend": id, "model": "m"}));
     call(&engine, "chat.new", json!({}));
@@ -271,6 +271,20 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
     call(&engine, "chat.open", json!({"id": chat}));
     settle(&mut h, &at("Chat"), |h| label(h, "Kopieren"));
     check(&mut h, &at("Chat"));
+
+    // Research in the background (#37, this one finds nothing) and the voice mode (#40) above
+    // the composer.
+    call(&engine, "research.set_search", json!({"url": url.trim_end_matches("/v1")}));
+    call(&engine, "research.start", json!({"question": "Wie leben Igel im Winter und was fressen sie im Herbst, bevor sie schlafen gehen?"}));
+    assert!(engine.wait_for(std::time::Duration::from_secs(20), |s| s.research.runs.iter().all(|r| r.status != "running")), "the research ends");
+    engine.use_test_audio().unwrap();
+    call(&engine, "voice.mode", json!({}));
+    settle(&mut h, &at("Chat, Recherche und Sprachmodus"), |h| label(h, "Fertig gesprochen") && label(h, "×"));
+    check(&mut h, &at("Chat, Recherche und Sprachmodus"));
+    call(&engine, "voice.mode", json!({"on": false}));
+    let run = engine.state().research.runs[0].id.clone();
+    call(&engine, "research.dismiss", json!({"id": run}));
+    settle(&mut h, &at("Recherche ausgeblendet"), |h| !label(h, "×") && !label(h, "Fertig gesprochen"));
 
     // The same chat with the search open (Strg+F, #41) and a hit marked.
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
@@ -360,6 +374,32 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
         check(&mut h, &what);
     }
     show(&mut h, &tx, "none");
+
+    // Templates, connector results, research, project knowledge (#54, #53, #37, #32).
+    let pid = call(&engine, "project.create", json!({"name": "Biologie 7b mit einem recht langen Namen"}))["id"].as_str().unwrap().to_string();
+    let file = std::env::temp_dir().join(format!("aiscraft-gate-lehrplan-{}-{}.md", std::process::id(), theme));
+    std::fs::write(
+        &file,
+        "# Lehrplan Biologie Klasse 7
+
+Igel, Winterschlaf und Fotosynthese.",
+    )
+    .unwrap();
+    call(&engine, "project.file_add", json!({"project": pid, "path": file.display().to_string()}));
+    let tpl = engine.state().templates.iter().find(|t| t.title == "Unterrichtsstunde planen").map(|t| t.id.clone()).unwrap();
+    for (view, what, ready) in [
+        ("Vorlage ausfüllen", format!("template:{tpl}"), "Ins Eingabefeld"),
+        ("Neue Vorlage", "template_new".to_string(), "Speichern"),
+        ("Recherche", "research".to_string(), "Recherche starten"),
+        ("Konnektor-Ergebnis", "connector_insert".to_string(), "Konnektor-Ergebnis einfügen"),
+        ("Projekt mit Projektwissen", format!("project:{pid}"), "Datei hinzufügen …"),
+    ] {
+        show(&mut h, &tx, &what);
+        settle(&mut h, &at(view), |h| label(h, ready));
+        check(&mut h, &at(view));
+        show(&mut h, &tx, "none");
+    }
+    let _ = std::fs::remove_file(&file);
 
     // Entdecken (nobody signed in to AIS.chat: the page explains it).
     show(&mut h, &tx, "personas");

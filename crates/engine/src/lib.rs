@@ -40,6 +40,7 @@ mod update;
 mod usage;
 mod vault;
 mod voice;
+pub mod voice_mode;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
