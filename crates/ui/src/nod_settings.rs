@@ -1,5 +1,6 @@
 //! Settings sections for features taken from Nod (AGENTS.md §5), kept out of `dialogs.rs`: the
-//! writing style (#20), briefing templates for schedules (#27).
+//! writing style (#20), briefing templates for schedules (#27), schedule ideas and the model per
+//! schedule (#68).
 
 use aiscraft_core::MemoryArea;
 use egui::{RichText, Ui};
@@ -74,5 +75,75 @@ impl AisCraftApp {
             });
             ui.add_space(4.0);
         }
+    }
+
+    /// Einstellungen › Zeitpläne: schedules suggested from requests the owner keeps making (#68).
+    pub(crate) fn schedule_ideas_section(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        ui.label(RichText::new("Ideen aus deinen Bitten").strong());
+        let ideas = self.state.schedule_ideas.clone();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(small_muted(
+                &t,
+                if ideas.is_empty() {
+                    "Bittest du an mindestens drei Tagen um dasselbe, zur gleichen Zeit oder am gleichen Wochentag, schlägt AIS.ChatCraft hier einen Zeitplan vor. Gesucht wird nur auf diesem Gerät, in deinen eigenen Nachrichten."
+                } else {
+                    "Diese Bitten stellst du immer wieder. Gesucht wurde nur auf diesem Gerät, in deinen eigenen Nachrichten."
+                },
+            ));
+            if ui.small_button("Jetzt suchen").clicked() {
+                self.run("schedule.ideas", json!({}));
+            }
+        });
+        for idea in ideas {
+            card(&t).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(&idea.title).strong());
+                    ui.label(small_muted(&t, format!("{} · {}", idea.rhythm, self.state.model_name(&idea.backend_id, &idea.model_id))));
+                });
+                ui.add(egui::Label::new(small_muted(&t, format!("„{}“, an {} Tagen", idea.prompt.chars().take(200).collect::<String>(), idea.days))).wrap());
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Als Zeitplan anlegen").clicked() {
+                        self.run("schedule.idea_accept", json!({"id": idea.id}));
+                    }
+                    if ui.button("Anpassen …").clicked() {
+                        self.dialog = Some(crate::dialogs::Dialog::AddSchedule {
+                            title: idea.title.clone(),
+                            prompt: idea.prompt.clone(),
+                            when: idea.cron.clone(),
+                            recurring: true,
+                            watch: false,
+                        });
+                    }
+                    if ui.small_button("Nein danke").clicked() {
+                        self.run("schedule.idea_dismiss", json!({"id": idea.id}));
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        }
+    }
+
+    /// The model a schedule runs with (#68), chosen in its card.
+    pub(crate) fn schedule_model_menu(&mut self, ui: &mut Ui, sch: &aiscraft_engine::Schedule) {
+        let t = self.tokens.clone();
+        ui.horizontal(|ui| {
+            ui.label(small_muted(&t, "Modell"));
+            let current = self.state.model_name(&sch.backend_id, &sch.model_id);
+            let mut picked = None;
+            egui::ComboBox::from_id_salt(("schedule-model", &sch.id)).selected_text(current).show_ui(ui, |ui| {
+                for b in &self.state.backends {
+                    for m in &b.models {
+                        let on = b.config.id == sch.backend_id && m.id == sch.model_id;
+                        if ui.selectable_label(on, format!("{} · {}", m.name, b.config.name)).clicked() {
+                            picked = Some((b.config.id.clone(), m.id.clone()));
+                        }
+                    }
+                }
+            });
+            if let Some((backend, model)) = picked {
+                self.run("schedule.update", json!({"id": sch.id, "backend": backend, "model": model}));
+            }
+        });
     }
 }

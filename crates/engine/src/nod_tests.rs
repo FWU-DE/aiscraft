@@ -168,3 +168,88 @@ fn briefing_templates_say_what_is_missing() {
     let list = engine.call("schedule.templates", json!({})).unwrap();
     assert!(!list.as_array().unwrap().iter().find(|t| t["id"] == "vertretung").unwrap()["missing"].as_array().unwrap().is_empty());
 }
+
+/// 8:10 on the Monday `weeks` weeks before last week's Monday, local time.
+fn monday_at_8(weeks: i64) -> i64 {
+    use chrono::{Datelike, Local, TimeZone};
+    let today = Local::now().date_naive();
+    let last_monday = today - chrono::Duration::days(i64::from(today.weekday().num_days_from_monday()) + 7);
+    let day = last_monday - chrono::Duration::weeks(weeks);
+    Local.from_local_datetime(&day.and_hms_opt(8, 10, 0).unwrap()).earliest().unwrap().timestamp_millis()
+}
+
+/// Sends `text` in a new chat and moves it to `at`.
+fn ask_at(engine: &crate::Engine, text: &str, at: i64) {
+    engine.call("chat.new", json!({})).unwrap();
+    engine.call("chat.send", json!({"text": text})).unwrap();
+    let id = engine.state().messages.iter().find(|m| m.role == aiscraft_core::Role::User).unwrap().id.clone();
+    engine.backdate_message(&id, at).unwrap();
+}
+
+/// #68: the same request on three Mondays becomes a schedule idea; tool text does not count, a
+/// declined idea does not come back, an accepted one becomes a schedule with the owner's changes.
+#[test]
+fn recurring_requests_become_schedule_ideas() {
+    let (engine, _) = engine_with_recording("ok");
+    for (w, text) in
+        ["Fass mir die Mails der Schulleitung zusammen", "Bitte fass die Mails der Schulleitung zusammen", "Fass mir die Mails der Schulleitung zusammen"]
+            .iter()
+            .enumerate()
+    {
+        ask_at(&engine, text, monday_at_8(w as i64));
+    }
+    let ideas = engine.call("schedule.ideas", json!({})).unwrap();
+    let ideas = ideas.as_array().unwrap();
+    assert_eq!(ideas.len(), 1, "{ideas:?}");
+    let idea = &ideas[0];
+    assert_eq!(idea["cron"], "0 8 * * 1");
+    assert_eq!(idea["rhythm"], "montags um 8 Uhr");
+    assert_eq!(idea["model_id"], "m");
+    assert_eq!(idea["prompt"], "Fass mir die Mails der Schulleitung zusammen");
+    let id = idea["id"].as_str().unwrap().to_string();
+
+    // The hints announce it once.
+    engine.block_on(crate::proactive::check(engine.ctx(), true)).unwrap();
+    let announced = |e: &crate::Engine| {
+        e.state().notices.iter().filter(|n| n.action.as_ref().is_some_and(|a| a.command == "schedule.idea_accept" && a.params["id"] == id.as_str())).count()
+    };
+    assert_eq!(announced(&engine), 1);
+    engine.block_on(crate::proactive::check(engine.ctx(), true)).unwrap();
+    assert_eq!(announced(&engine), 1, "never twice");
+
+    // Declined: gone for good.
+    engine.call("schedule.idea_dismiss", json!({"id": id})).unwrap();
+    assert!(engine.state().schedule_ideas.is_empty());
+    assert!(engine.call("schedule.ideas", json!({})).unwrap().as_array().unwrap().is_empty(), "a declined idea does not come back");
+    assert!(engine.call("schedule.idea_accept", json!({"id": id})).is_err());
+
+    // Accepted with changes: a schedule with that model; then no idea for it any more.
+    let (engine, _) = engine_with_recording("ok");
+    for w in 0..3 {
+        ask_at(&engine, "Fass mir die Mails der Schulleitung zusammen", monday_at_8(w));
+    }
+    let id = engine.call("schedule.ideas", json!({})).unwrap()[0]["id"].as_str().unwrap().to_string();
+    engine.call("schedule.idea_accept", json!({"id": id, "title": "Mails Schulleitung", "cron": "30 7 * * 1"})).unwrap();
+    let s = engine.state().schedules.last().cloned().unwrap();
+    assert_eq!((s.title.as_str(), s.cron.as_deref(), s.model_id.as_str()), ("Mails Schulleitung", Some("30 7 * * 1"), "m"));
+    assert!(engine.call("schedule.ideas", json!({})).unwrap().as_array().unwrap().is_empty());
+    // The model per schedule.
+    engine.call("schedule.update", json!({"id": s.id, "model": "m2"})).unwrap();
+    assert_eq!(engine.state().schedules.last().unwrap().model_id, "m2");
+    assert!(engine.call("schedule.update", json!({"id": s.id, "backend": "gibtsnicht"})).is_err());
+
+    // Tool results with the same words on three Mondays are no requests of the owner.
+    let (engine, _) = engine_with_recording("ok");
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let conv = engine.state().current.clone().unwrap();
+    for w in 0..3 {
+        let mut m = engine.state().messages[0].clone();
+        m.id = crate::new_id();
+        m.role = aiscraft_core::Role::Tool;
+        m.content = "Fass mir die Mails der Schulleitung zusammen".into();
+        m.created_at = monday_at_8(w);
+        m.conversation_id = conv.clone();
+        engine.ctx().store(|st| st.save_message(&m)).unwrap();
+    }
+    assert!(engine.call("schedule.ideas", json!({})).unwrap().as_array().unwrap().is_empty(), "tool text does not count");
+}

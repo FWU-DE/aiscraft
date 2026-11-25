@@ -24,6 +24,7 @@ mod pictures;
 pub mod privacy;
 mod proactive;
 pub mod quick;
+mod schedule_ideas;
 mod schedule_templates;
 mod schedules;
 mod secrets;
@@ -58,6 +59,7 @@ pub use commands::{CommandSpec, commands};
 pub use files::{MAX_FILE_BYTES, mime_of};
 pub use inbox::InboxItem;
 pub use links::{LINK_CHECK, has_links};
+pub use schedule_ideas::ScheduleIdea;
 pub use schedule_templates::{TemplateView, template_views};
 pub use schedules::{Cron, Schedule, next_run as schedule_next_run, parse_when};
 pub use secrets::Secrets;
@@ -382,6 +384,15 @@ impl Engine {
         }
         self.ctx.0.web_local_ok.store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Move one of the owner's messages back in time, as if it had been written then (tests and
+    /// the offscreen demo: schedule ideas need weeks of history). Only for engines in memory.
+    pub fn backdate_message(&self, id: &str, at: i64) -> Result<()> {
+        if self.ctx.0.pictures_online {
+            return Err(Error::refused("Nur ohne Datenordner (Tests, Vorschau) erlaubt"));
+        }
+        if self.ctx.store(|st| st.set_message_time(id, at))? { Ok(()) } else { Err(Error::not_found("Nachricht nicht gefunden")) }
     }
 
     /// Hand the update check a release list (JSON as GitHub's `/releases` sends it) or the error

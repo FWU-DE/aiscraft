@@ -197,6 +197,8 @@ Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
 
 **Vorlagen** unter den Zeitplänen legen einen Zeitplan mit einem Klick an: Morgenüberblick (Termine heute, offene Mails), Wochenvorschau, Mails des Tages und Vertretungsplan beobachten. Fehlt dafür etwas, etwa ein Konnektor für Kalender oder E-Mail oder ein Modell, das Webseiten lesen kann, steht das an der Vorlage, und sie lässt sich erst anlegen, wenn es da ist.
 
+**Ideen aus deinen Bitten.** Bittest du an mindestens drei Tagen um dasselbe, etwa jeden Montag „Fass mir die Mails der Schulleitung zusammen“, schlägt AIS.ChatCraft unter den Zeitplänen einen Zeitplan vor: mit deinem Auftrag, dem Rhythmus und dem Modell, das du dafür genommen hast. „Als Zeitplan anlegen“ legt ihn an, „Anpassen …“ öffnet ihn vorher zum Ändern, „Nein danke“ lässt ihn nie wieder auftauchen. Gesucht wird nur auf diesem Gerät, in deinen eigenen Nachrichten, ohne Modell. Sind die Hinweise an, meldet sich eine neue Idee einmal in den Benachrichtigungen. Das Modell jedes Zeitplans wählst du in seiner Karte.
+
 **Aufgaben** laufen im Hintergrund in einem eigenen Chat (Titel mit ▶), während du weiterchattest. Das Ergebnis kommt in den Chat zurück, aus dem die Aufgabe kam.
 
 ## Fähigkeiten und Hinweise

@@ -46,6 +46,9 @@ pub struct State {
     /// Tool calls waiting for the owner's yes or no.
     pub approvals: Vec<Approval>,
     pub schedules: Vec<crate::schedules::Schedule>,
+    /// Schedules suggested from the owner's recurring requests (#68).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schedule_ideas: Vec<crate::schedule_ideas::ScheduleIdea>,
     pub skills: Vec<crate::skills::Skill>,
     /// Dictation is recording.
     pub recording: bool,

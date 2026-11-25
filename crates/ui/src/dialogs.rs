@@ -951,6 +951,7 @@ impl AisCraftApp {
                             });
                         });
                         ui.label(small_muted(&t, sch.prompt.chars().take(160).collect::<String>()));
+                        self.schedule_model_menu(ui, &sch);
                         let next = aiscraft_engine::schedule_next_run(&sch, now).map(fmt_time).unwrap_or_else(|| "–".into());
                         ui.label(small_muted(&t, format!("Nächster Lauf: {next}{}", sch.last_run.map(|l| format!(" · zuletzt {}", fmt_time(l))).unwrap_or_default())));
                         if let Some(conv) = &sch.conversation_id
@@ -964,6 +965,8 @@ impl AisCraftApp {
                 if ui.button("+ Zeitplan anlegen").clicked() {
                     self.dialog = Some(Dialog::AddSchedule { title: String::new(), prompt: String::new(), when: "0 7 * * 1-5".into(), recurring: true, watch: false });
                 }
+                ui.add_space(10.0);
+                self.schedule_ideas_section(ui);
                 ui.add_space(10.0);
                 self.schedule_templates_section(ui);
             }

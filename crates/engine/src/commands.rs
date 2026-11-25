@@ -536,7 +536,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Zeitplan ändern",
         "Zeitpläne",
         None,
-        "id: string, enabled?: bool, title?: string, prompt?: string, cron?: string",
+        "id: string, enabled?: bool, title?: string, prompt?: string, cron?: string, backend?: string, model?: string (das Modell, mit dem der Zeitplan läuft)",
         false,
         |c, p| Box::pin(crate::schedules::edit(c, p))
     ),
@@ -558,6 +558,27 @@ static COMMANDS: &[CommandSpec] = &[
         false,
         |c, p| Box::pin(crate::schedule_templates::create(c, p))
     ),
+    cmd!(
+        "schedule.ideas",
+        "Zeitplan-Ideen suchen",
+        "Zeitpläne",
+        None,
+        "Sucht in deinen eigenen Nachrichten nach Bitten, die du immer wieder stellst (an mindestens drei Tagen, gleicher Wochentag oder gleiche Uhrzeit). Antwort: id, title, prompt, cron, rhythm, backend_id, model_id, days",
+        true,
+        |c, p| Box::pin(crate::schedule_ideas::list(c, p))
+    ),
+    cmd!(
+        "schedule.idea_accept",
+        "Zeitplan-Idee anlegen",
+        "Zeitpläne",
+        None,
+        "id: string, title?: string, prompt?: string, cron?: string, backend?: string, model?: string (Änderungen vor dem Anlegen)",
+        false,
+        |c, p| Box::pin(crate::schedule_ideas::accept(c, p))
+    ),
+    cmd!("schedule.idea_dismiss", "Zeitplan-Idee ablehnen", "Zeitpläne", None, "id: string. Die Idee kommt nicht wieder", false, |c, p| Box::pin(
+        crate::schedule_ideas::dismiss(c, p)
+    )),
     cmd!("schedule.delete", "Zeitplan löschen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::delete(c, p))),
     cmd!("schedule.run", "Zeitplan jetzt ausführen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::run_now(c, p))),
     cmd!("log.list", "Aktionsprotokoll", "App", None, "limit?: number (Standard 100), conversation?: string", false, |c, p| Box::pin(crate::action_log::list(
