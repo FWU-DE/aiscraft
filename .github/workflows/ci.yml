@@ -34,7 +34,9 @@ jobs:
           - { name: macos, os: macos-15 }
           - { name: windows, os: windows-2025 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # egui/winit (X11, Wayland, GL), rfd (GTK file dialogs), cpal (ALSA), keyring (D-Bus Secret
       # Service), WebKitGTK 4.1 (aiscraft-preview, the learning-app window), and Mesa's software
@@ -52,13 +54,14 @@ jobs:
           done
           dpkg -s libwebkit2gtk-4.1-dev libgtk-3-dev >/dev/null
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch, 2026-11
         with:
+          toolchain: stable
           components: clippy, rustfmt
 
       # Only main saves caches; pull requests restore main's, so the 10 GB budget is not spent on
       # per-branch copies.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
@@ -78,7 +81,9 @@ jobs:
     name: packaging scripts
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Shell scripts
         working-directory: packaging
         run: shellcheck -x env.sh linux/*.sh macos/*.sh

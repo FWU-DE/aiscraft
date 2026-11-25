@@ -63,7 +63,7 @@ impl AisCraftApp {
         let chapters = chapters();
         let mut open = true;
         let screen = ctx.content_rect();
-        egui::Window::new(RichText::new("Handbuch").strong())
+        let shown = egui::Window::new(RichText::new("Handbuch").strong())
             .id(egui::Id::unique("manual"))
             .open(&mut open)
             .collapsible(false)
@@ -103,6 +103,10 @@ impl AisCraftApp {
                     });
                 });
             });
+        // A click beside the handbook closes it, as beside a dialog.
+        if shown.is_some_and(|r| r.response.clicked_elsewhere()) {
+            open = false;
+        }
         if open {
             self.manual = Some(view);
         }

@@ -136,6 +136,9 @@ pub struct AisCraftApp {
     pub(crate) dictated: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// Generated images by file, decoded once (`None`: could not be read).
     pub(crate) images: std::collections::HashMap<String, Option<egui::TextureHandle>>,
+    /// Generated images (message id, index) whose „KI-Kennzeichnung“ is switched off; on by
+    /// default, like AIS.chat.
+    pub(crate) badge_off: std::collections::HashSet<(String, usize)>,
     /// Numbers the start page reads from the engine, refreshed every few seconds.
     pub(crate) home: crate::home::HomeCache,
     /// When each toast was first shown (egui's input time, seconds); plain information goes away
@@ -310,6 +313,7 @@ impl AisCraftApp {
             dictated: Default::default(),
             manual: None,
             images: Default::default(),
+            badge_off: Default::default(),
             home: Default::default(),
             toast_seen: Default::default(),
             narrow: None,
@@ -328,28 +332,30 @@ impl AisCraftApp {
         self
     }
 
-    /// The texture of an image file (at most 25 MB, 8192 px a side), loaded on first use.
-    pub(crate) fn image_texture(&mut self, ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
-        if let Some(t) = self.images.get(path) {
+    /// The texture of an image file (at most 25 MB, 8192 px a side), loaded on first use; with
+    /// `badge` the „KI-Kennzeichnung“ drawn in, as it is saved and copied.
+    pub(crate) fn image_texture(&mut self, ctx: &egui::Context, path: &str, badge: bool) -> Option<egui::TextureHandle> {
+        let key = if badge { format!("{path}#ki") } else { path.to_string() };
+        if let Some(t) = self.images.get(&key) {
             return t.clone();
         }
-        let tex = std::fs::metadata(path)
-            .ok()
-            .filter(|m| m.len() <= 25 * 1024 * 1024)
-            .and_then(|_| std::fs::read(path).ok())
-            .and_then(|bytes| image::load_from_memory(&bytes).ok())
-            .filter(|img| img.width() <= 8192 && img.height() <= 8192)
-            .map(|img| {
-                let rgba = img.to_rgba8();
-                let size = [rgba.width() as usize, rgba.height() as usize];
-                ctx.load_texture(path, egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()), egui::TextureOptions::LINEAR)
-            });
+        let tex = image_pixels(path, badge).map(|img| ctx.load_texture(&key, img, egui::TextureOptions::LINEAR));
         // Keep the cache small: generated images are few, but never let it grow without bound.
         if self.images.len() > 64 {
             self.images.clear();
         }
-        self.images.insert(path.to_string(), tex.clone());
+        self.images.insert(key, tex.clone());
         tex
+    }
+
+    /// Whether the „KI-Kennzeichnung“ of a generated image is on (the default).
+    pub fn image_badge(&self, message_id: &str, index: usize) -> bool {
+        !self.badge_off.contains(&(message_id.to_string(), index))
+    }
+
+    /// The parameters „Bild speichern“ sends to `chat.save_image` for this image.
+    pub fn image_save_params(&self, message_id: &str, index: usize, path: &str) -> Value {
+        json!({"message_id": message_id, "index": index, "path": path, "badge": self.image_badge(message_id, index)})
     }
 
     pub(crate) fn run(&self, cmd: &str, params: Value) {
@@ -418,6 +424,15 @@ impl AisCraftApp {
                 self.find = Some(self.state.find.as_ref().map(|f| f.query.clone()).unwrap_or_default());
             }
             self.focus_find = true;
+        }
+        // Esc closes an open handbook or citation first, as it closes a dialog.
+        if self.manual.is_some() && pressed(sc(Modifiers::NONE, Key::Escape)) {
+            self.manual = None;
+            return;
+        }
+        if self.state.citation.is_some() && pressed(sc(Modifiers::NONE, Key::Escape)) {
+            self.run("message.citation", json!({"close": true}));
+            return;
         }
         if self.find.is_some() && pressed(sc(Modifiers::NONE, Key::Escape)) {
             self.close_find();
@@ -896,4 +911,21 @@ impl eframe::App for AisCraftApp {
             ctx.request_repaint_after(std::time::Duration::from_secs(2));
         }
     }
+}
+
+/// The pixels of an image file (at most 25 MB, 8192 px a side); with `badge` the
+/// „KI-Kennzeichnung“ drawn in.
+pub(crate) fn image_pixels(path: &str, badge: bool) -> Option<egui::ColorImage> {
+    let img = std::fs::metadata(path)
+        .ok()
+        .filter(|m| m.len() <= 25 * 1024 * 1024)
+        .and_then(|_| std::fs::read(path).ok())
+        .and_then(|bytes| image::load_from_memory(&bytes).ok())
+        .filter(|img| img.width() <= 8192 && img.height() <= 8192)?;
+    let mut rgba = img.to_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+    if badge {
+        aiscraft_engine::ai_badge::draw(&mut rgba, w, h, 4);
+    }
+    Some(egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], rgba.as_raw()))
 }

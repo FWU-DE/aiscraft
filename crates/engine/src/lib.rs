@@ -4,6 +4,7 @@
 
 mod accounts;
 mod action_log;
+pub mod ai_badge;
 mod ai_label;
 mod apps;
 mod archive;
