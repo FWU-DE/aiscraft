@@ -14,6 +14,9 @@ pub struct State {
     pub citation: Option<crate::citations::CitationView>,
     /// The search in the open chat (Strg+F, #41).
     pub find: Option<crate::find::FindState>,
+    /// „Entdecken“: tab, kind, search, sort order and filters, for this run (`explore.*`).
+    #[serde(default)]
+    pub explore: aiscraft_core::ExploreFilter,
     /// Increases with every change; surfaces redraw when it moves.
     pub revision: u64,
     pub backends: Vec<BackendView>,

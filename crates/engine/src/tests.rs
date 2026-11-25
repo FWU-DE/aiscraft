@@ -768,7 +768,7 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                     let (status, ctype, body) = if !authed {
                         ("307 Temporary Redirect\r\nlocation: /login", "text/plain", String::new())
                     } else if req.starts_with("GET /api/auth/session") {
-                        ("200 OK", "application/json", r#"{"user":{"id":"me","firstName":"Ada","lastName":"Lehrerin"},"expires":"2030-01-01"}"#.to_string())
+                        ("200 OK", "application/json", r#"{"user":{"id":"me","firstName":"Ada","lastName":"Lehrerin","schoolIds":["s1"],"federalState":{"featureToggles":{"isShareTemplateWithSchoolEnabled":true}}},"expires":"2030-01-01"}"#.to_string())
                     } else if req.starts_with("GET /api/conversations") {
                         ("200 OK", "application/json", r#"{"conversations":[{"id":"r2","name":"Mit Goethe","characterId":"c1","type":"chat"}]}"#.to_string())
                     } else if req.starts_with("GET /d/r2") || req.starts_with("GET /characters/d/c1/r2") {
@@ -814,11 +814,11 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                     } else if req.starts_with("POST / ") {
                         rec.lock().unwrap().push(req.clone());
                         let body = if action == id(0x11) {
-                            flight(r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung","promptSuggestions":["Erkläre 3/4"],"maybeSignedPictureUrl":"https://s3.example/avatars/coach.png"}]"#)
+                            flight(r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung","promptSuggestions":["Erkläre 3/4"],"maybeSignedPictureUrl":"https://s3.example/avatars/coach.png","isSchoolShared":true,"ownerSchoolIds":["s1"],"updatedAt":"$D2026-11-10T09:00:00.000Z","popularity":3,"filterGroup":{"school_types":["grammar-school"],"subjects":["mathematics"]}}]"#)
                         } else if action == id(0x22) {
-                            flight(r#"[{"id":"c1","name":"Goethe","userId":"x","description":"Dichter aus Weimar","initialMessage":"Seid gegrüßt!","modelId":"m-other","isFavorite":true,"maybeSignedPictureUrl":"https://s3.example/avatars/goethe.png?X-Amz-Signature=abc"}]"#)
+                            flight(r#"[{"id":"c1","name":"Goethe","userId":"x","description":"Dichter aus Weimar","initialMessage":"Seid gegrüßt!","modelId":"m-other","isFavorite":true,"maybeSignedPictureUrl":"https://s3.example/avatars/goethe.png?X-Amz-Signature=abc","isGlobal":true,"updatedAt":"$D2026-09-01T09:00:00.000Z","popularity":50,"filterGroup":{"categories":["historical-figures"],"subjects":["german"]}}]"#)
                         } else if action == id(0x33) {
-                            flight(r#"[{"id":"l1","name":"Photosynthese erforschen","userId":"me","studentExercise":"Finde heraus, was Pflanzen brauchen.","maybeSignedPictureUrl":"https://s3.example/avatars/riesig.png"}]"#)
+                            flight(r#"[{"id":"l1","name":"Photosynthese erforschen","userId":"me","studentExercise":"Finde heraus, was Pflanzen brauchen.","maybeSignedPictureUrl":"https://s3.example/avatars/riesig.png","updatedAt":"$D2026-11-20T09:00:00.000Z","schoolType":"elementary-school","gradeLevel":"range-1","subject":"social-studies","filterGroup":{}}]"#)
                         } else if action == id(0x55) {
                             if req.contains("kaputt") {
                                 flight(r#"{"success":true,"value":{"processedUrls":[],"errorUrls":["https://kaputt.example/"]}}"#)
@@ -889,6 +889,14 @@ fn persona_list_and_action_ids_survive_a_restart() {
     let second = open();
     let list = second.state().backend("ais-chat").and_then(|b| b.personas.clone()).unwrap_or_default();
     assert_eq!(list.len(), 3, "the list from the last run shows before any request");
+    let coach = list.iter().find(|p| p.id == "a1").unwrap();
+    assert!(
+        coach.sharing.school
+            && coach.popularity == 3
+            && coach.updated_at.as_deref() == Some("2026-11-10T09:00:00.000Z")
+            && coach.filters.subjects == ["mathematics"],
+        "what Entdecken filters and sorts by survives the restart: {coach:?}"
+    );
     let known = second.ctx().backend("ais-chat").unwrap().known_actions();
     assert!(known.contains_key("getAssistantsByFilterAction"), "{known:?}");
 
@@ -897,6 +905,103 @@ fn persona_list_and_action_ids_survive_a_restart() {
     assert!(open().state().backend("ais-chat").is_some_and(|b| b.personas.is_none()));
     drop((first, second));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Entdecken like AIS.chat's overview pages: tabs from what each entity carries, filter values
+/// OR within a group and AND across groups, search, the five sort orders with popularity ties
+/// going to the newest, and the reset.
+#[test]
+fn explore_filters_sorts_and_searches_like_ais_chat() {
+    let (engine, _posted) = ais_engine();
+    engine.call("persona.refresh", json!({"backend": "ais-chat"})).unwrap();
+    let ids = |engine: &Engine| -> Vec<String> {
+        let out = engine.call("explore.list", json!({})).unwrap();
+        out["items"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_string()).collect()
+    };
+    // Defaults: all tabs, newest first.
+    assert_eq!(ids(&engine), ["l1", "a1", "c1"]);
+    let out = engine.call("explore.list", json!({})).unwrap();
+    assert_eq!(out["hits"], 3);
+    assert_eq!(out["sort_label"], "Neueste zuerst");
+    let sources: Vec<(&str, u64)> = out["sources"].as_array().unwrap().iter().map(|s| (s["key"].as_str().unwrap(), s["count"].as_u64().unwrap())).collect();
+    assert_eq!(sources, [("mine", 2), ("official", 1), ("school", 1), ("community", 0), ("all", 3), ("favorites", 1)]);
+    let groups: Vec<&str> = out["groups"].as_array().unwrap().iter().map(|g| g["key"].as_str().unwrap()).collect();
+    assert_eq!(groups, ["school_types", "grade_ranges", "subjects", "categories"], "only groups some entry has values for");
+    assert_eq!(out["groups"][0]["values"][0]["label"], "Grundschule");
+
+    // Tabs.
+    for (source, want) in [("mine", vec!["l1", "a1"]), ("official", vec!["c1"]), ("school", vec!["a1"]), ("favorites", vec!["c1"]), ("community", vec![])] {
+        engine.call("explore.filter", json!({"source": source})).unwrap();
+        assert_eq!(ids(&engine), want, "{source}");
+    }
+    engine.call("explore.filter", json!({"source": "all"})).unwrap();
+
+    // OR within a group, AND across groups.
+    let out = engine.call("explore.filter", json!({"group": "school_types", "values": ["grammar-school", "elementary-school"]})).unwrap();
+    assert_eq!((out["hits"].as_u64(), out["active"].as_u64()), (Some(2), Some(2)));
+    assert_eq!(ids(&engine), ["l1", "a1"]);
+    engine.call("explore.filter", json!({"group": "subjects", "value": "mathematics"})).unwrap();
+    assert_eq!(ids(&engine), ["a1"], "both groups must match");
+    let out = engine.call("explore.list", json!({})).unwrap();
+    let school_types = &out["groups"][0]["values"];
+    assert_eq!((school_types[0]["count"].as_u64(), school_types[1]["count"].as_u64()), (Some(0), Some(1)), "counts with the other groups applied");
+    assert_eq!(school_types[1]["selected"], true);
+    engine.call("explore.filter", json!({"group": "subjects", "value": "mathematics"})).unwrap();
+    assert_eq!(ids(&engine), ["l1", "a1"], "without on the value toggles");
+    engine.call("explore.filter", json!({"group": "subjects", "value": "german", "on": true})).unwrap();
+    assert!(ids(&engine).is_empty());
+    let out = engine.call("explore.reset", json!({})).unwrap();
+    assert_eq!((out["hits"].as_u64(), out["active"].as_u64()), (Some(3), Some(0)), "Zurücksetzen clears the filter values");
+
+    // Sort orders; a popularity tie goes to the newest.
+    for (by, want) in
+        [("name-asc", ["c1", "a1", "l1"]), ("name-desc", ["l1", "a1", "c1"]), ("date-asc", ["c1", "a1", "l1"]), ("popularity", ["c1", "a1", "l1"])]
+    {
+        engine.call("explore.sort", json!({"by": by})).unwrap();
+        assert_eq!(ids(&engine), want, "{by}");
+    }
+    engine.ctx().update(|s| {
+        for b in &mut s.backends {
+            for p in b.personas.iter_mut().flatten().filter(|p| p.id == "l1") {
+                p.popularity = 3;
+            }
+        }
+    });
+    assert_eq!(ids(&engine), ["c1", "l1", "a1"], "equal popularity: the newer first");
+    assert_eq!(engine.state().explore.sort, aiscraft_core::ExploreSort::Popularity);
+
+    // Search (every word, umlauts folded) and kind.
+    engine.call("explore.filter", json!({"query": "WEIMAR dichter"})).unwrap();
+    assert_eq!(ids(&engine), ["c1"]);
+    engine.call("explore.filter", json!({"query": "", "kind": "learning_scenario"})).unwrap();
+    assert_eq!(ids(&engine), ["l1"]);
+    engine.call("explore.filter", json!({"kind": "all"})).unwrap();
+    assert_eq!(ids(&engine).len(), 3);
+
+    // Hostile params are refused and change nothing.
+    let before = engine.state().explore.clone();
+    for p in [
+        json!({"source": "alles"}),
+        json!({"kind": "robot"}),
+        json!({"kind": 5}),
+        json!({"query": 5}),
+        json!({"group": "farbe", "value": "rot"}),
+        json!({"value": "rot"}),
+        json!({"group": "subjects", "values": "mathematics"}),
+        json!({"group": "subjects", "value": "<b>"}),
+        json!({"group": "subjects", "values": (0..41).map(|i| format!("v{i}")).collect::<Vec<_>>()}),
+    ] {
+        assert!(engine.call("explore.filter", p.clone()).is_err(), "{p}");
+    }
+    assert!(engine.call("explore.sort", json!({"by": "zufall"})).is_err());
+    assert!(engine.call("explore.list", json!({"backend": "nirgends"})).is_err());
+    assert_eq!(engine.state().explore, before);
+
+    // Reset with all: tab, kind and search too; the sort order stays.
+    engine.call("explore.filter", json!({"source": "mine", "query": "x", "group": "languages", "values": ["german"]})).unwrap();
+    engine.call("explore.reset", json!({"all": true})).unwrap();
+    let f = engine.state().explore.clone();
+    assert_eq!(f, aiscraft_core::ExploreFilter { sort: aiscraft_core::ExploreSort::Popularity, ..Default::default() });
 }
 
 /// Favourites: toggling marks at once and asks AIS.chat; a refusal puts the mark back.

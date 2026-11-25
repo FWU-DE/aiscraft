@@ -379,6 +379,87 @@ pub struct PersonaInfo {
     /// Web search as set in AIS.chat for this entity (`isWebSearchEnabled`), if it says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_search: Option<bool>,
+    /// Last change in AIS.chat (`updatedAt`, ISO 8601 in UTC), for „Neueste zuerst“.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// How much it was used lately across AIS.chat (`popularity`), for „Beliebteste zuerst“.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub popularity: u64,
+    /// Where AIS.chat lists it besides „Meine“: the tabs Offiziell, Schulintern and Community.
+    #[serde(default, skip_serializing_if = "PersonaSharing::is_empty")]
+    pub sharing: PersonaSharing,
+    /// School types, grades, subjects, … it was tagged with (`filterGroup`), as AIS.chat's keys.
+    #[serde(default, skip_serializing_if = "PersonaFilters::is_empty")]
+    pub filters: PersonaFilters,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// The overview tabs of AIS.chat an entity shows up in (`OverviewFilter`), besides „Meine“ and
+/// „Favoriten“, which [`PersonaInfo::own`] and [`PersonaInfo::favorite`] say.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PersonaSharing {
+    /// „Offiziell“: provided for the federal state (`isGlobal`).
+    pub official: bool,
+    /// „Schulintern“: shared within one of the person's schools.
+    pub school: bool,
+    /// „Community“: shared with every teacher (`isCommunityShared`).
+    pub community: bool,
+}
+
+impl PersonaSharing {
+    pub fn is_empty(&self) -> bool {
+        !self.official && !self.school && !self.community
+    }
+}
+
+/// The filter values of one entity, as AIS.chat's keys (`grammar-school`, `range-2`, …).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PersonaFilters {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub school_types: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub grade_ranges: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subjects: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub federal_states: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub languages: Vec<String>,
+}
+
+impl PersonaFilters {
+    pub fn is_empty(&self) -> bool {
+        crate::explore::FilterGroup::ALL.iter().all(|g| self.get(*g).is_empty())
+    }
+    pub fn get(&self, group: crate::explore::FilterGroup) -> &[String] {
+        use crate::explore::FilterGroup as G;
+        match group {
+            G::SchoolTypes => &self.school_types,
+            G::GradeRanges => &self.grade_ranges,
+            G::Subjects => &self.subjects,
+            G::Categories => &self.categories,
+            G::FederalStates => &self.federal_states,
+            G::Languages => &self.languages,
+        }
+    }
+    pub fn get_mut(&mut self, group: crate::explore::FilterGroup) -> &mut Vec<String> {
+        use crate::explore::FilterGroup as G;
+        match group {
+            G::SchoolTypes => &mut self.school_types,
+            G::GradeRanges => &mut self.grade_ranges,
+            G::Subjects => &mut self.subjects,
+            G::Categories => &mut self.categories,
+            G::FederalStates => &mut self.federal_states,
+            G::Languages => &mut self.languages,
+        }
+    }
 }
 
 /// A chat's path in AIS.chat's web app (`getConversationPath`).
