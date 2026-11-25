@@ -32,10 +32,17 @@ jobs:
   build:
     name: H5P-Player bauen
     runs-on: ubuntu-24.04
+    # The build (npm packages, build.sh) runs with read rights only and without a stored token;
+    # only the job `publish` can write, and it runs no code from the repository or npm.
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      asset: ${{ steps.sum.outputs.asset }}
+      sha256: ${{ steps.sum.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -57,12 +64,25 @@ jobs:
           name: h5p-player
           path: dist/h5p-player/
           retention-days: 14
+
+  publish:
+    name: H5P-Player veröffentlichen
+    needs: build
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: h5p-player
+          path: dist/h5p-player/
       - name: Veröffentlichen
-        if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
-          ASSET: ${{ steps.sum.outputs.asset }}
-          SHA256: ${{ steps.sum.outputs.sha256 }}
+          GH_REPO: ${{ github.repository }}
+          ASSET: ${{ needs.build.outputs.asset }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
         run: |
           version="${ASSET#aiscraft-h5p-player-}"
           version="${version%.zip}"

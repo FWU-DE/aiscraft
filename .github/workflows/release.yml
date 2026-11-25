@@ -17,6 +17,12 @@ name: Release
 # off it also leaves a draft release, unpublished. nightly.yml calls this workflow with a
 # `version` (e.g. 0.1.1-nightly.20261126): the shared jobs set it with `cargo xtask version set`,
 # and publishing the pre-release creates its tag at the built commit.
+#
+# Only main and `v*` tags publish: the job `gate` stops every run that would leave a release (dry
+# run off, or called by nightly.yml) from any other branch before anything is built, because the
+# app's update check offers the latest release to every user. Repository settings the owner keeps
+# in step: a tag ruleset that lets only maintainers push `v*`, and protection rules (allowed
+# branches and tags, reviewers if wanted) on the `release` environment the job `publish` uses.
 on:
   push:
     tags: ["v*"]
@@ -49,9 +55,40 @@ permissions:
   contents: read
 
 jobs:
+  # A run that publishes must come from main or a `v*` tag. A dry run may build any branch.
+  # Called from nightly.yml, `github.ref` is the caller's (main) and `inputs.dry-run` is empty.
+  gate:
+    name: Publishing only from main or a v* tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check ref
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run == true }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "Dry run on $REF: builds only, publishes nothing."
+            exit 0
+          fi
+          if [ "$REF_TYPE" = "tag" ] && [[ "$REF_NAME" == v* ]]; then
+            echo "Release from tag $REF_NAME."
+            exit 0
+          fi
+          if [ "$REF" = "refs/heads/main" ]; then
+            echo "Release from main ($EVENT)."
+            exit 0
+          fi
+          echo "::error::Releases are published only from main or a v* tag, not from $REF ($EVENT). Run it on main, push a tag, or keep dry-run on."
+          exit 1
+
   # The release is named after Cargo.toml's version, not after the tag.
   tag:
     name: Tag matches Cargo.toml
+    needs: gate
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     steps:
@@ -69,9 +106,9 @@ jobs:
           fi
 
   release:
-    needs: tag
-    # Runs after `tag` passed, or without it on "Run workflow".
-    if: ${{ !cancelled() && (needs.tag.result == 'success' || needs.tag.result == 'skipped') }}
+    needs: [gate, tag]
+    # Runs after `gate` passed and `tag` passed, or without `tag` on "Run workflow".
+    if: ${{ !cancelled() && needs.gate.result == 'success' && (needs.tag.result == 'success' || needs.tag.result == 'skipped') }}
     # GitHub checks the called workflow's job permissions against these even for jobs the dry run
     # skips (its draft and its Flatpak OCI push).
     permissions:
@@ -95,10 +132,12 @@ jobs:
 
   publish:
     name: GitHub Release
-    needs: release
-    if: ${{ !cancelled() && needs.release.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.dry-run) }}
+    needs: [gate, release]
+    if: ${{ !cancelled() && needs.gate.result == 'success' && needs.release.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.dry-run) && (github.ref == 'refs/heads/main' || (github.ref_type == 'tag' && startsWith(github.ref_name, 'v'))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # Protection rules on this environment (allowed refs, reviewers) are repository settings.
+    environment: release
     permissions:
       contents: write
     steps:
