@@ -39,6 +39,11 @@ const LIST_KEY: &str = "accounts";
 pub(crate) const PREFIX: &str = "app-";
 /// How long the sign-in in the browser may take.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// The catalog's MCP servers run in exactly these versions, never "latest": what npx and uvx
+/// fetch on start must not change under people. Raise them on purpose, after a look at the
+/// changes (`npm view @softeria/ms-365-mcp-server version`, `pypi.org/pypi/workspace-mcp/json`).
+pub(crate) const MS365_MCP_VERSION: &str = "0.191.0";
+pub(crate) const WORKSPACE_MCP_VERSION: &str = "2.7.0";
 
 // ---- catalog --------------------------------------------------------------------------------
 
@@ -662,17 +667,25 @@ async fn connect_mcp(c: Ctx, e: &CatalogEntry, p: &Value) -> Result<Value> {
             if !tenant.is_empty() {
                 env.insert("MS365_MCP_TENANT_ID".into(), json!(tenant));
             }
-            format!("npx -y @softeria/ms-365-mcp-server --read-only{}", if tenant.is_empty() { "" } else { " --org-mode" })
+            mcp_command(e.id, !tenant.is_empty())
         }
         _ => {
             env.insert("GOOGLE_OAUTH_CLIENT_ID".into(), json!(client_id));
             if !secret.is_empty() {
                 env.insert("GOOGLE_OAUTH_CLIENT_SECRET".into(), json!(secret));
             }
-            "uvx workspace-mcp --read-only --tools gmail calendar drive".to_string()
+            mcp_command(e.id, false)
         }
     };
     crate::tools::add(c, json!({"name": e.name, "command": command, "env": env})).await
+}
+
+/// How a catalog MCP server is started: always in its pinned version.
+pub(crate) fn mcp_command(entry: &str, org: bool) -> String {
+    match entry {
+        "ms365-mcp" => format!("npx -y @softeria/ms-365-mcp-server@{MS365_MCP_VERSION} --read-only{}", if org { " --org-mode" } else { "" }),
+        _ => format!("uvx workspace-mcp@{WORKSPACE_MCP_VERSION} --read-only --tools gmail calendar drive"),
+    }
 }
 
 pub(crate) async fn remove(c: &Ctx, id: &str) -> Result<Value> {

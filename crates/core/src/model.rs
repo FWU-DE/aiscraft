@@ -98,7 +98,11 @@ pub struct ActivityLink {
 pub struct GeneratedDocument {
     pub file_name: String,
     pub format: String,
+    /// For `docx` and `pdf` AIS.chat sends Markdown and converts it itself; `html` is the page.
     pub content: String,
+    /// The document's title (AIS.chat since 2026-11, used for the Word/PDF title).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

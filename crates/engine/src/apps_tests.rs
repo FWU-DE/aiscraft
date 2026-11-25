@@ -169,6 +169,28 @@ fn the_bridge_follows_the_approval_rules_and_stays_with_its_connector() {
         }
     }
 
+    // A structured result waiting for another view's call of the same tool stays with that call;
+    // this view gets the result of its own call.
+    let other = "view-einer-anderen-ansicht";
+    assert!(crate::tools::plant_structured(&ctx, other, json!({"fremd": true})));
+    let out = send(json!({"jsonrpc": "2.0", "id": 30, "method": "tools/call", "params": {"name": "board", "arguments": {"woche": 49}}}));
+    assert_eq!(out[0]["result"]["structuredContent"]["args"]["woche"], 49, "{out:?}");
+    assert!(out[0]["result"]["structuredContent"].get("fremd").is_none());
+    assert!(crate::tools::structured_waits(&ctx, other), "the other view's result is still there");
+
+    // A view refused again and again is held back for a while, without asking the person.
+    assert_eq!(session.live.lock().unwrap().denials.len(), 1, "the „no“ above counts");
+    {
+        let now = std::time::Instant::now();
+        session.live.lock().unwrap().denials.extend([now, now]);
+    }
+    let out = send(json!({"jsonrpc": "2.0", "id": 31, "method": "tools/call", "params": {"name": "board_save", "arguments": {"termin": "x"}}}));
+    assert_eq!(out[0]["error"]["code"], -32000, "{out:?}");
+    assert!(engine.state().approvals.is_empty(), "no question while held back");
+    assert!(!session.live.lock().unwrap().held_back(std::time::Instant::now() + crate::apps::DENIAL_WINDOW), "after the window it may ask again");
+    session.live.lock().unwrap().denials.clear();
+    assert_eq!(send(json!({"jsonrpc": "2.0", "id": 32, "method": "tools/call", "params": {"name": "board", "arguments": {}}}))[0]["result"]["isError"], false);
+
     // Only tools for the view, only of its own connector.
     for name in ["board_model", "gibt_es_nicht", "local_files_list"] {
         let out = send(json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": name, "arguments": {}}}));

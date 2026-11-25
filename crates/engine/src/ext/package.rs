@@ -33,10 +33,34 @@ pub(crate) fn bad_name(name: &str) -> Option<String> {
         return Some(format!("unzulässiger Pfad: {shown}"));
     }
     let trimmed = name.strip_suffix('/').unwrap_or(name);
-    if trimmed.split('/').any(|p| p.is_empty() || p == "." || p == "..") || trimmed.split('/').count() > MAX_DEPTH {
+    if trimmed.split('/').any(|p| !segment_ok(p)) || trimmed.split('/').count() > MAX_DEPTH {
         return Some(format!("unzulässiger Pfad: {shown}"));
     }
     None
+}
+
+/// Device names Windows reserves in every folder (`NUL`, `COM1.txt` …).
+const WINDOWS_DEVICES: &[&str] = &["con", "prn", "aux", "nul", "conin$", "conout$"];
+
+/// One segment of an entry name. Windows drops trailing dots and spaces (`.. ` and `...` become
+/// `..`, `a.` becomes `a`), so such segments are refused, like dot-only segments, leading
+/// spaces, characters Windows does not allow, device names and `.git` (hooks run code). Other
+/// names starting with a dot stay allowed: plug-ins carry `.claude-plugin/` and `.mcp.json`,
+/// bundles `node_modules/.bin`.
+fn segment_ok(p: &str) -> bool {
+    let lower = p.to_ascii_lowercase();
+    let stem = lower.split('.').next().unwrap_or("");
+    let device = WINDOWS_DEVICES.contains(&stem)
+        || ((stem.starts_with("com") || stem.starts_with("lpt"))
+            && stem.chars().count() == 4
+            && stem.chars().nth(3).is_some_and(|c| c.is_ascii_digit() || "¹²³".contains(c)));
+    !p.is_empty()
+        && !p.chars().all(|c| c == '.' || c == ' ')
+        && !p.ends_with(['.', ' '])
+        && !p.starts_with(' ')
+        && !p.contains(['<', '>', '"', '|', '?', '*'])
+        && !device
+        && lower != ".git"
 }
 
 /// Unpack ZIP bytes (an `.mcpb` or a zipped plug-in) into `dest`, which must not exist yet.
@@ -171,8 +195,44 @@ mod tests {
         for bad in ["/etc/passwd", "../x", "a/../../x", "C:/x", "a\\b", "", "a//b", "./a"] {
             assert!(bad_name(bad).is_some(), "{bad}");
         }
-        assert!(bad_name("server/index.js").is_none());
-        assert!(bad_name("server/").is_none());
+        // What Windows would turn into something else: trailing dots and spaces, dot-only
+        // segments, device names, forbidden characters; and `.git`.
+        for bad in [
+            "... /x",
+            "a/.../b",
+            "a/.. /b",
+            "a/. /b",
+            "a./b",
+            "server/index.js.",
+            "server/index.js ",
+            " a/b",
+            "a/ b",
+            "NUL",
+            "a/con.txt",
+            "lib/COM1.js",
+            "lpt9",
+            "a/b?.js",
+            "a*/b",
+            "x/.git/hooks/pre-commit",
+            ".GIT/config",
+        ] {
+            assert!(bad_name(bad).is_some(), "{bad}");
+        }
+        for ok in [
+            "server/index.js",
+            "server/",
+            ".claude-plugin/plugin.json",
+            ".mcp.json",
+            "node_modules/.bin/tool",
+            "node_modules/.package-lock.json",
+            "a.b/c.d.e",
+            "console/x",
+            "com/x",
+            "computer.js",
+            ".gitignore",
+        ] {
+            assert!(bad_name(ok).is_none(), "{ok}");
+        }
     }
 
     #[test]

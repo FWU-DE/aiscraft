@@ -40,7 +40,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PIN: crates/engine/src/sandbox/image.rs
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Neuestes Release
         id: release
         env:
@@ -153,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           branch="nod-runtime/$TAG"
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+          if git ls-remote --exit-code --heads "https://github.com/${GITHUB_REPOSITORY}.git" "$branch" >/dev/null; then
             echo "Branch $branch gibt es schon; nichts zu tun." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -166,7 +168,8 @@ jobs:
           Rechner mit $CURRENT bekommen „Aktualisieren“ angeboten.
 
           Ref #94"
-          git push origin "$branch"
+          # Checkout keeps no credentials (zizmor artipacked); the token is used only for this push.
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$branch"
           cat > body.md <<EOF
           Neue Windows-Laufzeit von n8n Nod für „Eigener Rechner (Sandbox)“ (#94): **$CURRENT → $TAG**.
 

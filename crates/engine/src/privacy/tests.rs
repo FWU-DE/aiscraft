@@ -166,7 +166,15 @@ fn no_real_name_reaches_the_backend() {
     // Switched off for this chat: the text goes out as written.
     engine.call("chat.set_sources", json!({"protect": false})).unwrap();
     engine.call("chat.send", json!({"text": "Ohne Schutz: Lea"})).unwrap();
-    assert!(posted(&seen).pop().unwrap().contains("Ohne Schutz: Lea"));
+    let unprotected = posted(&seen).pop().unwrap();
+    assert!(unprotected.contains("Ohne Schutz: Lea"));
+    // Memory notes come from every chat: their names stay home here too.
+    assert!(unprotected.contains("braucht mehr Zeit bei Tests") && !unprotected.contains("Müller"), "{unprotected}");
+    // Single calls in the background (tidy-up, check-ins) protect once a class list exists,
+    // whatever the open chat's switch says.
+    engine.block_on(crate::chat::complete(engine.ctx(), None, "Fasse zusammen: Lea Müller braucht mehr Zeit.")).unwrap();
+    let single = posted(&seen).pop().unwrap();
+    assert!(!single.contains("Lea") && !single.contains("Müller"), "{single}");
     engine.call("chat.set_sources", json!({"protect": null})).unwrap();
 
     // Deleting the chat keeps its mapping while it lies in the trash (#77); purging deletes it.
@@ -205,6 +213,63 @@ fn single_calls_are_protected_and_translated_back() {
     let out = engine.block_on(crate::chat::complete(engine.ctx(), Some("Du hilfst Lea Müller."), "Überarbeite: Lea war krank.")).unwrap();
     assert_eq!(out, "Für Lea: alles gut.");
     assert!(posted(&seen).iter().all(|r| !r.contains("Lea") && !r.contains("Müller")));
+}
+
+/// Answers written before protection was switched on hold names; later requests protect them
+/// too, and placeholders in answers stay as they are.
+#[test]
+fn older_answers_are_protected_too() {
+    let (engine, seen) = engine_with(&["Lea Müller hat gefehlt, [S1] nicht."]);
+    engine.call("chat.send", json!({"text": "Wer hat gefehlt?"})).unwrap();
+    assert!(posted(&seen).pop().unwrap().contains("Wer hat gefehlt?"));
+    engine.call("privacy.list_add", json!({"text": "Lea Müller"})).unwrap();
+    engine.call("chat.send", json!({"text": "Und gestern?"})).unwrap();
+    let req = posted(&seen).pop().unwrap();
+    assert!(!req.contains("Lea") && !req.contains("Müller"), "{req}");
+    assert!(req.contains("hat gefehlt, [S1] nicht."), "{req}");
+}
+
+/// The page reader goes over the network: a web address keeps the placeholders (#55).
+#[test]
+fn web_addresses_keep_the_placeholders() {
+    let (engine, _) = engine_with(&["ok"]);
+    engine.allow_local_web().unwrap();
+    let (page, pages) = chunked_openai(&engine, &["x"]);
+    engine.call("privacy.list_add", json!({"text": "Lea Müller"})).unwrap();
+    engine.call("chat.send", json!({"text": "Such etwas über Lea"})).unwrap();
+    let conv = engine.state().current.clone().unwrap();
+    assert!(mapping(engine.ctx(), &conv).entries.iter().any(|e| e.placeholder == "[S1]"));
+    let call = aiscraft_core::ToolCall {
+        id: "w".into(),
+        name: crate::tools::WEB_FETCH.into(),
+        arguments: json!({"url": format!("{}/schueler/[S1]", page.trim_end_matches("/v1"))}),
+        outcome: None,
+    };
+    let (_, _, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, &Default::default(), true));
+    let reqs = pages.lock().unwrap().clone();
+    let get = reqs.iter().find(|r| r.contains("/schueler/")).expect("the page was requested");
+    let line = get.lines().next().unwrap_or("");
+    assert!(!line.contains("Lea") && (line.contains("[S1]") || line.contains("%5BS1%5D")), "{line}");
+}
+
+/// A task's result in the chat it came from (#55): the task chat's `[S1]` is translated back and
+/// protected again with the origin chat's mapping, so it never names another pupil.
+#[test]
+fn task_results_keep_the_right_names() {
+    let (engine, _) = engine_with(&["[S1] ist fertig."]);
+    engine.call("privacy.list_add", json!({"text": "Lea Müller\nJonas Schmidt"})).unwrap();
+    engine.call("chat.send", json!({"text": "Lea Müller fehlt heute."})).unwrap();
+    let origin = engine.state().current.clone().unwrap();
+    assert_eq!(engine.call("privacy.reveal", json!({"text": "[S1]"})).unwrap()["text"], "Lea");
+    let task =
+        engine.call("task.start", json!({"title": "Bericht", "instructions": "Schreib über Jonas Schmidt"})).unwrap()["id"].as_str().unwrap().to_string();
+    let card =
+        |s: &crate::State| s.messages.iter().find(|m| m.conversation_id == origin && m.activity.iter().any(|a| a.label == crate::tasks::TASK_RESULT)).cloned();
+    assert!(engine.wait_for(std::time::Duration::from_secs(30), |s| card(s).is_some()));
+    assert_eq!(mapping(engine.ctx(), &task).reveal("[S1]"), "Jonas", "in the task chat [S1] is Jonas");
+    let m = card(&engine.state()).unwrap();
+    assert!(!m.content.contains("Jonas") && !m.content.contains("[S1] ist fertig"), "{}", m.content);
+    assert!(engine.call("privacy.reveal", json!({"text": m.content})).unwrap()["text"].as_str().unwrap().contains("Jonas ist fertig."));
 }
 
 /// Class lists come from CSV, Excel, OpenDocument-like sheets and contacts; for one project or all.

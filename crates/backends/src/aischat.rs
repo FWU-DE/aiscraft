@@ -548,7 +548,12 @@ pub fn activity_steps(v: &Value) -> Vec<ActivityStep> {
                         })
                         .unwrap_or_default(),
                     document: st.get("document").and_then(|d| {
-                        Some(GeneratedDocument { file_name: s(d, "fileName")?, format: s(d, "format").unwrap_or_default(), content: s(d, "content")? })
+                        Some(GeneratedDocument {
+                            file_name: s(d, "fileName")?,
+                            format: s(d, "format").unwrap_or_default(),
+                            content: s(d, "content")?,
+                            title: s(d, "title").unwrap_or_default(),
+                        })
                     }),
                 },
                 _ => return None,

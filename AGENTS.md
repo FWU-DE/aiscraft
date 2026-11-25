@@ -89,6 +89,7 @@ itself; keep that block in step with craft-libs' root `Cargo.toml` when bumping 
 ```sh
 cargo test --workspace --exclude aiscraft          # all tests (+ `cargo test -p aiscraft`: control channel)
 cargo clippy --workspace --all-targets
+cargo deny check                                   # RustSec advisories, licences, sources (deny.toml)
 cargo test -p aiscraft-backends -- --ignored       # live: real Claude CLI, real headless browser
 cargo run -p aiscraft-ui --example snapshot -- --demo --out shot.png \
   --script '[["chat.send", {"text": "Hallo"}], ["ui.show", {"what": "settings"}]]'
@@ -106,11 +107,11 @@ changes, the client breaks or misses features. **At least once per working week,
 release**, compare against the AIS.chat repository (`FWU-DE/ais-chat`, public, AGPL) and pull new
 features in.
 
-Last compared: **`d496d627c897` (2026-11-23)**. Update this line when you compare.
+Last compared: **`674c6be3fd5f` (2026-11-25)**. Update this line when you compare.
 
 ```sh
-gh api repos/FWU-DE/ais-chat/compare/d496d627c897...main --jq '.commits[].commit.message' | head -80
-gh api 'repos/FWU-DE/ais-chat/compare/d496d627c897...main' --jq '.files[].filename' | sort -u
+gh api repos/FWU-DE/ais-chat/compare/674c6be3fd5f...main --jq '.commits[].commit.message' | head -80
+gh api 'repos/FWU-DE/ais-chat/compare/674c6be3fd5f...main' --jq '.files[].filename' | sort -u
 ```
 
 What to check, in this order (paths in `FWU-DE/ais-chat`):
@@ -119,6 +120,7 @@ What to check, in this order (paths in `FWU-DE/ais-chat`):
 |---|---|---|
 | `sendChatMessageAction(conversationId, messages, modelId, fileIds, …)` and its result `{stream, messageId, error}` | `apps/chat-bot/src/app/api/chat/actions.ts`, `src/types/chat.ts` | `backends/src/aischat.rs` (`action_payload`, `map_action_event`) |
 | Stream format: text deltas, `\x1e`-prefixed `ai_activity` events | `src/utils/streaming.ts`, `src/types/ai-activity.ts` (`aiActivityStepSchema`, tool names) | `aischat.rs` (`activity_steps`, `tool_label`) |
+| Generated documents: `ai_activity` step `generateDocument` with `document: {fileName, title, format, content}`; for `docx` and `pdf` the content is **Markdown** (AIS.chat converts it in the browser), `html` a page | `api/chat/tools/generate-document-tool.ts`, `src/utils/files/generated-document*.ts` | `aischat.rs` (`GeneratedDocument`), `commands.rs` (`document_file_bytes`) |
 | Session cookie name, Auth.js config, 8 h lifetime | `src/auth/cookies.ts`, `src/auth/index.ts` | `SESSION_COOKIE`, `browser_login.rs` |
 | Models in the page payload (`llm_model` fields, `priceMetadata.type`); repeated objects come as back-references (`"$1f:0:props:models:0:priceMetadata"`), e.g. `defaultImageModel` on `/image-generation` | `packages/shared/src/db/schema.ts`, `llm-model-provider.tsx`, `image-generation/page.tsx`, `image-model-provider.tsx` | `rsc/src/scrape.rs` (`page_models`, `resolve_ref`) |
 | Favourites: `setFavoriteAction({entityType: assistant\|character\|learningScenario, entityId, isFavorite})`, shipped with the overview pages' JS | `(chat-bot)/actions/favorite-actions.ts`, `packages/shared/src/favorites/favorite-service.ts` | `AisChat::set_favorite`, `persona.favorite` |
@@ -187,9 +189,9 @@ a slow path comes with such a gate.
 | Persona lists | The three lists and the session load in parallel | none yet (code review) |
 | Pictures in Entdecken load as cards come into view | Opening the page asks only for the pictures of the cards in view and about a row ahead (`PICTURE_LOOKAHEAD`); jumping over cards asks nothing for them; a picture is asked for once per run; at most 6 asks are open at once, 2 of them for cards not yet in view (`ui/src/explore.rs`), the engine downloads 4 at once | `explore_asks_only_for_pictures_in_view` (ui, `tests/explore_pictures.rs`) |
 | Errors a person can fix are named | A full disk (`StorageFull`, `QuotaExceeded`, ENOSPC/EDQUOT, `SQLITE_FULL`) gives `aiscraft_core::DISK_FULL` with the details, classified from error codes, never from text; every engine file write goes through `engine/src/disk.rs`. A stopped local service (Ollama, LM Studio, Claude CLI, `aiscraft-preview`, a connector) is named with host:port or exit code and the next step | `every_engine_file_write_goes_through_disk`, `a_full_disk_while_saving_an_artifact_is_named_and_keeps_the_old_file` (engine), `a_store_that_cannot_grow_says_the_disk_is_full` (store), `a_stopped_local_server_is_named_with_host_and_port`, `claude_cli_that_ends_mid_answer_says_so` (backends) |
-| Names stay on the device („Namen schützen“, #55) | With protection on, no class-list name, common first name outside the lists (built-in list, #73: "Klaus"), name the downloaded model finds (a last name without a form of address, #73: "Weber"), e-mail, phone, IBAN or street address is in any request body the backend receives (message, attached text, memory, system prompt, later rounds, single calls); the mapping is not in the state agents read nor in the JSON export | `no_real_name_reaches_the_backend`, `single_calls_are_protected_and_translated_back`, `common_first_names_without_a_class_list`, `the_name_model_finds_last_names_without_a_form_of_address` (engine, `privacy/tests.rs`) |
+| Names stay on the device („Namen schützen“, #55) | With protection on, no class-list name, common first name outside the lists (built-in list, #73: "Klaus"), name the downloaded model finds (a last name without a form of address, #73: "Weber"), e-mail, phone, IBAN or street address is in any request body the backend receives (message, attached text, memory, system prompt, later rounds, older answers, single calls); memory notes go out without class-list names in chats without protection too; single calls in the background (tidy-up, check-ins, skills, research, trust check) are protected once any class list exists; the page reader (`web_fetch`) keeps the placeholders in the address; a task's result is translated into the placeholders of the chat it came from; the mapping is not in the state agents read nor in the JSON export. **Not checked:** images, PDFs uploaded as files (AIS.chat) and voice input go out as they are | `no_real_name_reaches_the_backend`, `single_calls_are_protected_and_translated_back`, `common_first_names_without_a_class_list`, `the_name_model_finds_last_names_without_a_form_of_address`, `older_answers_are_protected_too`, `web_addresses_keep_the_placeholders`, `task_results_keep_the_right_names` (engine, `privacy/tests.rs`) |
 | Name recognition only on a yes (#73) | Nothing is downloaded and no native code loaded before the person answered the question with size, source and licence; every file has a pinned SHA-256 (download and, for the runtime package, the library inside), a wrong one keeps nothing; ONNX Runtime is loaded at run time from `<data>/ner` (ort `load-dynamic`, `.cargo/config.toml` keeps the build from downloading or linking it) | `the_name_recognition_downloads_only_after_yes_and_checks_checksums`, `every_platform_part_is_pinned` (engine, `privacy/`) |
-| One request, one question at most (#63) | A batch of steps from one request asks nothing; a call nobody asked for asks once; one trust check per call that needs a yes, none for reads; the check's request holds the owner's messages with the answers they replied to and never a tool result | `one_request_covers_every_step` (engine, `trust_tests.rs`) |
+| One request, one question at most (#63) | A batch of steps from one request asks nothing; a call nobody asked for asks once; one trust check per call that needs a yes, none for reads; the check's request holds the owner's messages with the answers they replied to and never a tool result nor a prompt the app wrote (schedules, tasks); a reply without explicit values covers only as the current request answering a proposal; a schedule or task the model plans asks unless the current request covers it, and background work never plans one | `one_request_covers_every_step`, `a_schedule_prompt_is_no_permission`, `an_empty_term_list_needs_the_current_short_reply` (engine, `trust_tests.rs`) |
 | Own rules (#22) | An allowing rule runs what it names without a question; a prohibition refuses without a question, also against a covering request, and also with the trust check off; background work stays closed; the check's request carries the connector's rules with their kind | `own_rules_allow_forbid_and_prohibitions_win` (engine, `trust_tests.rs`) |
 | One approval, one result (#24) | An approved or covered action is claimed in the store before it runs; a second answer, a claim from another window or a repeat in the same request does not run it; a call cut off midway is uncertain, never retried, and asks next time; after a restart running claims become uncertain | `one_approval_one_result`, `a_call_cut_off_midway_is_uncertain_and_never_retried`, `a_covered_action_runs_once_per_request`, `running_actions_become_uncertain_after_a_restart` (engine), `a_claim_is_taken_once_and_running_claims_become_uncertain` (store) |
 | Action log (#23) | Every tool action is logged with target, short arguments and why (read, request with source and words, rule, approval, refusal); model calls with tokens and cost; no vault value in the log or the CSV; capped at 5000 entries | `action_log_says_what_ran_and_why` (engine), `action_log_keeps_the_newest_entries` (store) |
@@ -200,6 +202,7 @@ a slow path comes with such a gate.
 | Every workspace container is locked down (#94) | Every start comes from `container::docker_run`: `--network none` unless the network switch is on, `--cap-drop ALL`, `no-new-privileges`, user 1000:1000, `--read-only`, 2 GB RAM without extra swap, 2 CPUs, 1024 processes, one mount (the chat's folder); the distribution mounts no Windows drive and runs no Windows program (`wsl.conf`, checked after the import); running, writing and converting ask with command, folder and time limit, background work refuses Security review (2026-11-25): no vault placeholder ever enters the computer (refused before filling); the approval and claim name the network and a run never gets more; every container is named and killed on any time limit, LibreOffice has its own; a read is whole or fails, links are measured by their target; working folders at most 2 GB per chat and 10 GB together, 2 GB per file; tool output cannot close its data block in any spelling; Docker maps container users to an unprivileged range (`userns-remap`), because root of the computer itself can still mount a Windows drive with drvfs (checked live) | `security_review_findings_are_closed`, `every_container_start_is_locked_down`, `workspace_tools_follow_nods_rule`, `workspace_output_passes_name_protection` (engine, `sandbox_tests.rs`); live: `real_wsl_runs_echo_in_the_container` (Windows), `real_lima_runs_echo_in_the_container` (Linux with KVM; both `#[ignore]`, download and install). Linux (#102): the downloads each checked and handed over in order, the VM mounts only the checked assets read-only and forwards no port, missing KVM, QEMU or ssh named in order: `the_linux_downloads_are_each_checked_and_handed_over_in_order` (engine), `the_vm_mounts_only_the_checked_assets_read_only_and_forwards_nothing`, `missing_pieces_are_named_in_order`, `the_workspace_id_comes_only_from_the_pinned_manifest` (`sandbox/lima.rs`) |
 | Never crash on hostile input | Caps on every size, no panics | workspace lints, panic hunt |
 | Tests stay off the desktop | No windows, browser, mic or speakers | rule 2.4, `browser_allowed` |
+| Security review | No known RustSec vulnerability or unsound crate (ignores only with reason and issue, when no fix exists); only the licences and sources in `deny.toml` (no GPL linked; crates.io and the pinned storytold repos, git deps by `rev`); no workflow finding of medium severity or worse (actions pinned to a SHA, `persist-credentials: false`, least privilege, no `${{ }}` of untrusted input in `run:`; exceptions with reasons in `.github/zizmor.yml`); no secret in the repository or its history (fake test keys in `.gitleaks.toml`); CodeQL (Rust, Actions) clean or each alert triaged. Before every release, agents also do a full manual security review of the code (as on 2026-11-25) and file an issue per finding | `cargo-deny`, `zizmor`, `gitleaks`, `codeql` (`.github/workflows/security.yml`, required checks); optional `ai-review` (Claude on pull requests, needs the secret `ANTHROPIC_API_KEY`) |
 
 Live check against the real AIS.chat (signed in): cold, with no cache, `persona.refresh` takes
 about 25 s; warm, with cached ids, about 3 s. The app shows the cached list at once. Measure with
@@ -211,6 +214,7 @@ cold number. If the warm number grows past 5 s, look for a missing cache before 
 ```sh
 cargo test --workspace --exclude aiscraft
 cargo clippy --workspace --all-targets
+cargo deny check          # after a dependency change; `cargo install cargo-deny --locked` once
 ```
 
 Then commit with a message that says what changed for people, reference the issue (`Closes #n`),
@@ -231,6 +235,11 @@ follow craft-update (`aischatcraft-<version>-<os>-<arch>.<ext>`); `update.rs` fi
 signed once their secrets are in the repository's `release` environment; the shared workflow signs
 Linux packages only on a `release` branch, so tag builds stay unsigned there. "Run workflow" on
 Release with dry-run builds the packages and publishes nothing.
+
+Before every release: the Security workflow is green on the commit to be tagged, and agents have
+done a full manual security review of the code since the last one (first on 2026-11-25: trust
+check, secrets, network, file writes, preview process, workflows), with an issue per finding and
+no open finding of high severity.
 
 For now (owner's decision, 2026-11-25) releases have no macOS package and no signatures: our
 workflow always calls the shared one in dry-run mode (no macOS, whose `macos-15-xlarge` runner is
