@@ -263,6 +263,10 @@ pub(crate) fn specs_for(c: &Ctx, sources: &aiscraft_core::Sources) -> Vec<ToolSp
     if crate::computer::enabled(c) && sources.allows_connector(crate::computer::ID) {
         out.extend(crate::computer::specs());
     }
+    // The own computer (#94), only while the person has it on.
+    if crate::sandbox::offered(c) && sources.allows_connector(crate::sandbox::ID) {
+        out.extend(crate::sandbox::specs());
+    }
     for conn in c.state().connectors.iter().filter(|x| x.enabled && x.status == "connected" && sources.allows_connector(&x.id)) {
         for t in conn.tools.iter().filter(|t| !t.app_only) {
             let mut desc = format!("[{}] {}", conn.name, if t.description.is_empty() { &t.title } else { &t.description });
@@ -339,6 +343,9 @@ fn needs_owner(c: &Ctx, call: &ToolCall) -> bool {
     if crate::computer::is_tool(&call.name) {
         return !matches!(call.name.as_str(), crate::computer::LIST | crate::computer::READ);
     }
+    if crate::sandbox::is_tool(&call.name) {
+        return !crate::sandbox::read_only(&call.name);
+    }
     c.state().connectors.iter().flat_map(|x| x.tools.iter()).find(|t| t.llm_name == call.name).is_some_and(|t| !t.read_only)
 }
 
@@ -411,6 +418,15 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     if call.arguments.get("_invalid_json").is_some() {
         return Prep::Done(("Die Argumente waren kein gültiges JSON. Bitte erneut mit gültigem JSON aufrufen.".into(), true, "error"));
     }
+    // The own computer (#94): folder and time limit filled in first, so the trust check, the
+    // question and the action log name exactly what will run.
+    let normalized;
+    let call = if crate::sandbox::is_tool(&call.name) {
+        normalized = ToolCall { arguments: crate::sandbox::normalize(&call.name, &call.arguments), ..call.clone() };
+        &normalized
+    } else {
+        call
+    };
     // Built-in tools work on the person's own files and documents: placeholders of „Namen
     // schützen“ become the names again there (#55). Connectors get the call as the model wrote it.
     let local = ToolCall { arguments: crate::privacy::reveal_value(c, conv, &call.arguments), ..call.clone() };
@@ -428,6 +444,8 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     }
     // Local files (#25): the person's own files, so with the names „Namen schützen“ replaced.
     let is_local = crate::local_files::is_tool(&call.name);
+    // The own computer (#94) is local too: its files are the person's work, with the names.
+    let is_sandbox = crate::sandbox::is_tool(&call.name);
     let mut window = None;
     let found = if crate::computer::is_tool(&call.name) {
         // Computer use (#97): off, background work, blocked programs and programs not opened
@@ -445,6 +463,11 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     } else if is_local {
         match crate::local_files::prepare(c, &call.name, &local.arguments, interactive) {
             Ok(tool) => Some((crate::local_files::view(), tool)),
+            Err(why) => return Prep::Done((why, true, if interactive { "error" } else { "denied" })),
+        }
+    } else if is_sandbox {
+        match crate::sandbox::prepare_call(c, &call.name, &local.arguments, interactive) {
+            Ok(tool) => Some((crate::sandbox::view(), tool)),
             Err(why) => return Prep::Done((why, true, if interactive { "error" } else { "denied" })),
         }
     } else {
@@ -465,10 +488,11 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
         return Prep::Done((format!("{} ist in diesem Chat nicht freigegeben.", conn.name), true, "denied"));
     }
     // Vault placeholders: fill them in here; using a secret always needs the owner's yes.
-    let (arguments, secrets) = match crate::vault::fill(c, if is_local || crate::computer::is_tool(&call.name) { &local.arguments } else { &call.arguments }) {
-        Ok(x) => x,
-        Err(e) => return Prep::Done((e.message, true, "error")),
-    };
+    let (arguments, secrets) =
+        match crate::vault::fill(c, if is_local || is_sandbox || crate::computer::is_tool(&call.name) { &local.arguments } else { &call.arguments }) {
+            Ok(x) => x,
+            Err(e) => return Prep::Done((e.message, true, "error")),
+        };
     let ready = Box::new(Ready { conn, tool, call: call.clone(), arguments, secrets, why: crate::action_log::Why::ReadOnly, window, turn: ev.turn.clone() });
     // While local files are off, the first call asks once: the yes switches them on and runs it.
     let switch_on = if is_local { crate::local_files::enable_note(c) } else { None };
@@ -546,7 +570,7 @@ const READING: &[&str] = &["history_search", "board_read", WEB_FETCH];
 fn logged(c: &Ctx, conv: &str, call: &ToolCall, r: Outcome) -> Outcome {
     let why = match r.2 {
         "ok" | "error" if READING.contains(&call.name.as_str()) => crate::action_log::Why::ReadOnly,
-        "ok" | "error" if !call.name.contains("__") => crate::action_log::Why::Own,
+        "ok" | "error" if !call.name.contains("__") && !crate::sandbox::is_tool(&call.name) => crate::action_log::Why::Own,
         _ => crate::action_log::Why::Refused(r.0.lines().next().unwrap_or("").to_string()),
     };
     let name = c
@@ -554,6 +578,7 @@ fn logged(c: &Ctx, conv: &str, call: &ToolCall, r: Outcome) -> Outcome {
         .connectors
         .iter()
         .find_map(|k| k.tools.iter().find(|t| t.llm_name == call.name).map(|t| format!("{} · {}", k.name, if t.title.is_empty() { &t.name } else { &t.title })))
+        .or_else(|| crate::sandbox::is_tool(&call.name).then(|| format!("{} · {}", crate::sandbox::view().name, crate::sandbox::tool(&call.name).title)))
         .unwrap_or_else(|| call.name.clone());
     crate::action_log::tool(c, conv, &name, crate::action_log::summary(&crate::privacy::reveal_value(c, conv, &call.arguments), &Value::Null, &[]), &why, r.2);
     r
@@ -594,6 +619,24 @@ async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> O
             Err(e) => {
                 finish("failed");
                 (format!("Fehler: {}", e.message), true, "error")
+            }
+        };
+    }
+    // The own computer (#94): what comes back is data; files become attachments of the answer.
+    if r.conn.id == crate::sandbox::ID {
+        return match crate::sandbox::execute(c, conv, &r.tool.name, &r.arguments).await {
+            Ok((text, files)) => {
+                finish("done");
+                if !files.is_empty() {
+                    c.0.tools.files.lock().unwrap_or_else(PoisonError::into_inner).entry(conv.to_string()).or_default().extend(files);
+                }
+                // A command's output cannot close the data block it is shown in.
+                let text = crate::vault::scrub(&text, &r.secrets).replace("untrusted_tool_result", "untrusted-tool-result");
+                (wrap_untrusted(&r.call.name, &text), false, "ok")
+            }
+            Err(e) => {
+                finish("failed");
+                (format!("Fehler: {}", crate::vault::scrub(&e.message, &r.secrets)), true, "error")
             }
         };
     }

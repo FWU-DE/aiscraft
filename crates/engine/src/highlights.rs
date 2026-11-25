@@ -13,6 +13,7 @@ const MAX_DEPTH: usize = 4;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Kind {
+    Command,
     Recipient,
     Subject,
     Title,
@@ -20,12 +21,14 @@ enum Kind {
     Date,
     End,
     File,
+    Limit,
     Amount,
 }
 
 impl Kind {
     fn label(self) -> &'static str {
         match self {
+            Kind::Command => "Befehl",
             Kind::Recipient => "An",
             Kind::Subject => "Betreff",
             Kind::Title => "Titel",
@@ -33,6 +36,7 @@ impl Kind {
             Kind::Date => "Datum",
             Kind::End => "Ende",
             Kind::File => "Datei",
+            Kind::Limit => "Zeitlimit",
             Kind::Amount => "Betrag",
         }
     }
@@ -66,7 +70,12 @@ fn words(key: &str) -> Vec<String> {
 fn kind_of(key: &str, schema: Option<&Value>) -> Option<Kind> {
     let w = words(key);
     let has = |list: &[&str]| w.iter().any(|x| list.contains(&x.as_str()));
-    let k = if has(&[
+    // A command to run (the own computer, #94, or a shell connector) is checked first.
+    let k = if has(&["command", "cmd", "befehl", "script", "shell"]) {
+        Some(Kind::Command)
+    } else if has(&["timeout", "zeitlimit"]) {
+        Some(Kind::Limit)
+    } else if has(&[
         "to",
         "recipient",
         "recipients",
@@ -161,6 +170,7 @@ fn readable(v: &Value, kind: Kind) -> Option<String> {
             }
             clean(s)
         }
+        Value::Number(n) if kind == Kind::Limit => format!("{n} s"),
         Value::Number(n) => n.to_string(),
         Value::Bool(b) => (if *b { "ja" } else { "nein" }).to_string(),
         Value::Array(a) => {

@@ -1,0 +1,27 @@
+# The workspace of „Eigener Rechner (Sandbox)“ (#94): what the model's commands run in.
+# Started only by crates/engine/src/sandbox/container.rs (no network, no capabilities, user 1000,
+# read-only root, limits). Built by build.sh; the base image is pinned by digest.
+FROM ubuntu:24.04@sha256:562111b88caa79c71391c0c4d3c2114a7d5c35915c20561fd893cb1e07929e6b
+
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw \
+      python3 python3-pandas python3-openpyxl python3-matplotlib python3-pypdf \
+      qpdf ghostscript poppler-utils \
+      fonts-noto-core fonts-noto-mono fonts-noto-color-emoji fonts-dejavu-core \
+      coreutils findutils file zip unzip; \
+    rm -rf /var/lib/apt/lists/*; \
+    if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi; \
+    groupadd -g 1000 work; \
+    useradd -u 1000 -g 1000 -M -d /tmp -s /bin/sh work; \
+    mkdir -p /work; \
+    chown 1000:1000 /work; \
+    find / -xdev -perm /6000 -type f -exec chmod a-s {} +; \
+    ! command -v sudo
+
+# No set-user-id programs (removed above) and no sudo: nothing in the container gains rights.
+USER 1000:1000
+WORKDIR /work
+CMD ["/bin/sh"]

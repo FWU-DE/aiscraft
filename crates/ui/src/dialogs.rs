@@ -838,7 +838,7 @@ impl AisCraftApp {
             SettingsTab::Backends => ("Anmelden", "Dienste", "AIS.chat und andere KI-Dienste, mit denen AIS.ChatCraft spricht."),
             SettingsTab::Connectors => ("Konnektoren und Freigaben", "Konnektoren", "Werkzeuge, die Modelle aufrufen dürfen, und was sie dafür fragen."),
             SettingsTab::Schedules => ("Zeitpläne und Aufgaben", "Zeitpläne", "Aufträge, die regelmäßig oder einmal zu einer Zeit laufen."),
-            SettingsTab::Skills => ("Fähigkeiten und Hinweise", "Fähigkeiten", "Gelernte Vorgehen und Hinweise zur rechten Zeit."),
+            SettingsTab::Skills => ("Fähigkeiten und Hinweise", "Fähigkeiten", "Eigener Rechner, gelernte Vorgehen und Hinweise zur rechten Zeit."),
             SettingsTab::Vault => ("Tresor", "Tresor", "Zugangsdaten, die Werkzeuge nutzen dürfen, ohne sie zu sehen."),
             SettingsTab::Privacy => ("Namen schützen", "Namen schützen", "Klassenlisten: diese Namen gehen nur als Platzhalter raus."),
             SettingsTab::Usage => ("Nutzung", "Nutzung", "Verbrauch je Dienst und eine Monatsgrenze."),
@@ -1155,6 +1155,10 @@ impl AisCraftApp {
                 self.schedule_templates_section(ui);
             }
             SettingsTab::Skills => {
+                self.sandbox_section(ui);
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(4.0);
                 let st = self.state.settings.clone();
                 let mut learn = st.learn_skills;
                 if ui.checkbox(&mut learn, "Vorgehen lernen: nach Aufgaben mit mehreren Werkzeugschritten").changed() {
