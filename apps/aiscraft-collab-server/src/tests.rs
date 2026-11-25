@@ -67,7 +67,12 @@ async fn until(what: &str, f: impl Fn() -> bool) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn share_join_edit_restart_and_end() {
     let dir = data_dir("main");
-    let r = relay(Config::new(dir.clone())).await;
+    let open = || {
+        let mut cfg = Config::new(dir.clone());
+        cfg.open_create = true;
+        cfg
+    };
+    let r = relay(open()).await;
     let addr = r.addr;
     let server = Server::parse(&format!("http://{addr}")).unwrap();
 
@@ -105,7 +110,7 @@ async fn share_join_edit_restart_and_end() {
     r.shutdown().await;
     until("a notices", || !matches!(a.status(), Status::Online { .. })).await;
     a.push(&edit(&a.state(), "!")).unwrap();
-    let r = relay_at(addr, Config::new(dir.clone())).await;
+    let r = relay_at(addr, open()).await;
     until("b gets the offline edit", || text_of(&b_seen.lock().unwrap()) == "Hallo Welt!").await;
 
     // Wrong token: refused, and the session gives up.
@@ -160,6 +165,94 @@ async fn key_limits_and_hostile_frames() {
         last = Some(api::resolve(&server, "ZZZZZ-ZZZZZ").await);
     }
     assert!(matches!(last, Some(Err(aiscraft_collab::CollabError::Refused(_)))));
+    r.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn refuses_to_start_without_a_create_key() {
+    let dir = data_dir("nokey");
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let e = start(l, Config::new(dir.clone())).await.err().unwrap();
+    assert!(e.to_string().contains("COLLAB_CREATE_KEY"), "{e}");
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut cfg = Config::new(dir.clone());
+    cfg.create_key = Some("  ".into());
+    assert!(start(l, cfg).await.is_err(), "a blank key is no key");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn client_address_is_the_rightmost_trusted_hop() {
+    let peer: SocketAddr = "10.0.0.2:5000".parse().unwrap();
+    let mut cfg = Config::new(PathBuf::new());
+    let mut h = HeaderMap::new();
+    h.insert("x-forwarded-for", HeaderValue::from_static("6.6.6.6, 203.0.113.7"));
+    assert_eq!(client_ip(&cfg, &h, peer), peer.ip(), "not behind a proxy: the header is the client's");
+    cfg.trust_proxy = true;
+    assert_eq!(client_ip(&cfg, &h, peer), "203.0.113.7".parse::<IpAddr>().unwrap(), "the client wrote the left one");
+    h.append("x-forwarded-for", HeaderValue::from_static("198.51.100.1"));
+    assert_eq!(client_ip(&cfg, &h, peer), "198.51.100.1".parse::<IpAddr>().unwrap(), "several headers count as one list");
+    cfg.proxy_hops = 2;
+    assert_eq!(client_ip(&cfg, &h, peer), "203.0.113.7".parse::<IpAddr>().unwrap());
+    cfg.proxy_hops = 5;
+    assert_eq!(client_ip(&cfg, &h, peer), peer.ip(), "fewer entries than proxies: the peer");
+    let a = limit_key("2001:db8:1:2:aaaa::1".parse().unwrap());
+    assert_eq!(a, limit_key("2001:db8:1:2:ffff:1:2:3".parse().unwrap()), "one /64, one limit");
+    assert_ne!(a, limit_key("2001:db8:1:3::1".parse().unwrap()));
+    assert_eq!(limit_key("::ffff:192.0.2.1".parse().unwrap()), "192.0.2.1".parse::<IpAddr>().unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rotating_forwarded_addresses_does_not_lift_the_code_limit() {
+    let dir = data_dir("xff");
+    let mut cfg = Config::new(dir.clone());
+    cfg.create_key = Some("k".into());
+    cfg.trust_proxy = true;
+    let r = relay(cfg).await;
+    let client = reqwest::Client::new();
+    let mut statuses = Vec::new();
+    for i in 0..=MAX_MISSES {
+        let resp = client
+            .get(format!("http://{}/join/ZZZZZZZZZZ", r.addr))
+            .header("accept", "application/json")
+            .header("x-forwarded-for", format!("10.9.{}.{}, 203.0.113.9", i / 200, i % 200))
+            .send()
+            .await
+            .unwrap();
+        statuses.push(resp.status().as_u16());
+    }
+    assert_eq!(statuses.last(), Some(&429), "{statuses:?}");
+    // Another client behind the same proxy still gets its turn.
+    let resp = client
+        .get(format!("http://{}/join/ZZZZZZZZZZ", r.addr))
+        .header("accept", "application/json")
+        .header("x-forwarded-for", "203.0.113.10")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 404);
+    r.shutdown().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn room_token_in_header_or_query() {
+    let dir = data_dir("header");
+    let mut cfg = Config::new(dir.clone());
+    cfg.create_key = Some("k".into());
+    let r = relay(cfg).await;
+    let server = Server::parse(&format!("http://{}", r.addr)).unwrap();
+    let created = api::create_room(&server, Some("k"), &NewRoom { room: "h1".into(), kind: "document".into(), title: "H".into() }).await.unwrap();
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut req = server.room_ws_url("h1").into_client_request().unwrap();
+    req.headers_mut().insert("authorization", format!("Bearer {}", created.token).parse().unwrap());
+    assert!(tokio_tungstenite::connect_async(req).await.is_ok(), "token in the header");
+    assert!(tokio_tungstenite::connect_async(server.room_ws("h1", &created.token)).await.is_ok(), "token in the query (older apps)");
+    let mut bad = server.room_ws_url("h1").into_client_request().unwrap();
+    bad.headers_mut().insert("authorization", "Bearer 0000".parse().unwrap());
+    assert!(tokio_tungstenite::connect_async(bad).await.is_err());
+    assert!(tokio_tungstenite::connect_async(server.room_ws_url("h1")).await.is_err(), "no token");
     r.shutdown().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
