@@ -28,7 +28,7 @@ pub const TAG: &str = "sandbox-v1";
 pub const ASSET_X86_64: &str = "aiscraft-sandbox-1-x86_64.tar.gz";
 pub const SUMS: &str = "SHA256SUMS.txt";
 /// The image's SHA-256 once the first one is published (fill in from the release's sums file).
-pub const PINNED_SHA256: Option<&str> = None;
+pub const PINNED_SHA256: Option<&str> = Some("5aad49506c5ce6858327e2dd3b53ddf4859207b071f385561d8f09ec25da6db1");
 /// What the question says before the download.
 pub const APPROX_MB: u64 = 900;
 pub const DISK_MB: u64 = 4000;
