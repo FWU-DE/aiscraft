@@ -1012,6 +1012,60 @@ impl Store {
         let rows = st.query_map(params![since, limit as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).map_err(db_err)?;
         rows.collect::<rusqlite::Result<_>>().map_err(db_err)
     }
+
+    /// The owner's own messages since `since`, newest first, with the chat's service and model
+    /// (#20, #68). Answers and tool results are not in it; prompts the app wrote (schedules,
+    /// tasks) are marked `automatic`.
+    pub fn own_messages(&self, since: i64, limit: usize) -> Result<Vec<OwnMessage>> {
+        let mut st = self
+            .db
+            .prepare(
+                "SELECT m.conversation_id, COALESCE(c.backend_id, ''), COALESCE(c.model_id, ''), COALESCE(c.title, ''), m.content, m.created_at, m.extra
+                 FROM messages m LEFT JOIN conversations c ON c.id = m.conversation_id
+                 WHERE m.role = 'user' AND m.active = 1 AND m.created_at >= ?1 ORDER BY m.created_at DESC LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = st
+            .query_map(params![since, limit as i64], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, String>(6)?,
+                ))
+            })
+            .map_err(db_err)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (conversation_id, backend_id, model_id, title, content, created_at, extra) = row.map_err(db_err)?;
+            let extra: Extra = serde_json::from_str(&extra).unwrap_or_default();
+            // Schedules and tasks write their prompts as a user message with a marker; older ones
+            // are known by the chat the app named.
+            let automatic = extra.model.is_some() || title.starts_with('⏰') || title.starts_with('▶');
+            out.push(OwnMessage { conversation_id, backend_id, model_id, content, created_at, automatic });
+        }
+        Ok(out)
+    }
+
+    /// Move a message in time (tests and the offscreen demo: the history of several weeks).
+    pub fn set_message_time(&self, id: &str, at: i64) -> Result<bool> {
+        Ok(self.db.execute("UPDATE messages SET created_at = ?2 WHERE id = ?1", params![id, at]).map_err(db_err)? > 0)
+    }
+}
+
+/// One of the owner's own messages (see [`Store::own_messages`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OwnMessage {
+    pub conversation_id: String,
+    pub backend_id: String,
+    pub model_id: String,
+    pub content: String,
+    pub created_at: i64,
+    /// Written by the app (a schedule's or a task's prompt), not typed by the owner.
+    pub automatic: bool,
 }
 
 /// A message's place in the tree.

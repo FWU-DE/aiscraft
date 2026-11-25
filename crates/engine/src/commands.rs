@@ -143,7 +143,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Quellen des Chats",
         "Chat",
         None,
-        "tools?: bool, memory?: bool, project?: bool, history?: bool, web?: bool (web search or the page reader), inline?: bool (memory and project at the top of a message, for backends without a system prompt), other_services?: bool (recall may send excerpts from chats with other services to this one), connectors?: [id] | null (alle), protect?: bool | null (Namen schützen; null = automatisch, an sobald es eine Klassenliste gibt), effort?: low|medium|high|max | null (wie gründlich das Modell nachdenkt; null = Standard des Modells)",
+        "tools?: bool, memory?: bool, project?: bool, history?: bool, web?: bool (web search or the page reader), inline?: bool (memory and project at the top of a message, for backends without a system prompt), other_services?: bool (recall may send excerpts from chats with other services to this one), own_style?: bool (dein Schreibstil bei Schreibaufträgen), connectors?: [id] | null (alle), protect?: bool | null (Namen schützen; null = automatisch, an sobald es eine Klassenliste gibt), effort?: low|medium|high|max | null (wie gründlich das Modell nachdenkt; null = Standard des Modells)",
         false,
         |c, p| Box::pin(set_sources(c, p))
     ),
@@ -263,7 +263,7 @@ static COMMANDS: &[CommandSpec] = &[
         });
         Ok(json!({}))
     })),
-    cmd!("memory.add", "Notiz merken", "Gedächtnis", None, "text: string, area?: about|preferences|people|routines|lessons", false, |c, p| Box::pin(
+    cmd!("memory.add", "Notiz merken", "Gedächtnis", None, "text: string, area?: about|preferences|people|routines|lessons|style", false, |c, p| Box::pin(
         async move {
             let text = req_str(&p, "text")?.trim().to_string();
             if text.is_empty() {
@@ -295,6 +295,15 @@ static COMMANDS: &[CommandSpec] = &[
             n.replaced_by = None;
         })
     })),
+    cmd!(
+        "style.learn",
+        "Schreibstil aus eigenen Texten lernen",
+        "Gedächtnis",
+        None,
+        "Liest deine eigenen Nachrichten in Chats mit dem gewählten Dienst (ohne Namen und Zahlen) und legt eine Stilnotiz an, die bei Schreibaufträgen mitgeht",
+        true,
+        |c, p| Box::pin(crate::style::learn(c, p))
+    ),
     cmd!(
         "memory.replace",
         "Notiz durch neuere ersetzen",
@@ -888,6 +897,7 @@ async fn set_sources(c: Ctx, p: Value) -> Result<Value> {
     src.web = flag("web", src.web);
     src.inline = flag("inline", src.inline);
     src.other_services = flag("other_services", src.other_services);
+    src.own_style = flag("own_style", src.own_style);
     match p.get("protect") {
         Some(Value::Null) => src.protect = None,
         Some(Value::Bool(b)) => src.protect = Some(*b),

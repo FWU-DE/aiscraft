@@ -175,6 +175,8 @@ Schreib im Chat „Merke dir: …“, und AIS.ChatCraft legt eine Notiz an. Noti
 
 **Sag es einmal.** Sagst du etwas Neues zu einer Sache, die schon notiert ist („Merke dir: Nicht mehr Anna, sondern Bob macht die Rechnungen“), ersetzt die neue Notiz die alte. Die alte landet bei den vergessenen Notizen mit dem Hinweis „ersetzt durch …“ und lässt sich wiederherstellen. Ob eine Notiz eine ältere ersetzt, prüft das gewählte Modell nur, wenn es deine Notizen ohnehin bekommt; sonst fragt AIS.ChatCraft dich.
 
+**Schreibstil.** „Schreibstil aus meinen Nachrichten lernen“ (Einstellungen › Gedächtnis) liest deine eigenen Nachrichten in Chats mit dem gewählten Dienst und legt eine Stilnotiz an: Anrede und Gruß, du oder Sie, Satzlänge, Ton. Antworten, Dateien, Werkzeug-Ergebnisse und Aufträge von Zeitplänen und Aufgaben zählen nicht. Namen aus Klassenlisten, Namen nach einer Anrede („Liebe Frau …“), E-Mail-Adressen, Telefonnummern und alle Ziffern nimmt AIS.ChatCraft vorher heraus, auch aus der fertigen Notiz. Der Stil geht nur mit, wenn du etwas schreiben lässt (eine Mail, einen Brief, eine Antwort), und lässt sich pro Chat unter „Quellen“ abschalten.
+
 ## Konnektoren und Freigaben
 
 Konnektoren sind MCP-Server, deren Werkzeuge Modelle aufrufen können: Obsidian, Dateien, Webseiten abrufen und viele mehr. Unter **Einstellungen › Konnektoren** gibt es Vorlagen, etwa für deinen Obsidian-Tresor.

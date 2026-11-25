@@ -28,6 +28,7 @@ mod schedules;
 mod secrets;
 mod skills;
 mod state;
+mod style;
 mod tasks;
 mod temporary;
 pub mod tools;

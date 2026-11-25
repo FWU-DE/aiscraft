@@ -22,6 +22,7 @@ pub mod manual;
 pub mod markup;
 pub mod math;
 pub mod mermaid;
+mod nod_settings;
 mod palette;
 pub mod plot;
 mod privacy_panel;

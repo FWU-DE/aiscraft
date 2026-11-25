@@ -1143,7 +1143,7 @@ impl AisCraftApp {
                     }
                 });
                 ui.add_space(6.0);
-                for area in MemoryArea::ALL {
+                for area in MemoryArea::NOTES {
                     let notes: Vec<_> = self.state.memory.iter().filter(|n| n.area == area && !n.archived).cloned().collect();
                     if notes.is_empty() {
                         continue;
@@ -1157,7 +1157,7 @@ impl AisCraftApp {
                                     self.run("memory.archive", json!({"id": n.id}));
                                 }
                                 ui.menu_button("Bereich", |ui| {
-                                    for a in MemoryArea::ALL {
+                                    for a in MemoryArea::NOTES {
                                         if ui.button(a.label()).clicked() {
                                             self.run("memory.update", json!({"id": n.id, "area": a.as_str()}));
                                             ui.close();
@@ -1169,6 +1169,9 @@ impl AisCraftApp {
                     }
                     ui.add_space(4.0);
                 }
+                ui.add_space(6.0);
+                self.style_section(ui);
+                ui.add_space(6.0);
                 let archived: Vec<_> = self.state.memory.iter().filter(|n| n.archived).cloned().collect();
                 if !archived.is_empty() {
                     egui::CollapsingHeader::new(small_muted(&t, format!("Vergessen ({})", archived.len()))).show(ui, |ui| {

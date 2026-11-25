@@ -74,3 +74,58 @@ fn foreign_words_replace_nothing() {
     assert!(!seen.lock().unwrap().iter().any(|r| r.contains("Ältere Notizen")), "the notes did not leave the device");
     assert!(engine.state().memory.iter().all(|n| !n.archived));
 }
+
+/// #20: the writing style comes only from the owner's own messages (no answers, no prompts the app
+/// wrote), leaves without names and numbers, keeps none, and goes along only with writing requests.
+#[test]
+fn style_is_learned_from_own_words_only() {
+    // The model tries to slip a greeted name and a number into the note.
+    let (engine, seen) = engine_with_recording("- Grüßt mit „Liebe Frau Kaya“\n- Schreibt 3 kurze Sätze, duzt Kolleginnen");
+    for text in [
+        "Liebe Frau Kaya, danke für die Unterlagen zur Klassenfahrt.",
+        "Hallo Jonas, kannst du mir die Liste bis 12 Uhr schicken?",
+        "Schreib mir bitte eine kurze Mail an das Kollegium wegen Freitag",
+        "Ich brauche drei Ideen für den Wandertag",
+        "Meine Nummer ist 0170 1234567, ruf mich gern an",
+    ] {
+        engine.call("chat.send", json!({"text": text})).unwrap();
+    }
+    // A prompt the app wrote is not the owner's: a schedule run in its own chat.
+    let sched =
+        engine.call("schedule.create", json!({"title": "Plan", "prompt": "Liebe Frau Yilmaz, was steht heute an im Plan?", "cron": "0 7 * * *"})).unwrap();
+    engine.call("schedule.run", json!({"id": sched["id"]})).unwrap();
+
+    let out = engine.call("style.learn", json!({})).unwrap();
+    assert_eq!(out["messages"], 5, "five own messages, not the schedule's prompt");
+    let req = seen.lock().unwrap().iter().rev().find(|r| r.contains("nachrichten_der_person")).cloned().unwrap();
+    for gone in ["Kaya", "Jonas", "Yilmaz", "0170", "12 Uhr", "Grüßt mit"] {
+        assert!(!req.contains(gone), "{gone} left the device: {req}");
+    }
+    assert!(req.contains("Wandertag"), "the owner's own words went along");
+    let note = engine.state().memory.iter().find(|n| n.area == aiscraft_core::MemoryArea::Style && !n.archived).cloned().unwrap();
+    assert!(!note.text.contains("Kaya") && !note.text.chars().any(|c| c.is_ascii_digit()), "no names or numbers kept: {}", note.text);
+    assert!(note.text.contains("duzt Kolleginnen"));
+    assert!(note.source_quote.contains("eigenen Nachrichten"), "the note says where it comes from");
+
+    // Only with writing requests, and each chat can switch it off.
+    let style_sent = |seen: &std::sync::Mutex<Vec<String>>| seen.lock().unwrap().last().is_some_and(|r| r.contains("Schreibstil der Person"));
+    engine.call("chat.new", json!({})).unwrap();
+    engine.call("chat.send", json!({"text": "Was ist Photosynthese?"})).unwrap();
+    assert!(!style_sent(&seen), "not with a question");
+    engine.call("chat.send", json!({"text": "Schreib eine Mail an die Eltern der 7b zum Wandertag"})).unwrap();
+    assert!(style_sent(&seen), "with a writing request");
+    engine.call("chat.set_sources", json!({"own_style": false})).unwrap();
+    engine.call("chat.send", json!({"text": "Schreib noch eine Mail an die Eltern"})).unwrap();
+    assert!(!style_sent(&seen), "switched off for this chat");
+
+    // Learning again replaces the old note.
+    engine.call("style.learn", json!({})).unwrap();
+    let styles: Vec<_> = engine.state().memory.iter().filter(|n| n.area == aiscraft_core::MemoryArea::Style).cloned().collect();
+    assert_eq!(styles.iter().filter(|n| !n.archived).count(), 1);
+    assert!(styles.iter().any(|n| n.archived && n.replaced_by.is_some()));
+
+    // Too few own messages: it says so.
+    let (fresh, _) = engine_with_recording("x");
+    let err = fresh.call("style.learn", json!({})).unwrap_err();
+    assert!(err.message.contains("zu wenige"), "{}", err.message);
+}

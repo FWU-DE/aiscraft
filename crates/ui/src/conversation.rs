@@ -1010,6 +1010,13 @@ impl AisCraftApp {
             if ui.checkbox(&mut memory, "Gedächtnis (deine Notizen)").changed() {
                 switch_inline("memory", memory);
             }
+            // #20: shown once there is a style note.
+            if self.state.memory.iter().any(|n| n.area == aiscraft_core::MemoryArea::Style && !n.archived) {
+                let mut own = src.own_style;
+                if ui.add_enabled(memory, egui::Checkbox::new(&mut own, "Mein Schreibstil (bei Entwürfen)")).changed() {
+                    set("own_style", own);
+                }
+            }
             let mut project = src.project_for(takes);
             if ui.checkbox(&mut project, "Projektanweisungen").changed() {
                 switch_inline("project", project);

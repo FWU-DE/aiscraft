@@ -395,7 +395,8 @@ pub(crate) async fn send_background(c: &Ctx, conv_id: &str, prompt: &str) -> Res
         role: Role::User,
         content: prompt.to_string(),
         created_at: now_ms(),
-        model: None,
+        // Written by the app, not the owner: never a source for the style or schedule ideas.
+        model: Some(AUTOMATIC.into()),
         attachments: vec![],
         activity: vec![],
         error: None,
@@ -507,6 +508,9 @@ pub(crate) fn select_variant(c: &Ctx, message_id: &str, index: usize) -> Result<
     Ok(json!({"index": index, "count": count, "messages": c.state().messages.len()}))
 }
 
+/// The `model` of a user message the app wrote (a schedule's or a task's prompt).
+pub const AUTOMATIC: &str = "Automatisch";
+
 /// Label of the step on a user message that names what went along with it.
 pub const SENT_ALONG: &str = "Mitgeschickt";
 /// Label of the step on a user message that names fitting chats with another service that did not
@@ -574,6 +578,18 @@ pub(crate) fn inline_context(c: &Ctx, conv: &Conversation, takes_system: bool, r
         style_print = Some(style_fp);
     }
     let mut recalled = Vec::new();
+    // The writing style (#20) with a writing request, where the person agreed to inline context;
+    // once per chat and version of the style, AIS.chat keeps it in its history.
+    if conv.sources.inline
+        && let Some(style) = own_style_for(c, conv, request)
+    {
+        let key = format!("stil:{}", fingerprint(&style));
+        if !conv.sources.inline_recalled.contains(&key) {
+            parts.push(style);
+            labels.push("Schreibstil".to_string());
+            recalled.push(key);
+        }
+    }
     let mut withheld = Vec::new();
     if state.settings.recall && !request.trim().is_empty() {
         let found = crate::skills::recall(c, conv, request);
@@ -649,6 +665,9 @@ fn system_prompt_for(c: &Ctx, conv: &Conversation, send_context: bool, takes_sys
     {
         parts.push(m);
     }
+    if let Some(s) = own_style_for(c, conv, request) {
+        parts.push(s);
+    }
     if state.settings.recall
         && !request.trim().is_empty()
         && let Some(r) = crate::skills::context_for(c, conv, request)
@@ -656,6 +675,16 @@ fn system_prompt_for(c: &Ctx, conv: &Conversation, send_context: bool, takes_sys
         parts.push(r);
     }
     (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
+/// The owner's writing style (#20), for a writing request in a chat that uses the memory and the
+/// style.
+fn own_style_for(c: &Ctx, conv: &Conversation, request: &str) -> Option<String> {
+    let state = c.state();
+    if !(state.settings.memory && conv.sources.memory && conv.sources.own_style && aiscraft_core::is_writing_request(request)) {
+        return None;
+    }
+    aiscraft_core::style_prompt(&state.memory)
 }
 
 /// The most thinking kept for one answer.

@@ -419,6 +419,10 @@ pub struct Sources {
     /// a message; the hint goes along again only when the style changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style_sent: Option<String>,
+    /// The owner's own writing style (#20) goes along with writing requests; on by default, as
+    /// part of the memory.
+    #[serde(default = "yes")]
+    pub own_style: bool,
 }
 
 impl Default for Sources {
@@ -439,6 +443,7 @@ impl Default for Sources {
             style: None,
             style_sample: None,
             style_sent: None,
+            own_style: true,
         }
     }
 }
