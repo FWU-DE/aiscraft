@@ -125,6 +125,10 @@ pub struct Message {
     /// For `Role::Tool`: which call this answers and whether it failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_result: Option<ToolResultInfo>,
+    /// What the model thought before answering, as the backend summarises it (Claude's thinking,
+    /// `reasoning_content` of OpenAI-compatible servers). Shown folded above the answer.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub thinking: String,
 }
 
 /// A tool the model may call.
@@ -355,6 +359,10 @@ pub struct Sources {
     /// `None` = automatic: on once a class list for the chat's project (or for all chats) exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protect: Option<bool>,
+    /// How much the model thinks before answering (#30): `low`, `medium`, `high`, `max`;
+    /// `None` = the model's default. Only backends with a thinking switch (Claude) use it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 impl Default for Sources {
@@ -371,6 +379,7 @@ impl Default for Sources {
             inline_recalled: Vec::new(),
             other_services: false,
             protect: None,
+            effort: None,
         }
     }
 }
@@ -638,6 +647,9 @@ pub struct ChatRequest {
     /// Let the backend search and read the web itself (see [`Capabilities::web_search`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub web: bool,
+    /// How much to think (see [`Sources::effort`]); backends without such a switch ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -671,6 +683,9 @@ pub struct ImageResult {
     pub message_id: Option<String>,
 }
 
+/// Thinking depths a chat can choose (#30): id and label.
+pub const EFFORTS: [(&str, &str); 4] = [("low", "Wenig"), ("medium", "Mittel"), ("high", "Gründlich"), ("max", "Sehr gründlich")];
+
 /// The aspect ratios AIS.chat offers for images.
 pub const ASPECT_RATIOS: [(&str, &str); 3] = [("quadratic", "Quadratisch"), ("landscape", "Querformat"), ("portrait", "Hochformat")];
 
@@ -683,6 +698,10 @@ pub enum StreamEvent {
         id: String,
     },
     Delta {
+        text: String,
+    },
+    /// A piece of the model's thinking (summarised), shown folded above the answer.
+    Thinking {
         text: String,
     },
     /// The full list of activity steps so far (replaces the previous list).

@@ -81,6 +81,7 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
         usage: None,
         tool_calls: vec![],
         tool_result: None,
+        thinking: String::new(),
     });
     c.store(|st| st.save_conversation(&conv))?;
     if let Some(g) = &greeting {
@@ -145,6 +146,7 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
         usage: None,
         tool_calls: vec![],
         tool_result: None,
+        thinking: String::new(),
     };
     let req = ChatRequest {
         conversation_id: new_id(),
@@ -155,6 +157,7 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
         tool_bridge: None,
         persona: None,
         web: false,
+        effort: None,
     };
     let mut stream = backend.chat(req).await?;
     let mut out = String::new();
@@ -306,6 +309,7 @@ pub(crate) async fn send_full(
         usage: None,
         tool_calls: vec![],
         tool_result: None,
+        thinking: String::new(),
     };
     if let Some((p, _)) = &protection {
         crate::privacy::save_mapping(&c, &conv, &p.mapping)?;
@@ -392,6 +396,7 @@ pub(crate) async fn send_background(c: &Ctx, conv_id: &str, prompt: &str) -> Res
         usage: None,
         tool_calls: vec![],
         tool_result: None,
+        thinking: String::new(),
     };
     c.store(|st| st.save_message(&user))?;
     put_message(c, conv_id, &user);
@@ -632,6 +637,9 @@ fn system_prompt_for(c: &Ctx, conv: &Conversation, send_context: bool, takes_sys
     (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
+/// The most thinking kept for one answer.
+const MAX_THINKING: usize = 256 * 1024;
+
 /// At most this many model rounds per answer (each round may call tools).
 const MAX_TOOL_ROUNDS: usize = 10;
 
@@ -649,6 +657,7 @@ fn new_answer(conv_id: &str, model_name: &str) -> Message {
         usage: None,
         tool_calls: vec![],
         tool_result: None,
+        thinking: String::new(),
     }
 }
 
@@ -672,10 +681,11 @@ async fn stream_round(
     let mut dirty = false;
     let mut usage = answer.usage.unwrap_or_default();
     let flush = |answer: &Message| {
-        let (content, activity) = (answer.content.clone(), answer.activity.clone());
+        let (content, activity, thinking) = (answer.content.clone(), answer.activity.clone(), answer.thinking.clone());
         patch_message(c, conv_id, &answer.id, |m| {
             m.content = content;
             m.activity = activity;
+            m.thinking = thinking;
         });
     };
     loop {
@@ -696,6 +706,13 @@ async fn stream_round(
             StreamEvent::Delta { text } => {
                 answer.content.push_str(&text);
                 dirty = true;
+            }
+            // The thinking is shown folded above the answer (#30); a runaway one is cut.
+            StreamEvent::Thinking { text } => {
+                if answer.thinking.len() + text.len() <= MAX_THINKING {
+                    answer.thinking.push_str(&text);
+                    dirty = true;
+                }
             }
             StreamEvent::MessageId { id } => {
                 c.store(|st| st.rename_message(&answer.id, &id))?;
@@ -848,6 +865,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
             tool_bridge: bridge.as_ref().map(|(b, _)| b.clone()),
             persona: conv.persona.clone(),
             web: caps.web_search && conv.sources.web,
+            effort: conv.sources.effort.clone(),
         };
         match stream_round(&c, &backend, req, &mut answer, &conv_id, &mut cancel_rx).await {
             Ok(calls) if calls.is_empty() => break,
@@ -1001,6 +1019,7 @@ fn plain_message(conv: &str, role: Role, text: &str) -> Message {
         usage: None,
         tool_calls: vec![],
         tool_result: None,
+        thinking: String::new(),
     }
 }
 

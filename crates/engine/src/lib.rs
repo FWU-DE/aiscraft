@@ -644,6 +644,9 @@ impl Ctx {
 mod tests;
 
 #[cfg(test)]
+mod chatux_tests;
+
+#[cfg(test)]
 pub(crate) fn chat_system_prompt_for_test(c: &Ctx, conv: &aiscraft_core::Conversation, send: bool, takes: bool) -> Option<String> {
     chat::system_prompt_pub(c, conv, send, takes)
 }

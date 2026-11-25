@@ -483,13 +483,27 @@ impl AisCraftApp {
             }
             self.variant_switcher(ui, &m.id);
         });
-        if !m.activity.is_empty() {
+        // What the model thought (#30): Claude's summarised thinking, the reasoning of
+        // OpenAI-compatible servers, or AIS.chat's analysis steps. Folded; open while it thinks.
+        let thinking = thinking_text(m);
+        if !thinking.is_empty() {
+            let still = generating && m.content.is_empty();
+            let title = if still { "Denkt nach …" } else { "Nachgedacht" };
+            egui::CollapsingHeader::new(small_muted(&t, title)).id_salt(("think", &m.id)).default_open(false).show(ui, |ui| {
+                Frame::new().stroke(Stroke::new(1.0, t.border)).inner_margin(Margin { left: 10, right: 4, top: 2, bottom: 2 }).show(ui, |ui| {
+                    ui.add(egui::Label::new(RichText::new(thinking.as_str()).size(13.5).color(t.text2)).wrap());
+                });
+            });
+        }
+        let shown_steps: Vec<(usize, &aiscraft_core::ActivityStep)> =
+            m.activity.iter().enumerate().filter(|(_, s)| !(is_analysis(s) && m.thinking.trim().is_empty())).collect();
+        if !shown_steps.is_empty() {
             let open_default = generating;
-            egui::CollapsingHeader::new(small_muted(&t, format!("Arbeitsschritte ({})", m.activity.len())))
+            egui::CollapsingHeader::new(small_muted(&t, format!("Arbeitsschritte ({})", shown_steps.len())))
                 .id_salt(("act", &m.id))
                 .default_open(open_default)
                 .show(ui, |ui| {
-                    for (i, s) in m.activity.iter().enumerate() {
+                    for (i, s) in shown_steps {
                         ui.horizontal_wrapped(|ui| {
                             let mark = if s.failed {
                                 RichText::new("×").color(t.danger)
@@ -931,6 +945,22 @@ impl AisCraftApp {
                 if ui.add_enabled(caps.web_search || src.tools, egui::Checkbox::new(&mut web, label)).changed() {
                     set("web", web);
                 }
+            }
+            // How much Claude thinks before it answers (#30): per chat.
+            if self.state.backend(&self.state.selection.backend_id).is_some_and(|b| b.config.kind == BackendKind::Anthropic) {
+                ui.separator();
+                ui.label(small_muted(&t, "Nachdenken vor der Antwort"));
+                ui.horizontal_wrapped(|ui| {
+                    if ui.add(egui::Button::selectable(src.effort.is_none(), "Standard")).clicked() {
+                        self.engine.dispatch("chat.set_sources", json!({"effort": null}));
+                    }
+                    for (id, label) in aiscraft_core::EFFORTS {
+                        if ui.add(egui::Button::selectable(src.effort.as_deref() == Some(id), label)).clicked() {
+                            self.engine.dispatch("chat.set_sources", json!({"effort": id}));
+                        }
+                    }
+                });
+                ui.label(small_muted(&t, "Gründlicher dauert länger und kostet mehr."));
             }
             let conns = self.state.connectors.clone();
             if !conns.is_empty() {
@@ -1463,6 +1493,19 @@ fn dead_links_row(ui: &mut Ui, t: &crate::theme::Tokens, m: &Message) {
 }
 
 /// A link as people read it: host and path, without the scheme, shortened.
+/// AIS.chat's analysis steps („Analyse“, „Zusammenfassung“): its counterpart to thinking.
+fn is_analysis(s: &aiscraft_core::ActivityStep) -> bool {
+    (s.label == "Analyse" || s.label == "Zusammenfassung") && s.detail.as_deref().is_some_and(|d| !d.trim().is_empty())
+}
+
+/// The thinking to show above an answer: the backend's own, else AIS.chat's analysis steps.
+fn thinking_text(m: &Message) -> String {
+    if !m.thinking.trim().is_empty() {
+        return m.thinking.trim().to_string();
+    }
+    m.activity.iter().filter(|s| is_analysis(s)).filter_map(|s| s.detail.as_deref()).map(str::trim).collect::<Vec<_>>().join("\n\n")
+}
+
 fn short_url(url: &str) -> String {
     let s = url.split_once("://").map(|(_, r)| r).unwrap_or(url).trim_end_matches('/');
     if s.chars().count() > 48 { format!("{}…", s.chars().take(47).collect::<String>()) } else { s.to_string() }

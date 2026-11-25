@@ -69,6 +69,7 @@ pub(crate) async fn start(c: Ctx, p: Value) -> Result<Value> {
                 usage: None,
                 tool_calls: vec![],
                 tool_result: None,
+                thinking: String::new(),
             };
             if !ok {
                 m.error = Some(summary.clone());

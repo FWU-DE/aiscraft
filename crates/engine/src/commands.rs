@@ -107,7 +107,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Quellen des Chats",
         "Chat",
         None,
-        "tools?: bool, memory?: bool, project?: bool, history?: bool, web?: bool (web search or the page reader), inline?: bool (memory and project at the top of a message, for backends without a system prompt), other_services?: bool (recall may send excerpts from chats with other services to this one), connectors?: [id] | null (alle), protect?: bool | null (Namen schützen; null = automatisch, an sobald es eine Klassenliste gibt)",
+        "tools?: bool, memory?: bool, project?: bool, history?: bool, web?: bool (web search or the page reader), inline?: bool (memory and project at the top of a message, for backends without a system prompt), other_services?: bool (recall may send excerpts from chats with other services to this one), connectors?: [id] | null (alle), protect?: bool | null (Namen schützen; null = automatisch, an sobald es eine Klassenliste gibt), effort?: low|medium|high|max | null (wie gründlich das Modell nachdenkt; null = Standard des Modells)",
         false,
         |c, p| Box::pin(set_sources(c, p))
     ),
@@ -797,6 +797,13 @@ async fn set_sources(c: Ctx, p: Value) -> Result<Value> {
         Some(_) => return Err(Error::invalid("protect muss true, false oder null sein")),
         None => {}
     }
+    match p.get("effort") {
+        Some(Value::Null) => src.effort = None,
+        Some(Value::String(e)) if aiscraft_core::EFFORTS.iter().any(|(id, _)| id == e) => src.effort = Some(e.clone()),
+        Some(Value::String(e)) if e == "default" || e.is_empty() => src.effort = None,
+        Some(_) => return Err(Error::invalid("effort muss low, medium, high, max oder null sein")),
+        None => {}
+    }
     match p.get("connectors") {
         Some(Value::Null) => src.connectors = None,
         Some(Value::Array(a)) => src.connectors = Some(a.iter().filter_map(|v| v.as_str().map(str::to_string)).take(200).collect()),
@@ -970,6 +977,7 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
                 usage: None,
                 tool_calls: vec![],
                 tool_result: None,
+                thinking: String::new(),
             })?;
         }
         Ok(())
