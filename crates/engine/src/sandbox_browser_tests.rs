@@ -109,8 +109,15 @@ fn the_browser_starts_only_when_needed_and_every_start_is_locked_down() {
         FakeCall::Exec(a) if a.get(2).map(String::as_str) == Some(k::PREPARE_SCRIPT) => Some(a),
         _ => None,
     });
-    assert_eq!(ws_prep.unwrap().last(), Some(&b.image), "the workspace's preparation keeps the browser's image");
+    // `$7` (after `/bin/sh -c SCRIPT aiscraft`) is the browser image to keep.
+    assert_eq!(ws_prep.unwrap().get(10), Some(&b.image), "the workspace's preparation keeps the browser's image");
     assert!(!k::PREPARE_SCRIPT.contains("browser.tar.zst"));
+    // Starting the browser never clears relays a run with network may be using (only setting up does).
+    let last_without_chat = fake.calls().into_iter().rev().find_map(|c| match c {
+        FakeCall::Exec(a) if a.get(2).map(String::as_str) == Some(k::PREPARE_SCRIPT) && a.get(5).map(String::as_str) == Some("") => Some(a),
+        _ => None,
+    });
+    assert_ne!(last_without_chat.unwrap().get(11).map(String::as_str), Some("setup"), "the browser start is no setup");
 
     // Reading, waiting and more steps reuse the running browser.
     assert!(!direct(&engine, SNAPSHOT, json!({})).1);

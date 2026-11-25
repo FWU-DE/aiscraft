@@ -341,7 +341,7 @@ fn result(lines: &[Value], id: &str) -> Result<Value> {
 /// The browser, started now if it is not running: the image loaded and checked, its network
 /// kept to public addresses, the container started locked down, the worker answering.
 async fn ensure(c: &Ctx) -> Result<runtime::Shared> {
-    let (m, network) = super::usable(c)?;
+    let (m, _) = super::usable(c)?;
     if !c.state().sandbox.browser {
         return Err(Error::refused("Der Browser im eigenen Rechner ist aus. Die Person schaltet ihn in den Einstellungen › Fähigkeiten ein."));
     }
@@ -353,7 +353,7 @@ async fn ensure(c: &Ctx) -> Result<runtime::Shared> {
     }
     let started = async {
         // Docker running, the workspace's image as before (the browser's is kept there).
-        super::prepare(&m, None, network).await?;
+        super::prepare(&m, None, false).await?;
         let img = m.browser()?;
         let fail = |out: &runtime::Output| Error::unsupported(format!("Der Browser startet nicht: {}", out.why()));
         // Loading the 1.3 GB image the first time takes a while.

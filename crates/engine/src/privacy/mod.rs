@@ -353,12 +353,25 @@ fn detector(c: &Ctx, project: Option<&str>, m: &Mapping, extra: &[String]) -> De
     Detector::new(&people_for(c, project), &m.known(), &manual, year()).with_common_names().with_model(ner::model(c))
 }
 
-/// Takes out what protection would find, with every class list (all projects), whether
-/// protection is on or not: for text derived from the owner's messages that must not keep names
-/// (the writing style, #20). Findings become „…“; placeholders like `[S1]` go too.
-pub(crate) fn strip_personal(c: &Ctx, text: &str) -> String {
-    let people: Vec<Person> = load_lists(c).into_iter().flat_map(|l| l.people).collect();
-    let d = Detector::new(&people, &[], &[], year());
+/// The people of every class list (all projects).
+fn all_people(c: &Ctx) -> Vec<Person> {
+    load_lists(c).into_iter().flat_map(|l| l.people).collect()
+}
+
+/// Some class list has names.
+fn any_list(c: &Ctx) -> bool {
+    c.state().privacy.lists.iter().any(|l| l.count > 0)
+}
+
+/// The detector for automatic protection (everything but the reviewed message): every class
+/// list, not only the project's, because memory notes and recalled text come from every chat.
+fn detector_all(c: &Ctx, m: &Mapping) -> Detector {
+    Detector::new(&all_people(c), &m.known(), &m.manual, year()).with_common_names().with_model(ner::model(c))
+}
+
+/// What protection finds with every class list, as „…“.
+fn strip_found(c: &Ctx, text: &str) -> String {
+    let d = Detector::new(&all_people(c), &[], &[], year());
     let text = text.get(..text.len().min(MAX_TEXT)).unwrap_or(text);
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
@@ -371,6 +384,25 @@ pub(crate) fn strip_personal(c: &Ctx, text: &str) -> String {
         at = f.end;
     }
     out.push_str(text.get(at..).unwrap_or(""));
+    out
+}
+
+/// Memory notes on their way into a chat's request. Notes are written from the owner's own
+/// words in any chat, also in protected ones, so they hold names. In a protected chat the
+/// [`Guard`] replaces them (with every class list); in a chat without protection, once any class
+/// list exists, what protection would find goes out as „…“, whatever the chat's switch says.
+pub(crate) fn notes_for(c: &Ctx, conv: &aiscraft_core::Conversation, text: &str) -> String {
+    if active(c, &conv.sources, conv.project_id.as_deref()) || !any_list(c) {
+        return text.to_string();
+    }
+    strip_found(c, text)
+}
+
+/// Takes out what protection would find, with every class list (all projects), whether
+/// protection is on or not: for text derived from the owner's messages that must not keep names
+/// (the writing style, #20). Findings become „…“; placeholders like `[S1]` go too.
+pub(crate) fn strip_personal(c: &Ctx, text: &str) -> String {
+    let out = strip_found(c, text);
     // Placeholders of protected chats name nobody, but they are not style either.
     let mut clean = String::with_capacity(out.len());
     let mut rest = out.as_str();
@@ -505,20 +537,22 @@ impl Guard {
             return None;
         }
         let mapping = (*mapping(c, &conv.id)).clone();
-        let detector = detector(c, conv.project_id.as_deref(), &mapping, &[]);
+        let detector = detector_all(c, &mapping);
         let before = (mapping.entries.len(), mapping.noted);
         Some(Guard { conv: conv.id.clone(), detector, mapping, before })
     }
 
-    /// For one model call outside a chat (`complete`): a mapping just for this call.
+    /// For one model call outside a chat (`complete`: memory tidy-up, check-ins, skills,
+    /// research, the trust check): a mapping just for this call. Such calls read notes and text
+    /// from every chat, so they are protected once any class list exists, whatever the selected
+    /// chat's switch says, or when protection is on for the selection.
     pub fn for_call(c: &Ctx) -> Option<Guard> {
         let s = c.state();
-        let project = s.selection.project_id.clone();
-        if !active(c, &s.selection.sources, project.as_deref()) {
+        if !any_list(c) && !active(c, &s.selection.sources, s.selection.project_id.as_deref()) {
             return None;
         }
         let mapping = Mapping::default();
-        let detector = detector(c, project.as_deref(), &mapping, &[]);
+        let detector = detector_all(c, &mapping);
         Some(Guard { conv: String::new(), detector, mapping, before: (0, false) })
     }
 
@@ -526,12 +560,14 @@ impl Guard {
         protect_text(&self.detector, &mut self.mapping, text, None).0
     }
 
-    /// Every outgoing message of a request: reviewed user messages stay as sent.
+    /// Every outgoing message of a request: reviewed user messages stay as sent. Older answers
+    /// pass too (one written before protection was switched on holds names); the placeholders
+    /// in them stay as they are.
     pub fn messages(&mut self, messages: &mut [aiscraft_core::Message]) {
         use aiscraft_core::Role;
         for m in messages.iter_mut() {
             let reviewed = m.role == Role::User && m.activity.iter().any(|s| s.label == PROTECTED);
-            if m.role == Role::Assistant || reviewed {
+            if reviewed {
                 continue;
             }
             m.content = self.text(&m.content);

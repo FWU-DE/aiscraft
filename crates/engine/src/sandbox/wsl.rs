@@ -162,6 +162,11 @@ impl SandboxRuntime for Wsl {
         Box::pin(async move { run_program(&exe, &args, stdin, timeout, max_output).await })
     }
 
+    fn stream(&self, argv: Vec<String>) -> BoxFuture<'static, Result<super::runtime::Pipe>> {
+        let r = super::process::spawn(&self.exe, &self.exec_args(&argv), &[("WSL_UTF8", "1".into())], MISSING);
+        Box::pin(async move { r })
+    }
+
     fn stop(&self) -> BoxFuture<'static, Result<()>> {
         let (exe, distro, guard) = (self.exe.clone(), self.distro.clone(), self.guard());
         Box::pin(async move {

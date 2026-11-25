@@ -687,7 +687,9 @@ impl AisCraftApp {
         }
         let images: Vec<(usize, aiscraft_core::Attachment)> = m.attachments.iter().filter(|a| a.mime.starts_with("image/")).cloned().enumerate().collect();
         for (i, a) in &images {
-            let tex = a.local_path.as_deref().and_then(|p| self.image_texture(ui.ctx(), p));
+            // Images in an answer are generated: „KI-Kennzeichnung“ as in AIS.chat, on by default.
+            let badge = self.image_badge(&m.id, *i);
+            let tex = a.local_path.as_deref().and_then(|p| self.image_texture(ui.ctx(), p, badge));
             match tex {
                 Some(tex) => {
                     let size = tex.size_vec2();
@@ -701,9 +703,34 @@ impl AisCraftApp {
             }
             ui.horizontal_wrapped(|ui| {
                 if ui.add(egui::Button::new(small_muted(&t, "Bild speichern …")).frame(false)).clicked()
-                    && let Some(path) = rfd::FileDialog::new().set_file_name(&a.name).save_file()
+                    && let Some(path) = rfd::FileDialog::new().set_file_name(badged_name(&a.name, badge)).save_file()
                 {
-                    self.run("chat.save_image", json!({"message_id": m.id, "index": i, "path": path.display().to_string()}));
+                    self.run("chat.save_image", self.image_save_params(&m.id, *i, &path.display().to_string()));
+                }
+                if ui.add(egui::Button::new(small_muted(&t, "Bild kopieren")).frame(false)).clicked()
+                    && let Some(img) = a.local_path.as_deref().and_then(|p| crate::app::image_pixels(p, badge))
+                {
+                    ui.ctx().copy_image(img);
+                }
+                if ui.add(egui::Button::new(small_muted(&t, "Prompt kopieren")).frame(false)).clicked() {
+                    let shown = self.engine.shown_messages(&self.state);
+                    let at = shown.iter().position(|x| x.id == m.id).unwrap_or(shown.len());
+                    if let Some(prompt) = shown.get(..at).and_then(|before| before.iter().rev().find(|x| x.role == aiscraft_core::Role::User)) {
+                        ui.ctx().copy_text(prompt.content.clone());
+                    }
+                }
+                let mut on = badge;
+                if ui
+                    .checkbox(&mut on, small_muted(&t, "KI-Kennzeichnung"))
+                    .on_hover_text("Zeigt, kopiert und speichert das Bild mit dem Zeichen „AI“ unten rechts, wie AIS.chat")
+                    .changed()
+                {
+                    let key = (m.id.clone(), *i);
+                    if on {
+                        self.badge_off.remove(&key);
+                    } else {
+                        self.badge_off.insert(key);
+                    }
                 }
                 if is_last && icon_button(ui, &t, "⟳", "Neu erzeugen (Strg+R)").clicked() {
                     self.run("chat.regenerate", json!({}));
@@ -1508,7 +1535,19 @@ impl AisCraftApp {
                 send = true;
             }
             let newline = if enter_sends { KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter) } else { KeyboardShortcut::new(Modifiers::NONE, Key::Enter) };
-            let hint = if image_mode {
+            // „Erstellen“ chosen with nothing typed: the next text is its topic.
+            let create_hint = self.create_pending.map(|(_, what)| format!("Thema für {what}, z. B. Brüche vergleichen, Klasse 6"));
+            if let Some((_, what)) = self.create_pending {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{what} erstellen: Thema eingeben, dann Enter")).color(t.accent).strong());
+                    if ui.small_button("Abbrechen").on_hover_text("Wieder eine normale Nachricht schreiben").clicked() {
+                        self.create_pending = None;
+                    }
+                });
+            }
+            let hint = if let Some(h) = create_hint.as_deref() {
+                h
+            } else if image_mode {
                 "Beschreibe das Bild, das entstehen soll …"
             } else if big {
                 "Frag etwas oder beschreib, was du brauchst …"
@@ -1541,6 +1580,19 @@ impl AisCraftApp {
         });
         if !big {
             self.context_hint(ui);
+        }
+        // The topic for a pending „Erstellen“ goes to its command, not into the chat as a message.
+        if send
+            && !generating
+            && let Some((cmd, _)) = self.create_pending
+        {
+            if crate::learn_panel::topic_usable(&self.composer) {
+                let topic = std::mem::take(&mut self.composer).trim().to_string();
+                self.create_pending = None;
+                self.run(cmd, json!({"topic": topic}));
+            }
+            self.focus_composer = true;
+            send = false;
         }
         if send && !generating {
             let text = std::mem::take(&mut self.composer);
@@ -1854,6 +1906,17 @@ fn suggestion_chip<'a>(t: &crate::theme::Tokens, text: &str) -> egui::Button<'a>
         .stroke(Stroke::new(1.0, t.border))
         .corner_radius(CornerRadius::same(t.radius))
         .min_size(egui::vec2(0.0, 30.0))
+}
+
+/// The file name to suggest when saving: with the badge the picture is a PNG, unless it was a
+/// JPEG (see `ai_badge::bake`).
+fn badged_name(name: &str, badge: bool) -> String {
+    let lower = name.to_lowercase();
+    if !badge || lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        return name.to_string();
+    }
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+    format!("{stem}.png")
 }
 
 /// An action under a message: symbol and word, framed only on hover.

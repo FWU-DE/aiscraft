@@ -92,6 +92,11 @@ pub(crate) trait SandboxRuntime: Send + Sync {
     /// Run `argv` in the machine as its root, `stdin` fed in, at most `timeout`, at most
     /// `max_output` bytes kept per stream.
     fn exec(&self, argv: Vec<String>, stdin: Vec<u8>, timeout: Duration, max_output: usize) -> BoxFuture<'static, Result<Output>>;
+    /// Start `argv` in the machine as its root and keep its stdin and stdout open (the relay of
+    /// a run with network, `net.rs`); stderr is dropped.
+    fn stream(&self, _argv: Vec<String>) -> BoxFuture<'static, Result<Pipe>> {
+        Box::pin(async { Err(Error::unsupported("Dieser Rechner hat kein Netz für den Arbeitsbereich.")) })
+    }
     /// Stop the machine (everything in it ends; files stay).
     fn stop(&self) -> BoxFuture<'static, Result<()>>;
     /// Remove the machine with its disk.
@@ -99,6 +104,14 @@ pub(crate) trait SandboxRuntime: Send + Sync {
 }
 
 pub(crate) type Shared = Arc<dyn SandboxRuntime>;
+
+/// A program in the machine that keeps running: its stdin and stdout, and what keeps it alive
+/// (dropping `guard` ends it).
+pub(crate) struct Pipe {
+    pub reader: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
+    pub writer: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
+    pub guard: Box<dyn std::any::Any + Send>,
+}
 
 /// The runtime for this system, for the real app. `dir` is `<data>/sandbox`.
 pub(crate) fn for_this_system(machine: String, dir: PathBuf) -> Shared {
@@ -165,6 +178,8 @@ pub(crate) enum FakeCall {
     Probe,
     Create(Vec<PathBuf>),
     Exec(Vec<String>),
+    /// A program kept running (the relay).
+    Stream(Vec<String>),
     Stop,
     Destroy,
 }
@@ -177,9 +192,13 @@ pub(crate) struct Fake {
     pub(crate) calls: Mutex<Vec<FakeCall>>,
     /// The probe's answer (`Err`: WSL missing).
     pub(crate) missing: Mutex<Option<String>>,
+    /// The working folders are over their limit (the prepare script says so).
+    pub(crate) full: Mutex<bool>,
     exists: Mutex<bool>,
     /// Files by machine path (`/work/<chat>/<path>`).
     files: Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
+    /// The container side of the running relay: what a fake `curl` in a run talks through.
+    relay: Arc<tokio::sync::Mutex<Option<tokio::io::DuplexStream>>>,
 }
 
 #[cfg(test)]
@@ -207,6 +226,11 @@ impl Fake {
         self.files.lock().unwrap_or_else(PoisonError::into_inner).get(path).cloned()
     }
 
+    /// Every relay the fake was asked to start.
+    pub(crate) fn relay_starts(&self) -> Vec<Vec<String>> {
+        self.calls().into_iter().filter_map(|c| if let FakeCall::Stream(a) = c { Some(a) } else { None }).collect()
+    }
+
     fn record(&self, c: FakeCall) {
         self.calls.lock().unwrap_or_else(PoisonError::into_inner).push(c);
     }
@@ -219,6 +243,9 @@ impl Fake {
             let req: serde_json::Value = argv.get(9).and_then(|r| serde_json::from_str(r).ok()).unwrap_or_default();
             let extra: serde_json::Value = argv.get(10).and_then(|r| serde_json::from_str(r).ok()).unwrap_or_default();
             return ok(fake_browser(&req, &extra).as_bytes());
+        }
+        if argv.get(2).map(String::as_str) == Some(k::PREPARE_SCRIPT) && *self.full.lock().unwrap_or_else(PoisonError::into_inner) {
+            return Output { code: Some(4), stderr: "Der Arbeitsordner dieses Chats ist voll (über 2048 MB).".as_bytes().to_vec(), ..Default::default() };
         }
         if argv.get(2).map(String::as_str) == Some(k::CLEAR_SCRIPT) {
             let prefix = format!("/work/{}/", argv.get(4).map(String::as_str).unwrap_or("?"));
@@ -253,6 +280,7 @@ impl Fake {
                 files.insert(format!("{mount}/{}", arg(0)), stdin.to_vec());
                 ok(b"")
             }
+            k::READ_SCRIPT if arg(0).contains("riesig") => Output { code: Some(0), stdout: b"QUJD".to_vec(), truncated: true, ..Default::default() },
             k::READ_SCRIPT => match files.get(&format!("{mount}/{}", arg(0))) {
                 Some(b) => {
                     use base64::Engine as _;
@@ -260,6 +288,7 @@ impl Fake {
                 }
                 None => Output { code: Some(2), stderr: format!("Datei fehlt: {}", arg(0)).into_bytes(), ..Default::default() },
             },
+            k::CONVERT_SCRIPT if arg(0).contains("langsam") => Output { code: None, timed_out: true, ..Default::default() },
             k::CONVERT_SCRIPT => {
                 let (src, to) = (arg(0), arg(1));
                 match files.get(&format!("{mount}/{src}")).cloned() {
@@ -346,6 +375,92 @@ impl Fake {
     }
 }
 
+/// A run of `curl URL [--sni NAME]` in the fake: what it asks the relay for.
+#[cfg(test)]
+fn fake_curl_args(argv: &[String]) -> Option<(String, Option<String>)> {
+    if !argv.iter().any(|a| a == super::container::RUN_SCRIPT) {
+        return None;
+    }
+    let image = Workspace::windows().image;
+    let at = argv.iter().position(|a| *a == image)?;
+    let cmd = argv.get(at + 6)?;
+    let mut words = cmd.strip_prefix("curl ")?.split_whitespace();
+    let url = words.next()?.to_string();
+    let sni = match (words.next(), words.next()) {
+        (Some("--sni"), Some(n)) => Some(n.to_string()),
+        _ => None,
+    };
+    Some((url, sni))
+}
+
+/// Everything that comes back through the relay for connection `id` until it is closed (or,
+/// with `until_head`, until the end of a response head).
+#[cfg(test)]
+async fn relay_collect(s: &mut tokio::io::DuplexStream, id: u32, until_head: bool) -> Vec<u8> {
+    let mut got = Vec::new();
+    while let Ok(Ok((kind, cid, data))) = tokio::time::timeout(Duration::from_secs(20), super::net::read_frame(s)).await {
+        if cid != id {
+            continue;
+        }
+        if kind == super::net::T_CLOSE {
+            break;
+        }
+        got.extend_from_slice(&data);
+        if until_head && got.windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+    }
+    got
+}
+
+/// What `curl` gets through the relay: without one (no network) it cannot resolve the name, as
+/// with `--network none`; with one it asks the app's proxy like the real curl with `HTTPS_PROXY`.
+#[cfg(test)]
+async fn fake_curl(relay: Arc<tokio::sync::Mutex<Option<tokio::io::DuplexStream>>>, url: &str, sni: Option<&str>) -> Output {
+    use super::net::{T_CLOSE, T_DATA, T_OPEN, frame};
+    use tokio::io::AsyncWriteExt as _;
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let mut guard = relay.lock().await;
+    let Some(s) = guard.as_mut() else {
+        return Output { code: Some(6), stderr: b"curl: (6) Could not resolve host".to_vec(), ..Default::default() };
+    };
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let (https, rest) = match url.split_once("://") {
+        Some(("https", r)) => (true, r),
+        Some((_, r)) => (false, r),
+        None => (false, url),
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    if s.write_all(&frame(T_OPEN, id, &[])).await.is_err() {
+        return Output { code: Some(7), stderr: b"relay".to_vec(), ..Default::default() };
+    }
+    if https {
+        let target = if authority.contains(':') && !authority.ends_with(']') { authority.to_string() } else { format!("{authority}:443") };
+        let host = target.rsplit_once(':').map(|(h, _)| h).unwrap_or("").to_string();
+        let _ = s.write_all(&frame(T_DATA, id, format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n").as_bytes())).await;
+        let head = relay_collect(s, id, true).await;
+        let text = String::from_utf8_lossy(&head).to_string();
+        if !text.starts_with("HTTP/1.1 200") {
+            let rest = relay_collect(s, id, false).await;
+            return Output {
+                code: Some(56),
+                stdout: [head, rest].concat(),
+                stderr: format!("curl: (56) CONNECT tunnel failed, response {}", text.split_whitespace().nth(1).unwrap_or("?")).into_bytes(),
+                ..Default::default()
+            };
+        }
+        let _ = s.write_all(&frame(T_DATA, id, &super::net::client_hello(sni.unwrap_or(&host)))).await;
+    } else {
+        let _ = s.write_all(&frame(T_DATA, id, format!("GET {url} HTTP/1.1\r\nHost: {authority}\r\nUser-Agent: curl\r\n\r\n").as_bytes())).await;
+    }
+    let _ = s.write_all(&frame(T_CLOSE, id, &[])).await;
+    let body = relay_collect(s, id, false).await;
+    if body.is_empty() {
+        return Output { code: Some(35), stderr: b"curl: (35) TLS connect error: the connection was closed".to_vec(), ..Default::default() };
+    }
+    Output { code: Some(0), stdout: body, ..Default::default() }
+}
+
 #[cfg(test)]
 impl SandboxRuntime for Fake {
     fn kind(&self) -> &'static str {
@@ -376,8 +491,35 @@ impl SandboxRuntime for Fake {
             return Box::pin(async { Err(Error::not_found("Kein eigener Rechner eingerichtet")) });
         }
         self.record(FakeCall::Exec(argv.clone()));
+        if let Some((url, sni)) = fake_curl_args(&argv) {
+            let relay = self.relay.clone();
+            return Box::pin(async move { Ok(fake_curl(relay, &url, sni.as_deref()).await) });
+        }
+        if argv.get(2).map(String::as_str) == Some(super::net::NET_DOWN_SCRIPT) {
+            // `docker rm -f` of the relay: its line to the engine ends.
+            let relay = self.relay.clone();
+            return Box::pin(async move {
+                *relay.lock().await = None;
+                Ok(Output { code: Some(0), ..Default::default() })
+            });
+        }
         let out = self.answer(&argv, &stdin);
         Box::pin(async move { Ok(out) })
+    }
+    fn stream(&self, argv: Vec<String>) -> BoxFuture<'static, Result<Pipe>> {
+        if !*self.exists.lock().unwrap_or_else(PoisonError::into_inner) {
+            return Box::pin(async { Err(Error::not_found("Kein eigener Rechner eingerichtet")) });
+        }
+        self.record(FakeCall::Stream(argv));
+        let relay = self.relay.clone();
+        Box::pin(async move {
+            use tokio::io::AsyncWriteExt as _;
+            let (engine_end, mut far) = tokio::io::duplex(1 << 20);
+            far.write_all(&super::net::frame(super::net::T_READY, 0, &[])).await.map_err(|e| Error::io("relay", &e))?;
+            *relay.lock().await = Some(far);
+            let (r, w) = tokio::io::split(engine_end);
+            Ok(Pipe { reader: Box::new(r), writer: Box::new(w), guard: Box::new(()) })
+        })
     }
     fn stop(&self) -> BoxFuture<'static, Result<()>> {
         self.record(FakeCall::Stop);

@@ -4,6 +4,7 @@ description = "AIS.ChatCraft chat backends: AIS.chat (web session), OpenAI-compa
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
@@ -31,3 +32,10 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-
 
 [lints]
 workspace = true
+
+# The proxy set in Windows (school networks, Nod 0.9.7 did the same). Only on Windows: on macOS
+# reqwest asks the system configuration for every new client, which made short time limits
+# (link checks) miss; there and on Linux the HTTP(S)_PROXY variables still apply. Feature
+# unification turns it on for every crate's reqwest on Windows.
+[target.'cfg(windows)'.dependencies]
+reqwest = { workspace = true, features = ["system-proxy"] }

@@ -260,3 +260,38 @@ async fn unreachable_and_invalid_urls() {
     cfg.transport = Transport::Http { url: "http://127.0.0.1:1/mcp".into(), headers: [("Bad Header".to_string(), "x".to_string())].into() };
     assert_eq!(McpClient::connect(&cfg).await.unwrap_err().kind, ErrorKind::Invalid);
 }
+
+/// Keys in custom headers go only to the connector's own address: a redirect to another host
+/// (here: another port) is not followed and is named; plain http only on this computer.
+#[tokio::test]
+async fn redirects_to_other_hosts_are_not_followed_and_http_needs_loopback() {
+    let other = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let other_url = format!("http://{}/mcp", other.local_addr().unwrap());
+    let hits = Arc::new(Mutex::new(0usize));
+    let h = Arc::clone(&hits);
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = other.accept().await {
+            *h.lock().unwrap() += 1;
+            respond(&mut sock, "200 OK", &[], "application/json", "{}").await;
+        }
+    });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let mut tmp = [0u8; 8192];
+            let _ = sock.read(&mut tmp).await;
+            respond(&mut sock, "307 Temporary Redirect", &[("Location", other_url.as_str())], "text/plain", "").await;
+        }
+    });
+    let e = McpClient::connect(&config(&url)).await.unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Refused, "{}", e.message);
+    assert!(e.message.contains("leitet auf eine andere Adresse um"), "{}", e.message);
+    assert_eq!(*hits.lock().unwrap(), 0, "the other host got the request (and the key)");
+
+    for u in ["http://mcp.example.org/mcp", "http://192.168.1.5:8080/mcp"] {
+        let e = McpClient::connect(&config(u)).await.unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Invalid, "{u}");
+        assert!(e.message.contains("https://"), "{}", e.message);
+    }
+}

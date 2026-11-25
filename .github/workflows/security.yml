@@ -1,0 +1,159 @@
+name: Security
+
+# Security review as a quality gate (AGENTS.md §6, „Security review“). The job names `cargo-deny`,
+# `zizmor`, `gitleaks` and `codeql` are stable: branch protection lists them as required checks.
+# `ai-review` is optional and only runs when the ANTHROPIC_API_KEY secret exists.
+#
+# Rules for this file (zizmor checks them): every action pinned to a full commit SHA with the
+# version as a comment, `persist-credentials: false` on every checkout, least privilege per job,
+# no `${{ }}` of untrusted input inside `run:` (pass it through `env:`).
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Monday 05:17 UTC: new RustSec advisories show up even when nothing was pushed.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # RustSec advisories, licences, bans and sources, configured in deny.toml.
+      - uses: EmbarkStudios/cargo-deny-action@81891abc19297b21343b15ef67dc61e4aea74fda # v2.1.4
+        with:
+          command: check
+          arguments: --all-features --locked
+
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # Static analysis of .github/workflows; fails on findings of medium severity or worse.
+      # Exceptions with reasons: .github/zizmor.yml.
+      - uses: zizmorcore/zizmor-action@1b4550e929643b8b26a62303c6bd64814271a4f1 # v0.9.2
+        with:
+          inputs: .github/workflows
+          config: .github/zizmor.yml
+          min-severity: medium
+          version: "1.33.1"
+          advanced-security: false
+          annotations: true
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The CLI from its release with a pinned checksum (gitleaks-action needs a licence key for
+      # organisations). Fake keys in test fixtures are allowed in .gitleaks.toml.
+      - name: Install gitleaks
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$archive"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+      # A pull request: only its own commits. Main and the weekly run: the whole history.
+      - name: Scan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            range="--log-opts=${BASE_SHA}..${HEAD_SHA}"
+          else
+            range=""
+          fi
+          # shellcheck disable=SC2086 # an empty $range means "everything"
+          "$RUNNER_TEMP/gitleaks" git . --config .gitleaks.toml --redact --no-banner --verbose $range
+
+  codeql:
+    name: codeql
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # Results go to the repository's code scanning; only this job may write them.
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          languages: rust, actions
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@915412ff23e8b7659517e607487dbeae018f2934 # v4.39.5
+        with:
+          category: codeql
+
+  # Optional: Claude reviews the pull request's diff for security problems and comments on it.
+  # Runs only for pull requests from this repository (a fork never sees the secret) and only when
+  # the owner has added ANTHROPIC_API_KEY; otherwise the job passes without doing anything.
+  ai-review:
+    name: ai-review
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Key present?
+        id: key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "present=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "present=false" >>"$GITHUB_OUTPUT"
+            echo "AI security review skipped: the secret ANTHROPIC_API_KEY is not set." >>"$GITHUB_STEP_SUMMARY"
+          fi
+      - if: steps.key.outputs.present == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      # No release tags upstream; pinned to the main commit of 2026-02-11.
+      - if: steps.key.outputs.present == 'true'
+        uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda # main 2026-02-11
+        with:
+          claude-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          comment-pr: true
+          upload-results: true
+          exclude-directories: target,design

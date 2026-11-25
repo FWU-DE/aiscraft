@@ -408,7 +408,8 @@ pub(crate) async fn send_background(c: &Ctx, conv_id: &str, prompt: &str) -> Res
         role: Role::User,
         content: prompt.to_string(),
         created_at: now_ms(),
-        // Written by the app, not the owner: never a source for the style or schedule ideas.
+        // Written by the app, not the owner: never a source for the style or schedule ideas, and
+        // never owner words for the trust check (`trust::owner_wrote`).
         model: Some(AUTOMATIC.into()),
         attachments: vec![],
         activity: vec![],
@@ -676,7 +677,8 @@ fn system_prompt_for(c: &Ctx, conv: &Conversation, send_context: bool, takes_sys
         && conv.sources.memory
         && let Some(m) = memory_prompt(&state.memory)
     {
-        parts.push(m);
+        // Notes come from every chat: names in them never go out unprotected (#55).
+        parts.push(crate::privacy::notes_for(c, conv, &m));
     }
     if let Some(s) = own_style_for(c, conv, request) {
         parts.push(s);

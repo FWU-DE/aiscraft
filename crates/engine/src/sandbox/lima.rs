@@ -87,7 +87,7 @@ provision:
       mkdir -p /etc/docker /work
       chmod 0711 /work
       cat > /etc/docker/daemon.json <<'JSON'
-      {"bridge":"none","storage-driver":"overlay2","userland-proxy":false,"iptables":true,"ip6tables":false,"ipv6":false,"log-driver":"local","log-opts":{"max-size":"10m","max-file":"2"}}
+      {"userns-remap":"default","bridge":"none","storage-driver":"overlay2","userland-proxy":false,"iptables":true,"ip6tables":false,"ipv6":false,"log-driver":"local","log-opts":{"max-size":"10m","max-file":"2"}}
       JSON
       cat > /etc/systemd/system/aiscraft-docker.service <<'UNIT'
       [Unit]
@@ -335,6 +335,11 @@ impl SandboxRuntime for Lima {
     fn exec(&self, argv: Vec<String>, stdin: Vec<u8>, timeout: Duration, max_output: usize) -> BoxFuture<'static, Result<Output>> {
         let (limactl, env, args) = (self.limactl(), self.env(), self.shell_args(&argv));
         Box::pin(async move { run(&limactl, &args, &env, stdin, timeout, max_output, NO_LIMACTL).await })
+    }
+
+    fn stream(&self, argv: Vec<String>) -> BoxFuture<'static, Result<super::runtime::Pipe>> {
+        let r = super::process::spawn(&self.limactl(), &self.shell_args(&argv), &self.env(), NO_LIMACTL);
+        Box::pin(async move { r })
     }
 
     fn stop(&self) -> BoxFuture<'static, Result<()>> {

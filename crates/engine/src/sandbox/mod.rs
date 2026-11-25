@@ -10,7 +10,8 @@
 //!   macOS and Linux it is not available yet (Lima, later). The image is n8n Nod's own Windows
 //!   runtime, pinned and updated as Nod does it (`image.rs`).
 //! - Work runs in a locked-down container in that machine (`container.rs`): no capabilities, no
-//!   network unless switched on, 2 GB RAM, 2 CPUs, 1024 processes, one folder per chat.
+//!   network unless the person allows sites (`net.rs`: then only through the app's proxy, never
+//!   the local network), 2 GB RAM, 2 CPUs, 1024 processes, one folder per chat.
 //! - The tools follow Nod's rule like connector tools (`tools.rs`): listing and reading run;
 //!   running, writing and converting need the owner's yes for exactly this command, folder and
 //!   time limit, or the owner's own request. Background work refuses. What comes back is
@@ -22,6 +23,7 @@ pub mod browser;
 pub(crate) mod container;
 pub mod image;
 pub(crate) mod lima;
+pub mod net;
 pub(crate) mod process;
 pub(crate) mod runtime;
 #[cfg(windows)]
@@ -70,8 +72,10 @@ pub const NOT_WITH_AIS: &str = "Mit AIS.chat nicht verfügbar: AIS.chat gibt dem
 pub struct SandboxState {
     /// Switched on by the person (only possible once installed).
     pub enabled: bool,
-    /// Containers may reach the network (off: `--network none`).
-    pub network: bool,
+    /// What a command may reach (`none`: `--network none`; `list`; `internet`).
+    pub network: net::NetMode,
+    /// The sites allowed with `list`, per profile (only the person changes it).
+    pub allow: Vec<String>,
     pub installed: bool,
     /// This engine can have a machine here (Windows; never engines in memory without a test machine).
     pub supported: bool,
@@ -104,7 +108,9 @@ pub struct SandboxState {
 #[serde(default)]
 struct Saved {
     enabled: bool,
-    network: bool,
+    /// v0.3.0 saved a switch (`true`/`false`); `NetMode` reads both.
+    network: net::NetMode,
+    allow: Vec<String>,
     browser: bool,
 }
 
@@ -126,6 +132,9 @@ pub(crate) struct Runtime {
     busy: AtomicBool,
     /// The browser container (#107).
     pub(crate) browser: browser::Browser,
+    /// Tests: names and the server every admitted connection goes to.
+    #[cfg(test)]
+    net_test: Mutex<Option<std::sync::Arc<net::TestNet>>>,
 }
 
 /// `aiscraft-default` for the usual data folder, else a short hash of the folder (portable).
@@ -151,6 +160,8 @@ impl Runtime {
             source: Mutex::new(if real { image::Source::github() } else { None }),
             busy: AtomicBool::new(false),
             browser: browser::Browser::default(),
+            #[cfg(test)]
+            net_test: Mutex::new(None),
         }
     }
 
@@ -188,6 +199,12 @@ impl Runtime {
             }],
             version: format!("test-{}", pinned.unwrap_or("").chars().take(6).collect::<String>()),
         });
+    }
+
+    /// Test hook: the proxy resolves names from `t` and connects to its local server.
+    #[cfg(test)]
+    pub(crate) fn set_net_test(&self, t: net::TestNet) {
+        *self.net_test.lock().unwrap_or_else(PoisonError::into_inner) = Some(std::sync::Arc::new(t));
     }
 
     #[cfg(test)]
@@ -237,6 +254,7 @@ pub(crate) fn refresh(c: &Ctx) {
         st.enabled = saved.enabled && installed && !st.legacy;
         st.network = saved.network;
         st.browser = saved.browser;
+        st.allow = saved.allow.clone();
         st.supported = machine.as_ref().is_some_and(|m| m.supported());
         st.kind = machine.as_ref().map(|m| m.kind().to_string()).unwrap_or_default();
         st.machine = machine.as_ref().map(|m| m.machine()).unwrap_or_default();
@@ -282,6 +300,9 @@ pub(crate) fn offer(c: &Ctx) -> Value {
         "installed": s.installed,
         "enabled": s.enabled,
         "network": s.network,
+        "allow": s.allow,
+        "suggestions": net::SUGGESTIONS.iter().map(|(name, domains)| json!({"name": name, "domains": domains})).collect::<Vec<_>>(),
+        "internet_warning": net::WARNING_INTERNET,
         "problem": s.problem,
         "version": s.version,
         "update": s.update,
@@ -328,9 +349,27 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         label: "Eigener Rechner ein/aus, Netz",
         group: "Fähigkeiten",
         shortcut: None,
-        params: "enabled?: bool, network?: bool (Netz für den Arbeitsbereich; aus: kein Netz), browser?: bool (Browser im eigenen Rechner, nur öffentliche Adressen; aus beendet ihn)",
+        params: "enabled?: bool, network?: \"none\" | \"list\" | \"internet\" (Kein Netz, nur erlaubte Seiten, ganzes Internet; true/false wie bisher: list/none), yes?: bool (für internet nötig: die Person hat die Warnung gelesen), browser?: bool (Browser im eigenen Rechner, nur öffentliche Adressen; aus beendet ihn)",
         palette: false,
         run: |c, p| Box::pin(set(c, p)),
+    },
+    CommandSpec {
+        id: "sandbox.allow_add",
+        label: "Eigener Rechner: Seite erlauben",
+        group: "Fähigkeiten",
+        shortcut: None,
+        params: "domain?: string, domains?: [string] (z. B. pypi.org oder *.example.org). Nur die Person; das Modell hat dafür kein Werkzeug",
+        palette: false,
+        run: |c, p| Box::pin(allow_add(c, p)),
+    },
+    CommandSpec {
+        id: "sandbox.allow_remove",
+        label: "Eigener Rechner: Seite nicht mehr erlauben",
+        group: "Fähigkeiten",
+        shortcut: None,
+        params: "domain: string",
+        palette: false,
+        run: |c, p| Box::pin(allow_remove(c, p)),
     },
     CommandSpec {
         id: "sandbox.stop",
@@ -388,6 +427,9 @@ fn step(c: &Ctx, what: Option<&str>) {
 
 /// A computer set up by v0.2.2 (AIS.ChatCraft's own image) before the switch to Nod's runtime.
 pub const LEGACY: &str = "Der eigene Rechner läuft noch mit dem früheren Abbild von AIS.ChatCraft und muss auf die Laufzeit von n8n Nod umgestellt werden: Einstellungen › Fähigkeiten › Aktualisieren. Bis dahin führt er nichts aus.";
+
+/// Why a call with a vault placeholder is refused.
+pub const VAULT_REFUSED: &str = "Abgelehnt: Einträge aus dem Tresor gehen nicht in den eigenen Rechner. Dort könnte ein späterer Befehl sie lesen, umformen oder weiterschicken. Ohne Tresor-Eintrag erneut versuchen oder die Person fragen.";
 
 /// What an update does to the working folders.
 pub const UPDATE_NOTE: &str = "Der eigene Rechner wird dabei neu angelegt; die Arbeitsordner der Chats werden geleert (Anhänge im Chat bleiben).";
@@ -454,7 +496,7 @@ async fn set_up(c: Ctx, p: Value, updating: bool) -> Result<Value> {
         }
         created?;
         step(&c, Some("Arbeitsumgebung wird vorbereitet"));
-        prepare(&machine, None, saved(&c).network).await?;
+        prepare(&machine, None, true).await?;
         let marker = Marker { layout: LAYOUT, machine: machine.machine(), sha256, version: src.version.clone() };
         crate::disk::write(&rt.dir.join(MARKER), &serde_json::to_vec_pretty(&marker)?)?;
         let mut st = saved(&c);
@@ -499,16 +541,23 @@ fn remove_leftovers(dir: &Path, keep: &[PathBuf]) -> Result<()> {
     Ok(())
 }
 
-/// `sandbox.set`: on only once installed; the network switch at any time.
+/// `sandbox.set`: on only once installed; the network mode at any time, the whole internet only
+/// with `yes` (the person read the warning).
 async fn set(c: Ctx, p: Value) -> Result<Value> {
     let enabled = p.get("enabled").and_then(Value::as_bool);
-    let network = p.get("network").and_then(Value::as_bool);
+    let network = match p.get("network") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(net::NetMode::parse(v).ok_or_else(|| Error::invalid("network: „none“, „list“ oder „internet“"))?),
+    };
     let browser_on = p.get("browser").and_then(Value::as_bool);
     if enabled.is_none() && network.is_none() && browser_on.is_none() {
-        return Err(Error::invalid("enabled, network oder browser (ja/nein) fehlt"));
+        return Err(Error::invalid("enabled, network oder browser fehlt"));
     }
     if enabled == Some(true) && read_marker(&c).is_none() {
         return Err(Error::invalid("Der eigene Rechner ist noch nicht eingerichtet. Erst „Einrichten …“ (lädt das Abbild nach deiner Zustimmung)."));
+    }
+    if network == Some(net::NetMode::Internet) && p.get("yes").and_then(Value::as_bool) != Some(true) {
+        return Ok(json!({"needs_yes": true, "warning": net::WARNING_INTERNET, "network": saved(&c).network}));
     }
     let mut st = saved(&c);
     if let Some(e) = enabled {
@@ -526,6 +575,44 @@ async fn set(c: Ctx, p: Value) -> Result<Value> {
     }
     save(&c, &st)?;
     Ok(json!({"enabled": c.state().sandbox.enabled, "network": st.network, "browser": st.browser}))
+}
+
+/// `sandbox.allow_add`: one domain or several (the suggestions); only the person's commands
+/// reach it, the model has no tool for the list.
+async fn allow_add(c: Ctx, p: Value) -> Result<Value> {
+    let mut raw: Vec<String> =
+        p.get("domains").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+    if let Some(d) = p.get("domain").and_then(Value::as_str) {
+        raw.push(d.to_string());
+    }
+    if raw.is_empty() {
+        return Err(Error::invalid("domain fehlt (z. B. pypi.org)"));
+    }
+    let mut st = saved(&c);
+    let mut added = Vec::new();
+    for r in raw.iter().take(net::MAX_LIST) {
+        let d = net::normalize_domain(r).map_err(Error::invalid)?;
+        if !st.allow.contains(&d) {
+            if st.allow.len() >= net::MAX_LIST {
+                return Err(Error::invalid(format!("Die Liste hat schon {} Einträge.", net::MAX_LIST)));
+            }
+            st.allow.push(d.clone());
+            added.push(d);
+        }
+    }
+    save(&c, &st)?;
+    Ok(json!({"added": added, "allow": st.allow}))
+}
+
+async fn allow_remove(c: Ctx, p: Value) -> Result<Value> {
+    let raw = p.get("domain").and_then(Value::as_str).ok_or_else(|| Error::invalid("domain fehlt"))?;
+    let d = net::normalize_domain(raw).unwrap_or_else(|_| raw.trim().to_ascii_lowercase());
+    let mut st = saved(&c);
+    let before = st.allow.len();
+    st.allow.retain(|x| *x != d);
+    let removed = st.allow.len() != before;
+    save(&c, &st)?;
+    Ok(json!({"removed": removed, "allow": st.allow}))
 }
 
 async fn stop(c: Ctx) -> Result<Value> {
@@ -600,15 +687,20 @@ pub(crate) fn forget(c: &Ctx, conv: &str) {
 // ---- the machine ----------------------------------------------------------------------------
 
 /// Docker running, the image loaded, the chat's folder there (idempotent, cheap when ready).
-async fn prepare(m: &runtime::Shared, chat: Option<&str>, network: bool) -> Result<()> {
+/// `setup`: the computer is being set up, so leftovers of runs with network may go.
+async fn prepare(m: &runtime::Shared, chat: Option<&str>, setup: bool) -> Result<()> {
     let ws = m.workspace()?;
     // The browser's image stays loaded (#107); without a readable id nothing else is kept.
     let browser_id = m.browser().map(|b| b.image).unwrap_or_default();
-    let args = [ws.image.as_str(), chat.unwrap_or(""), ws.tar, ws.tar_sha256, if network { "1" } else { "0" }, browser_id.as_str()];
+    let (chat_mb, all_mb) = (k::CHAT_FOLDER_MB.to_string(), k::ALL_FOLDERS_MB.to_string());
+    let args = [ws.image.as_str(), chat.unwrap_or(""), ws.tar, ws.tar_sha256, &chat_mb, &all_mb, browser_id.as_str(), if setup { "setup" } else { "" }];
     // Loading the 2 GB workspace image the first time takes a while.
     let out = m.exec(k::machine_script(k::PREPARE_SCRIPT, &args), Vec::new(), Duration::from_secs(900), 16 * 1024).await?;
     if out.ok() {
         Ok(())
+    } else if out.code == Some(4) {
+        // A working folder over its limit: the person makes room, nothing is wrong with the computer.
+        Err(Error::storage(out.why()))
     } else if out.timed_out {
         Err(Error::unsupported(format!("Der eigene Rechner ({}) antwortet nicht. „Anhalten“ in den Einstellungen und noch einmal versuchen.", m.machine())))
     } else {
@@ -616,8 +708,8 @@ async fn prepare(m: &runtime::Shared, chat: Option<&str>, network: bool) -> Resu
     }
 }
 
-/// The machine when it is on and installed, and whether the network is allowed.
-fn usable(c: &Ctx) -> Result<(runtime::Shared, bool)> {
+/// The machine when it is on and installed, and what the network allows.
+fn usable(c: &Ctx) -> Result<(runtime::Shared, net::NetMode)> {
     let s = c.state().sandbox.clone();
     if s.legacy {
         return Err(Error::refused(LEGACY));
@@ -627,6 +719,23 @@ fn usable(c: &Ctx) -> Result<(runtime::Shared, bool)> {
     }
     let m = c.0.sandbox.machine().filter(|_| read_marker(c).is_some()).ok_or_else(|| Error::refused("Der eigene Rechner ist nicht eingerichtet."))?;
     Ok((m, s.network))
+}
+
+/// What this run's connections are checked against: the list as saved now.
+fn policy(c: &Ctx, mode: net::NetMode) -> net::Policy {
+    #[allow(unused_mut)]
+    let mut p = net::Policy::new(mode, saved(c).allow);
+    #[cfg(test)]
+    {
+        p.test = c.0.sandbox.net_test.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    }
+    p
+}
+
+/// Every connection, allowed or refused, into the action log of the chat.
+fn net_logger(c: &Ctx, conv: &str) -> net::OnConn {
+    let (ctx, conv) = (c.clone(), conv.to_string());
+    std::sync::Arc::new(move |conn: net::Conn| crate::action_log::net(&ctx, &conv, &conn))
 }
 
 // ---- the tools ------------------------------------------------------------------------------
@@ -662,7 +771,7 @@ pub(crate) fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: RUN.into(),
-            description: format!("Führt einen Shell-Befehl im eigenen, abgeschotteten Linux-Rechner aus (Python 3, LibreOffice, qpdf, Ghostscript; kein Netz, keine Dateien der Person). Arbeitsordner /work gehört zu diesem Chat. Braucht die Freigabe der Person für genau diesen Befehl, Ordner und dieses Zeitlimit. Zeitlimit {DEFAULT_TIMEOUT} s, höchstens {MAX_TIMEOUT} s."),
+            description: format!("Führt einen Shell-Befehl im eigenen, abgeschotteten Linux-Rechner aus (Python 3, LibreOffice, qpdf, Ghostscript; keine Dateien der Person). Netz nur, wenn die Person es erlaubt hat, und dann nur über den Proxy der App (HTTPS_PROXY ist gesetzt): nur Webseiten (http/https), nie das lokale Netz, kein UDP; welche Seiten erlaubt sind, legt allein die Person fest. Arbeitsordner /work gehört zu diesem Chat. Braucht die Freigabe der Person für genau diesen Befehl, Ordner und dieses Zeitlimit. Zeitlimit {DEFAULT_TIMEOUT} s, höchstens {MAX_TIMEOUT} s."),
             input_schema: json!({"type": "object", "properties": {
                 "command": {"type": "string", "description": "Shell-Befehl (sh)"},
                 "folder": {"type": "string", "description": "Ordner im Arbeitsordner, Standard ."},
@@ -692,14 +801,21 @@ pub(crate) fn specs() -> Vec<ToolSpec> {
     ]
 }
 
-/// The arguments as they run: folder and time limit filled in, so the trust check, the approval
-/// card and the action log name exactly what will run.
-pub(crate) fn normalize(name: &str, args: &Value) -> Value {
+/// The arguments as they run: folder, time limit and whether the network is on filled in, so the
+/// trust check, the approval card, the claim and the action log name exactly what will run. The
+/// run itself never gets more network than these arguments say ([`execute`]).
+pub(crate) fn normalize(name: &str, args: &Value, network: net::NetMode) -> Value {
     if browser::is_tool(name) {
         return browser::normalize(name, args);
     }
     let mut a = args.clone();
     if let Some(o) = a.as_object_mut() {
+        // Only commands get network (converting never does).
+        if name == RUN {
+            o.insert("network".into(), json!(network));
+        } else {
+            o.remove("network");
+        }
         match name {
             RUN => {
                 let folder = o.get("folder").and_then(Value::as_str).unwrap_or(".").to_string();
@@ -772,6 +888,11 @@ pub(crate) fn prepare_call(c: &Ctx, name: &str, args: &Value, interactive: bool)
         return Err("Abgelehnt: Arbeit im Hintergrund nutzt den eigenen Rechner nicht.".into());
     }
     usable(c).map_err(|e| e.message)?;
+    // Vault values never enter the computer: once there, a later read, a transformed echo or the
+    // network would carry them past every scrub. Refused before anything is filled in.
+    if args.to_string().contains("{{vault:") {
+        return Err(VAULT_REFUSED.into());
+    }
     let check = |r: Result<String>| r.map(|_| ()).map_err(|e| e.message);
     match name {
         RUN => {
@@ -809,29 +930,94 @@ fn container_name() -> String {
     format!("aiscraft-{}", crate::new_id().replace('-', "").chars().take(16).collect::<String>())
 }
 
+/// One chat's containers: every start is named, and a time limit that ends the call also kills
+/// its container (ending `wsl.exe`/`limactl` alone would leave `docker run` going).
+struct Containers {
+    m: runtime::Shared,
+    chat: String,
+    /// What `docker run` starts (the pinned workspace image of this computer).
+    image: String,
+}
+
+impl Containers {
+    async fn run(&self, script: &str, args: &[&str], stdin: Vec<u8>, timeout: Duration, max: usize) -> Result<runtime::Output> {
+        let name = container_name();
+        let argv = k::docker_run(&self.chat, &name, k::Net::None, &self.image, script, args);
+        let out = self.m.exec(argv, stdin, timeout, max).await?;
+        if out.timed_out {
+            let _ = self.m.exec(vec!["docker".into(), "kill".into(), name], Vec::new(), Duration::from_secs(30), 4096).await;
+        }
+        Ok(out)
+    }
+
+    /// A file of the working folder, whole or not at all (never cut off).
+    async fn read_file(&self, path: &str) -> Result<Vec<u8>> {
+        use base64::Engine as _;
+        let max = crate::files::MAX_FILE_BYTES;
+        let out = self.run(k::READ_SCRIPT, &[path, &max.to_string()], Vec::new(), Duration::from_secs(120), (max as usize).saturating_mul(2)).await?;
+        if out.timed_out {
+            return Err(Error::busy(format!("/work/{path} ließ sich nicht rechtzeitig lesen.")));
+        }
+        if !out.ok() {
+            return Err(Error::not_found(format!("/work/{path}: {}", out.why())));
+        }
+        if out.truncated {
+            return Err(Error::invalid(format!("/work/{path} ist größer als 25 MB.")));
+        }
+        let text: String = String::from_utf8_lossy(&out.stdout).split_whitespace().collect();
+        base64::engine::general_purpose::STANDARD.decode(text.as_bytes()).map_err(|e| Error::protocol(format!("/work/{path}: unlesbare Antwort ({e})")))
+    }
+}
+
+/// The narrower of two network modes: off, then the list, then the whole internet.
+fn narrower(a: net::NetMode, b: net::NetMode) -> net::NetMode {
+    let rank = |m: net::NetMode| match m {
+        net::NetMode::Off => 0,
+        net::NetMode::List => 1,
+        net::NetMode::Internet => 2,
+    };
+    if rank(a) <= rank(b) { a } else { b }
+}
+
 /// Run one call that may run. Files that come out become attachments of the answer.
 pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value, secrets: &[String]) -> Result<(String, Vec<Attachment>)> {
     if browser::is_tool(name) {
         return browser::execute(c, conv, name, args, secrets).await;
     }
-    let (m, network) = usable(c)?;
+    let (m, now) = usable(c)?;
+    // Only commands get network, and never more than the approved arguments say (the question
+    // named it) nor more than is switched on now.
+    let approved = args.get("network").and_then(net::NetMode::parse).unwrap_or(net::NetMode::Off);
+    let mode = if name == RUN { narrower(now, approved) } else { net::NetMode::Off };
     let chat = k::chat_folder(conv)?;
-    prepare(&m, Some(&chat), network).await?;
+    prepare(&m, Some(&chat), false).await?;
     let image = m.workspace()?.image;
-    let start = |script: &str, a: &[&str]| k::docker_run(&chat, &container_name(), network, &image, script, a);
+    // Writing, reading, listing and converting never get network.
+    let boxes = Containers { m: m.clone(), chat: chat.clone(), image: image.clone() };
     match name {
         RUN => {
             let folder = k::rel_path(args.get("folder").and_then(Value::as_str).unwrap_or("."))?;
             let secs = args.get("timeout_s").and_then(Value::as_u64).unwrap_or(DEFAULT_TIMEOUT).clamp(1, MAX_TIMEOUT);
             let cmd = arg(args, "command");
-            let argv = start(k::RUN_SCRIPT, &[&folder, cmd, &secs.to_string()]);
-            let cname = argv.get(5).cloned().unwrap_or_default();
+            let online = match mode {
+                net::NetMode::Off => None,
+                _ => Some(net::open(&*m, &image, policy(c, mode), net_logger(c, conv)).await?),
+            };
+            let netargs = online.as_ref().map(|o| k::Net::Proxy { network: &o.network, relay: &o.relay }).unwrap_or(k::Net::None);
+            let cname = container_name();
+            let argv = k::docker_run(&chat, &cname, netargs, &image, k::RUN_SCRIPT, &[&folder, cmd, &secs.to_string()]);
             // The container's own `timeout` ends the command; this is the backstop.
-            let out = m.exec(argv, Vec::new(), Duration::from_secs(secs + 30), MAX_OUTPUT).await?;
-            if out.timed_out {
+            let out = m.exec(argv, Vec::new(), Duration::from_secs(secs + 30), MAX_OUTPUT).await;
+            if out.as_ref().is_ok_and(|o| o.timed_out) {
                 let _ = m.exec(vec!["docker".into(), "kill".into(), cname], Vec::new(), Duration::from_secs(30), 4096).await;
             }
-            Ok((run_report(cmd, &folder, secs, &out), Vec::new()))
+            let conns = match online {
+                Some(o) => o.close(&*m).await,
+                None => Vec::new(),
+            };
+            let mut report = run_report(cmd, &folder, secs, &out?);
+            report.push_str(&net::report(&conns));
+            Ok((report, Vec::new()))
         }
         WRITE => {
             let path = k::rel_path(arg(args, "path"))?;
@@ -839,7 +1025,7 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value, secre
             if text.len() > MAX_WRITE {
                 return Err(Error::invalid("Der Text ist zu groß"));
             }
-            let out = m.exec(start(k::WRITE_SCRIPT, &[&path]), text.as_bytes().to_vec(), Duration::from_secs(60), 16 * 1024).await?;
+            let out = boxes.run(k::WRITE_SCRIPT, &[&path], text.as_bytes().to_vec(), Duration::from_secs(60), 16 * 1024).await?;
             if !out.ok() {
                 return Err(Error::storage(format!("/work/{path} nicht gespeichert: {}", out.why())));
             }
@@ -847,7 +1033,7 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value, secre
         }
         READ => {
             let path = k::rel_path(arg(args, "path"))?;
-            let bytes = read_file(&m, &start, &path).await?;
+            let bytes = boxes.read_file(&path).await?;
             let attach = args.get("attach").and_then(Value::as_bool).unwrap_or(false);
             let text = (!attach && !bytes.contains(&0)).then(|| String::from_utf8(bytes.clone()).ok()).flatten().filter(|_| !binary_name(&path));
             match text {
@@ -868,19 +1054,24 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value, secre
             if !k::FORMATS.contains(&to) {
                 return Err(Error::invalid(format!("Format {to} gibt es nicht")));
             }
-            let out = m.exec(start(k::CONVERT_SCRIPT, &[&path, to]), Vec::new(), Duration::from_secs(300), MAX_OUTPUT).await?;
+            let out = boxes
+                .run(k::CONVERT_SCRIPT, &[&path, to, &k::CONVERT_SECS.to_string()], Vec::new(), Duration::from_secs(k::CONVERT_SECS + 30), MAX_OUTPUT)
+                .await?;
+            if out.timed_out || out.code == Some(124) {
+                return Err(Error::busy(format!("/work/{path} ließ sich nicht in {} s umwandeln.", k::CONVERT_SECS)));
+            }
             if !out.ok() {
                 return Err(Error::unsupported(format!("/work/{path} ließ sich nicht umwandeln: {}", out.why())));
             }
             let stem = path.rsplit_once('.').map(|(s, _)| s).unwrap_or(&path);
             let result = format!("{stem}.{to}");
-            let bytes = read_file(&m, &start, &result).await?;
+            let bytes = boxes.read_file(&result).await?;
             let a = attachment(c, &result, &bytes)?;
             Ok((format!("Umgewandelt: /work/{result} liegt als Anhang „{}“ im Chat.", a.name), vec![a]))
         }
         LIST => {
             let folder = k::rel_path(args.get("folder").and_then(Value::as_str).unwrap_or("."))?;
-            let out = m.exec(start(k::LIST_SCRIPT, &[&folder]), Vec::new(), Duration::from_secs(60), MAX_OUTPUT).await?;
+            let out = boxes.run(k::LIST_SCRIPT, &[&folder], Vec::new(), Duration::from_secs(60), MAX_OUTPUT).await?;
             if !out.ok() {
                 return Err(Error::not_found(format!("/work/{folder}: {}", out.why())));
             }
@@ -921,26 +1112,15 @@ fn run_report(cmd: &str, folder: &str, secs: u64, out: &runtime::Output) -> Stri
     s
 }
 
-async fn read_file(m: &runtime::Shared, start: &impl Fn(&str, &[&str]) -> Vec<String>, path: &str) -> Result<Vec<u8>> {
-    use base64::Engine as _;
-    let max = crate::files::MAX_FILE_BYTES;
-    let out = m.exec(start(k::READ_SCRIPT, &[path, &max.to_string()]), Vec::new(), Duration::from_secs(120), (max as usize).saturating_mul(2)).await?;
-    if !out.ok() {
-        return Err(Error::not_found(format!("/work/{path}: {}", out.why())));
-    }
-    let text: String = String::from_utf8_lossy(&out.stdout).split_whitespace().collect();
-    base64::engine::general_purpose::STANDARD.decode(text.as_bytes()).map_err(|e| Error::protocol(format!("/work/{path}: unlesbare Antwort ({e})")))
-}
-
 /// Write `bytes` to `path` (relative to `/work`) in the chat's working folder, through a
 /// locked-down workspace container without network (the browser's downloads, #107).
 async fn write_file(c: &Ctx, conv: &str, path: &str, bytes: Vec<u8>) -> Result<()> {
-    let (m, network) = usable(c)?;
+    let (m, _) = usable(c)?;
     let chat = k::chat_folder(conv)?;
-    prepare(&m, Some(&chat), network).await?;
+    prepare(&m, Some(&chat), false).await?;
     let image = m.workspace()?.image;
-    let argv = k::docker_run(&chat, &container_name(), false, &image, k::WRITE_SCRIPT, &[path]);
-    let out = m.exec(argv, bytes, Duration::from_secs(120), 16 * 1024).await?;
+    let boxes = Containers { m, chat, image };
+    let out = boxes.run(k::WRITE_SCRIPT, &[path], bytes, Duration::from_secs(120), 16 * 1024).await?;
     if out.ok() { Ok(()) } else { Err(Error::storage(format!("/work/{path} nicht gespeichert: {}", out.why()))) }
 }
 
