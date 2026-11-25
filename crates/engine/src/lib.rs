@@ -18,6 +18,7 @@ pub mod citations;
 mod collab;
 mod commands;
 mod disk;
+pub mod explore;
 mod ext;
 mod fallback;
 mod files;

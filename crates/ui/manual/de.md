@@ -71,7 +71,14 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 **Assistenten, Dialogpartner und Lernszenarien.** „Entdecken“ in der Seitenleiste (oder Strg+K) öffnet eine Seite mit allem, was AIS.chat dir anbietet: eigene, an der Schule geteilte und offizielle Einträge, mit Bild und Beschreibung.
 
 - **Suchen:** Strg+F, dann Name oder Beschreibung. Groß- und Kleinschreibung und Umlaute spielen keine Rolle („uebung“ findet „Übung“). Bleibt genau ein Treffer, öffnet Enter ihn.
-- **Eingrenzen:** Alle, Assistenten, Dialogpartner, Lernszenarien; dazu „★ Favoriten“ und „Meine“.
+- **Eingrenzen:** Alle, Assistenten, Dialogpartner, Lernszenarien.
+- **Filter und Sortierung:** darunter, mit einem Klick aufgeklappt, alles, was AIS.chat auf seinen Übersichtsseiten anbietet:
+  - **Anzeigen:** Meine, Offiziell (vom Land), Schulintern (an deiner Schule geteilt; nur, wenn dein Land das Teilen in der Schule erlaubt und etwas geteilt ist), Community, Alle und Favoriten.
+  - **Sortierung:** Neueste zuerst (wie in AIS.chat voreingestellt), Älteste zuerst, Alphabetisch A-Z oder Z-A, Beliebteste zuerst (wie oft in letzter Zeit in ganz AIS.chat genutzt; bei Gleichstand das Neuere zuerst).
+  - **Filter:** Schulform, Klassenstufe, Fach, Kategorie, Bundesland und Sprache, jeweils nur, wenn ein Eintrag Werte dafür hat; in Klammern steht, wie viele Einträge ein Wert zeigt. Innerhalb einer Gruppe reicht einer der gewählten Werte („Gymnasium“ oder „Realschule“), über Gruppen hinweg muss alles passen („Gymnasium“ und „Deutsch“).
+  - Gewählte Werte stehen als Chips mit × unter dem Abschnitt, davor „N Treffer“; „Zurücksetzen“ wählt alle ab.
+
+  Die Auswahl bleibt, bis du AIS.ChatCraft beendest (wie AIS.chat sie für einen Browser-Tab behält); beim nächsten Start beginnt die Seite wieder mit „Alle“, „Neueste zuerst“ und ohne Filter, damit kein vergessener Filter Einträge versteckt. Die Werte vergibt, wer einen Eintrag in AIS.chat anlegt; fehlen sie, findet der Filter ihn nicht.
 - **Favoriten:** Zeige auf eine Karte und klicke auf den Stern oben rechts, oder auf „☆ Als Favorit markieren“ in den Details und im neuen Chat. Favoriten gelten auch in AIS.chat im Browser.
 - **Details:** Ein Klick auf eine Karte zeigt Beschreibung, Begrüßung, Aufgabe, ob die Websuche an ist, und Gesprächsanfänge. „Chat starten“ (oder Enter) beginnt einen neuen Chat; ein Gesprächsanfang startet ihn und schickt den Satz gleich ab.
 - **Zurück:** Esc, erst zur Übersicht, dann zum Chat.
@@ -393,6 +400,8 @@ Unter **Einstellungen › Darstellung** wählst du, wie AIS.ChatCraft aussieht. 
 **Transparenz** (nur Glas): „Verlauf“ zeigt die Glasflächen lichtdurchlässig über dem Verlauf. „Aus“ macht sie deckend. Das ist ruhiger und auf schwachen Rechnern schneller. Echte Unschärfe hinter dem Fenster (der Desktop scheint durch) gibt es nicht.
 
 **Zoom** vergrößert Schrift und Bedienelemente. **Enter sendet** schaltet zwischen Enter und Strg+Enter zum Senden um.
+
+**Warte-Animation:** Bis eine Antwort kommt, zeigt der Chat eine kleine Animation, darunter wechselt alle paar Sekunden ein Satz („Denkt nach …“, „Sortiert die Gedanken …“, „Schlägt nach …“). „Abwechselnd“ (Standard) nimmt für jede Antwort eine andere: einen Bleistift, der schreibt und wieder radiert, eine Glühbirne, aus der Ideen aufsteigen, ein Buch mit umblätternden Seiten, Planeten um eine kleine Sonne oder einen Papierflieger. In Bild-Chats tupft ein Pinsel Farbkleckse. Du kannst auch eine feste Animation wählen. **Schlicht** zeigt nur den kleinen Kreisel von früher: Das ist die ruhigste Wahl, wenn dich Bewegung stört. Die Einstellung „Animationen reduzieren“ des Betriebssystems kann AIS.ChatCraft nicht auslesen, deshalb gibt es diese Wahl hier.
 
 Die Akzentfarbe ist überall das AIS-Blau.
 
