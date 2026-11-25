@@ -46,6 +46,9 @@ pub struct State {
     /// Increases when any artifact's content changes, so open views reload.
     pub artifact_rev: u64,
     pub connectors: Vec<ConnectorView>,
+    /// Local files (#25): on or off, folders kept out.
+    #[serde(default)]
+    pub local_files: crate::local_files::LocalFilesState,
     /// Tool calls waiting for the owner's yes or no.
     pub approvals: Vec<Approval>,
     pub schedules: Vec<crate::schedules::Schedule>,

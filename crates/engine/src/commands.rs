@@ -48,6 +48,7 @@ pub fn commands() -> &'static [CommandSpec] {
         all.extend(crate::templates::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::research::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::voice_mode::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::local_files::COMMANDS.iter().map(CommandSpec::copy));
         all
     })
 }

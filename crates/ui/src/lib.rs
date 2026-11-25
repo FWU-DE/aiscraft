@@ -19,6 +19,7 @@ pub mod icons;
 mod kit;
 mod know;
 mod learn_panel;
+mod local_files;
 mod looks;
 pub mod manual;
 pub mod markup;

@@ -247,6 +247,9 @@ pub(crate) fn specs_for(c: &Ctx, sources: &aiscraft_core::Sources) -> Vec<ToolSp
     if c.state().current.as_deref().and_then(|id| c.state().conversation(id).map(|x| x.title.starts_with("▶ "))).unwrap_or(false) {
         out.retain(|t| t.name != "task_start");
     }
+    if sources.allows_connector(crate::local_files::ID) {
+        out.extend(crate::local_files::specs());
+    }
     for conn in c.state().connectors.iter().filter(|x| x.enabled && x.status == "connected" && sources.allows_connector(&x.id)) {
         for t in &conn.tools {
             let mut desc = format!("[{}] {}", conn.name, if t.description.is_empty() { &t.title } else { &t.description });
@@ -312,6 +315,9 @@ fn args_hash(args: &Value) -> String {
 fn needs_owner(c: &Ctx, call: &ToolCall) -> bool {
     if call.arguments.to_string().contains("{{vault:") {
         return true;
+    }
+    if crate::local_files::is_tool(&call.name) {
+        return call.name != crate::local_files::LIST || !crate::local_files::enabled(c);
     }
     c.state().connectors.iter().flat_map(|x| x.tools.iter()).find(|t| t.llm_name == call.name).is_some_and(|t| !t.read_only)
 }
@@ -400,7 +406,17 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
             Err(e) => (e.message, true, "error"),
         });
     }
-    let Some((conn, tool)) = c.state().connectors.iter().find_map(|x| x.tools.iter().find(|t| t.llm_name == call.name).map(|t| (x.clone(), t.clone()))) else {
+    // Local files (#25): the person's own files, so with the names „Namen schützen“ replaced.
+    let is_local = crate::local_files::is_tool(&call.name);
+    let found = if is_local {
+        match crate::local_files::prepare(c, &call.name, &local.arguments, interactive) {
+            Ok(tool) => Some((crate::local_files::view(), tool)),
+            Err(why) => return Prep::Done((why, true, if interactive { "error" } else { "denied" })),
+        }
+    } else {
+        c.state().connectors.iter().find_map(|x| x.tools.iter().find(|t| t.llm_name == call.name).map(|t| (x.clone(), t.clone())))
+    };
+    let Some((conn, tool)) = found else {
         return Prep::Done((format!("Werkzeug {} gibt es nicht.", call.name), true, "error"));
     };
     // The model may only call what this chat offers; a name it made up or remembered from
@@ -411,13 +427,18 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
         return Prep::Done((format!("{} ist in diesem Chat nicht freigegeben.", conn.name), true, "denied"));
     }
     // Vault placeholders: fill them in here; using a secret always needs the owner's yes.
-    let (arguments, secrets) = match crate::vault::fill(c, &call.arguments) {
+    let (arguments, secrets) = match crate::vault::fill(c, if is_local { &local.arguments } else { &call.arguments }) {
         Ok(x) => x,
         Err(e) => return Prep::Done((e.message, true, "error")),
     };
     let ready = Box::new(Ready { conn, tool, call: call.clone(), arguments, secrets, why: crate::action_log::Why::ReadOnly });
-    if ready.tool.read_only && ready.secrets.is_empty() {
+    // While local files are off, the first call asks once: the yes switches them on and runs it.
+    let switch_on = if is_local { crate::local_files::enable_note(c) } else { None };
+    if ready.tool.read_only && ready.secrets.is_empty() && switch_on.is_none() {
         return Prep::Run(ready, None);
+    }
+    if let Some(note) = switch_on {
+        return Prep::Ask(ready, None, Some(note));
     }
     // Work without a person present never runs what needs a yes, whatever a check or a rule
     // says: the words in a task or a schedule are not the owner's (#22: rules do not open it).
@@ -514,6 +535,18 @@ async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> O
             let _ = c.store(|st| st.finish_claim(key, state, crate::now_ms()));
         }
     };
+    if r.conn.id == crate::local_files::ID {
+        return match crate::local_files::execute(c, &r.tool.name, &r.arguments) {
+            Ok(text) => {
+                finish("done");
+                (wrap_untrusted(&r.call.name, &text), false, "ok")
+            }
+            Err(e) => {
+                finish("failed");
+                (format!("Fehler: {}", e.message), true, "error")
+            }
+        };
+    }
     let client = match client_for(c, &r.conn.id).await {
         Ok(cl) => cl,
         Err(e) => {

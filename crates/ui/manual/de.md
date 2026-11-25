@@ -192,6 +192,14 @@ Werkzeuge, die nur lesen, laufen direkt. Alles andere läuft nur, wenn du darum 
 
 Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
 
+### Lokale Dateien
+
+„Lies die PDF in Downloads und fasse sie zusammen“ oder „Speichere den Bericht in Dokumente“ geht ohne eigenen Konnektor. Lokale Dateien sind zuerst aus. Fragt ein Modell danach, erscheint im Chat eine Frage; „Erlauben“ schaltet sie ein und führt die Aktion aus, „Ablehnen“ lässt sie aus. Aufgaben und Zeitpläne können sie nicht einschalten und greifen nie auf Dateien zu. Abschalten unter **Einstellungen › Konnektoren**.
+
+- Erlaubt sind dein Persönlicher Ordner und externe Laufwerke. Verknüpfungen werden aufgelöst; zählt, wohin sie führen.
+- Immer gesperrt: versteckte Ordner und Dateien (`.ssh`, `.config`, Browserprofile, Schlüsselbund), Programmordner (`Library`, `AppData`), Dateien mit Geheimnissen (`.env`, Schlüssel wie `id_rsa` oder `.pem`, Passwort-Datenbanken wie `.kdbx`), die Daten von AIS.ChatCraft und Ordner, die du unter **Ordner sperren** einträgst.
+- Auflisten läuft ohne Frage. Lesen (Text bis 256 KB, PDF als Text) und Speichern (Text bis 1 MB) folgen den Freigaben oben; Ersetzen einer Datei fragt immer. Programme und Skripte legt AIS.ChatCraft nicht an.
+
 ## Zeitpläne und Aufgaben
 
 **Zeitpläne** (Einstellungen › Zeitpläne) schicken einen Auftrag wiederkehrend oder einmal ab, etwa werktags um 7 Uhr: `0 7 * * 1-5`. Die Antwort landet in einem eigenen Chat. **Beobachten** meldet nur, wenn sich etwas geändert hat. Modelle können selbst eine Nachfrage planen („Ich schaue Freitag nach“). Zeitpläne laufen, solange AIS.ChatCraft läuft; Werkzeuge, die eine Freigabe brauchen, sind dabei abgeschaltet.
