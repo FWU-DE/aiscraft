@@ -23,6 +23,24 @@ pub fn dialog_frame(ctx: &egui::Context, t: &Tokens) -> Frame {
         .inner_margin(Margin::same(DIALOG_MARGIN + 4))
 }
 
+/// The round „Schließen“ X in the top-right corner of a dialog whose content fills `content`
+/// (the frame's inner rect, with [`DIALOG_MARGIN`] + 4 around it). It sits in the frame's margin
+/// and inside its rounded corner, and takes no layout space (nothing is allocated, so the dialog
+/// never grows by it). Returns whether it was clicked.
+pub fn corner_close(ui: &mut Ui, t: &Tokens, content: egui::Rect) -> bool {
+    let margin = f32::from(DIALOG_MARGIN + 4);
+    let center = content.right_top() + egui::vec2(margin - 18.0, 18.0 - margin);
+    let rect = egui::Rect::from_center_size(center, egui::vec2(26.0, 26.0));
+    let r = ui.interact(rect, ui.scope_id().with("dialog-close-x"), egui::Sense::click());
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Schließen"));
+    let p = ui.painter();
+    if r.hovered() || r.has_focus() {
+        p.circle_filled(center, 13.0, crate::theme::mix(t.opaque(t.chip), t.text, 0.08));
+    }
+    crate::icons::Icon::X.paint(p, center, 15.0, if r.hovered() { t.text } else { t.text2 });
+    r.on_hover_text("Schließen (Esc)").clicked()
+}
+
 pub fn accent_button(ui: &mut Ui, t: &Tokens, text: &str) -> Response {
     crate::kit::pill(ui, t, crate::kit::Pill::Primary, None, text, 14.0, None)
 }

@@ -1,7 +1,8 @@
 //! "Entdecken": assistants, characters and learning scenarios as a page with search, tabs,
 //! filters and a card grid, and a detail view per entry. Replaces the chat column while open.
 
-use aiscraft_core::{BackendKind, PersonaInfo, PersonaKind};
+use aiscraft_core::{BackendKind, ExploreFilter, ExploreSort, ExploreSource, FilterGroup, PersonaInfo, PersonaKind};
+use aiscraft_engine::explore::{GroupValue, group_values, source_counts};
 use aiscraft_engine::{BackendStatus, picture_key};
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Align, Align2, Color32, CornerRadius, FontId, Frame, Key, Layout, Margin, Rect, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
@@ -9,6 +10,8 @@ use serde_json::json;
 
 use crate::app::AisCraftApp;
 use crate::dialogs::Dialog;
+use crate::icons::Icon;
+use crate::kit::{Pill, pill as kit_pill};
 use crate::theme::Tokens;
 use crate::widgets::{accent_button, card, muted, small_muted};
 
@@ -29,16 +32,43 @@ const PICTURE_PATIENCE: f64 = 30.0;
 /// Entries of one kind (or all), as the grid lists them.
 type Section<'a> = (Option<PersonaKind>, Vec<&'a (String, PersonaInfo)>);
 
-/// What the page shows; pure view state.
+/// What the page shows besides the engine's filter (`State::explore`): the search field as
+/// typed, the open entry and focus.
 #[derive(Debug, Default)]
 pub(crate) struct ExploreView {
+    /// The search as typed; sent to the engine (`explore.filter`) on every change.
     pub query: String,
-    /// `None` = all kinds.
-    pub tab: Option<PersonaKind>,
-    pub favorites: bool,
-    pub own: bool,
     pub detail: Option<Pick>,
     pub focus_search: bool,
+    /// Searches sent and not yet seen back in the engine's state, so a slow update does not
+    /// overwrite what is being typed. Anything else the engine holds came from elsewhere (the
+    /// control channel, „Filter zurücksetzen“) and replaces the field.
+    sent: Vec<String>,
+    /// The engine's search as last seen; only a change is looked at.
+    seen: String,
+}
+
+impl ExploreView {
+    fn new(engine_query: &str) -> Self {
+        ExploreView { focus_search: true, query: engine_query.to_string(), seen: engine_query.to_string(), ..Default::default() }
+    }
+
+    /// When the engine's search changed: one of ours arriving, or one from elsewhere, which
+    /// replaces the field unless something typed is still on its way.
+    fn sync_query(&mut self, engine: &str) {
+        if engine == self.seen {
+            return;
+        }
+        self.seen = engine.to_string();
+        if let Some(i) = self.sent.iter().position(|q| q == engine) {
+            self.sent.drain(..=i);
+        } else if self.sent.is_empty() {
+            self.query = engine.to_string();
+        }
+        if self.sent.len() > 64 {
+            self.sent.clear();
+        }
+    }
 }
 
 /// One entry, by backend, kind and id.
@@ -49,37 +79,8 @@ pub(crate) struct Pick {
     pub id: String,
 }
 
-/// Lower case without umlauts and accents, so "ubung", "uebung" and "Übung" find each other.
-pub(crate) fn fold(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars().flat_map(char::to_lowercase) {
-        match c {
-            'ä' | 'à' | 'á' | 'â' | 'ã' | 'å' => out.push('a'),
-            'ö' | 'ò' | 'ó' | 'ô' | 'õ' | 'ø' => out.push('o'),
-            'ü' | 'ù' | 'ú' | 'û' => out.push('u'),
-            'é' | 'è' | 'ê' | 'ë' => out.push('e'),
-            'í' | 'ì' | 'î' | 'ï' => out.push('i'),
-            'ç' => out.push('c'),
-            'ñ' => out.push('n'),
-            'ß' => out.push_str("ss"),
-            _ => out.push(c),
-        }
-    }
-    out.replace("ae", "a").replace("oe", "o").replace("ue", "u")
-}
-
-/// Does every word of the query occur in name or description?
-pub(crate) fn matches_query(p: &PersonaInfo, terms: &[String]) -> bool {
-    if terms.is_empty() {
-        return true;
-    }
-    let hay = fold(&format!("{} {}", p.name, p.description.as_deref().unwrap_or("")));
-    terms.iter().all(|t| hay.contains(t.as_str()))
-}
-
-pub(crate) fn query_terms(q: &str) -> Vec<String> {
-    fold(q).split_whitespace().map(str::to_string).collect()
-}
+#[cfg(test)]
+use aiscraft_core::explore::{fold, matches_query, query_terms};
 
 /// "Johann Wolfgang von Goethe" → "JG"; "Mathe-Coach" → "MC".
 pub(crate) fn initials(name: &str) -> String {
@@ -154,7 +155,7 @@ impl AisCraftApp {
     pub(crate) fn open_explore(&mut self) {
         self.archive = None;
         if self.explore.is_none() {
-            self.explore = Some(ExploreView { focus_search: true, ..Default::default() });
+            self.explore = Some(ExploreView::new(&self.state.explore.query));
         }
         self.prefetch_personas(true);
     }
@@ -241,7 +242,7 @@ impl AisCraftApp {
         let tex = if large {
             let key = picture_key(backend, p.kind, &p.id);
             match self.state.persona_pictures.get(&key).cloned().flatten() {
-                Some(path) => self.image_texture(ui.ctx(), &path),
+                Some(path) => self.image_texture(ui.ctx(), &path, false),
                 None => self.persona_thumb(ui.ctx(), backend, p),
             }
         } else {
@@ -328,12 +329,9 @@ impl AisCraftApp {
         self.run("persona.favorite", json!({"backend": backend, "kind": kind.as_str(), "id": id, "favorite": favorite}));
     }
 
-    /// The entries the page lists, with their backend: favourites first, then own, then by name.
+    /// The entries the page lists, with their backend (signed-in AIS.chat backends only).
     fn explore_entries(&self) -> Vec<(String, PersonaInfo)> {
-        let mut out: Vec<(String, PersonaInfo)> =
-            self.persona_backends().iter().flat_map(|b| b.personas.iter().flatten().map(|p| (b.config.id.clone(), p.clone()))).collect();
-        out.sort_by(|a, b| b.1.favorite.cmp(&a.1.favorite).then(b.1.own.cmp(&a.1.own)).then_with(|| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase())));
-        out
+        self.persona_backends().iter().flat_map(|b| b.personas.iter().flatten().map(|p| (b.config.id.clone(), p.clone()))).collect()
     }
 
     fn explore_find(&self, pick: &Pick) -> Option<PersonaInfo> {
@@ -358,7 +356,8 @@ impl AisCraftApp {
             view.detail = None;
             view.focus_search = true;
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
+        // An open menu (sort order, a filter group) takes Esc itself.
+        if !egui::Popup::is_any_open(ctx) && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
             if view.detail.is_some() {
                 view.detail = None;
             } else {
@@ -390,13 +389,18 @@ impl AisCraftApp {
     fn explore_grid(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let Some(mut view) = self.explore.take() else { return };
+        view.sync_query(&self.state.explore.query);
         let backends = self.persona_backends();
         let entries = self.explore_entries();
-        let terms = query_terms(&view.query);
-        let filtered: Vec<&(String, PersonaInfo)> =
-            entries.iter().filter(|(_, p)| matches_query(p, &terms) && (!view.favorites || p.favorite) && (!view.own || p.own)).collect();
+        // The engine's filter, with the search as typed (the engine gets it a moment later).
+        let f = ExploreFilter { query: view.query.clone(), ..self.state.explore.clone() };
+        let matches = f.matcher();
+        let filtered: Vec<&(String, PersonaInfo)> = entries.iter().filter(|(_, p)| matches(p)).collect();
         let count = |k: Option<PersonaKind>| filtered.iter().filter(|(_, p)| k.is_none_or(|k| p.kind == k)).count();
-        let shown: Vec<&(String, PersonaInfo)> = filtered.iter().copied().filter(|(_, p)| view.tab.is_none_or(|k| p.kind == k)).collect();
+        let mut shown: Vec<&(String, PersonaInfo)> = filtered.iter().copied().filter(|(_, p)| f.matches_kind(p)).collect();
+        shown.sort_by(|a, b| f.sort.compare(&a.1, &b.1));
+        // Commands the page sends after drawing.
+        let mut cmds: Vec<(&'static str, serde_json::Value)> = Vec::new();
         let mut close = false;
         let mut refresh = false;
         let mut open: Option<Pick> = None;
@@ -427,6 +431,10 @@ impl AisCraftApp {
                 if std::mem::take(&mut view.focus_search) {
                     search.request_focus();
                 }
+                if search.changed() {
+                    view.sent.push(view.query.clone());
+                    cmds.push(("explore.filter", json!({"query": view.query})));
+                }
                 if search.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) && shown.len() == 1 {
                     open = shown.first().map(|(b, p)| Pick { backend: b.clone(), kind: p.kind, id: p.id.clone() });
                 }
@@ -437,26 +445,24 @@ impl AisCraftApp {
                     |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-                            if chip(ui, &t, view.tab.is_none(), "Alle", Some(count(None))).clicked() {
-                                view.tab = None;
+                            if chip(ui, &t, f.kind.is_none(), "Alle", Some(count(None))).clicked() {
+                                cmds.push(("explore.filter", json!({"kind": "all"})));
                             }
                             for k in PersonaKind::ALL {
-                                if chip(ui, &t, view.tab == Some(k), k.plural(), Some(count(Some(k)))).clicked() {
-                                    view.tab = if view.tab == Some(k) { None } else { Some(k) };
+                                if chip(ui, &t, f.kind == Some(k), k.plural(), Some(count(Some(k)))).clicked() {
+                                    cmds.push(("explore.filter", json!({"kind": if f.kind == Some(k) { "all" } else { k.as_str() }})));
                                 }
-                            }
-                            ui.add_space(4.0);
-                            ui.separator();
-                            ui.add_space(4.0);
-                            if chip(ui, &t, view.favorites, "★ Favoriten", None).on_hover_text("Nur deine Favoriten (der Stern auf einer Karte)").clicked() {
-                                view.favorites = !view.favorites;
-                            }
-                            if chip(ui, &t, view.own, "Meine", None).on_hover_text("Nur die, die du selbst angelegt hast").clicked() {
-                                view.own = !view.own;
                             }
                         });
                     },
                 );
+                if !entries.is_empty() {
+                    ui.add_space(4.0);
+                    filter_section(ui, &t, &f, &entries, &mut cmds);
+                }
+                if f.active_count() > 0 {
+                    active_filters(ui, &t, &f, shown.len(), &mut cmds);
+                }
             });
         });
 
@@ -495,7 +501,7 @@ impl AisCraftApp {
                         return;
                     }
                     let no_favorites = !entries.iter().any(|(_, p)| p.favorite);
-                    if shown.is_empty() && view.favorites && no_favorites {
+                    if shown.is_empty() && f.source == ExploreSource::Favorites && no_favorites {
                         empty_card(
                             ui,
                             &t,
@@ -504,12 +510,12 @@ impl AisCraftApp {
                              oben rechts: Sie erscheint dann hier und in der Seitenleiste, auch in AIS.chat im Browser.",
                         );
                         if accent_button(ui, &t, "Alle zeigen").clicked() {
-                            view.favorites = false;
+                            cmds.push(("explore.filter", json!({"source": "all"})));
                         }
                         return;
                     }
                     if shown.is_empty() {
-                        let what = match view.tab {
+                        let what = match f.kind {
                             Some(k) => k.plural().to_string(),
                             None => "Treffer".into(),
                         };
@@ -521,14 +527,15 @@ impl AisCraftApp {
                         empty_card(ui, &t, "Nichts gefunden", &detail);
                         if ui.button("Filter zurücksetzen").clicked() {
                             view.query.clear();
-                            view.tab = None;
-                            view.favorites = false;
-                            view.own = false;
+                            if !view.seen.is_empty() {
+                                view.sent.push(String::new());
+                            }
+                            cmds.push(("explore.reset", json!({"all": true})));
                         }
                         return;
                     }
                     // All kinds: one section each, so the page reads like a catalogue.
-                    let sections: Vec<Section> = match view.tab {
+                    let sections: Vec<Section> = match f.kind {
                         Some(k) => vec![(Some(k), shown.clone())],
                         None => PersonaKind::ALL
                             .iter()
@@ -555,6 +562,9 @@ impl AisCraftApp {
             });
         });
 
+        for (cmd, params) in cmds {
+            self.run(cmd, params);
+        }
         if refresh {
             for b in &backends {
                 self.engine.dispatch_quiet("persona.refresh", json!({"backend": b.config.id}));
@@ -728,6 +738,94 @@ impl AisCraftApp {
     }
 }
 
+/// „Filter und Sortierung“: AIS.chat's tabs, sort orders and filter groups, folded away until
+/// opened (the header names the sort order and how many values are chosen). Counts are worked
+/// out only while it is open.
+fn filter_section(ui: &mut Ui, t: &Tokens, f: &ExploreFilter, entries: &[(String, PersonaInfo)], cmds: &mut Vec<(&'static str, serde_json::Value)>) {
+    let active = f.active_count();
+    let mut title = format!("Filter und Sortierung · {}", f.sort.label());
+    if f.source != ExploreSource::All {
+        title.push_str(&format!(" · {}", f.source.label()));
+    }
+    if active > 0 {
+        title.push_str(&format!(" · {active} Filter"));
+    }
+    egui::CollapsingHeader::new(RichText::new(title).size(13.5).color(t.text)).id_salt("explore-filters").default_open(false).show(ui, |ui| {
+        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+        ui.label(small_muted(t, "ANZEIGEN"));
+        egui::ScrollArea::horizontal().id_salt("explore-sources").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let school_tab = aiscraft_engine::explore::school_tab(entries) || f.source == ExploreSource::School;
+                for (s, n) in source_counts(entries, f).into_iter().filter(|(s, _)| *s != ExploreSource::School || school_tab) {
+                    if chip(ui, t, f.source == s, s.label(), Some(n)).on_hover_text(s.hint()).clicked() && f.source != s {
+                        cmds.push(("explore.filter", json!({"source": s.key()})));
+                    }
+                }
+            });
+        });
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            ui.label(small_muted(t, "SORTIERUNG"));
+            let r = egui::ComboBox::from_id_salt("explore-sort").selected_text(f.sort.label()).width(190.0).show_ui(ui, |ui| {
+                for s in ExploreSort::ALL {
+                    if ui.selectable_label(f.sort == s, s.label()).clicked() && f.sort != s {
+                        cmds.push(("explore.sort", json!({"by": s.key()})));
+                    }
+                }
+            });
+            r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Sortierung"));
+        });
+        ui.add_space(2.0);
+        ui.label(small_muted(t, "FILTER"));
+        let groups: Vec<(FilterGroup, Vec<GroupValue>)> =
+            FilterGroup::ALL.iter().map(|g| (*g, group_values(entries, f, *g))).filter(|(_, v)| !v.is_empty()).collect();
+        if groups.is_empty() {
+            ui.label(small_muted(t, "In AIS.chat ist hier keinem Eintrag eine Schulform, Klassenstufe, ein Fach oder eine Kategorie zugeordnet."));
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            for (g, values) in &groups {
+                let chosen = f.selected.get(*g).len();
+                let label = if chosen > 0 { format!("{} ({chosen})", g.label()) } else { g.label().to_string() };
+                let kind = if chosen > 0 { Pill::Soft } else { Pill::Chip };
+                let toggle = kit_pill(ui, t, kind, None, &label, 13.0, Some(Icon::ChevronDown));
+                egui::Popup::from_toggle_button_response(&toggle).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                    ui.set_min_width(240.0);
+                    ScrollArea::vertical().id_salt(("explore-group", g.key())).max_height(320.0).show(ui, |ui| {
+                        for v in values {
+                            let mut on = v.selected;
+                            if ui.checkbox(&mut on, format!("{} ({})", v.label, v.count)).changed() {
+                                cmds.push(("explore.filter", json!({"group": g.key(), "value": v.key, "on": on})));
+                            }
+                        }
+                    });
+                });
+            }
+        });
+    });
+}
+
+/// The chosen filter values as chips with ×, the number of hits and „Zurücksetzen“.
+fn active_filters(ui: &mut Ui, t: &Tokens, f: &ExploreFilter, hits: usize, cmds: &mut Vec<(&'static str, serde_json::Value)>) {
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+        ui.label(RichText::new(format!("{hits} Treffer")).size(13.5).color(t.text));
+        for g in FilterGroup::ALL {
+            for key in f.selected.get(g) {
+                let label = g.value_label(key);
+                let r = kit_pill(ui, t, Pill::Soft, None, &label, 12.5, Some(Icon::X)).on_hover_text(format!("Filter {label} entfernen"));
+                if r.clicked() {
+                    cmds.push(("explore.filter", json!({"group": g.key(), "value": key, "on": false})));
+                }
+            }
+        }
+        if kit_pill(ui, t, Pill::Link, None, "Zurücksetzen", 12.5, None).on_hover_text("Alle Filterwerte abwählen").clicked() {
+            cmds.push(("explore.reset", json!({})));
+        }
+    });
+}
+
 fn badge(ui: &mut Ui, t: &Tokens, text: &str, fill: Color32, color: Color32) {
     Frame::new().fill(fill).corner_radius(CornerRadius::same(t.radius)).inner_margin(Margin::symmetric(8, 2)).show(ui, |ui| {
         ui.label(RichText::new(text).size(12.0).color(color));
@@ -778,6 +876,10 @@ mod tests {
             picture_url: None,
             favorite: false,
             web_search: None,
+            updated_at: None,
+            popularity: 0,
+            sharing: Default::default(),
+            filters: Default::default(),
         }
     }
 
@@ -795,6 +897,25 @@ mod tests {
         assert!(!matches_query(&goethe, &query_terms("goethe schiller")), "every word must match");
         assert!(matches_query(&goethe, &query_terms("   ")));
         assert_eq!(fold("Straße"), "strasse");
+    }
+
+    #[test]
+    fn typed_search_is_not_overwritten_by_slow_updates() {
+        let mut v = ExploreView::new("");
+        // Typed "ab" and deleted it again; the engine catches up step by step.
+        for q in ["a", "ab", "a", ""] {
+            v.query = q.into();
+            v.sent.push(q.into());
+        }
+        for engine in ["a", "ab", "a"] {
+            v.sync_query(engine);
+            assert_eq!(v.query, "", "while typing the field keeps what was typed");
+        }
+        v.sync_query("");
+        assert!(v.sent.is_empty());
+        // A search set from elsewhere (control channel) shows in the field.
+        v.sync_query("goethe");
+        assert_eq!(v.query, "goethe");
     }
 
     #[test]

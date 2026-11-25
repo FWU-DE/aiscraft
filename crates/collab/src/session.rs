@@ -110,8 +110,8 @@ impl Session {
         let (synced, _) = watch::channel(false);
         let shared = Arc::new(Shared { doc: Mutex::new(doc), status: Mutex::new(Status::Connecting), synced, out, on_remote, on_status });
         let (stop, stop_rx) = watch::channel(false);
-        let url = server.room_ws(room, token);
-        handle.spawn(run(shared.clone(), url, stop_rx, out_rx, opts));
+        let target = Target { url: server.room_ws_url(room), query_url: server.room_ws(room, token), token: token.to_string() };
+        handle.spawn(run(shared.clone(), target, stop_rx, out_rx, opts));
         Ok(Session { shared, stop })
     }
 
@@ -161,15 +161,47 @@ enum Exit {
     Lost(String),
 }
 
-async fn run(shared: Arc<Shared>, url: String, mut stop: watch::Receiver<bool>, mut out: mpsc::UnboundedReceiver<Vec<u8>>, opts: Options) {
+/// Where a session connects: the token goes in the `Authorization` header, so it stays out of
+/// the URL (and proxy logs); `query_url` is for relays that read only `?token=`.
+struct Target {
+    url: String,
+    query_url: String,
+    token: String,
+}
+
+impl Target {
+    fn request(&self, in_header: bool) -> std::result::Result<tungstenite::handshake::client::Request, tungstenite::Error> {
+        use tungstenite::client::IntoClientRequest;
+        if !in_header {
+            return self.query_url.as_str().into_client_request();
+        }
+        let mut req = self.url.as_str().into_client_request()?;
+        // The token is checked to be alphanumeric in `Session::start`, so it is a valid header.
+        if let Ok(value) = format!("Bearer {}", self.token).parse() {
+            req.headers_mut().insert(tungstenite::http::header::AUTHORIZATION, value);
+        }
+        Ok(req)
+    }
+}
+
+async fn run(shared: Arc<Shared>, target: Target, mut stop: watch::Receiver<bool>, mut out: mpsc::UnboundedReceiver<Vec<u8>>, opts: Options) {
     let mut backoff = opts.min_backoff;
+    // Until a relay refuses the header: an older one reads only the query.
+    let mut in_header = true;
     loop {
         if *stop.borrow() {
             return;
         }
         shared.set_status(Status::Connecting);
         let config = WebSocketConfig::default().max_message_size(Some(proto::MAX_FRAME)).max_frame_size(Some(proto::MAX_FRAME));
-        let connect = tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async_with_config(url.as_str(), Some(config), false));
+        let request = match target.request(in_header) {
+            Ok(r) => r,
+            Err(_) => {
+                shared.set_status(Status::Ended { reason: "Ungültige Adresse des Raums".into() });
+                return;
+            }
+        };
+        let connect = tokio::time::timeout(Duration::from_secs(15), tokio_tungstenite::connect_async_with_config(request, Some(config), false));
         let res = tokio::select! {
             r = connect => r,
             _ = stop.changed() => return,
@@ -185,6 +217,10 @@ async fn run(shared: Arc<Shared>, url: String, mut stop: watch::Receiver<bool>, 
                     }
                     Exit::Lost(reason) => reason,
                 }
+            }
+            Ok(Err(tungstenite::Error::Http(resp))) if in_header && matches!(resp.status().as_u16(), 401 | 403) => {
+                in_header = false;
+                continue;
             }
             Ok(Err(tungstenite::Error::Http(resp))) => {
                 let reason = match resp.status().as_u16() {

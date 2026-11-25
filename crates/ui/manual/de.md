@@ -25,6 +25,8 @@ Ist kein Chat offen, zeigt AIS.ChatCraft die Startseite: oben das Eingabefeld (S
 
 **Chat schließen:** das × oben rechts im Chat (in Modern, Glas und Omarchy im Menü ⋯ oben rechts), Esc bei leerem Eingabefeld oder „Chat schließen“ in den Befehlen (Strg+K). Der Chat bleibt in der Seitenleiste.
 
+**Fenster schließen:** Jedes Fenster, das sich öffnet (Einstellungen, Fragen, Dialoge, das Handbuch, ein Beleg), schließt mit dem × oben rechts, mit Esc oder mit einem Klick daneben.
+
 ## Anmelden
 
 **AIS.chat.** „Im Browser anmelden“ öffnet ein eigenes Browserfenster mit der AIS.chat-Anmeldung (VIDIS, Schulkonto oder Microsoft 365). Nach der Anmeldung übernimmt AIS.ChatCraft die Sitzung und schließt das Fenster. Dafür braucht es Chrome, Chromium, Edge, Brave oder Vivaldi. Die Sitzung gilt einige Stunden; ist sie abgelaufen, meldet AIS.ChatCraft dich beim nächsten Start ohne Fenster neu an, solange die VIDIS-Sitzung noch gilt.
@@ -62,13 +64,21 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 - **Temporärer Chat:** „Temporärer Chat“ oben auf der Startseite (anderswo auch „Inkognito“ genannt) beginnt vor der ersten Nachricht einen Chat, der nur im Arbeitsspeicher liegt: Er steht nicht in der Seitenleiste, wird nicht durchsucht oder erinnert, legt keine Notizen an (auch nicht mit „Merk dir“) und lernt keine Fähigkeiten. Notizen aus dem Gedächtnis gehen zuerst nicht mit (unter „Quellen“ zuschaltbar). Sobald du ihn schließt oder einen anderen Chat öffnest, ist er samt Kopien seiner Anhänge weg. Was du an den Dienst schickst, verarbeitet dieser trotzdem nach seinen Regeln. Mit AIS.chat gibt es keinen temporären Chat, denn AIS.chat speichert jeden Chat in seinem eigenen Verlauf; der Knopf erscheint nur bei anderen Diensten (Claude, OpenAI-kompatible, lokale Modelle). Dokumente, die du daraus anlegst, bleiben.
 - **Kontextfenster:** oben rechts im Chat, wie viel vom Kontext des Modells belegt ist. „≈“ heißt geschätzt. Die Tokens einer einzelnen Antwort stehen im Tooltip am Modellnamen über ihr.
 - **Bilder erzeugen:** „🖼 Bild erzeugen“ in der Seitenleiste (oder ein Bildmodell im Modellmenü) startet einen Bild-Chat bei AIS.chat: beschreibe, was das Bild zeigen soll, und wähle das Format. Fehlt der Eintrag, hat dein Land die Bilderzeugung in AIS.chat ausgeschaltet.
+- **KI-Kennzeichnung:** Erzeugte Bilder tragen wie in AIS.chat unten rechts einen schwarzen Kreis mit „AI“. Unter dem Bild stehen „Bild speichern …“, „Bild kopieren“, „Prompt kopieren“ und der Schalter „KI-Kennzeichnung“ (an). Ist er an, wird das Bild mit dem Zeichen angezeigt, kopiert und gespeichert; schaltest du ihn aus, bekommst du das Bild ohne Zeichen. Gespeicherte Bilder tragen zusätzlich den Hinweis „Erstellt mit KI“ als Kommentar in der Datei. Bilder, die du selbst hochlädst, werden nie gekennzeichnet.
 - **AIS.chat-Kontingent:** unten links, wie viele Token-Punkte noch übrig sind.
 - **Formeln und Diagramme:** Formeln in LaTeX (`$…$` und `\(…\)` im Text, `$$…$$` und `\[…\]` als eigene Zeile) und Mermaid-Flussdiagramme und -Mindmaps (```` ```mermaid ````) erscheinen gezeichnet, in Antworten wie in der Dokument-Vorschau. Fährst du über eine Formel, siehst du ihren Quelltext; ein Rechtsklick kopiert ihn. Eine Mindmap öffnest du mit „Als Whiteboard“ zum Weiterbearbeiten. Andere Mermaid-Arten zeigt AIS.ChatCraft als Quelltext.
 
 **Assistenten, Dialogpartner und Lernszenarien.** „Entdecken“ in der Seitenleiste (oder Strg+K) öffnet eine Seite mit allem, was AIS.chat dir anbietet: eigene, an der Schule geteilte und offizielle Einträge, mit Bild und Beschreibung.
 
 - **Suchen:** Strg+F, dann Name oder Beschreibung. Groß- und Kleinschreibung und Umlaute spielen keine Rolle („uebung“ findet „Übung“). Bleibt genau ein Treffer, öffnet Enter ihn.
-- **Eingrenzen:** Alle, Assistenten, Dialogpartner, Lernszenarien; dazu „★ Favoriten“ und „Meine“.
+- **Eingrenzen:** Alle, Assistenten, Dialogpartner, Lernszenarien.
+- **Filter und Sortierung:** darunter, mit einem Klick aufgeklappt, alles, was AIS.chat auf seinen Übersichtsseiten anbietet:
+  - **Anzeigen:** Meine, Offiziell (vom Land), Schulintern (an deiner Schule geteilt; nur, wenn dein Land das Teilen in der Schule erlaubt und etwas geteilt ist), Community, Alle und Favoriten.
+  - **Sortierung:** Neueste zuerst (wie in AIS.chat voreingestellt), Älteste zuerst, Alphabetisch A-Z oder Z-A, Beliebteste zuerst (wie oft in letzter Zeit in ganz AIS.chat genutzt; bei Gleichstand das Neuere zuerst).
+  - **Filter:** Schulform, Klassenstufe, Fach, Kategorie, Bundesland und Sprache, jeweils nur, wenn ein Eintrag Werte dafür hat; in Klammern steht, wie viele Einträge ein Wert zeigt. Innerhalb einer Gruppe reicht einer der gewählten Werte („Gymnasium“ oder „Realschule“), über Gruppen hinweg muss alles passen („Gymnasium“ und „Deutsch“).
+  - Gewählte Werte stehen als Chips mit × unter dem Abschnitt, davor „N Treffer“; „Zurücksetzen“ wählt alle ab.
+
+  Die Auswahl bleibt, bis du AIS.ChatCraft beendest (wie AIS.chat sie für einen Browser-Tab behält); beim nächsten Start beginnt die Seite wieder mit „Alle“, „Neueste zuerst“ und ohne Filter, damit kein vergessener Filter Einträge versteckt. Die Werte vergibt, wer einen Eintrag in AIS.chat anlegt; fehlen sie, findet der Filter ihn nicht.
 - **Favoriten:** Zeige auf eine Karte und klicke auf den Stern oben rechts, oder auf „☆ Als Favorit markieren“ in den Details und im neuen Chat. Favoriten gelten auch in AIS.chat im Browser.
 - **Details:** Ein Klick auf eine Karte zeigt Beschreibung, Begrüßung, Aufgabe, ob die Websuche an ist, und Gesprächsanfänge. „Chat starten“ (oder Enter) beginnt einen neuen Chat; ein Gesprächsanfang startet ihn und schickt den Satz gleich ab.
 - **Zurück:** Esc, erst zur Übersicht, dann zum Chat.

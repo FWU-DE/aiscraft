@@ -15,7 +15,9 @@
 //! "Arbeitsblatt Bruchrechnung" a worksheet block, "Lern-App" an html
 //! block; `worksheet.request`/`learning_app.request` go through the tools; "Linkliste" one working and one dead link). `--demo-ais` adds a local stand-in for
 //! AIS.chat (assistants, characters, learning scenarios, image generation, a plot answer for
-//! prompts with "Parabel"), with a catalogue of placeholder portraits for the "Entdecken" page
+//! prompts with "Parabel"), with a catalogue of placeholder portraits for the "Entdecken" page, with
+//! dates, popularity, sharing and filter values for „Filter und Sortierung“ (`explore.filter`,
+//! `explore.sort` in the script)
 //! (`["ui.show", {"what": "personas"}]`, `{"what": "persona:character:c1"}` for one entry;
 //! `persona.favorite` works against it;
 //! `["ui.wait", {"ms": 1500}]` lets the pictures arrive; `["ui.drop", {"paths": [..]}]` drops
@@ -231,6 +233,69 @@ fn demo_avatar(seed: u32) -> Vec<u8> {
 }
 
 /// The demo catalogue: (kind, id, name, description, own, favourite, with picture, extra fields).
+/// What AIS.chat sends for its overview's tabs, sort orders and filters: last change (a Flight
+/// date), popularity, sharing and the filter values.
+fn demo_meta(id: &str) -> Value {
+    let (day, popularity, sharing, filters) = match id {
+        "a1" => (
+            20,
+            31,
+            json!({"isSchoolShared": true, "ownerSchoolIds": ["s1"]}),
+            json!({"school_types": ["grammar-school", "comprehensive-school"], "grade_ranges": ["range-2"], "subjects": ["mathematics"], "categories": ["coaching"], "languages": ["german"]}),
+        ),
+        "a2" => (3, 120, json!({"isGlobal": true}), json!({"categories": ["organisation"], "languages": ["german", "english", "turkish", "arabic"]})),
+        "a3" => (
+            14,
+            54,
+            json!({"isCommunityShared": true, "ownerSchoolIds": ["s7"]}),
+            json!({"school_types": ["grammar-school", "secondary-school"], "grade_ranges": ["range-3", "range-4"], "subjects": ["german"], "categories": ["feedback"]}),
+        ),
+        "a4" => (9, 77, json!({"isGlobal": true}), json!({"categories": ["teaching-material"], "federal_states": ["berlin", "brandenburg"]})),
+        "a5" => (
+            6,
+            12,
+            json!({"isSchoolShared": true, "ownerSchoolIds": ["s1"]}),
+            json!({"school_types": ["special-needs-school", "comprehensive-school"], "categories": ["teaching-material"]}),
+        ),
+        "a6" => (22, 2, json!({}), json!({"categories": ["lesson-planning"]})),
+        "c1" => {
+            (11, 98, json!({"isGlobal": true}), json!({"subjects": ["german"], "categories": ["historical-figures"], "grade_ranges": ["range-3", "range-4"]}))
+        }
+        "c2" => (
+            18,
+            40,
+            json!({"isCommunityShared": true, "ownerSchoolIds": ["s1"]}),
+            json!({"subjects": ["physics", "chemistry"], "categories": ["historical-figures"]}),
+        ),
+        "c3" => (5, 25, json!({"isGlobal": true}), json!({"subjects": ["geography"], "categories": ["historical-figures"]})),
+        "c4" => {
+            (8, 66, json!({"isGlobal": true}), json!({"subjects": ["history", "politics"], "categories": ["historical-figures"], "grade_ranges": ["range-3"]}))
+        }
+        "c5" => (2, 88, json!({"isCommunityShared": true, "ownerSchoolIds": ["s3"]}), json!({"subjects": ["physics"], "categories": ["experts"]})),
+        "c6" => (1, 9, json!({"isGlobal": true}), json!({"subjects": ["religion", "music"], "categories": ["historical-figures"]})),
+        "l1" => (21, 45, json!({}), json!({"school_types": ["comprehensive-school"], "grade_ranges": ["range-2"], "subjects": ["biology"]})),
+        "l2" => (
+            12,
+            70,
+            json!({"isGlobal": true}),
+            json!({"school_types": ["secondary-school", "middle-school"], "grade_ranges": ["range-3"], "subjects": ["business-studies"]}),
+        ),
+        "l3" => (
+            16,
+            33,
+            json!({"isCommunityShared": true, "ownerSchoolIds": ["s9"]}),
+            json!({"grade_ranges": ["range-4"], "subjects": ["politics"], "categories": ["conversation"]}),
+        ),
+        "l4" => (4, 51, json!({"isGlobal": true}), json!({"grade_ranges": ["range-2"], "subjects": ["history"]})),
+        _ => (1, 0, json!({}), json!({})),
+    };
+    let mut v = json!({"updatedAt": format!("$D2026-11-{day:02}T08:00:00.000Z"), "popularity": popularity, "filterGroup": filters});
+    if let (Some(o), Some(s)) = (v.as_object_mut(), sharing.as_object()) {
+        o.extend(s.clone());
+    }
+    v
+}
+
 fn demo_personas() -> [Value; 3] {
     let entry = |id: &str, name: &str, desc: &str, own: bool, fav: bool, pic: bool, extra: Value| {
         let mut v = json!({"id": id, "name": name, "description": desc, "userId": if own { "me" } else { "x" }, "isFavorite": fav});
@@ -238,6 +303,9 @@ fn demo_personas() -> [Value; 3] {
             v["maybeSignedPictureUrl"] = json!(format!("https://bilder.demo.invalid/avatars/{id}.png?X-Amz-Signature=demo"));
         }
         if let (Some(o), Some(e)) = (v.as_object_mut(), extra.as_object()) {
+            o.extend(e.clone());
+        }
+        if let (Some(o), Some(e)) = (v.as_object_mut(), demo_meta(id).as_object()) {
             o.extend(e.clone());
         }
         v
@@ -399,7 +467,7 @@ fn demo_ais(engine: &Engine) {
                     let action = req.lines().find_map(|l| l.strip_prefix("next-action: ")).unwrap_or("").to_string();
                     let models = r#"3:{"usedBudget":120,"maxBudget":1000,"models":[{"id":"m-gpt","name":"gpt","displayName":"GPT-5","priceMetadata":{"type":"text"}},{"id":"m-img","name":"img","displayName":"Bildmodell","priceMetadata":{"type":"image"}}]}"#;
                     let (ctype, body) = if req.starts_with("GET /api/auth/session") {
-                        ("application/json", r#"{"user":{"id":"me","firstName":"Ada","lastName":"Lehrerin","school":{"name":"Gesamtschule Nord"}},"expires":"2030-01-01"}"#.to_string())
+                        ("application/json", r#"{"user":{"id":"me","firstName":"Ada","lastName":"Lehrerin","schoolIds":["s1"],"school":{"name":"Gesamtschule Nord"},"federalState":{"featureToggles":{"isShareTemplateWithSchoolEnabled":true}}},"expires":"2030-01-01"}"#.to_string())
                     } else if req.starts_with("GET /api/conversations") {
                         ("application/json", r#"{"conversations":[]}"#.to_string())
                     } else if req.starts_with("GET /image-generation ") {

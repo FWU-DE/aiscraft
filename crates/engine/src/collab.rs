@@ -39,6 +39,16 @@ struct Share {
     artifact_id: String,
     server: String,
     owner: bool,
+    /// The room on the relay; empty (older records, shares made here) = the artifact id. A joined
+    /// room whose id is taken here by an artifact of its own gets a fresh artifact.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    room: String,
+}
+
+impl Share {
+    fn room(&self) -> &str {
+        if self.room.is_empty() { &self.artifact_id } else { &self.room }
+    }
 }
 
 /// What the keychain keeps per shared artifact.
@@ -165,7 +175,7 @@ fn connect(c: &Ctx, share: &Share, k: &Keys) -> Result<Arc<Session>> {
     });
     let token = k.owner_token.as_deref().unwrap_or(&k.token);
     let _guard = c.0.handle.enter();
-    let session = Arc::new(Session::start(&server, &id, token, &initial, on_remote, on_status, Options::default()).map_err(err)?);
+    let session = Arc::new(Session::start(&server, share.room(), token, &initial, on_remote, on_status, Options::default()).map_err(err)?);
     let mut v = view(share, k);
     c.update(|st| {
         st.collab.shares.retain(|x| x.artifact_id != id);
@@ -268,7 +278,7 @@ async fn share(c: Ctx, p: Value) -> Result<Value> {
     let key = c.0.secrets.get(SERVER_KEY)?;
     let made =
         api::create_room(&server, key.as_deref(), &NewRoom { room: id.clone(), kind: a.kind.as_str().into(), title: a.title.clone() }).await.map_err(err)?;
-    let share = Share { artifact_id: id.clone(), server: server.http().into(), owner: true };
+    let share = Share { artifact_id: id.clone(), server: server.http().into(), owner: true, room: String::new() };
     let k = Keys { token: made.token, owner_token: Some(made.owner_token), code: made.code };
     remember(&c, &share, &k)?;
     let session = connect(&c, &share, &k)?;
@@ -294,30 +304,33 @@ async fn join(c: Ctx, p: Value) -> Result<Value> {
     };
     let info = api::resolve(&server, &code).await.map_err(err)?;
     let kind = ArtifactKind::parse(&info.kind).ok_or_else(|| Error::unsupported("Diese Art von Artefakt kann AIS.ChatCraft noch nicht öffnen"))?;
-    let id = info.room.clone();
-    if c.state().share(&id).is_some() {
-        c.update(|s| s.open_artifact = Some(id.clone()));
+    // Already in this room on this relay: open it.
+    let known = saved(&c).shares.into_iter().find(|s| s.room() == info.room && s.server == server.http());
+    if let Some(s) = known
+        && c.state().share(&s.artifact_id).is_some()
+    {
+        let id = s.artifact_id;
+        c.update(|st| st.open_artifact = Some(id.clone()));
         return Ok(json!({"id": id, "synced": true}));
     }
-    match artifacts::get_artifact(&c, &id) {
-        Ok(a) if a.kind != kind => return Err(Error::invalid("Hier gibt es schon ein anderes Artefakt mit dieser Kennung")),
-        Ok(_) => {}
-        Err(_) => {
-            let now = now_ms();
-            let state = match kind {
-                ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet | ArtifactKind::H5p => artifacts::doc_new("")?,
-                ArtifactKind::Board => Vec::new(),
-            };
-            let title = if info.title.trim().is_empty() { kind.label().to_string() } else { info.title.chars().take(200).collect() };
-            let a = Artifact { id: id.clone(), kind, title, conversation_id: None, project_id: None, created_at: now, updated_at: now };
-            c.store(|st| st.save_artifact(&a, Some(&state)))?;
-            c.update(|s| {
-                s.artifacts.insert(0, a);
-                s.artifact_rev = s.artifact_rev.wrapping_add(1);
-            });
-        }
-    }
-    let share = Share { artifact_id: id.clone(), server: server.http().into(), owner: false };
+    // Otherwise always a new artifact: the room's id is chosen by whoever shared it, and an
+    // artifact here that happens to have it must never be sent to the relay.
+    let taken = c.state().artifacts.iter().any(|a| a.id == info.room) || artifacts::get_artifact(&c, &info.room).is_ok();
+    let id = if taken { crate::new_id() } else { info.room.clone() };
+    let now = now_ms();
+    let state = match kind {
+        ArtifactKind::Document | ArtifactKind::App | ArtifactKind::Worksheet | ArtifactKind::H5p => artifacts::doc_new("")?,
+        ArtifactKind::Board => Vec::new(),
+    };
+    let title = if info.title.trim().is_empty() { kind.label().to_string() } else { info.title.chars().take(200).collect() };
+    let a = Artifact { id: id.clone(), kind, title, conversation_id: None, project_id: None, created_at: now, updated_at: now };
+    c.store(|st| st.save_artifact(&a, Some(&state)))?;
+    c.update(|s| {
+        s.artifacts.insert(0, a);
+        s.artifact_rev = s.artifact_rev.wrapping_add(1);
+    });
+    let room = if id == info.room { String::new() } else { info.room.clone() };
+    let share = Share { artifact_id: id.clone(), server: server.http().into(), owner: false, room };
     let k = Keys { token: info.token, owner_token: None, code };
     remember(&c, &share, &k)?;
     let session = connect(&c, &share, &k)?;
@@ -340,7 +353,7 @@ async fn leave(c: Ctx, p: Value) -> Result<Value> {
     forget(&c, &id);
     if let (true, Some(owner)) = (end, owner) {
         let server = Server::parse(&share.server).map_err(err)?;
-        api::delete_room(&server, &id, &owner).await.map_err(err)?;
+        api::delete_room(&server, share.room(), &owner).await.map_err(err)?;
     }
     Ok(json!({"ended": end}))
 }

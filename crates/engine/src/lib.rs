@@ -4,6 +4,7 @@
 
 mod accounts;
 mod action_log;
+pub mod ai_badge;
 mod ai_label;
 mod apps;
 mod archive;
@@ -17,6 +18,7 @@ pub mod citations;
 mod collab;
 mod commands;
 mod disk;
+pub mod explore;
 mod ext;
 mod fallback;
 mod files;

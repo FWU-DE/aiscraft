@@ -585,7 +585,12 @@ fn management_commands() {
         if let Some(m) = s.messages.iter_mut().find(|m| m.id == mid) {
             m.activity.push(aiscraft_core::ActivityStep {
                 label: "Dokument erstellen".into(),
-                document: Some(aiscraft_core::GeneratedDocument { file_name: "a.md".into(), format: "md".into(), content: "# Hallo".into() }),
+                document: Some(aiscraft_core::GeneratedDocument {
+                    file_name: "a.md".into(),
+                    format: "md".into(),
+                    content: "# Hallo".into(),
+                    title: String::new(),
+                }),
                 ..Default::default()
             });
         }
@@ -594,6 +599,36 @@ fn management_commands() {
     engine.call("chat.save_document", json!({"message_id": mid, "step": 0, "path": path.display().to_string()})).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Hallo");
     let _ = std::fs::remove_file(path);
+    // AIS.chat sends Word and PDF documents as Markdown: they become real files.
+    let ready_pdf = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(b"%PDF-1.4 schon fertig")
+    };
+    for (format, content, magic) in [
+        ("docx", "# Elternbrief\n\nLiebe Eltern", &b"PK\x03\x04"[..]),
+        ("pdf", "# Elternbrief\n\nLiebe Eltern", b"%PDF"),
+        ("pdf", ready_pdf.as_str(), b"%PDF-1.4 schon"),
+    ] {
+        engine.ctx().update(|s| {
+            if let Some(m) = s.messages.iter_mut().find(|m| m.id == mid) {
+                m.activity = vec![aiscraft_core::ActivityStep {
+                    label: "Dokument erstellen".into(),
+                    document: Some(aiscraft_core::GeneratedDocument {
+                        file_name: format!("Elternbrief.{format}"),
+                        format: format.into(),
+                        content: content.into(),
+                        title: "Elternbrief".into(),
+                    }),
+                    ..Default::default()
+                }];
+            }
+        });
+        let path = std::env::temp_dir().join(format!("aiscraft-doc-{}.{format}", uuid::Uuid::new_v4()));
+        engine.call("chat.save_document", json!({"message_id": mid, "step": 0, "path": path.display().to_string()})).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.starts_with(magic), "{format}: {:?}", bytes.get(..16));
+        let _ = std::fs::remove_file(path);
+    }
 
     // Search, notices, state, commands, tools.
     engine.call("search", json!({"query": "Geänderte"})).unwrap();
@@ -768,7 +803,7 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                     let (status, ctype, body) = if !authed {
                         ("307 Temporary Redirect\r\nlocation: /login", "text/plain", String::new())
                     } else if req.starts_with("GET /api/auth/session") {
-                        ("200 OK", "application/json", r#"{"user":{"id":"me","firstName":"Ada","lastName":"Lehrerin"},"expires":"2030-01-01"}"#.to_string())
+                        ("200 OK", "application/json", r#"{"user":{"id":"me","firstName":"Ada","lastName":"Lehrerin","schoolIds":["s1"],"federalState":{"featureToggles":{"isShareTemplateWithSchoolEnabled":true}}},"expires":"2030-01-01"}"#.to_string())
                     } else if req.starts_with("GET /api/conversations") {
                         ("200 OK", "application/json", r#"{"conversations":[{"id":"r2","name":"Mit Goethe","characterId":"c1","type":"chat"}]}"#.to_string())
                     } else if req.starts_with("GET /d/r2") || req.starts_with("GET /characters/d/c1/r2") {
@@ -814,11 +849,11 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                     } else if req.starts_with("POST / ") {
                         rec.lock().unwrap().push(req.clone());
                         let body = if action == id(0x11) {
-                            flight(r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung","promptSuggestions":["Erkläre 3/4"],"maybeSignedPictureUrl":"https://s3.example/avatars/coach.png"}]"#)
+                            flight(r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung","promptSuggestions":["Erkläre 3/4"],"maybeSignedPictureUrl":"https://s3.example/avatars/coach.png","isSchoolShared":true,"ownerSchoolIds":["s1"],"updatedAt":"$D2026-11-10T09:00:00.000Z","popularity":3,"filterGroup":{"school_types":["grammar-school"],"subjects":["mathematics"]}}]"#)
                         } else if action == id(0x22) {
-                            flight(r#"[{"id":"c1","name":"Goethe","userId":"x","description":"Dichter aus Weimar","initialMessage":"Seid gegrüßt!","modelId":"m-other","isFavorite":true,"maybeSignedPictureUrl":"https://s3.example/avatars/goethe.png?X-Amz-Signature=abc"}]"#)
+                            flight(r#"[{"id":"c1","name":"Goethe","userId":"x","description":"Dichter aus Weimar","initialMessage":"Seid gegrüßt!","modelId":"m-other","isFavorite":true,"maybeSignedPictureUrl":"https://s3.example/avatars/goethe.png?X-Amz-Signature=abc","isGlobal":true,"updatedAt":"$D2026-09-01T09:00:00.000Z","popularity":50,"filterGroup":{"categories":["historical-figures"],"subjects":["german"]}}]"#)
                         } else if action == id(0x33) {
-                            flight(r#"[{"id":"l1","name":"Photosynthese erforschen","userId":"me","studentExercise":"Finde heraus, was Pflanzen brauchen.","maybeSignedPictureUrl":"https://s3.example/avatars/riesig.png"}]"#)
+                            flight(r#"[{"id":"l1","name":"Photosynthese erforschen","userId":"me","studentExercise":"Finde heraus, was Pflanzen brauchen.","maybeSignedPictureUrl":"https://s3.example/avatars/riesig.png","updatedAt":"$D2026-11-20T09:00:00.000Z","schoolType":"elementary-school","gradeLevel":"range-1","subject":"social-studies","filterGroup":{}}]"#)
                         } else if action == id(0x55) {
                             if req.contains("kaputt") {
                                 flight(r#"{"success":true,"value":{"processedUrls":[],"errorUrls":["https://kaputt.example/"]}}"#)
@@ -889,6 +924,14 @@ fn persona_list_and_action_ids_survive_a_restart() {
     let second = open();
     let list = second.state().backend("ais-chat").and_then(|b| b.personas.clone()).unwrap_or_default();
     assert_eq!(list.len(), 3, "the list from the last run shows before any request");
+    let coach = list.iter().find(|p| p.id == "a1").unwrap();
+    assert!(
+        coach.sharing.school
+            && coach.popularity == 3
+            && coach.updated_at.as_deref() == Some("2026-11-10T09:00:00.000Z")
+            && coach.filters.subjects == ["mathematics"],
+        "what Entdecken filters and sorts by survives the restart: {coach:?}"
+    );
     let known = second.ctx().backend("ais-chat").unwrap().known_actions();
     assert!(known.contains_key("getAssistantsByFilterAction"), "{known:?}");
 
@@ -897,6 +940,103 @@ fn persona_list_and_action_ids_survive_a_restart() {
     assert!(open().state().backend("ais-chat").is_some_and(|b| b.personas.is_none()));
     drop((first, second));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Entdecken like AIS.chat's overview pages: tabs from what each entity carries, filter values
+/// OR within a group and AND across groups, search, the five sort orders with popularity ties
+/// going to the newest, and the reset.
+#[test]
+fn explore_filters_sorts_and_searches_like_ais_chat() {
+    let (engine, _posted) = ais_engine();
+    engine.call("persona.refresh", json!({"backend": "ais-chat"})).unwrap();
+    let ids = |engine: &Engine| -> Vec<String> {
+        let out = engine.call("explore.list", json!({})).unwrap();
+        out["items"].as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_string()).collect()
+    };
+    // Defaults: all tabs, newest first.
+    assert_eq!(ids(&engine), ["l1", "a1", "c1"]);
+    let out = engine.call("explore.list", json!({})).unwrap();
+    assert_eq!(out["hits"], 3);
+    assert_eq!(out["sort_label"], "Neueste zuerst");
+    let sources: Vec<(&str, u64)> = out["sources"].as_array().unwrap().iter().map(|s| (s["key"].as_str().unwrap(), s["count"].as_u64().unwrap())).collect();
+    assert_eq!(sources, [("mine", 2), ("official", 1), ("school", 1), ("community", 0), ("all", 3), ("favorites", 1)]);
+    let groups: Vec<&str> = out["groups"].as_array().unwrap().iter().map(|g| g["key"].as_str().unwrap()).collect();
+    assert_eq!(groups, ["school_types", "grade_ranges", "subjects", "categories"], "only groups some entry has values for");
+    assert_eq!(out["groups"][0]["values"][0]["label"], "Grundschule");
+
+    // Tabs.
+    for (source, want) in [("mine", vec!["l1", "a1"]), ("official", vec!["c1"]), ("school", vec!["a1"]), ("favorites", vec!["c1"]), ("community", vec![])] {
+        engine.call("explore.filter", json!({"source": source})).unwrap();
+        assert_eq!(ids(&engine), want, "{source}");
+    }
+    engine.call("explore.filter", json!({"source": "all"})).unwrap();
+
+    // OR within a group, AND across groups.
+    let out = engine.call("explore.filter", json!({"group": "school_types", "values": ["grammar-school", "elementary-school"]})).unwrap();
+    assert_eq!((out["hits"].as_u64(), out["active"].as_u64()), (Some(2), Some(2)));
+    assert_eq!(ids(&engine), ["l1", "a1"]);
+    engine.call("explore.filter", json!({"group": "subjects", "value": "mathematics"})).unwrap();
+    assert_eq!(ids(&engine), ["a1"], "both groups must match");
+    let out = engine.call("explore.list", json!({})).unwrap();
+    let school_types = &out["groups"][0]["values"];
+    assert_eq!((school_types[0]["count"].as_u64(), school_types[1]["count"].as_u64()), (Some(0), Some(1)), "counts with the other groups applied");
+    assert_eq!(school_types[1]["selected"], true);
+    engine.call("explore.filter", json!({"group": "subjects", "value": "mathematics"})).unwrap();
+    assert_eq!(ids(&engine), ["l1", "a1"], "without on the value toggles");
+    engine.call("explore.filter", json!({"group": "subjects", "value": "german", "on": true})).unwrap();
+    assert!(ids(&engine).is_empty());
+    let out = engine.call("explore.reset", json!({})).unwrap();
+    assert_eq!((out["hits"].as_u64(), out["active"].as_u64()), (Some(3), Some(0)), "Zurücksetzen clears the filter values");
+
+    // Sort orders; a popularity tie goes to the newest.
+    for (by, want) in
+        [("name-asc", ["c1", "a1", "l1"]), ("name-desc", ["l1", "a1", "c1"]), ("date-asc", ["c1", "a1", "l1"]), ("popularity", ["c1", "a1", "l1"])]
+    {
+        engine.call("explore.sort", json!({"by": by})).unwrap();
+        assert_eq!(ids(&engine), want, "{by}");
+    }
+    engine.ctx().update(|s| {
+        for b in &mut s.backends {
+            for p in b.personas.iter_mut().flatten().filter(|p| p.id == "l1") {
+                p.popularity = 3;
+            }
+        }
+    });
+    assert_eq!(ids(&engine), ["c1", "l1", "a1"], "equal popularity: the newer first");
+    assert_eq!(engine.state().explore.sort, aiscraft_core::ExploreSort::Popularity);
+
+    // Search (every word, umlauts folded) and kind.
+    engine.call("explore.filter", json!({"query": "WEIMAR dichter"})).unwrap();
+    assert_eq!(ids(&engine), ["c1"]);
+    engine.call("explore.filter", json!({"query": "", "kind": "learning_scenario"})).unwrap();
+    assert_eq!(ids(&engine), ["l1"]);
+    engine.call("explore.filter", json!({"kind": "all"})).unwrap();
+    assert_eq!(ids(&engine).len(), 3);
+
+    // Hostile params are refused and change nothing.
+    let before = engine.state().explore.clone();
+    for p in [
+        json!({"source": "alles"}),
+        json!({"kind": "robot"}),
+        json!({"kind": 5}),
+        json!({"query": 5}),
+        json!({"group": "farbe", "value": "rot"}),
+        json!({"value": "rot"}),
+        json!({"group": "subjects", "values": "mathematics"}),
+        json!({"group": "subjects", "value": "<b>"}),
+        json!({"group": "subjects", "values": (0..41).map(|i| format!("v{i}")).collect::<Vec<_>>()}),
+    ] {
+        assert!(engine.call("explore.filter", p.clone()).is_err(), "{p}");
+    }
+    assert!(engine.call("explore.sort", json!({"by": "zufall"})).is_err());
+    assert!(engine.call("explore.list", json!({"backend": "nirgends"})).is_err());
+    assert_eq!(engine.state().explore, before);
+
+    // Reset with all: tab, kind and search too; the sort order stays.
+    engine.call("explore.filter", json!({"source": "mine", "query": "x", "group": "languages", "values": ["german"]})).unwrap();
+    engine.call("explore.reset", json!({"all": true})).unwrap();
+    let f = engine.state().explore.clone();
+    assert_eq!(f, aiscraft_core::ExploreFilter { sort: aiscraft_core::ExploreSort::Popularity, ..Default::default() });
 }
 
 /// Favourites: toggling marks at once and asks AIS.chat; a refusal puts the mark back.
@@ -1054,10 +1194,45 @@ fn ais_chat_image_generation() {
     assert!(first.contains(r#""aspectRatio":"landscape""#) && first.contains(r#""modelId":"m-img""#) && !first.contains("conversationId"), "{first}");
 
     let target = std::env::temp_dir().join(format!("aiscraft-bild-{}.png", std::process::id()));
-    engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string()})).unwrap();
+    // Without „KI-Kennzeichnung“ the file is the picture as it came.
+    let out = engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string(), "badge": false})).unwrap();
+    assert_eq!(out["badge"], false);
     assert_eq!(std::fs::read(&target).unwrap().len(), img.size as usize);
     let _ = std::fs::remove_file(&target);
+    // With it (the default) the picture has to be readable: these stand-in bytes are not.
+    let err = engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string()})).unwrap_err();
+    assert!(err.message.contains("KI-Kennzeichnung"), "{}", err.message);
+    assert!(!target.exists(), "nothing half-written");
     assert!(engine.call("chat.save_image", json!({"message_id": answer.id, "index": 3, "path": "/tmp/x.png"})).is_err());
+    // A real picture: the saved file carries the badge bottom right, the same size, and the note.
+    {
+        use craft_image_codecs::{ChannelLayout, DecodeOptions, EncodeOptions, Format, Image, SampleType};
+        let pic = Image::from_u8(400, 300, ChannelLayout::Rgb, vec![200; 400 * 300 * 3]).unwrap();
+        std::fs::write(img.local_path.as_ref().unwrap(), craft_image_codecs::encode(&pic, Format::Png, &EncodeOptions::default()).unwrap()).unwrap();
+        let read = |badge: Option<bool>| {
+            let mut p = json!({"message_id": answer.id, "path": target.display().to_string()});
+            if let Some(b) = badge {
+                p["badge"] = json!(b);
+            }
+            let out = engine.call("chat.save_image", p).unwrap();
+            let bytes = std::fs::read(&target).unwrap();
+            let px = craft_image_codecs::decode_with(&bytes, &DecodeOptions::default()).unwrap().convert(ChannelLayout::Rgb, SampleType::U8);
+            let (cx, cy, r) = crate::ai_badge::geometry(400, 300);
+            let i = (((cy - r * 0.85) as usize) * 400 + cx as usize) * 3;
+            (out["badge"].as_bool().unwrap(), (px.width(), px.height()), px.data()[i], px.data()[3], bytes.windows(13).any(|w| w == b"Erstellt mit "))
+        };
+        assert_eq!(read(None), (true, (400, 300), 0, 200, true), "badge dark, corner unchanged, note kept");
+        assert_eq!(read(Some(true)).2, 0);
+        assert_eq!(read(Some(false)), (false, (400, 300), 200, 200, true), "the original");
+        // Above 40 megapixels the badge is refused with a German hint; the original still saves.
+        let huge = crate::ai_badge::tests::png_header(8000, 6000);
+        std::fs::write(img.local_path.as_ref().unwrap(), &huge).unwrap();
+        let err = engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string()})).unwrap_err();
+        assert!(err.message.contains("40 Megapixel"), "{}", err.message);
+        engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string(), "badge": false})).unwrap();
+        assert!(std::fs::read(&target).unwrap().starts_with(&huge), "the original, with the note after the header");
+    }
+    let _ = std::fs::remove_file(&target);
 
     // The next prompt continues the server's image chat; regenerate draws again.
     engine.call("chat.send", json!({"text": "jetzt mit Mond", "aspect_ratio": "portrait"})).unwrap();
@@ -1198,7 +1373,17 @@ fn check_in_tool_answers_in_the_same_chat() {
         arguments: json!({"title": "Nachfragen", "prompt": "Hat Frau Yilmaz geantwortet?", "at": "in 2 Tagen"}),
         outcome: None,
     };
-    let (text, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, &Default::default(), true));
+    // A schedule the model plans on its own needs the owner's yes.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (e2, c2, conv2) = (engine.clone(), call.clone(), conv.clone());
+    std::thread::spawn(move || {
+        let _ = tx.send(e2.block_on(crate::tools::run(e2.ctx(), &conv2, &c2, &Default::default(), true)));
+    });
+    assert!(engine.wait_for(Duration::from_secs(30), |s| !s.approvals.is_empty()));
+    assert!(engine.state().schedules.is_empty(), "nothing planned before the yes");
+    let id = engine.state().approvals[0].id.clone();
+    engine.call("tool.answer", json!({"id": id, "allow": true})).unwrap();
+    let (text, err, _) = rx.recv_timeout(Duration::from_secs(30)).unwrap();
     assert!(!err && text.starts_with("Geplant für"), "{text}");
     let s = engine.state();
     assert_eq!(s.schedules[0].conversation_id.as_deref(), Some(conv.as_str()));
@@ -1580,14 +1765,19 @@ fn recall_from_other_services_needs_consent() {
     assert!(last.contains("FREMDDIENST") && !last.contains("EIGENERDIENST"), "{last}");
 }
 
-/// A local site for the link check: alive, gone, redirect, HEAD refused, slow.
-fn scripted_links(engine: &Engine) -> String {
-    engine.block_on(async move {
+/// A local site for the link check: alive, gone, redirect, HEAD refused, slow. The slow page
+/// answers only once the returned gate is closed, so it times out whatever the time limit is,
+/// and the fast pages can have a generous one.
+fn scripted_links(engine: &Engine) -> (String, std::sync::Arc<tokio::sync::Semaphore>) {
+    let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    let held = gate.clone();
+    let site = engine.block_on(async move {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else { return };
+                let held = held.clone();
                 tokio::spawn(async move {
                     let req = read_http(&mut sock).await;
                     let line = req.lines().next().unwrap_or("").to_string();
@@ -1601,7 +1791,8 @@ fn scripted_links(engine: &Engine) -> String {
                         "/nurget" if head => "405 Method Not Allowed".to_string(),
                         "/nurget" => "200 OK".to_string(),
                         "/langsam" => {
-                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            // Err once the gate is closed: then it answers.
+                            let _ = held.acquire().await;
                             "200 OK".to_string()
                         }
                         _ => "500 Internal Server Error".to_string(),
@@ -1613,7 +1804,8 @@ fn scripted_links(engine: &Engine) -> String {
             }
         });
         format!("http://{addr}")
-    })
+    });
+    (site, gate)
 }
 
 /// Links in answers (#52): checked on click, dead ones marked; local addresses never asked
@@ -1621,7 +1813,7 @@ fn scripted_links(engine: &Engine) -> String {
 #[test]
 fn links_in_answers_are_checked() {
     let (engine, _) = engine_with_recording("Siehe http://127.0.0.1:9/nichts und [Lehrplan](http://10.0.0.1/plan).");
-    let site = scripted_links(&engine);
+    let (site, slow_gate) = scripted_links(&engine);
     engine.call("chat.send", json!({"text": "Links bitte"})).unwrap();
     let answer = engine.state().messages.last().cloned().unwrap();
     // Without permission for local addresses (the real app): nothing in the local network is asked.
@@ -1638,7 +1830,9 @@ fn links_in_answers_are_checked() {
     m.content = format!("Quellen: {site}/da, [alt]({site}/alt), {site}/weg. Dazu {site}/nurget und {site}/langsam sowie {site}/kreis!");
     engine.ctx().store(|st| st.save_message(&m)).unwrap();
     engine.call("chat.open", json!({"id": conv})).unwrap();
-    let r = engine.call("message.check_links", json!({"message_id": m.id, "timeout_ms": 1500})).unwrap();
+    // A generous limit for the pages that answer at once; `/langsam` holds until the check is back.
+    let r = engine.call("message.check_links", json!({"message_id": m.id, "timeout_ms": 5000})).unwrap();
+    slow_gate.close();
     let status =
         |path: &str| r["links"].as_array().unwrap().iter().find(|l| l["url"] == format!("{site}{path}")).map(|l| l["status"].as_str().unwrap().to_string());
     assert_eq!(status("/da").as_deref(), Some("ok"), "{r}");
@@ -1812,7 +2006,9 @@ fn collab_two_engines_converge() {
     let _ = std::fs::remove_dir_all(&dir);
     let relay = a.block_on(async {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        aiscraft_collab_server::start(l, aiscraft_collab_server::Config::new(dir.clone())).await.unwrap()
+        let mut cfg = aiscraft_collab_server::Config::new(dir.clone());
+        cfg.open_create = true;
+        aiscraft_collab_server::start(l, cfg).await.unwrap()
     });
     let url = format!("http://{}", relay.addr);
     assert_eq!(a.call("collab.set_server", json!({"url": url, "key": ""})).unwrap()["server"], url.as_str());
@@ -1860,6 +2056,14 @@ fn collab_two_engines_converge() {
     b.call("collab.leave", json!({"id": board})).unwrap();
     assert!(b.state().share(&board).is_none());
     assert!(text_of(&b, &board).contains("Fuchs"));
+    // Joining again: B's kept copy has the room's id but is no longer shared, so it stays local
+    // and the room gets a fresh artifact. Joining the same room twice opens the one share.
+    let again = b.call("collab.join", json!({"code": code})).unwrap()["id"].as_str().unwrap().to_string();
+    assert_ne!(again, board, "a local artifact with the room's id is never attached to the relay");
+    assert!(b.state().share(&board).is_none() && b.state().share(&again).is_some());
+    assert!(eventually(|| text_of(&b, &again).contains("Fuchs")));
+    assert_eq!(b.call("collab.join", json!({"code": code})).unwrap()["id"], again.as_str());
+    b.call("collab.leave", json!({"id": again})).unwrap();
     assert!(b.call("collab.leave", json!({"id": doc, "end": true})).is_err(), "only the owner ends a room");
     a.call("collab.leave", json!({"id": board, "end": true})).unwrap();
     assert!(b.call("collab.join", json!({"code": code})).is_err(), "the room is gone");
@@ -2511,18 +2715,38 @@ fn vertex_signs_in_with_a_key_file_and_finds_its_models() {
     let out = first.call("backend.models_check", json!({"id": id})).unwrap();
     assert_eq!(out["usable"], 2);
 
-    let before = seen.lock().unwrap().len();
-    let second = open();
-    assert_eq!(second.state().backend(&id).map(|b| b.models.len()), Some(2), "the menu from the last run");
-    assert_eq!(seen.lock().unwrap().len(), before, "no request for it");
-
     assert!(first.call("backend.login", json!({"id": id, "key_file": dir.join("fehlt.json")})).is_err());
     std::fs::write(dir.join("anders.json"), r#"{"type": "authorized_user"}"#).unwrap();
     let e = first.call("backend.login", json!({"id": id, "key_file": dir.join("anders.json")})).unwrap_err();
     assert!(e.message.contains("kein Dienstkonto"), "{e:?}");
     first.call("backend.login", json!({"id": id, "key_file": key})).unwrap();
     assert!(matches!(first.state().backend(&id).unwrap().status, crate::BackendStatus::Ready { .. }));
-    drop((first, second));
+
+    // A restart. The first run's background checks (from `backend.add` and the login) end with
+    // its runtime; a request of our own, answered after every connection made before it, marks
+    // where the second run's requests begin.
+    drop(first);
+    let mark = |what: &str| {
+        let addr = addr.trim_start_matches("http://").to_string();
+        let request = format!("GET /{what} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
+        rt.block_on(async move {
+            let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+            sock.write_all(request.as_bytes()).await.unwrap();
+            let mut out = Vec::new();
+            let _ = sock.read_to_end(&mut out).await;
+        });
+        seen.lock().unwrap().iter().position(|r| r.starts_with(&format!("GET /{what} "))).unwrap()
+    };
+    let before = mark("marke-vorher");
+    let second = open();
+    assert_eq!(second.state().backend(&id).map(|b| b.models.len()), Some(2), "the menu from the last run");
+    // A full check now: sign-in only, the models come from the last run.
+    second.call("backend.check", json!({"id": id})).unwrap();
+    assert_eq!(second.state().backend(&id).map(|b| b.models.len()), Some(2));
+    let after = mark("marke-nachher");
+    let asked: Vec<String> = seen.lock().unwrap()[before + 1..after].iter().map(|r| r.lines().next().unwrap_or_default().to_string()).collect();
+    assert!(asked.iter().all(|l| l.starts_with("POST /token ")), "no request for the menu: {asked:?}");
+    drop(second);
     let _ = std::fs::remove_dir_all(dir);
 }
 

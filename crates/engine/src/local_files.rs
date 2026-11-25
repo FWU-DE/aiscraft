@@ -308,6 +308,30 @@ fn program_name(name: &str) -> bool {
         "py",
         "pl",
         "rb",
+        // Windows runs these with a double click, too.
+        "hta",
+        "js",
+        "jse",
+        "vbe",
+        "wsf",
+        "wsh",
+        "reg",
+        "scf",
+        "cpl",
+        "msc",
+        "pif",
+        "chm",
+        "psm1",
+        "psd1",
+        "appref-ms",
+        "msix",
+        "msp",
+        "application",
+        "gadget",
+        "inf",
+        "settingcontent-ms",
+        "library-ms",
+        "search-ms",
     ];
     EXTS.contains(&ext)
 }
@@ -586,6 +610,36 @@ mod tests {
             assert!(!secret_name(n), "{n}");
         }
         assert!(program_name("start.sh") && program_name("x.DESKTOP") && !program_name("bericht.md"));
+        // Windows script and shortcut types, in any case.
+        for n in [
+            "a.HTA",
+            "a.js",
+            "a.JSE",
+            "a.vbe",
+            "a.VBS",
+            "a.wsf",
+            "a.wsh",
+            "a.reg",
+            "a.scf",
+            "a.cpl",
+            "a.msc",
+            "a.pif",
+            "a.chm",
+            "a.ps1",
+            "a.PSM1",
+            "a.psd1",
+            "a.bat",
+            "a.CMD",
+            "a.com",
+            "a.lnk",
+            "a.url",
+            "a.appref-ms",
+            "a.msi",
+            "a.MSIX",
+        ] {
+            assert!(program_name(n), "{n}");
+        }
+        assert!(!program_name("notizen.json") && !program_name("plan.txt"));
     }
 
     #[test]
