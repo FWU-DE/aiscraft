@@ -1,12 +1,12 @@
 //! Finding personal data in a text without a model (#55): names from class lists (stage a) and
 //! fixed formats by rule and checksum (stage b). Pure functions, no I/O.
 //!
-//! Stage c finds names that are in no list: without a model, a built-in list of common first
-//! names and context rules ([`super::common`], switched on with [`Detector::with_common_names`]).
-//! A local model (GLiNER through gline-rs) would be one more source of [`Found`] items:
+//! Stage c finds names that are in no list: a built-in list of common first names and context
+//! rules ([`super::common`], switched on with [`Detector::with_common_names`]), and, once the
+//! person downloaded it, a local GLiNER model ([`super::ner`], [`Detector::with_model`]).
 //! [`Detector::detect`] merges whatever its sources find, rule findings first, then class-list
-//! names, longest first, then the common names. Such findings are never "sure" on their own
-//! (replaced by default, the person can keep them in the preview).
+//! names, longest first, then the common names, then the model's. Findings of stage c are never
+//! "sure" on their own (replaced by default, the person can keep them in the preview).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
@@ -368,6 +368,7 @@ pub struct Detector {
     patterns: HashMap<String, Vec<Pattern>>,
     year: i32,
     common: bool,
+    model: Option<super::ner::NameModel>,
 }
 
 /// Longest list entries a detector takes (a class list is 30 names, a school maybe 2000).
@@ -426,12 +427,18 @@ impl Detector {
                 patterns.entry(first).or_default().push(p);
             }
         }
-        Detector { patterns, year, common: false }
+        Detector { patterns, year, common: false, model: None }
     }
 
     /// Also find names that are in no list (stage c without a model, [`super::common`]).
     pub fn with_common_names(mut self) -> Self {
         self.common = true;
+        self
+    }
+
+    /// Also the names a model finds (stage c with the downloaded model, [`super::ner`]).
+    pub fn with_model(mut self, model: Option<super::ner::NameModel>) -> Self {
+        self.model = model;
         self
     }
 
@@ -441,6 +448,9 @@ impl Detector {
         let mut names = self.names(text);
         if self.common {
             names.extend(super::common::find(text));
+        }
+        if let Some(m) = &self.model {
+            names.extend(model_hits(text, &m(text)));
         }
         for n in names {
             if !found.iter().any(|f| n.start < f.end && f.start < n.end) {
@@ -555,6 +565,35 @@ impl Detector {
         let last = toks.get(i + n - 1)?;
         Some(if genitive { last.end.saturating_sub(1) } else { last.end })
     }
+}
+
+// ---- the model's names (stage c with a model) ---------------------------------------------------
+
+/// Words of the model's spans as unsure name findings, one per capitalised word and with the
+/// same key as the first-name list (`c:klaus`), so "Klaus" gets one placeholder whichever source
+/// found it. Lower-case words in a name ("von der") stay; a placeholder already in the text
+/// (`[S1]`, `[Name 2]`) is never a name again.
+pub(super) fn model_hits(text: &str, spans: &[(usize, usize)]) -> Vec<Found> {
+    let mut out: Vec<Found> = Vec::new();
+    for &(s, e) in spans.iter().take(10_000) {
+        let Some(span) = text.get(s..e) else { continue };
+        if e - s > 200 || span.contains(['[', ']']) || text.get(..s).is_some_and(|b| b.ends_with('[')) || text.get(e..).is_some_and(|a| a.starts_with(']')) {
+            continue;
+        }
+        for t in tokens(span) {
+            let (a, b) = (s + t.start, s + t.end);
+            let Some(word) = text.get(a..b) else { continue };
+            if !word.chars().next().is_some_and(char::is_uppercase) || word.chars().count() < 2 || word.chars().any(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            if out.iter().any(|f| a < f.end && f.start < b) {
+                continue;
+            }
+            out.push(Found { start: a, end: b, kind: Kind::Name, key: format!("c:{}", word.to_lowercase()), display: word.to_string(), ambiguous: true });
+        }
+    }
+    out.sort_by_key(|f| f.start);
+    out
 }
 
 // ---- rules (stage b) -------------------------------------------------------------------------
@@ -928,6 +967,21 @@ mod tests {
         assert_eq!(f.len(), 1);
         assert!(f[0].ambiguous);
         assert_eq!(d.detect("Im Jahr 2020 und Am Montag 3 Stunden").iter().filter(|x| !x.ambiguous).count(), 0);
+    }
+
+    #[test]
+    fn model_spans_become_unsure_words() {
+        let t = "Lea von der Heide traf [Name 1] und Weber. ä";
+        let at = |w: &str| t.find(w).map(|i| (i, i + w.len())).unwrap();
+        let spans = [at("Lea von der Heide"), at("Name 1"), at("Weber"), (t.len() - 1, t.len()), (5, 3), (0, 999)];
+        let f = model_hits(t, &spans);
+        let words: Vec<&str> = f.iter().map(|x| &t[x.start..x.end]).collect();
+        assert_eq!(words, vec!["Lea", "Heide", "Weber"]);
+        assert!(f.iter().all(|x| x.ambiguous && x.kind == Kind::Name && x.key.starts_with("c:")));
+        // The class list wins where both find something; the model adds the rest.
+        let d = Detector::new(&people(), &[], &[], 2026).with_model(Some(std::sync::Arc::new(|t: &str| vec![(0, t.find(' ').unwrap_or(0))])));
+        let f = d.detect("Lea kam.");
+        assert_eq!((f.len(), f[0].kind), (1, Kind::FirstName));
     }
 
     #[test]

@@ -746,6 +746,19 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("privacy.reveal", "Platzhalter zurückübersetzen", "Namen schützen", None, "text: string, conversation?: string", false, |c, p| Box::pin(
         crate::privacy::reveal_cmd(c, p)
     )),
+    cmd!("privacy.ner_status", "Namenserkennung: Stand, Größe, Quelle, Lizenz", "Namen schützen", None, "", false, |c, p| Box::pin(
+        crate::privacy::ner::status_cmd(c, p)
+    )),
+    cmd!(
+        "privacy.ner_install",
+        "Namenserkennung laden",
+        "Namen schützen",
+        None,
+        "yes: bool (die Antwort der Person auf Größe, Quelle und Lizenz; ohne: nur diese Angaben, nichts wird geladen)",
+        false,
+        |c, p| Box::pin(crate::privacy::ner::install(c, p))
+    ),
+    cmd!("privacy.ner_remove", "Namenserkennung entfernen", "Namen schützen", None, "", false, |c, p| Box::pin(crate::privacy::ner::remove(c, p))),
     cmd!("vault.remove", "Tresor-Eintrag löschen", "Tresor", None, "id: string", false, |c, p| Box::pin(crate::vault::remove(c, p))),
     cmd!("vault.code", "Einmalcode anzeigen", "Tresor", None, "id: string", false, |c, p| Box::pin(crate::vault::code(c, p))),
     cmd!("vault.import_bitwarden", "Aus Bitwarden übernehmen", "Tresor", None, "path: string (CSV-Export)", false, |c, p| Box::pin(

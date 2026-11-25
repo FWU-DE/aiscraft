@@ -199,6 +199,8 @@ pub(crate) struct Inner {
     pub(crate) update_feed: Mutex<update::Feed>,
     /// Placeholder mappings of chats read so far (#55), so drawing never waits for the database.
     pub(crate) privacy_maps: Mutex<HashMap<String, Arc<privacy::Mapping>>>,
+    /// The downloadable name recognition (#73): its folder, source and the loaded model.
+    pub(crate) ner: privacy::ner::Runtime,
 }
 
 /// What commands and tasks hold. It never owns the runtime, so it can be dropped anywhere.
@@ -289,6 +291,7 @@ impl Engine {
                 .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-open-{}", std::process::id()))),
             preview: Mutex::new(None),
             privacy_maps: Mutex::new(HashMap::new()),
+            ner: privacy::ner::Runtime::new(opts.data_dir.as_deref()),
             previews: Mutex::new(Vec::new()),
             // Engines in memory get a folder of their own, so tests never share an install.
             h5p_player_dir: opts

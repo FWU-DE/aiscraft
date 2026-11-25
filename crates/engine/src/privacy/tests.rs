@@ -81,7 +81,7 @@ fn posted(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
 
 /// Real names, contact data and the bank account of the made-up class.
 const SECRETS: &[&str] =
-    &["Lea", "Müller", "Klaus", "Jonas", "Schmidt", "lea.mueller@example.org", "0171 2345678", "DE89 3704 0044 0532 0130 00", "Lindenstraße 5"];
+    &["Lea", "Müller", "Klaus", "Weber", "Jonas", "Schmidt", "lea.mueller@example.org", "0171 2345678", "DE89 3704 0044 0532 0130 00", "Lindenstraße 5"];
 
 /// Quality gate (AGENTS.md §6): with protection on, no real name or contact detail is in any
 /// byte the backend receives — not in the message, not in an attached document, not in memory,
@@ -96,6 +96,9 @@ fn no_real_name_reaches_the_backend() {
     assert_eq!(engine.state().privacy.lists[0].count, 3);
     assert!(!serde_json::to_string(&*engine.state()).unwrap().contains("Müller"), "the state agents read has no names");
     engine.call("memory.add", json!({"text": "Lea Müller braucht mehr Zeit bei Tests", "area": "about"})).unwrap();
+    // The downloaded model (#73) finds last names without a form of address; here a stand-in.
+    engine.ctx().0.ner.set_model(Some(fake_model(&["Weber"])));
+    engine.call("memory.add", json!({"text": "Weber sitzt vorne", "area": "about"})).unwrap();
 
     let dir = std::env::temp_dir().join(format!("aiscraft-privacy-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -123,7 +126,7 @@ fn no_real_name_reaches_the_backend() {
     assert!(off["outgoing"].as_str().unwrap().contains("Jonas hilft"));
 
     engine.call("chat.send", json!({"text": text, "files": [notes.display().to_string()]})).unwrap();
-    engine.call("chat.send", json!({"text": "Und noch ein Satz zu Jonas Schmidt bitte."})).unwrap();
+    engine.call("chat.send", json!({"text": "Und noch ein Satz zu Jonas Schmidt bitte. Weber war auch dabei."})).unwrap();
     let reqs = posted(&seen);
     assert_eq!(reqs.len(), 2);
     for r in &reqs {
@@ -272,4 +275,176 @@ fn placeholders_are_stable_and_stream_back_without_flashing() {
     let d = Decisions::from_value(Some(&json!({"off": [{"text": "LEA", "n": 1}], "add": ["x", "Frau Özdemir", 5]})));
     assert_eq!(d.off, vec![("lea".to_string(), 1)]);
     assert_eq!(d.add, vec!["Frau Özdemir".to_string()]);
+}
+
+/// Stands in for the GLiNER model: every occurrence of these words, and the words of a
+/// placeholder (which the detector must never take for a name).
+fn fake_model(names: &'static [&'static str]) -> ner::NameModel {
+    Arc::new(move |t: &str| {
+        let mut out: Vec<(usize, usize)> = names.iter().flat_map(|n| t.match_indices(n).map(|(i, w)| (i, i + w.len()))).collect();
+        out.extend(t.match_indices("Name 1").map(|(i, w)| (i, i + w.len())));
+        out
+    })
+}
+
+/// Stage c with a model (#73): last names without a form of address, found by the downloaded
+/// model, are unsure and replaced by default like the first-name list's; the same word keeps one
+/// placeholder whichever source found it; placeholders are never names again.
+#[test]
+fn the_name_model_finds_last_names_without_a_form_of_address() {
+    let (engine, seen) = engine_with(&["[Name 2] kommt morgen."]);
+    // Without a class list protection stays off until switched on for the chat.
+    assert!(!engine.state().protection_on());
+    engine.ctx().0.ner.set_model(Some(fake_model(&["Weber", "Klaus Brandt"])));
+    engine.call("chat.set_sources", json!({"protect": true})).unwrap();
+    assert!(engine.state().protection_on());
+    let text = "Gestern hat Weber gefehlt. Klaus Brandt und Klaus kamen zu spät.";
+    let pv = engine.call("privacy.preview", json!({"text": text})).unwrap();
+    assert_eq!(pv["outgoing"], "Gestern hat [Name 1] gefehlt. [Name 2] [Name 3] und [Name 2] kamen zu spät.");
+    assert!(pv["hits"].as_array().unwrap().iter().all(|h| h["ambiguous"] == true && h["on"] == true));
+    let kept = engine.call("privacy.preview", json!({"text": text, "off": [{"text": "Weber", "n": 0}]})).unwrap();
+    assert!(kept["outgoing"].as_str().unwrap().starts_with("Gestern hat Weber gefehlt."), "a tap keeps it");
+    engine.call("chat.send", json!({"text": text})).unwrap();
+    engine.call("chat.send", json!({"text": "Und [Name 1]?"})).unwrap();
+    assert!(posted(&seen).pop().unwrap().contains("Und [Name 1]?"), "a placeholder is no name");
+    for r in posted(&seen) {
+        assert!(!r.contains("Weber") && !r.contains("Brandt") && !r.contains("Klaus"), "{r}");
+        assert!(!r.contains("[[Name") && !r.contains("[Name [") && !r.contains("[[S"), "a placeholder is no name: {r}");
+    }
+    let s = engine.state();
+    assert_eq!(engine.shown_messages(&s)[1].content, "Klaus kommt morgen.");
+    // Without the model only the lists, the rules and the chat's known names count.
+    let pv = engine.call("privacy.preview", json!({"text": "Krause und Weber fehlten."})).unwrap();
+    assert_eq!(pv["outgoing"], "Krause und [Name 1] fehlten.");
+}
+
+/// A local file server for the downloads: path → bytes, `connection: close`; counts requests.
+fn file_server(engine: &Engine, files: Vec<(&'static str, Vec<u8>)>) -> (String, Arc<Mutex<usize>>) {
+    let count = Arc::new(Mutex::new(0usize));
+    let count2 = count.clone();
+    let files = Arc::new(files);
+    let url = engine.block_on(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let (files, count) = (files.clone(), count2.clone());
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = vec![0u8; 4096];
+                    while !String::from_utf8_lossy(&buf).contains("\r\n\r\n") {
+                        let k = sock.read(&mut chunk).await.unwrap_or(0);
+                        if k == 0 {
+                            return;
+                        }
+                        buf.extend_from_slice(&chunk[..k]);
+                    }
+                    *count.lock().unwrap() += 1;
+                    let req = String::from_utf8_lossy(&buf).to_string();
+                    let path = req.split_whitespace().nth(1).unwrap_or("").to_string();
+                    match files.iter().find(|(p, _)| *p == path) {
+                        Some((_, body)) => {
+                            let head =
+                                format!("HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", body.len());
+                            let _ = sock.write_all(head.as_bytes()).await;
+                            let _ = sock.write_all(body).await;
+                        }
+                        None => {
+                            let _ = sock.write_all(b"HTTP/1.1 404 Not Found\r\nconnection: close\r\ncontent-length: 0\r\n\r\n").await;
+                        }
+                    }
+                });
+            }
+        });
+        format!("http://{addr}")
+    });
+    (url, count)
+}
+
+fn sha(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// „Namenserkennung laden“ (#73): nothing is downloaded without the yes; a wrong checksum (of
+/// the download or of the library inside the package) keeps nothing; the right ones install,
+/// a second install loads nothing again, and removing deletes the folder. Never the internet.
+#[test]
+fn the_name_recognition_downloads_only_after_yes_and_checks_checksums() {
+    let (engine, _) = engine_with(&["ok"]);
+    let model = b"ein winziges Modell".to_vec();
+    let tokenizer = br#"{"model":"klein"}"#.to_vec();
+    let lib = b"\x7fELF keine echte Bibliothek".to_vec();
+    let mut w = craft_zip::Writer::new();
+    w.add("onnxruntime/LICENSE", b"MIT", craft_zip::Compression::Deflated).unwrap();
+    w.add("onnxruntime/capi/libonnxruntime.so.1.20.1", &lib, craft_zip::Compression::Deflated).unwrap();
+    let wheel = w.finish().unwrap();
+    let (url, count) = file_server(&engine, vec![("/model.onnx", model.clone()), ("/tokenizer.json", tokenizer.clone()), ("/ort.whl", wheel.clone())]);
+    let part = |path: &str, bytes: &[u8], file: &str| ner::Part {
+        what: file.into(),
+        url: format!("{url}{path}"),
+        sha256: sha(bytes),
+        size: bytes.len() as u64,
+        file: file.into(),
+        extract: None,
+        file_sha256: None,
+        file_size: None,
+    };
+    let runtime = ner::Part {
+        extract: Some("onnxruntime/capi/libonnxruntime.so.1.20.1".into()),
+        file_sha256: Some(sha(&lib)),
+        file_size: Some(lib.len() as u64),
+        ..part("/ort.whl", &wheel, ner::library_name())
+    };
+    let good = vec![part("/model.onnx", &model, "model.onnx"), part("/tokenizer.json", &tokenizer, "tokenizer.json"), runtime];
+    let dir = std::env::temp_dir().join(format!("aiscraft-ner-{}", uuid::Uuid::new_v4()));
+    let rt = &engine.ctx().0.ner;
+
+    // An engine in memory has no source: even with a yes it downloads nothing.
+    let refused = engine.call("privacy.ner_install", json!({"yes": true})).unwrap_err();
+    assert!(refused.to_string().contains("lädt nichts"), "{refused}");
+
+    // The question first: size, source, licence; nothing downloaded.
+    let mut wrong = good.clone();
+    wrong[0].sha256 = sha(b"etwas anderes");
+    rt.set_source(dir.clone(), wrong);
+    let asked = engine.call("privacy.ner_install", json!({})).unwrap();
+    assert_eq!(asked["needs_yes"], true);
+    assert!(asked["model"].as_str().unwrap().contains("Apache-2.0") && asked["runtime"].as_str().unwrap().contains("MIT"));
+    assert_eq!(asked["size"], (model.len() + tokenizer.len() + wheel.len()) as u64);
+    assert_eq!(*count.lock().unwrap(), 0, "no download without the yes");
+
+    // A wrong checksum: refused, nothing kept, not installed.
+    let e = engine.call("privacy.ner_install", json!({"yes": true})).unwrap_err();
+    assert!(e.to_string().contains("Prüfsumme"), "{e}");
+    assert!(!dir.join("model.onnx").exists() && !dir.join("model.onnx.part").exists());
+    assert!(!engine.call("privacy.ner_status", json!({})).unwrap()["installed"].as_bool().unwrap());
+
+    // The library inside the package does not match: refused too.
+    let mut wrong_lib = good.clone();
+    wrong_lib[2].file_sha256 = Some(sha(b"andere Bibliothek"));
+    rt.set_source(dir.clone(), wrong_lib);
+    let e = engine.call("privacy.ner_install", json!({"yes": true})).unwrap_err();
+    assert!(e.to_string().contains("Bibliothek"), "{e}");
+    assert!(!dir.join(ner::library_name()).exists());
+    assert!(!engine.state().privacy.ner.installed);
+
+    // The right checksums: installed, only the library taken out of the package.
+    rt.set_source(dir.clone(), good);
+    let ok = engine.call("privacy.ner_install", json!({"yes": true})).unwrap();
+    assert_eq!(ok["installed"], true);
+    assert!(engine.state().privacy.ner.installed && engine.state().privacy.ner.progress.is_none());
+    assert_eq!(std::fs::read(dir.join("model.onnx")).unwrap(), model);
+    assert_eq!(std::fs::read(dir.join(ner::library_name())).unwrap(), lib);
+    assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().ends_with(".part")));
+    let before = *count.lock().unwrap();
+    engine.call("privacy.ner_install", json!({"yes": true})).unwrap();
+    assert_eq!(*count.lock().unwrap(), before, "checked files are not downloaded again");
+
+    // Removing deletes the folder.
+    assert_eq!(engine.call("privacy.ner_remove", json!({})).unwrap()["removed"], true);
+    assert!(!dir.exists());
+    assert!(!engine.call("privacy.ner_status", json!({})).unwrap()["installed"].as_bool().unwrap());
+    assert_eq!(engine.call("privacy.ner_remove", json!({})).unwrap()["removed"], false);
 }

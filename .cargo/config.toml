@@ -1,3 +1,10 @@
 [alias]
 # Repository chores (xtask/src/main.rs), e.g. `cargo xtask version set 0.2.0`.
 xtask = "run --quiet --package xtask --"
+
+[env]
+# Name recognition (#73) loads ONNX Runtime at run time (ort's `load-dynamic`) from the library
+# the person downloads in the settings. These keep ort-sys' build script from downloading
+# ONNX Runtime at build time or linking a system copy found through pkg-config.
+ORT_LIB_LOCATION = "load-dynamic-at-run-time"
+LIBONNXRUNTIME_NO_PKG_CONFIG = "1"
