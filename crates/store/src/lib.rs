@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS artifacts (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, conversation_id TEXT, project_id TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, state BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS action_log (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, conversation_id TEXT NOT NULL, kind TEXT NOT NULL,
+    name TEXT NOT NULL, detail TEXT NOT NULL, reason TEXT NOT NULL, outcome TEXT NOT NULL,
+    input_tokens INTEGER, output_tokens INTEGER, usd REAL
+);
 CREATE TABLE IF NOT EXISTS tool_claims (
     id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, tool TEXT NOT NULL, args_hash TEXT NOT NULL,
     state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
@@ -73,6 +78,28 @@ pub struct UsageRow {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub answers: i64,
+}
+
+/// The action log keeps this many entries (#23).
+pub const MAX_LOG: i64 = 5000;
+
+/// One entry of the action log: a model call or a tool action, with why it was allowed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LogEntry {
+    pub at: i64,
+    pub conversation_id: String,
+    /// "model" or "tool".
+    pub kind: String,
+    /// The model, or connector and tool.
+    pub name: String,
+    /// The arguments in short (secrets scrubbed), or what the call was for.
+    pub detail: String,
+    /// Why it ran: „Nur lesen“, „Deine Freigabe“, the owner's words, a rule; or why not.
+    pub reason: String,
+    pub outcome: String,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -744,6 +771,49 @@ impl Store {
         Ok(out)
     }
 
+    // ---- action log (#23) -----------------------------------------------------------------
+
+    /// Add an entry; the log keeps the newest [`MAX_LOG`] entries.
+    pub fn log_action(&self, e: &LogEntry) -> Result<()> {
+        self.db
+            .execute(
+                "INSERT INTO action_log (at, conversation_id, kind, name, detail, reason, outcome, input_tokens, output_tokens, usd)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![e.at, e.conversation_id, e.kind, e.name, e.detail, e.reason, e.outcome, e.input_tokens, e.output_tokens, e.usd],
+            )
+            .map_err(db_err)?;
+        self.db.execute("DELETE FROM action_log WHERE seq <= (SELECT MAX(seq) FROM action_log) - ?1", [MAX_LOG]).map_err(db_err)?;
+        Ok(())
+    }
+
+    /// The newest entries first, optionally of one chat.
+    pub fn action_log(&self, limit: usize, conversation_id: Option<&str>) -> Result<Vec<LogEntry>> {
+        let mut st = self
+            .db
+            .prepare(
+                "SELECT at, conversation_id, kind, name, detail, reason, outcome, input_tokens, output_tokens, usd FROM action_log
+                 WHERE ?1 IS NULL OR conversation_id = ?1 ORDER BY seq DESC LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = st
+            .query_map(params![conversation_id, limit.min(MAX_LOG as usize) as i64], |r| {
+                Ok(LogEntry {
+                    at: r.get(0)?,
+                    conversation_id: r.get(1)?,
+                    kind: r.get(2)?,
+                    name: r.get(3)?,
+                    detail: r.get(4)?,
+                    reason: r.get(5)?,
+                    outcome: r.get(6)?,
+                    input_tokens: r.get(7)?,
+                    output_tokens: r.get(8)?,
+                    usd: r.get(9)?,
+                })
+            })
+            .map_err(db_err)?;
+        rows.collect::<rusqlite::Result<_>>().map_err(db_err)
+    }
+
     // ---- claims (#24: one approval, one result) -------------------------------------------
 
     /// Claim an action before it runs. `false` when it was claimed before (by a double click,
@@ -1211,5 +1281,31 @@ mod tests {
         assert_eq!(s.claim_state("approval:2").unwrap().as_deref(), Some("done"));
         assert!(s.uncertain_claim("c", "k__send", "h").unwrap());
         assert!(s.settle_running_claims(6).unwrap().is_empty());
+    }
+
+    #[test]
+    fn action_log_keeps_the_newest_entries() {
+        let s = Store::open_in_memory().unwrap();
+        let e = |i: i64, conv: &str| LogEntry {
+            at: i,
+            conversation_id: conv.into(),
+            kind: "tool".into(),
+            name: format!("Kalender · {i}"),
+            detail: String::new(),
+            reason: "Nur lesen".into(),
+            outcome: "ok".into(),
+            input_tokens: None,
+            output_tokens: None,
+            usd: None,
+        };
+        for i in 0..(MAX_LOG + 20) {
+            s.log_action(&e(i, if i % 2 == 0 { "a" } else { "b" })).unwrap();
+        }
+        let all = s.action_log(usize::MAX, None).unwrap();
+        assert_eq!(all.len() as i64, MAX_LOG, "capped");
+        assert_eq!(all[0].at, MAX_LOG + 19, "newest first");
+        let a = s.action_log(10, Some("a")).unwrap();
+        assert_eq!(a.len(), 10);
+        assert!(a.iter().all(|x| x.conversation_id == "a"));
     }
 }

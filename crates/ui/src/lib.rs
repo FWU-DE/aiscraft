@@ -2,6 +2,7 @@
 //! dispatches the engine's commands. Pure view state (open dialogs, text being typed, scroll)
 //! lives here; everything else lives in the engine.
 
+mod action_log;
 mod app;
 mod approval;
 mod artifact_panel;

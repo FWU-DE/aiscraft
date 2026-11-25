@@ -286,6 +286,8 @@ struct Ready {
     /// The arguments with vault values filled in (never shown, never logged).
     arguments: Value,
     secrets: Vec<String>,
+    /// Why it may run, for the action log (#23).
+    why: crate::action_log::Why,
 }
 
 /// A call of the step that waits for the owner: index, the call, the verdict, a card warning.
@@ -334,14 +336,14 @@ pub(crate) async fn run_step(c: &Ctx, conv: &str, calls: &[ToolCall], ev: &crate
     for (i, call) in calls.iter().enumerate() {
         if pending.is_some() {
             if needs_owner(c, call) {
-                set(&mut out, i, (NOT_ASKED.into(), true, "skipped"));
+                set(&mut out, i, logged(c, conv, call, (NOT_ASKED.into(), true, "skipped")));
             } else {
                 reads.push(i);
             }
             continue;
         }
         match prepare(c, conv, call, ev, interactive).await {
-            Prep::Done(r) => set(&mut out, i, r),
+            Prep::Done(r) => set(&mut out, i, logged(c, conv, call, r)),
             Prep::Run(r, claim) => set(&mut out, i, execute(c, conv, *r, claim).await),
             Prep::Ask(r, trust, note) => pending = Some((i, r, trust, note)),
         }
@@ -349,10 +351,11 @@ pub(crate) async fn run_step(c: &Ctx, conv: &str, calls: &[ToolCall], ev: &crate
     if let Some((i, ready, trust, note)) = pending {
         let asked = async {
             // One approval, one result: the yes is claimed before the call runs.
+            let call = ready.call.clone();
             if let Some(id) = ask(c, conv, &ready.conn, &ready.tool, &ready.call.arguments, trust, note).await {
-                execute(c, conv, *ready, Some(format!("approval:{id}"))).await
+                execute(c, conv, Ready { why: crate::action_log::Why::Approved, ..*ready }, Some(format!("approval:{id}"))).await
             } else {
-                ("Die Person hat diese Aktion abgelehnt. Nicht erneut versuchen, sondern nachfragen.".to_string(), true, "denied")
+                logged(c, conv, &call, ("Die Person hat diese Aktion abgelehnt. Nicht erneut versuchen, sondern nachfragen.".to_string(), true, "denied"))
             }
         };
         let read = async {
@@ -360,9 +363,9 @@ pub(crate) async fn run_step(c: &Ctx, conv: &str, calls: &[ToolCall], ev: &crate
             for j in reads {
                 let Some(call) = calls.get(j) else { continue };
                 let r = match prepare(c, conv, call, ev, interactive).await {
-                    Prep::Done(r) => r,
+                    Prep::Done(r) => logged(c, conv, call, r),
                     Prep::Run(r, claim) => execute(c, conv, *r, claim).await,
-                    Prep::Ask(..) => (NOT_ASKED.into(), true, "skipped"),
+                    Prep::Ask(..) => logged(c, conv, call, (NOT_ASKED.into(), true, "skipped")),
                 };
                 done.push((j, r));
             }
@@ -412,7 +415,7 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
         Ok(x) => x,
         Err(e) => return Prep::Done((e.message, true, "error")),
     };
-    let ready = Box::new(Ready { conn, tool, call: call.clone(), arguments, secrets });
+    let ready = Box::new(Ready { conn, tool, call: call.clone(), arguments, secrets, why: crate::action_log::Why::ReadOnly });
     if ready.tool.read_only && ready.secrets.is_empty() {
         return Prep::Run(ready, None);
     }
@@ -453,13 +456,51 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
         );
     }
     // A covered action runs at most once per request with the same arguments.
-    if auto { Prep::Run(ready, Some(format!("auto:{conv}:{}:{}:{hash}", ev.turn, call.name))) } else { Prep::Ask(ready, trust, None) }
+    if auto {
+        let why = match &trust {
+            Some(t) if t.rule.is_some() => crate::action_log::Why::Rule(t.rule.clone().unwrap_or_default()),
+            Some(t) => crate::action_log::Why::Request { source: t.source.clone(), quote: t.quote.clone() },
+            None => crate::action_log::Why::Approved,
+        };
+        Prep::Run(Box::new(Ready { why, ..*ready }), Some(format!("auto:{conv}:{}:{}:{hash}", ev.turn, call.name)))
+    } else {
+        Prep::Ask(ready, trust, None)
+    }
 }
 
 /// Call the connector. A call that changes something is claimed first (#24): a claim taken
 /// before (double click, second window, an earlier run) means it does not run again. A call that
 /// may have reached the connector without an answer is uncertain and is never retried.
 async fn execute(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> Outcome {
+    let label = format!("{} · {}", r.conn.name, if r.tool.title.is_empty() { &r.tool.name } else { &r.tool.title });
+    let detail = crate::action_log::summary(&crate::privacy::reveal_value(c, conv, &r.call.arguments), &r.tool.input_schema, &r.secrets);
+    let why = r.why.clone();
+    let out = execute_once(c, conv, r, claim).await;
+    crate::action_log::tool(c, conv, &label, detail, &why, out.2);
+    out
+}
+
+/// Built-in tools that only read.
+const READING: &[&str] = &["history_search", "board_read", WEB_FETCH];
+
+/// Log a call that ended without reaching a connector (built-in tools, refusals, notes).
+fn logged(c: &Ctx, conv: &str, call: &ToolCall, r: Outcome) -> Outcome {
+    let why = match r.2 {
+        "ok" | "error" if READING.contains(&call.name.as_str()) => crate::action_log::Why::ReadOnly,
+        "ok" | "error" if !call.name.contains("__") => crate::action_log::Why::Own,
+        _ => crate::action_log::Why::Refused(r.0.lines().next().unwrap_or("").to_string()),
+    };
+    let name = c
+        .state()
+        .connectors
+        .iter()
+        .find_map(|k| k.tools.iter().find(|t| t.llm_name == call.name).map(|t| format!("{} · {}", k.name, if t.title.is_empty() { &t.name } else { &t.title })))
+        .unwrap_or_else(|| call.name.clone());
+    crate::action_log::tool(c, conv, &name, crate::action_log::summary(&crate::privacy::reveal_value(c, conv, &call.arguments), &Value::Null, &[]), &why, r.2);
+    r
+}
+
+async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> Outcome {
     let hash = args_hash(&r.call.arguments);
     if let Some(key) = &claim {
         match c.store(|st| st.claim(key, conv, &r.call.name, &hash, crate::now_ms())) {

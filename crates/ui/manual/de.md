@@ -204,6 +204,8 @@ Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats
 
 Unter **Einstellungen › Nutzung** stehen die Tokens pro Monat, Dienst und Modell, bei Claude über API auch die Kosten. Mit einer **Monatsgrenze** fragt AIS.ChatCraft vor dem Senden nach, sobald sie erreicht ist.
 
+Darunter steht das **Aktionsprotokoll**: jeder Modellaufruf (Modell, Tokens, bei Claude über API die Kosten) und jede Werkzeugaktion mit Ziel, den wichtigsten Angaben und warum sie erlaubt war: „Nur lesen“, „Deine Bitte“ mit deinen Worten, „Deine Regel“, „Deine Freigabe“ oder warum sie nicht lief. Zugangsdaten aus dem Tresor stehen nie darin. Es behält die letzten 5000 Einträge; **Als CSV exportieren** speichert alle als Tabelle.
+
 ## Updates
 
 Einmal am Tag schaut AIS.ChatCraft nach, ob es eine neue Version gibt. Gibt es eine, steht über deinem Konto ein Hinweis: **Herunterladen** öffnet den Download im Browser, **Was ist neu** die Seite mit den Änderungen. **Diese Version überspringen** blendet den Hinweis für diese Version dauerhaft aus, **Später** bis zum nächsten Start. Installiert wird nichts von selbst.

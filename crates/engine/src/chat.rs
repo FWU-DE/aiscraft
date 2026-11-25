@@ -148,7 +148,7 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
     };
     let req = ChatRequest {
         conversation_id: new_id(),
-        model: sel.model_id,
+        model: sel.model_id.clone(),
         system: if takes_system { system.map(str::to_string) } else { None },
         messages: vec![msg],
         tools: vec![],
@@ -158,13 +158,16 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
     };
     let mut stream = backend.chat(req).await?;
     let mut out = String::new();
+    let mut usage = None;
     while let Some(ev) = stream.next().await {
         match ev? {
             StreamEvent::Delta { text } => out.push_str(&text),
+            StreamEvent::Usage { usage: u } => usage = Some(u),
             StreamEvent::Done => break,
             _ => {}
         }
     }
+    crate::action_log::model(c, "", &sel.backend_id, &c.state().model_name(&sel.backend_id, &sel.model_id), usage, "Einzelaufruf (Prüfung, Überarbeitung)");
     Ok(match &guard {
         Some(g) => g.mapping.reveal(&out),
         None => out,
@@ -851,7 +854,9 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
             persona: conv.persona.clone(),
             web: caps.web_search && conv.sources.web,
         };
-        match stream_round(&c, &backend, req, &mut answer, &conv_id, &mut cancel_rx).await {
+        let round_result = stream_round(&c, &backend, req, &mut answer, &conv_id, &mut cancel_rx).await;
+        crate::action_log::model(&c, &conv_id, &conv.backend_id, &model_name, answer.usage, "Antwort");
+        match round_result {
             Ok(calls) if calls.is_empty() => break,
             Ok(calls) => {
                 answer.tool_calls = calls.clone();

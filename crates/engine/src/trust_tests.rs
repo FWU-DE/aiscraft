@@ -429,3 +429,66 @@ fn running_actions_become_uncertain_after_a_restart() {
     drop(engine);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #23: the action log says what ran and why (request, approval, refusal, model call), keeps
+/// vault values out and exports as CSV.
+#[test]
+fn action_log_says_what_ran_and_why() {
+    let Some((engine, _, notify, echo)) = setup(|body| {
+        if is_trust_check(body) {
+            return text(
+                r#"{"covered": true, "source": "message:1", "terms": [{"term": "Kollegium", "value": "kollegium@schule.de", "match": true}], "reason": "gebeten"}"#,
+            );
+        }
+        text("x")
+    }) else {
+        return;
+    };
+    engine.call("vault.add", json!({"name": "portal", "username": "frau.ada", "password": "geheim-123"})).unwrap();
+    let ev = crate::trust::Evidence {
+        messages: vec![crate::trust::OwnerMessage { n: 1, text: "Lade das Kollegium ein".into(), answered: None }],
+        turn: "t1".into(),
+    };
+    let call = |name: &str, args: Value| aiscraft_core::ToolCall { id: "c".into(), name: name.into(), arguments: args, outcome: None };
+    let ctx = engine.ctx();
+    // Read, covered request, background refusal.
+    assert_eq!(engine.block_on(crate::tools::run(ctx, "conv", &call(&echo, json!({"text": "hallo"})), &ev, true)).2, "ok");
+    assert_eq!(engine.block_on(crate::tools::run(ctx, "conv", &call(&notify, json!({"an": "kollegium@schule.de"})), &ev, true)).2, "ok");
+    assert_eq!(engine.block_on(crate::tools::run(ctx, "conv", &call(&notify, json!({"an": "x@y.de"})), &ev, false)).2, "denied");
+    // A vault value with the owner's yes.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (e2, c2, ev2) = (engine.clone(), call(&echo, json!({"text": "{{vault:portal.password}}"})), ev.clone());
+    std::thread::spawn(move || {
+        let _ = tx.send(e2.block_on(crate::tools::run(e2.ctx(), "conv", &c2, &ev2, true)));
+    });
+    assert!(engine.wait_for(Duration::from_secs(30), |s| !s.approvals.is_empty()));
+    let id = engine.state().approvals[0].id.clone();
+    engine.call("tool.answer", json!({"id": id, "allow": true})).unwrap();
+    rx.recv_timeout(Duration::from_secs(30)).unwrap();
+
+    let log = engine.call("log.list", json!({"limit": 50})).unwrap();
+    let entries = log["entries"].as_array().unwrap().clone();
+    let tools: Vec<&Value> = entries.iter().filter(|e| e["kind"] == "tool").collect();
+    let reasons: Vec<String> = tools.iter().rev().map(|e| e["reason"].as_str().unwrap().to_string()).collect();
+    assert_eq!(reasons.len(), 4, "{reasons:?}");
+    assert_eq!(reasons[0], "Nur lesen");
+    assert!(reasons[1].starts_with("Deine Bitte (message:1): „Lade das Kollegium ein“"), "{}", reasons[1]);
+    assert!(reasons[2].contains("niemand da"), "{}", reasons[2]);
+    assert_eq!(reasons[3], "Deine Freigabe");
+    assert!(tools.iter().any(|e| e["detail"] == "An: kollegium@schule.de"));
+    assert!(entries.iter().any(|e| e["kind"] == "model"), "the trust checks are model calls");
+    let all = serde_json::to_string(&entries).unwrap();
+    assert!(!all.contains("geheim-123") && !all.contains("frau.ada"), "no vault values in the log");
+    assert_eq!(engine.call("log.list", json!({"conversation": "andere"})).unwrap()["entries"].as_array().unwrap().len(), 0);
+
+    let dir = std::env::temp_dir().join(format!("aiscraft-log-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("protokoll.csv");
+    let out = engine.call("log.export", json!({"path": path.display().to_string()})).unwrap();
+    assert!(out["entries"].as_u64().unwrap() >= 5);
+    let csv = std::fs::read_to_string(&path).unwrap();
+    assert!(csv.starts_with("Zeit;Chat;Art;Was;Angaben;Warum;Ergebnis"));
+    assert!(csv.contains("\"Deine Freigabe\"") && !csv.contains("geheim-123"));
+    assert!(engine.call("log.export", json!({"path": ""})).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -1195,6 +1195,8 @@ impl AisCraftApp {
                     }
                 });
                 ui.label(small_muted(&t, "Ab der Grenze fragt AIS.ChatCraft vor dem Senden nach. Kosten nur für Claude über API (Preise je Million Tokens); Abo und AIS.chat rechnen nicht pro Token ab."));
+                ui.add_space(12.0);
+                crate::action_log::section(self, ui);
             }
             SettingsTab::Memory => {
                 let mut on = self.state.settings.memory;

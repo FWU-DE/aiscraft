@@ -479,6 +479,10 @@ static COMMANDS: &[CommandSpec] = &[
     ),
     cmd!("schedule.delete", "Zeitplan löschen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::delete(c, p))),
     cmd!("schedule.run", "Zeitplan jetzt ausführen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::run_now(c, p))),
+    cmd!("log.list", "Aktionsprotokoll", "App", None, "limit?: number (Standard 100), conversation?: string", false, |c, p| Box::pin(crate::action_log::list(
+        c, p
+    ))),
+    cmd!("log.export", "Aktionsprotokoll als CSV exportieren", "App", None, "path: string", false, |c, p| Box::pin(crate::action_log::export(c, p))),
     cmd!("usage.report", "Nutzung", "App", None, "months?: number (default 6)", true, |c, p| Box::pin(crate::usage::report(c, p))),
     cmd!(
         "task.start",
