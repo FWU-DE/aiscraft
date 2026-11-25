@@ -182,7 +182,7 @@ pub fn picture_with_note(bytes: &[u8], note: &str) -> Vec<u8> {
 }
 
 /// CRC-32 (IEEE) as PNG chunks need it.
-fn crc32(data: &[u8]) -> u32 {
+pub(crate) fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &b in data {
         crc ^= u32::from(b);
