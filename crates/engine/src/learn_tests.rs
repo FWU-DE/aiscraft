@@ -35,6 +35,14 @@ fn h5p_json() -> Value {
     })
 }
 
+fn board_json() -> Value {
+    json!({
+        "title": "Wasserkreislauf", "layout": "mindmap",
+        "nodes": [{"id": "a", "text": "Wasserkreislauf"}, {"id": "b", "text": "Verdunstung"}, {"id": "c", "text": "Niederschlag"}],
+        "links": [{"from": "a", "to": "b"}, {"from": "a", "to": "c"}]
+    })
+}
+
 /// What the scripted model answers, by what the request contains.
 fn route(req: &str) -> Vec<Value> {
     let text = |t: &str| vec![json!({"choices": [{"delta": {"content": t}}]})];
@@ -45,6 +53,21 @@ fn route(req: &str) -> Vec<Value> {
         ]
     };
     let has_tool_result = req.contains("\"role\":\"tool\"");
+    if req.contains("Werkzeug board_create") && !has_tool_result {
+        return tool("board_create", json!({"board": board_json()}));
+    }
+    if req.contains("reparierst ein Whiteboard") {
+        return text(&if req.contains("NOCHMAL") { "```aiscraft-board\n{\"title\":\"NOCHMAL\",\"nodes\":[]}\n```".to_string() } else { format!("```aiscraft-board\n{}\n```", board_json()) });
+    }
+    if req.contains("Whiteboard zum Thema: Dauerkaputt") && !has_tool_result {
+        return text("```aiscraft-board\n{\"title\":\"NOCHMAL\",\"nodes\":[]}\n```");
+    }
+    if req.contains("Whiteboard zum Thema: Kaputt") && !has_tool_result {
+        return text("```aiscraft-board\n{\"title\":\"Wasser\",\"nodes\":[{\"id\":\"a\"}]}\n```");
+    }
+    if req.contains("Whiteboard zum Thema") && !has_tool_result {
+        return text(&format!("Hier dein Whiteboard:\n```aiscraft-board\n{}\n```", board_json()));
+    }
     if req.contains("Werkzeug h5p_create") && !has_tool_result {
         return tool("h5p_create", json!({"h5p": h5p_json()}));
     }
@@ -166,6 +189,7 @@ fn format_requests_send_the_spec_but_show_only_the_topic() {
         ("worksheet.request", "worksheet", worksheet_prompt("Bruchrechnung (Klasse: 6)", 8, false, true)),
         ("learning_app.request", "learning_app", app_prompt("Bruchrechnung (Klasse: 6)", false)),
         ("h5p.request", "h5p", crate::learn::h5p::h5p_prompt("Bruchrechnung (Klasse: 6)", 6, false)),
+        ("board.request", "board", crate::learn::board::board_prompt("Bruchrechnung (Klasse: 6)", None, false)),
     ];
     assert_eq!(cases.len(), formats::formats().len(), "every format in the registry is covered");
     for (command, format, expected) in cases {
@@ -193,6 +217,67 @@ fn format_requests_send_the_spec_but_show_only_the_topic() {
         assert!(md.contains("Bruchrechnung (Klasse: 6)") && md.contains(&format!("_Mit Formatvorgabe: {}_", r.format.label)), "{md}");
         assert!(!md.contains(&(r.format.prompt_description)(&formats::PromptOptions::default())), "{command}: no spec in the export");
     }
+}
+
+/// Whiteboards as an output format (#56): the request carries the format, the block becomes a
+/// laid-out board; a broken block gets exactly one repair round, then the answer stays text;
+/// tool backends get `board_create`; a plain message carries no format description.
+#[test]
+fn whiteboard_format_one_round_one_repair_at_most() {
+    use aiscraft_core::ArtifactKind;
+    let (engine, log) = routed_engine_logged();
+    engine.call("settings.set", json!({"key": "tools", "value": false})).unwrap();
+    // A plain message: no format description goes along.
+    engine.call("chat.send", json!({"text": "Was ist der Wasserkreislauf?"})).unwrap();
+    let first = log.lock().unwrap()[0].to_string();
+    assert!(!first.contains("aiscraft-board") && !first.contains("aiscraft-worksheet"), "{first}");
+
+    engine.call("chat.new", json!({})).unwrap();
+    let out = engine.call("board.request", json!({"topic": "Wasserkreislauf", "layout": "mindmap"})).unwrap();
+    assert_eq!(out["created"], true, "{out}");
+    let id = out["id"].as_str().unwrap().to_string();
+    let s = engine.state();
+    let a = s.artifacts.iter().find(|a| a.id == id).unwrap();
+    assert_eq!((a.kind, a.title.as_str()), (ArtifactKind::Board, "Wasserkreislauf"));
+    let text = engine.call("artifact.get", json!({"id": id})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(text.contains("Verdunstung") && text.contains("Niederschlag"), "{text}");
+    assert!(s.messages[0].content.contains("Anordnung: mindmap") && s.messages[0].content.contains("Format aiscraft-board"));
+    assert!(engine.call("board.request", json!({"topic": "Wasser", "layout": "spirale"})).is_err());
+
+    // Broken, repaired once.
+    engine.call("chat.new", json!({})).unwrap();
+    log.lock().unwrap().clear();
+    let out = engine.call("board.request", json!({"topic": "Kaputt"})).unwrap();
+    assert_eq!(out["created"], true, "{out}");
+    assert_eq!(log.lock().unwrap().len(), 2, "the answer and one repair round");
+    // Broken twice: no second repair, the answer stays text.
+    engine.call("chat.new", json!({})).unwrap();
+    log.lock().unwrap().clear();
+    let before = engine.state().artifacts.len();
+    let out = engine.call("board.request", json!({"topic": "Dauerkaputt"})).unwrap();
+    assert_eq!(out["created"], false, "{out}");
+    assert_eq!(log.lock().unwrap().len(), 2, "one repair round at most");
+    assert_eq!(engine.state().artifacts.len(), before);
+
+    // From a block (the card in the chat), from an object, through artifact.create.
+    let block = format!("Text\n```aiscraft-board\n{}\n```", json!({"layout": "flow", "nodes": ["Erst", "Dann", "Zuletzt"]}));
+    let out = engine.call("board.create", json!({"content": block, "title": "Ablauf"})).unwrap();
+    assert_eq!((out["nodes"].as_u64(), out["layout"].as_str()), (Some(3), Some("flow")));
+    let out = engine.call("board.create", json!({"board": board_json()})).unwrap();
+    assert_eq!(out["nodes"], 3);
+    assert!(engine.call("board.create", json!({"content": "{kaputt"})).is_err());
+    let out = engine.call("artifact.create", json!({"kind": "board", "content": board_json().to_string()})).unwrap();
+    let board_id = out["id"].as_str().unwrap().to_string();
+    // Cards added to an open board from a JSON block.
+    let added = engine.call("artifact.board_add", json!({"id": board_id, "outline": board_json().to_string()})).unwrap();
+    assert!(added["added"].as_u64().unwrap() >= 3, "{added}");
+
+    // With tools: board_create from the same description.
+    engine.call("settings.set", json!({"key": "tools", "value": true})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    let out = engine.call("board.request", json!({"topic": "Wasserkreislauf"})).unwrap();
+    assert_eq!(out["created"], true, "{out}");
+    assert!(crate::learn::tool_specs(true).iter().any(|t| t.name == "board_create" && t.description.contains("aiscraft-board")));
 }
 
 fn tmp_dir(name: &str) -> std::path::PathBuf {

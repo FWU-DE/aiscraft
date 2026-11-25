@@ -1,8 +1,8 @@
 //! Output formats (#56): content a model delivers in one marked block, so backends without
 //! tool calling (AIS.chat) can create artifacts, and the same formats as tools for backends
 //! that have them. Learning apps (```` ```html ````) and worksheets (```` ```aiscraft-worksheet ````)
-//! are the first two entries, H5P (```` ```aiscraft-h5p ````, #59) the third; the whiteboard (`aiscraft-board`), calendar and diagram formats
-//! join this list later.
+//! are the first two entries, H5P (```` ```aiscraft-h5p ````, #59) the third, the whiteboard
+//! (```` ```aiscraft-board ````, content only, laid out by `aiscraft_board::spec`) the fourth.
 //!
 //! Each entry has the fence languages it is recognised by, a compact description for the
 //! prompt (sent only when the format is asked for), a lenient check, the artifact kind it
@@ -70,6 +70,10 @@ fn h5p_check(src: &str) -> Result<Vec<String>, String> {
     })
 }
 
+fn board_description(_: &PromptOptions) -> String {
+    super::board::description()
+}
+
 pub const APP_INTRO: &str = "Erstelle eine interaktive Lern-App zum Thema: ";
 pub const WORKSHEET_INTRO: &str = "Erstelle ein interaktives Arbeitsblatt zum Thema: ";
 
@@ -106,6 +110,17 @@ static FORMATS: &[OutputFormat] = &[
         prompt_description: h5p_description,
         find: super::h5p::h5p_blocks,
         check: h5p_check,
+    },
+    OutputFormat {
+        id: "board",
+        label: "Whiteboard",
+        fences: &[aiscraft_board::spec::FENCE, "aiscraft-whiteboard"],
+        kind: ArtifactKind::Board,
+        tool: "board_create",
+        request_intro: super::board::BOARD_INTRO,
+        prompt_description: board_description,
+        find: super::board::board_blocks,
+        check: super::board::check,
     },
 ];
 
@@ -180,7 +195,12 @@ mod tests {
             assert!(super::super::tool_specs(true).iter().any(|t| t.name == f.tool), "every format has its tool");
         }
         assert!((by_id("worksheet").unwrap().check)("{kaputt").is_err());
-        assert!(by_id("board").is_none());
+        assert!(by_id("diagramm").is_none());
+        let board = "```aiscraft-board\n{\"nodes\":[\"A\"]}\n```\n```aiscraft-board\n- nur eine Liste\n```";
+        let found = blocks(board);
+        assert_eq!(found.len(), 1, "an indented list is a change block, not the format");
+        assert_eq!(found[0].0.id, "board");
+        assert!((found[0].0.check)(found[0].1).unwrap().is_empty());
     }
 
     #[test]

@@ -147,6 +147,76 @@ fn counting_backend(engine: &Engine) -> String {
     })
 }
 
+/// A local OpenAI-compatible server that always answers `answer`; the engine is set up to use it.
+fn answering_backend(engine: &Engine, answer: &str) {
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let answer = answer.to_string();
+    let url = engine.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let answer = answer.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = vec![0u8; 1 << 16];
+                    loop {
+                        let k = sock.read(&mut chunk).await.unwrap_or(0);
+                        if k == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..k]);
+                        let s = String::from_utf8_lossy(&buf).to_string();
+                        if let Some(h) = s.find("\r\n\r\n") {
+                            let len = s[..h]
+                                .lines()
+                                .find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                                .unwrap_or(0);
+                            if buf.len() >= h + 4 + len {
+                                break;
+                            }
+                        }
+                    }
+                    if buf.starts_with(b"GET") {
+                        let body = r#"{"data":[{"id":"m"}]}"#;
+                        let head = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", body.len());
+                        let _ = sock.write_all(format!("{head}{body}").as_bytes()).await;
+                        return;
+                    }
+                    let c = json!({"choices":[{"delta":{"content": answer}}]});
+                    let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
+                    let _ = sock.write_all(format!("data: {c}\n\ndata: [DONE]\n\n").as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}/v1")
+    });
+    let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+}
+
+/// An answer with an `aiscraft-board` block (#56) shows a card instead of the JSON; „Whiteboard
+/// öffnen“ lays it out next to the chat.
+#[test]
+fn whiteboard_block_becomes_a_card() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    answering_backend(
+        &engine,
+        "Hier:\n```aiscraft-board\n{\"title\":\"Wasserkreislauf\",\"layout\":\"cluster\",\"nodes\":[\"Verdunstung\",\"Regen\",\"Grundwasser\"]}\n```",
+    );
+    engine.call("chat.send", serde_json::json!({"text": "Whiteboard bitte"})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    assert!(h.query_by_label_contains("Whiteboard · 3 Karten, Cluster").is_some(), "the card names the board");
+    assert!(h.query_by_label_contains("\"nodes\"").is_none(), "no raw JSON in the chat");
+    click_until(&mut h, "Whiteboard öffnen", "a board opens", |_| engine.state().artifacts.iter().any(|a| a.kind == aiscraft_core::ArtifactKind::Board));
+    assert_eq!(engine.state().artifacts[0].title, "Wasserkreislauf");
+}
+
 /// After "Neu erzeugen" the answer shows ‹ 2/2 ›; ‹ brings the first answer back.
 #[test]
 fn variant_switcher_shows_the_old_answer() {

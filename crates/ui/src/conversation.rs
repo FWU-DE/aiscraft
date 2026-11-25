@@ -598,6 +598,7 @@ impl AisCraftApp {
                     crate::markup::Segment::App(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::App, src),
                     crate::markup::Segment::Worksheet(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::Worksheet, src),
                     crate::markup::Segment::H5p(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::H5p, src),
+                    crate::markup::Segment::Board(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::Board, src),
                     seg => {
                         if let Some(crate::markup::Action::Board(outline)) = crate::markup::show(ui, &mut self.md, &t, &seg, (&m.id, k)) {
                             self.run("artifact.create", json!({"kind": "board", "content": outline}));

@@ -17,6 +17,7 @@
 //! in the app's own data changes nothing of the person's, so these tools run without asking,
 //! like `document_create`.
 
+pub mod board;
 pub mod formats;
 pub mod h5p;
 pub mod print;
@@ -881,12 +882,13 @@ pub(crate) fn tool_specs(worksheet_points: bool) -> Vec<ToolSpec> {
         },
     ];
     specs.extend(h5p::tool_specs());
+    specs.extend(board::tool_specs());
     specs
 }
 
 /// Runs one of the tools above; `None` when `name` is none of them.
 pub(crate) fn run_tool(c: &Ctx, name: &str, a: &Value) -> Option<Result<String>> {
-    if let Some(r) = h5p::run_tool(c, name, a) {
+    if let Some(r) = h5p::run_tool(c, name, a).or_else(|| board::run_tool(c, name, a)) {
         return Some(r);
     }
     let s = |k: &str| a.get(k).and_then(Value::as_str).unwrap_or("").to_string();
