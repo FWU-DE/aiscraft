@@ -68,6 +68,7 @@ heif = ["craft-image-codecs/heif"]
 
 [dev-dependencies]
 craft-wordmodel.workspace = true
+aiscraft-backends = { workspace = true, features = ["test-support"] }
 craft-xls = { workspace = true, features = ["test-support"] }
 craft-heif = { workspace = true, features = ["test-support"] }
 aiscraft-collab-server = { path = "../../apps/aiscraft-collab-server" }

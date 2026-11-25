@@ -332,6 +332,24 @@ pub struct BackendView {
     /// Why the last attempt to load them failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personas_error: Option<String>,
+    /// Every model tried and whether it worked (Vertex AI: models the project has not enabled).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_checks: Vec<aiscraft_core::ModelCheck>,
+}
+
+impl BackendView {
+    /// AIS.chat, signed in, with its speech feature on for the person (or no list of features).
+    pub fn ais_speech(&self) -> bool {
+        self.config.kind == aiscraft_core::BackendKind::AisChat
+            && match &self.status {
+                BackendStatus::Ready { account } => account.server_tools.is_empty() || account.server_tools.iter().any(|t| t.id == "speech" && t.enabled),
+                _ => false,
+            }
+    }
+    /// An OpenAI-compatible backend with a key, which speaks through `/audio/speech`.
+    pub fn openai_speech(&self) -> bool {
+        self.config.kind == aiscraft_core::BackendKind::OpenAi && self.has_secret
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -496,6 +514,12 @@ impl Default for Settings {
 }
 
 impl State {
+    /// A service is set up that can read answers aloud: AIS.chat signed in with its speech
+    /// feature on, or an OpenAI-compatible backend with a key. Same rule as `voice.speak`
+    /// (`voice::tts_provider`), so the „Vorlesen“ button shows only where it can work.
+    pub fn speech_available(&self) -> bool {
+        self.backends.iter().any(|b| b.ais_speech() || b.openai_speech())
+    }
     pub fn backend(&self, id: &str) -> Option<&BackendView> {
         self.backends.iter().find(|b| b.config.id == id)
     }

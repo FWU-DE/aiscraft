@@ -35,6 +35,10 @@ Ohne passenden Browser: den Sitzungs-Cookie `__Secure-ais-chat-app.authjs.sessio
 
 **Claude (API), OpenAI und andere.** API-Schlüssel eintragen. Lokale Server wie Ollama oder LM Studio brauchen keinen Schlüssel.
 
+**Google Vertex AI.** Claude und Gemini über das Google-Cloud-Projekt deiner Schule oder deines Trägers, mit einer Anmeldung für alle Modelle. Unter Einstellungen › Dienste › „+ Dienst hinzufügen“ › „Google Vertex AI“ die JSON-Schlüsseldatei eines Dienstkontos wählen (Google Cloud Console › IAM › Dienstkonten › Schlüssel › Schlüssel hinzufügen › JSON; das Dienstkonto braucht die Rolle „Vertex AI User“). Das Projekt steht in der Datei; als Region passt meist `global`, für Daten in der EU `eu` oder eine Region wie `europe-west3` (dort gibt es nicht jedes Modell).
+
+AIS.ChatCraft probiert dann jedes bekannte Modell mit einer kostenlosen Anfrage (Token zählen) aus: Was das Projekt nutzen darf, steht im Modellmenü; die anderen stehen in den Einstellungen unter „Nicht freigeschaltet“ mit dem Grund. Claude-Modelle schaltet man im Model Garden der Google Cloud Console frei; danach „Modelle neu prüfen“. Das Ergebnis bleibt bis zum nächsten Prüfen gespeichert, beim Start ist das Menü also gleich da. Claude über Vertex sucht im Netz, liest aber keine Webseiten selbst und kennt keine hochgeladenen Dateien auf dem Server; Anhänge gehen wie bei Claude (API) mit der Nachricht mit.
+
 Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 
 **Ersatzmodelle.** Unter **Einstellungen › Dienste** legst du eine Reihenfolge von Ersatzmodellen fest. Scheitert eine Anfrage am Modell (überlastet, Serverfehler, Zeitüberschreitung, Kontingent aufgebraucht), antwortet das erste passende Ersatzmodell, und unter der Antwort steht „Mit Ersatzmodell … beantwortet, weil …“. Bei Fehlern am Inhalt, etwa wenn AIS.chat eine Anfrage wegen unangemessener Inhalte blockiert, wird nicht gewechselt. Ersatzmodelle bei einem anderen Dienst bekämen den Chat; das passiert nur, wenn du „Auch Ersatzmodelle bei anderen Diensten nutzen“ einschaltest, und nie für AIS.chat-Chats oder Assistenten.

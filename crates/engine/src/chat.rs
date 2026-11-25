@@ -820,7 +820,7 @@ fn put_message(c: &Ctx, conv_id: &str, m: &Message) {
 async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interactive: bool) -> Result<Value> {
     let conv = c.state().conversation(&conv_id).cloned().ok_or_else(|| Error::not_found("Chat nicht gefunden"))?;
     let backend = c.backend(&conv.backend_id)?;
-    let caps = backend.capabilities();
+    let caps = backend.capabilities().for_model(backend.config().kind, &conv.model_id);
     let last_user = c.store(|st| st.messages(&conv_id))?.into_iter().rev().find(|m| m.role == Role::User);
     let request = last_user.as_ref().map(|m| m.content.clone()).unwrap_or_default();
     let system = system_prompt_for(&c, &conv, backend.config().send_context, caps.system_prompt, &request);
@@ -864,7 +864,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     // without a system prompt (AIS.chat) keep it in their history, so it needs the same consent as
     // memory and project instructions (`inline`).
     let knowledge = if caps.system_prompt || conv.sources.inline { crate::knowledge::pick(&c, &conv, &request, caps.remote_history) } else { None };
-    let as_documents = backend.config().kind == aiscraft_core::BackendKind::Anthropic;
+    let as_documents = aiscraft_core::speaks_anthropic(backend.config().kind, &conv.model_id);
     let mut last_user = last_user;
     if let (Some(k), Some(user)) = (&knowledge, last_user.as_mut()) {
         user.activity.retain(|s| s.label != crate::knowledge::KNOWLEDGE);

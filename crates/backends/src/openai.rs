@@ -18,7 +18,12 @@ pub struct OpenAi {
 
 impl OpenAi {
     pub fn new(config: BackendConfig, base: String, key: Option<String>) -> Result<Self> {
-        Ok(Self { config, base, key: key.filter(|k| !k.trim().is_empty()), http: client(true)? })
+        Ok(Self::with_client(config, base, key, client(true)?))
+    }
+
+    /// With an existing HTTP client (Vertex builds one per request with a fresh access token).
+    pub fn with_client(config: BackendConfig, base: String, key: Option<String>, http: reqwest::Client) -> Self {
+        Self { config, base, key: key.filter(|k| !k.trim().is_empty()), http }
     }
 
     fn req(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {

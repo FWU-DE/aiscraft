@@ -683,35 +683,73 @@ impl Backend for Anthropic {
     }
 
     fn chat(&self, req: ChatRequest) -> BoxFuture<'_, Result<EventStream>> {
-        Box::pin(async move {
-            let mut r = self.req(reqwest::Method::POST, "/v1/messages")?;
-            if takes_fallback(&req.model) {
-                r = r.header("anthropic-beta", FALLBACK_BETA);
-            }
-            let resp = r.json(&body(&req)).send().await.map_err(net_err)?;
-            if !resp.status().is_success() {
-                return Err(status_error(resp, "Chat").await);
-            }
-            let acc = Arc::new(Mutex::new(ToolAcc::default()));
-            let inner = sse_stream(resp, acc.clone());
-            Ok(continuing(self.http.clone(), self.req_parts(&req)?, body(&req), acc, inner))
-        })
+        Box::pin(async move { stream_messages(self.http.clone(), self.req_parts(&req)?, body(&req)).await })
     }
 }
 
-/// What a follow-up request needs: address, key and beta header.
+/// Where a Messages request goes and the headers it carries (key and version for Anthropic,
+/// the access token for Vertex). Follow-up requests of a paused answer use the same.
 #[derive(Clone)]
-struct ReqParts {
-    url: String,
-    key: String,
-    beta: Option<&'static str>,
+pub(crate) struct ReqParts {
+    pub url: String,
+    pub headers: Vec<(&'static str, String)>,
+}
+
+impl ReqParts {
+    fn post(&self, http: &reqwest::Client) -> reqwest::RequestBuilder {
+        self.headers.iter().fold(attributed(http.post(&self.url), &self.url), |r, (k, v)| r.header(*k, v))
+    }
 }
 
 impl Anthropic {
     fn req_parts(&self, req: &ChatRequest) -> Result<ReqParts> {
         let key = self.key.as_deref().ok_or_else(|| Error::auth("Kein API-Schlüssel für Anthropic hinterlegt"))?.trim().to_string();
-        Ok(ReqParts { url: format!("{}/v1/messages", self.base), key, beta: takes_fallback(&req.model).then_some(FALLBACK_BETA) })
+        let mut headers = vec![("x-api-key", key), ("anthropic-version", API_VERSION.to_string())];
+        if takes_fallback(&req.model) {
+            headers.push(("anthropic-beta", FALLBACK_BETA.to_string()));
+        }
+        Ok(ReqParts { url: format!("{}/v1/messages", self.base), headers })
     }
+}
+
+/// Send a streaming Messages request and return the answer's events, continued over pauses.
+pub(crate) async fn stream_messages(http: reqwest::Client, parts: ReqParts, body: Value) -> Result<EventStream> {
+    let resp = parts.post(&http).json(&body).send().await.map_err(net_err)?;
+    if !resp.status().is_success() {
+        return Err(status_error(resp, "Chat").await);
+    }
+    let acc = Arc::new(Mutex::new(ToolAcc::default()));
+    let inner = sse_stream(resp, acc.clone());
+    Ok(continuing(http, parts, body, acc, inner))
+}
+
+/// The version Claude on Vertex takes in the body (`anthropic_version`); Google's docs name
+/// `vertex-2023-10-16` or the API version `2026-10-21`, which this client speaks.
+pub(crate) const VERTEX_VERSION: &str = API_VERSION;
+
+/// The Messages body for Claude on Google Vertex AI: the model is in the URL, the version in the
+/// body; Vertex has no server-side fallback and no web fetch, and only the basic web search.
+pub(crate) fn vertex_body(req: &ChatRequest) -> Value {
+    let mut b = body(req);
+    if let Some(o) = b.as_object_mut() {
+        o.remove("model");
+        o.remove("fallbacks");
+        o.insert("anthropic_version".into(), json!(VERTEX_VERSION));
+        if let Some(tools) = o.get_mut("tools").and_then(Value::as_array_mut) {
+            tools.retain(|t| !t.get("type").and_then(Value::as_str).is_some_and(|ty| ty.starts_with("web_fetch")));
+            for t in tools.iter_mut() {
+                if t.get("type").and_then(Value::as_str).is_some_and(|ty| ty.starts_with("web_search"))
+                    && let Some(t) = t.as_object_mut()
+                {
+                    t.insert("type".into(), json!("web_search_20250305"));
+                }
+            }
+        }
+        if o.get("tools").and_then(Value::as_array).is_some_and(Vec::is_empty) {
+            o.remove("tools");
+        }
+    }
+    b
 }
 
 fn sse_stream(resp: reqwest::Response, acc: Arc<Mutex<ToolAcc>>) -> EventStream {
@@ -757,12 +795,7 @@ fn continuing(http: reqwest::Client, parts: ReqParts, body: Value, acc: Arc<Mute
                                 m.truncate(t.messages);
                                 m.push(json!({"role": "assistant", "content": c}));
                             }
-                            let mut r =
-                                attributed(t.http.post(&t.parts.url), &t.parts.url).header("x-api-key", &t.parts.key).header("anthropic-version", API_VERSION);
-                            if let Some(b) = t.parts.beta {
-                                r = r.header("anthropic-beta", b);
-                            }
-                            match r.json(&t.body).send().await {
+                            match t.parts.post(&t.http).json(&t.body).send().await {
                                 Ok(resp) if resp.status().is_success() => {
                                     t.inner = Some(sse_stream(resp, t.acc.clone()));
                                     continue;

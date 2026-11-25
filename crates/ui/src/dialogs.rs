@@ -111,6 +111,13 @@ pub const PRESETS: &[(&str, BackendKind, &str, bool, &str)] = &[
         "Nutzt dein claude.ai-Abo über die lokale Claude-CLI (vorher `claude auth login`). Ohne Werkzeuge, nur Chat.",
     ),
     ("Claude (API)", BackendKind::Anthropic, "https://api.anthropic.com", true, "API-Schlüssel von console.anthropic.com, Abrechnung nach Verbrauch"),
+    (
+        "Google Vertex AI",
+        BackendKind::Vertex,
+        "global",
+        true,
+        "Claude und Gemini über dein Google-Cloud-Projekt. Anmeldung mit dem JSON-Schlüssel eines Dienstkontos (Rolle „Vertex AI User“); welche Modelle freigeschaltet sind, prüft AIS.ChatCraft selbst.",
+    ),
     ("OpenAI", BackendKind::OpenAi, "https://api.openai.com/v1", true, "API-Schlüssel von platform.openai.com"),
     (
         "AIS.chat API",
@@ -132,7 +139,18 @@ fn kind_str(k: BackendKind) -> &'static str {
         BackendKind::OpenAi => "openai",
         BackendKind::Anthropic => "anthropic",
         BackendKind::ClaudeCli => "claude_cli",
+        BackendKind::Vertex => "vertex",
     }
+}
+
+/// Ask for the service account key of Vertex AI (a JSON file). The engine reads it.
+fn pick_key_file() -> Option<String> {
+    rfd::FileDialog::new().set_title("Dienstkonto-Schlüssel (JSON) wählen").add_filter("JSON-Schlüssel", &["json"]).pick_file().map(|p| p.display().to_string())
+}
+
+/// The file name of a chosen key, for the dialog.
+fn file_name(path: &str) -> String {
+    std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
 }
 
 impl Dialog {
@@ -321,6 +339,8 @@ impl AisCraftApp {
                                 *preset = i;
                                 *name = p.0.trim_end_matches(" (lokal)").to_string();
                                 *base_url = p.2.to_string();
+                                // A key typed for one service never goes to another.
+                                secret.clear();
                             }
                         }
                     },
@@ -332,10 +352,26 @@ impl AisCraftApp {
                     ui.label("Name");
                     ui.add(egui::TextEdit::singleline(name).desired_width(300.0));
                     ui.end_row();
-                    ui.label(if kind == BackendKind::ClaudeCli { "Programm" } else { "Adresse" });
-                    ui.add(egui::TextEdit::singleline(base_url).desired_width(300.0));
+                    ui.label(match kind {
+                        BackendKind::ClaudeCli => "Programm",
+                        BackendKind::Vertex => "Region",
+                        _ => "Adresse",
+                    });
+                    ui.add(egui::TextEdit::singleline(base_url).hint_text("global").desired_width(300.0));
                     ui.end_row();
-                    if !matches!(kind, BackendKind::AisChat | BackendKind::ClaudeCli) {
+                    if kind == BackendKind::Vertex {
+                        // The path of the key file; the engine reads and checks it.
+                        ui.label("Schlüsseldatei");
+                        ui.horizontal(|ui| {
+                            if ui.button("JSON-Datei wählen …").clicked()
+                                && let Some(path) = pick_key_file()
+                            {
+                                *secret = path;
+                            }
+                            ui.label(small_muted(&t, if secret.is_empty() { "keine gewählt".to_string() } else { file_name(secret) }));
+                        });
+                        ui.end_row();
+                    } else if !matches!(kind, BackendKind::AisChat | BackendKind::ClaudeCli) {
                         ui.label(if needs_key { "API-Schlüssel" } else { "Schlüssel (optional)" });
                         ui.add(egui::TextEdit::singleline(secret).password(true).desired_width(300.0));
                         ui.end_row();
@@ -346,7 +382,8 @@ impl AisCraftApp {
                 ui.horizontal(|ui| {
                     let ok = !base_url.trim().is_empty() && (!needs_key || !secret.trim().is_empty() || kind == BackendKind::AisChat);
                     if ui.add_enabled(ok, egui::Button::new("Hinzufügen")).clicked() {
-                        self.run("backend.add", json!({"kind": kind_str(kind), "name": name, "base_url": base_url, "secret": secret}));
+                        let key = if kind == BackendKind::Vertex { "key_file" } else { "secret" };
+                        self.run("backend.add", json!({"kind": kind_str(kind), "name": name, "base_url": base_url, key: secret}));
                         keep = false;
                     }
                     if ui.button("Abbrechen").clicked() {
@@ -623,6 +660,37 @@ impl AisCraftApp {
         ui.heading(format!("Bei {} anmelden", view.config.name));
         ui.add_space(4.0);
         let mut keep = true;
+        if view.config.kind == BackendKind::Vertex {
+            ui.label(muted(
+                &t,
+                "Den JSON-Schlüssel eines Dienstkontos wählen (Google Cloud Console › IAM › Dienstkonten › Schlüssel › JSON). Er liegt danach im Schlüsselbund des Systems; AIS.ChatCraft prüft, welche Modelle im Projekt freigeschaltet sind.",
+            ));
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if accent_button(ui, &t, "JSON-Datei wählen …").clicked()
+                    && let Some(path) = pick_key_file()
+                {
+                    self.run("backend.login", json!({"id": backend_id, "key_file": path}));
+                    *secret = file_name(&path);
+                    *sent = true;
+                }
+                if matches!(view.status, BackendStatus::Checking) {
+                    ui.add(egui::Spinner::new());
+                    ui.label(small_muted(&t, "Prüfe Schlüssel und Modelle …"));
+                } else if !secret.is_empty() {
+                    ui.label(small_muted(&t, secret.as_str()));
+                }
+                if ui.button("Abbrechen").clicked() {
+                    keep = false;
+                }
+            });
+            if let BackendStatus::SignedOut { message } | BackendStatus::Failed { message } = &view.status
+                && *sent
+            {
+                ui.label(RichText::new(message).color(t.danger));
+            }
+            return keep;
+        }
         let mut manual = view.config.kind != BackendKind::AisChat;
         if view.config.kind == BackendKind::AisChat {
             ui.label(muted(&t, "Die Anmeldung (VIDIS, Schulkonto oder Microsoft 365) läuft in einem eigenen Browserfenster. AIS.ChatCraft übernimmt danach die Sitzung und schließt das Fenster."));
@@ -840,7 +908,9 @@ impl AisCraftApp {
                             };
                             status_dot(ui, color);
                             ui.label(RichText::new(&b.config.name).strong());
-                            ui.label(small_muted(&t, b.config.kind.label()));
+                            if b.config.name != b.config.kind.label() {
+                                ui.label(small_muted(&t, b.config.kind.label()));
+                            }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 // One width for all three, so the row does not shift between states.
                                 let action = |ui: &mut Ui, text: &str| ui.add(egui::Button::new(RichText::new(text).small()).min_size(egui::vec2(124.0, 0.0)));
@@ -859,7 +929,16 @@ impl AisCraftApp {
                                     if action(ui, if is_ais { "Abmelden" } else { "Schlüssel entfernen" }).clicked() {
                                         self.run("backend.logout", json!({"id": b.config.id}));
                                     }
-                                } else if action(ui, if is_ais { "Anmelden" } else { "Schlüssel eingeben" }).clicked() {
+                                } else if action(
+                                    ui,
+                                    match b.config.kind {
+                                        BackendKind::AisChat => "Anmelden",
+                                        BackendKind::Vertex => "Schlüsseldatei wählen",
+                                        _ => "Schlüssel eingeben",
+                                    },
+                                )
+                                .clicked()
+                                {
                                     self.dialog = Some(Dialog::login(&b.config.id));
                                 }
                                 if action(ui, "Prüfen").clicked() {
@@ -867,7 +946,14 @@ impl AisCraftApp {
                                 }
                             });
                         });
-                        ui.label(small_muted(&t, &b.config.base_url));
+                        if b.config.kind == BackendKind::Vertex {
+                            // When signed in, the account line names project and region.
+                            if !matches!(b.status, BackendStatus::Ready { .. }) {
+                                ui.label(small_muted(&t, format!("Region {}", b.config.base_url)));
+                            }
+                        } else {
+                            ui.label(small_muted(&t, &b.config.base_url));
+                        }
                         match &b.status {
                             BackendStatus::Ready { account } => {
                                 let who = [account.display_name.clone(), account.detail.clone()].into_iter().flatten().collect::<Vec<_>>().join(" · ");
@@ -877,6 +963,9 @@ impl AisCraftApp {
                                 ui.label(RichText::new(message).small().color(t.danger));
                             }
                             _ => {}
+                        }
+                        if b.config.kind == BackendKind::Vertex && b.has_secret {
+                            self.model_checks(ui, &b);
                         }
                         let mut ctx_on = b.config.send_context;
                         if b.capabilities.system_prompt && ui.checkbox(&mut ctx_on, "Projektanweisungen und Notizen mitsenden").changed() {
@@ -1366,6 +1455,41 @@ impl AisCraftApp {
         }
         ui.add_space(8.0);
         ui.label(small_muted(&t, "Grenzen: Spitznamen, Tippfehler, Namen außerhalb der Listen und Namen in Bildern oder PDF-Dateien erkennt AIS.ChatCraft nicht. Prüfe die Vorschau über dem Eingabefeld vor dem Senden."));
+    }
+}
+
+impl AisCraftApp {
+    /// Vertex AI: how many models the project may use, which not and why, and a button to try
+    /// them again (after enabling one in the Model Garden).
+    fn model_checks(&mut self, ui: &mut Ui, b: &aiscraft_engine::BackendView) {
+        let t = self.tokens.clone();
+        let blocked: Vec<&aiscraft_core::ModelCheck> = b.model_checks.iter().filter(|m| !m.usable).collect();
+        let usable = b.model_checks.len() - blocked.len();
+        ui.horizontal_wrapped(|ui| {
+            if b.model_checks.is_empty() {
+                ui.label(small_muted(&t, "Modelle noch nicht geprüft"));
+            } else {
+                ui.label(small_muted(&t, format!("{usable} von {} Modellen nutzbar", b.model_checks.len())));
+            }
+            let checking = matches!(b.status, BackendStatus::Checking);
+            if ui.add_enabled(!checking, egui::Button::new(RichText::new("Modelle neu prüfen").small())).clicked() {
+                self.run("backend.models_check", json!({"id": b.config.id}));
+            }
+        });
+        if blocked.is_empty() {
+            return;
+        }
+        egui::CollapsingHeader::new(small_muted(&t, format!("Nicht freigeschaltet ({})", blocked.len()))).id_salt(("vertex-blocked", &b.config.id)).show(
+            ui,
+            |ui| {
+                for m in blocked {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(&m.name).small().strong());
+                        ui.label(small_muted(&t, m.reason.as_deref().unwrap_or("nicht nutzbar")));
+                    });
+                }
+            },
+        );
     }
 }
 

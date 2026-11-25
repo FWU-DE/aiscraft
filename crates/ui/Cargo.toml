@@ -29,3 +29,4 @@ workspace = true
 egui_kittest = { version = "0.37", features = ["wgpu", "eframe"] }
 eframe = { workspace = true, features = ["wgpu"] }
 tokio = { workspace = true }
+aiscraft-backends = { workspace = true, features = ["test-support"] }

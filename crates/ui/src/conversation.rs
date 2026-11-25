@@ -787,6 +787,8 @@ impl AisCraftApp {
                 });
             }
         }
+        // „Vorlesen“ only where a service is set up that can speak (the engine decides).
+        let can_speak = self.state.speech_available();
         if !generating && !m.content.is_empty() {
             ui.add_space(2.0);
             ui.horizontal_wrapped(|ui| {
@@ -799,9 +801,10 @@ impl AisCraftApp {
                 if copy.clicked() {
                     ui.ctx().copy_text(m.content.clone());
                 }
-                if pill(ui, &t, Pill::Ghost, Some(Icon::Speaker), "Vorlesen", 13.0, None)
-                    .on_hover_text("Antwort vorlesen (AIS.chat oder OpenAI-kompatibler Dienst)")
-                    .clicked()
+                if can_speak
+                    && pill(ui, &t, Pill::Ghost, Some(Icon::Speaker), "Vorlesen", 13.0, None)
+                        .on_hover_text("Antwort vorlesen (AIS.chat oder OpenAI-kompatibler Dienst)")
+                        .clicked()
                 {
                     self.run("voice.speak", json!({"message_id": m.id}));
                 }
@@ -836,7 +839,8 @@ impl AisCraftApp {
                 if message_action(ui, &t, "🗐", "Kopieren").on_hover_text("Antwort in die Zwischenablage").clicked() {
                     ui.ctx().copy_text(m.content.clone());
                 }
-                if message_action(ui, &t, "🔊", "Vorlesen").on_hover_text("Antwort vorlesen (AIS.chat oder OpenAI-kompatibler Dienst)").clicked() {
+                if can_speak && message_action(ui, &t, "🔊", "Vorlesen").on_hover_text("Antwort vorlesen (AIS.chat oder OpenAI-kompatibler Dienst)").clicked()
+                {
                     self.run("voice.speak", json!({"message_id": m.id}));
                 }
                 if message_action(ui, &t, "📄", "Als Dokument").on_hover_text("Antwort neben dem Chat als bearbeitbares Dokument öffnen").clicked() {
@@ -995,7 +999,11 @@ impl AisCraftApp {
     fn sources_menu(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let src = self.state.selection.sources.clone();
-        let caps = self.state.backend(&self.state.selection.backend_id).map(|b| b.capabilities).unwrap_or_default();
+        let caps = self
+            .state
+            .backend(&self.state.selection.backend_id)
+            .map(|b| b.capabilities.for_model(b.config.kind, &self.state.selection.model_id))
+            .unwrap_or_default();
         let takes_label = self.state.backend(&self.state.selection.backend_id).is_none_or(|b| b.capabilities.system_prompt);
         let on = [src.tools, src.memory_for(takes_label), src.project_for(takes_label), src.history].iter().filter(|x| **x).count();
         let label = if on == 4 && src.connectors.is_none() { "Quellen".to_string() } else { format!("Quellen ({on}/4)") };
@@ -1091,7 +1099,11 @@ impl AisCraftApp {
                 }
             }
             // How much Claude thinks before it answers (#30): per chat.
-            if self.state.backend(&self.state.selection.backend_id).is_some_and(|b| b.config.kind == BackendKind::Anthropic) {
+            if self
+                .state
+                .backend(&self.state.selection.backend_id)
+                .is_some_and(|b| aiscraft_core::speaks_anthropic(b.config.kind, &self.state.selection.model_id))
+            {
                 ui.separator();
                 ui.label(small_muted(&t, "Nachdenken vor der Antwort"));
                 ui.horizontal_wrapped(|ui| {
