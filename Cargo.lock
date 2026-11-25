@@ -347,6 +347,7 @@ dependencies = [
 name = "aiscraft-preview"
 version = "0.2.2"
 dependencies = [
+ "aiscraft-core",
  "serde_json",
  "tao",
  "wry",

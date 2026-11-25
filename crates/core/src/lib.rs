@@ -5,6 +5,7 @@ mod error;
 pub mod h5p;
 mod memory;
 mod model;
+pub mod net;
 pub mod worksheet;
 
 pub use attribution::attribution_headers;
