@@ -241,7 +241,7 @@ impl AisCraftApp {
         let tex = if large {
             let key = picture_key(backend, p.kind, &p.id);
             match self.state.persona_pictures.get(&key).cloned().flatten() {
-                Some(path) => self.image_texture(ui.ctx(), &path),
+                Some(path) => self.image_texture(ui.ctx(), &path, false),
                 None => self.persona_thumb(ui.ctx(), backend, p),
             }
         } else {

@@ -37,7 +37,7 @@ pub async fn fetch(url: &str, allow_private: bool) -> Result<WebPage> {
             .header(reqwest::header::ACCEPT, "text/html, text/plain;q=0.9, application/json;q=0.8, */*;q=0.1")
             .send()
             .await
-            .map_err(net_err)?;
+            .map_err(direct_err)?;
         let status = resp.status();
         if status.is_redirection() {
             url = redirect_target(&url, &resp)?;
@@ -63,8 +63,21 @@ pub async fn fetch(url: &str, allow_private: bool) -> Result<WebPage> {
     Err(Error::network("Zu viele Weiterleitungen"))
 }
 
+/// A connection error of the page reader, saying that pages are read directly: behind a school
+/// proxy that blocks direct connections the person learns why reading fails.
+fn direct_err(e: reqwest::Error) -> Error {
+    let connect = e.is_connect();
+    let mut err = net_err(e);
+    if connect {
+        err.message = format!("{} (Webseiten liest AIS.ChatCraft direkt, nicht über den Proxy der Schule)", err.message);
+    }
+    err
+}
+
 /// A client that connects to exactly the addresses of `url`'s host checked here, so the name
 /// cannot change in between; refuses addresses in the local network unless `allow_private`.
+/// Never through a proxy (system or `HTTP(S)_PROXY`): a proxy resolves the name again itself,
+/// and the address checked here would prove nothing.
 async fn client_for(url: &reqwest::Url, allow_private: bool, timeout: Duration) -> Result<(reqwest::Client, String)> {
     let host = url.host_str().unwrap_or("").to_string();
     let port = url.port_or_known_default().unwrap_or(443);
@@ -90,12 +103,19 @@ async fn client_for(url: &reqwest::Url, allow_private: bool, timeout: Duration) 
     let mut builder = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
         .connect_timeout(timeout.min(Duration::from_secs(10)))
         .timeout(timeout);
     if literal.is_none() {
         builder = builder.resolve_to_addrs(&host, &addrs);
     }
-    let client = builder.build().map_err(|e| Error::network(format!("HTTP-Client: {e}")))?;
+    // Building a client reads the system's certificate store, which can take a while (macOS).
+    // Off the async task, so the other links checked at the same time keep being answered and
+    // their time limits are not spent waiting for this one.
+    let client = tokio::task::spawn_blocking(move || builder.build())
+        .await
+        .map_err(|e| Error::network(format!("HTTP-Client: {e}")))?
+        .map_err(|e| Error::network(format!("HTTP-Client: {e}")))?;
     Ok((client, host))
 }
 
@@ -188,7 +208,7 @@ pub async fn check(url: &str, allow_private: bool, timeout: Duration) -> LinkSta
         }
         let resp = match resp {
             Ok(r) => r,
-            Err(e) => return LinkState::Dead(net_err(e).message),
+            Err(e) => return LinkState::Dead(direct_err(e).message),
         };
         let status = resp.status();
         if status.is_redirection() {
@@ -499,5 +519,55 @@ mod tests {
         for u in ["http://127.0.0.1:9/", "http://[::1]/", "file:///etc/passwd", "ftp://example.org/", "http://user:pw@example.org/", "kein Link"] {
             assert!(fetch(u, false).await.is_err(), "{u}");
         }
+    }
+
+    /// Child half of [`web_reading_never_goes_through_a_proxy`]: runs with `HTTP_PROXY` pointing
+    /// at a listener that must stay untouched, and reads a page from its own local server.
+    #[tokio::test]
+    #[ignore = "started by web_reading_never_goes_through_a_proxy with a proxy in the environment"]
+    async fn read_page_with_proxy_in_environment() {
+        if std::env::var_os("AISCRAFT_TEST_PROXY_CHILD").is_none() {
+            return;
+        }
+        let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = server.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            while let Ok((mut s, _)) = server.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf).await;
+                let body = "<title>Direkt</title><p>direkt gelesen</p>";
+                let head = format!("HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+                let _ = s.write_all(format!("{head}{body}").as_bytes()).await;
+            }
+        });
+        let url = format!("http://127.0.0.1:{port}/");
+        let page = fetch(&url, true).await.unwrap();
+        assert!(page.text.contains("direkt gelesen"), "{page:?}");
+        assert_eq!(check(&url, true, Duration::from_secs(5)).await, LinkState::Alive);
+    }
+
+    #[test]
+    fn web_reading_never_goes_through_a_proxy() {
+        // A proxy resolves names itself, so the private-address check would prove nothing: the
+        // page reader and the link check connect directly even when a proxy is set.
+        let proxy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        proxy.set_nonblocking(true).unwrap();
+        let proxy_url = format!("http://127.0.0.1:{}", proxy.local_addr().unwrap().port());
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["web::tests::read_page_with_proxy_in_environment", "--exact", "--ignored", "--nocapture", "--test-threads=1"])
+            .env("AISCRAFT_TEST_PROXY_CHILD", "1")
+            .env("HTTP_PROXY", &proxy_url)
+            .env("http_proxy", &proxy_url)
+            .env("HTTPS_PROXY", &proxy_url)
+            .env("ALL_PROXY", &proxy_url)
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy")
+            .output()
+            .unwrap();
+        let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "{log}");
+        assert!(log.contains("1 passed"), "{log}");
+        assert!(proxy.accept().is_err(), "the page reader went through the proxy");
     }
 }

@@ -133,7 +133,10 @@ enum Callback {
         code: String,
         state: String,
     },
-    Denied(String),
+    Denied {
+        why: String,
+        state: String,
+    },
     /// Something else (a favicon): answered 404, keep waiting.
     Other,
 }
@@ -175,7 +178,7 @@ fn parse_request(head: &str) -> Callback {
     let pairs = query_pairs(query);
     let get = |k: &str| pairs.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
     if let Some(e) = get("error") {
-        return Callback::Denied(get("error_description").unwrap_or(e).chars().take(300).collect());
+        return Callback::Denied { why: get("error_description").unwrap_or(e).chars().take(300).collect(), state: get("state").unwrap_or_default() };
     }
     match (get("code"), get("state")) {
         (Some(code), Some(state)) if !code.is_empty() => Callback::Code { code, state },
@@ -214,43 +217,72 @@ impl Pending {
         exchange(c, &code, &self.verifier, &self.redirect_uri).await
     }
 
+    /// Accept connections until one brings this sign-in's `state`. Every connection is handled on
+    /// its own with one total deadline, so a slow or silent one blocks nobody. Callbacks with
+    /// another (or no) state are answered and ignored, also an `error=`: anything on this computer
+    /// can reach the port, and only the real browser knows the state.
     async fn wait(&self) -> Result<String> {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Result<String>>(1);
         loop {
-            let (mut sock, _) = self.listener.accept().await.map_err(|e| Error::network(e.to_string()))?;
-            let mut buf = vec![0u8; MAX_REQUEST];
-            let mut n = 0;
-            while let Some(room) = buf.get_mut(n..) {
-                if room.is_empty() {
-                    break;
+            tokio::select! {
+                accepted = self.listener.accept() => {
+                    let Ok((sock, _)) = accepted else { continue };
+                    tokio::spawn(handle_callback(sock, self.state.clone(), tx.clone()));
                 }
-                let read = tokio::time::timeout(Duration::from_secs(10), sock.read(room)).await;
-                let k = match read {
-                    Ok(Ok(k)) => k,
-                    _ => 0,
-                };
-                n += k;
-                if k == 0 || buf.get(..n).is_some_and(|b| b.windows(4).any(|w| w == b"\r\n\r\n")) {
-                    break;
-                }
-            }
-            let head = String::from_utf8_lossy(buf.get(..n).unwrap_or_default()).into_owned();
-            match parse_request(&head) {
-                Callback::Other => reply(&mut sock, "404 Not Found", "Nicht gefunden.").await,
-                Callback::Denied(why) => {
-                    reply(&mut sock, "200 OK", "Die Anmeldung wurde abgebrochen. Du kannst dieses Fenster schließen.").await;
-                    return Err(Error::auth(format!("Anmeldung abgebrochen: {why}")));
-                }
-                Callback::Code { code, state } => {
-                    // Constant-time is not needed: the state is single-use and random.
-                    if state != self.state {
-                        reply(&mut sock, "400 Bad Request", "Diese Anmeldung passt nicht zur Anfrage von AIS.ChatCraft und wurde abgelehnt.").await;
-                        return Err(Error::refused("Die Rückmeldung des Browsers passt nicht zur Anmeldung (state). Abgelehnt; bitte erneut verbinden."));
-                    }
-                    reply(&mut sock, "200 OK", "Angemeldet. Du kannst dieses Fenster schließen und zu AIS.ChatCraft zurückkehren.").await;
-                    return Ok(code);
-                }
+                Some(done) = rx.recv() => return done,
             }
         }
+    }
+}
+
+/// How long one connection to the loopback port may take, from accept to answer.
+const CONNECTION_DEADLINE: Duration = Duration::from_secs(10);
+
+async fn handle_callback(mut sock: tokio::net::TcpStream, expected: String, done: tokio::sync::mpsc::Sender<Result<String>>) {
+    let Ok(head) = tokio::time::timeout(CONNECTION_DEADLINE, read_head(&mut sock)).await else { return };
+    let outcome = match parse_request(&head) {
+        Callback::Other => None,
+        // Constant-time is not needed: the state is single-use and random.
+        Callback::Code { code, state } if state == expected => Some(Ok(code)),
+        Callback::Denied { why, state } if state == expected => Some(Err(Error::auth(format!("Anmeldung abgebrochen: {why}")))),
+        Callback::Code { .. } | Callback::Denied { .. } => {
+            let text = "Diese Rückmeldung passt nicht zur Anmeldung von AIS.ChatCraft und wurde ignoriert.";
+            let _ = tokio::time::timeout(CONNECTION_DEADLINE, reply(&mut sock, "400 Bad Request", text)).await;
+            return;
+        }
+    };
+    let (status, text) = match &outcome {
+        None => ("404 Not Found", "Nicht gefunden."),
+        Some(Ok(_)) => ("200 OK", "Angemeldet. Du kannst dieses Fenster schließen und zu AIS.ChatCraft zurückkehren."),
+        Some(Err(_)) => ("200 OK", "Die Anmeldung wurde abgebrochen. Du kannst dieses Fenster schließen."),
+    };
+    let _ = tokio::time::timeout(CONNECTION_DEADLINE, reply(&mut sock, status, text)).await;
+    if let Some(o) = outcome {
+        let _ = done.send(o).await;
+    }
+}
+
+/// The request line and headers, at most [`MAX_REQUEST`] bytes.
+async fn read_head(sock: &mut tokio::net::TcpStream) -> String {
+    let mut buf = vec![0u8; MAX_REQUEST];
+    let mut n = 0;
+    while let Some(room) = buf.get_mut(n..) {
+        if room.is_empty() {
+            break;
+        }
+        let k = sock.read(room).await.unwrap_or(0);
+        n += k;
+        if k == 0 || buf.get(..n).is_some_and(|b| b.windows(4).any(|w| w == b"\r\n\r\n")) {
+            break;
+        }
+    }
+    String::from_utf8_lossy(buf.get(..n).unwrap_or_default()).into_owned()
+}
+
+impl Pending {
+    #[cfg(test)]
+    fn state(&self) -> &str {
+        &self.state
     }
 }
 
@@ -320,7 +352,10 @@ mod tests {
         assert_eq!(decode("a%20b+c%C3%A4%zz"), "a b cä%zz");
         assert_eq!(parse_request("GET /callback?code=x%2By&state=s1 HTTP/1.1\r\nHost: x\r\n\r\n"), Callback::Code { code: "x+y".into(), state: "s1".into() });
         assert_eq!(parse_request("GET /favicon.ico HTTP/1.1\r\n\r\n"), Callback::Other);
-        assert_eq!(parse_request("GET /callback?error=access_denied HTTP/1.1\r\n\r\n"), Callback::Denied("access_denied".into()));
+        assert_eq!(
+            parse_request("GET /callback?error=access_denied&state=s1 HTTP/1.1\r\n\r\n"),
+            Callback::Denied { why: "access_denied".into(), state: "s1".into() }
+        );
         assert_eq!(parse_request("POST /callback?code=1&state=2 HTTP/1.1"), Callback::Other);
         assert_eq!(parse_request(""), Callback::Other);
         // RFC 7636 appendix B.
@@ -329,5 +364,50 @@ mod tests {
         assert_eq!((t.refresh_token.as_deref(), t.expires_at), (Some("r"), 3_601_000));
         assert!(!t.expired(1000) && t.expired(3_560_000));
         assert!(tokens_from(&serde_json::json!({"error": "x"}), None, 0).is_err());
+    }
+
+    async fn request(port: u16, path: &str) -> String {
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        s.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes()).await.unwrap();
+        let mut out = String::new();
+        let _ = s.read_to_string(&mut out).await;
+        out
+    }
+
+    /// Anything on this computer can reach the loopback port: callbacks without this sign-in's
+    /// state are ignored (also `error=`), and a connection that never sends blocks nobody.
+    #[tokio::test]
+    async fn only_the_right_state_ends_the_sign_in() {
+        let c = Client {
+            auth_url: "https://login.example/authorize".into(),
+            token_url: "https://login.example/token".into(),
+            client_id: "cid".into(),
+            client_secret: None,
+            scopes: vec![],
+            extra: vec![],
+        };
+        let p = start(&c).await.unwrap();
+        let port: u16 = p.redirect_uri().trim_start_matches("http://127.0.0.1:").trim_end_matches(CALLBACK_PATH).parse().unwrap();
+        let state = encode(p.state());
+        let waiting = tokio::spawn(async move { p.wait().await });
+        // A silent connection stays open the whole time.
+        let _silent = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        assert!(request(port, "/callback?code=FALSCH&state=fremd").await.starts_with("HTTP/1.1 400"));
+        assert!(request(port, "/callback?error=access_denied").await.starts_with("HTTP/1.1 400"));
+        assert!(request(port, "/callback?error=access_denied&state=fremd").await.starts_with("HTTP/1.1 400"));
+        assert!(request(port, "/favicon.ico").await.starts_with("HTTP/1.1 404"));
+        assert!(!waiting.is_finished(), "none of these ends the sign-in");
+        assert!(request(port, &format!("/callback?code=RICHTIG&state={state}")).await.starts_with("HTTP/1.1 200"));
+        let code = tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap().unwrap();
+        assert_eq!(code, "RICHTIG");
+
+        // A cancel with the right state ends it as cancelled.
+        let p = start(&c).await.unwrap();
+        let port: u16 = p.redirect_uri().trim_start_matches("http://127.0.0.1:").trim_end_matches(CALLBACK_PATH).parse().unwrap();
+        let state = encode(p.state());
+        let waiting = tokio::spawn(async move { p.wait().await });
+        request(port, &format!("/callback?error=access_denied&error_description=abgebrochen&state={state}")).await;
+        let e = tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap().unwrap_err();
+        assert!(e.message.contains("abgebrochen"), "{}", e.message);
     }
 }

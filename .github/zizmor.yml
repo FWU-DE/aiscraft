@@ -1,0 +1,10 @@
+# zizmor configuration (.github/workflows/security.yml, job `zizmor`). Every exception says why.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # The Craft suite's shared release workflow and actions (same owner as craft-libs and the
+        # egui/winit forks) are tracked at @main on purpose, like in every Craft app, so suite-wide
+        # fixes arrive without a pull request here (release.yml). Everything else: a full SHA.
+        "storytold/craft-common-actions/*": ref-pin
+        "*": hash-pin

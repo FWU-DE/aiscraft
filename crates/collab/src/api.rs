@@ -45,10 +45,16 @@ impl Server {
         &self.http
     }
 
-    /// The room's WebSocket address (the token rides in the query: browsers cannot set headers).
-    pub fn room_ws(&self, room: &str, token: &str) -> String {
+    /// The room's WebSocket address; the app sends the token as `Authorization: Bearer`.
+    pub fn room_ws_url(&self, room: &str) -> String {
         let ws = if let Some(r) = self.http.strip_prefix("https://") { format!("wss://{r}") } else { self.http.replacen("http://", "ws://", 1) };
-        format!("{ws}/r/{room}?token={token}")
+        format!("{ws}/r/{room}")
+    }
+
+    /// The room's WebSocket address with the token in the query, for browsers (they cannot set
+    /// headers) and older relays, which read only the query.
+    pub fn room_ws(&self, room: &str, token: &str) -> String {
+        format!("{}?token={token}", self.room_ws_url(room))
     }
 
     /// The link to hand on: `<server>/join/<code>`. Opened in a browser it shows the code.
@@ -108,8 +114,11 @@ async fn check(resp: reqwest::Response) -> Result<reqwest::Response> {
     if status.is_success() {
         return Ok(resp);
     }
-    let said =
-        resp.json::<serde_json::Value>().await.ok().and_then(|v| v.get("error").and_then(|e| e.as_str()).map(|s| s.chars().take(200).collect::<String>()));
+    let said = capped(resp, 16 * 1024)
+        .await
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(|s| s.chars().take(200).collect::<String>()));
     let msg = |fallback: &str| said.clone().unwrap_or_else(|| fallback.to_string());
     Err(match status.as_u16() {
         401 | 403 => CollabError::Refused(msg("Der Server lässt das nicht zu (Schlüssel oder Zugang falsch)")),
@@ -120,11 +129,20 @@ async fn check(resp: reqwest::Response) -> Result<reqwest::Response> {
     })
 }
 
-async fn json<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
-    let bytes = resp.bytes().await.map_err(net)?;
-    if bytes.len() > 64 * 1024 {
-        return Err(CollabError::Protocol("Antwort des Servers ist zu groß".into()));
+/// The body, read piece by piece and refused once it grows past `max` bytes.
+async fn capped(mut resp: reqwest::Response, max: usize) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(net)? {
+        if out.len().saturating_add(chunk.len()) > max {
+            return Err(CollabError::Protocol("Antwort des Servers ist zu groß".into()));
+        }
+        out.extend_from_slice(&chunk);
     }
+    Ok(out)
+}
+
+async fn json<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
+    let bytes = capped(resp, 64 * 1024).await?;
     serde_json::from_slice(&bytes).map_err(|_| CollabError::Protocol("Antwort des Servers ist unlesbar".into()))
 }
 
@@ -179,5 +197,39 @@ mod tests {
         assert_eq!((srv, code.as_str()), (s, "ABCDEFGHJK"));
         assert!(parse_link("ABCDE-FGHJK").is_none());
         assert!(parse_link("https://x/join/nope").is_none());
+    }
+
+    /// A relay that answers with an endless body: errors and answers are read only up to their
+    /// cap, never whole.
+    #[tokio::test]
+    async fn endless_answers_are_cut_off() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut s, _)) = l.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let n = s.read(&mut buf).await.unwrap_or(0);
+                    let status = if buf.get(..n).is_some_and(|b| b.starts_with(b"DELETE")) { "500 Internal Server Error" } else { "200 OK" };
+                    let head = format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{{\"error\": \"");
+                    if s.write_all(head.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    let chunk = vec![b'x'; 64 * 1024];
+                    // 64 MiB at most, so a client that reads everything still ends the test.
+                    for _ in 0..1024 {
+                        if s.write_all(&chunk).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        let server = Server::parse(&format!("http://{addr}")).unwrap();
+        let e = delete_room(&server, "r1", "t").await.unwrap_err();
+        assert!(matches!(e, CollabError::Protocol(ref m) if m.contains("500")), "{e:?}");
+        let e = resolve(&server, "ABCDE-FGHJK").await.unwrap_err();
+        assert!(matches!(e, CollabError::Protocol(ref m) if m.contains("zu groß")), "{e:?}");
     }
 }

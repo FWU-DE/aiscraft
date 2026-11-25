@@ -1,8 +1,9 @@
 //! The AIS.ChatCraft collaboration relay: one small binary that keeps y-sync rooms for documents
 //! and whiteboards. A room is one artifact. Its owner makes it (`POST /rooms`) and gets an owner
 //! token and a join code; others turn the code into the room token (`GET /join/<code>`) and sync
-//! over `GET /r/<room>?token=…` (WebSocket, y-sync as y-websocket speaks it). `GET /healthz`
-//! answers `ok`. Logs never contain tokens, codes or content.
+//! over `GET /r/<room>` with `Authorization: Bearer <token>` or `?token=…` (WebSocket, y-sync as
+//! y-websocket speaks it). `GET /healthz` answers `ok`. Logs never contain tokens, codes or
+//! content.
 
 mod rooms;
 
@@ -42,6 +43,13 @@ pub struct Config {
     pub compact_after: usize,
     /// Take the client address from `X-Forwarded-For` (behind a reverse proxy).
     pub trust_proxy: bool,
+    /// How many reverse proxies in front append to `X-Forwarded-For` (Coolify's Traefik: 1). The
+    /// address that many entries from the right is the client; what lies left of it the client
+    /// may have written itself.
+    pub proxy_hops: usize,
+    /// Let anyone who reaches the server make rooms when no `create_key` is set. Without it,
+    /// [`start`] refuses to run without a key.
+    pub open_create: bool,
 }
 
 impl Config {
@@ -55,6 +63,8 @@ impl Config {
             idle_days: 180,
             compact_after: 1024 * 1024,
             trust_proxy: false,
+            proxy_hops: 1,
+            open_create: false,
         }
     }
 }
@@ -65,11 +75,13 @@ struct App {
     cfg: Config,
     index: Mutex<Index>,
     live: tokio::sync::Mutex<HashMap<String, LiveRef>>,
-    /// Wrong codes per address: (count, window start).
+    /// Code attempts per address (IPv6 per /64) that opened no room: (count, window start).
     misses: Mutex<HashMap<IpAddr, (u32, Instant)>>,
     next_peer: AtomicU64,
     active: AtomicUsize,
     shutdown: watch::Sender<bool>,
+    /// Codes being stretched at once (each costs [`rooms::STRETCH`] hash rounds).
+    hashing: tokio::sync::Semaphore,
 }
 
 /// Wrong codes an address may try per window.
@@ -109,6 +121,12 @@ fn now() -> u64 {
 
 /// Start the relay on `listener`.
 pub async fn start(listener: tokio::net::TcpListener, cfg: Config) -> std::io::Result<Running> {
+    if cfg.create_key.as_deref().is_none_or(|k| k.trim().is_empty()) && !cfg.open_create {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Ohne Schlüssel (COLLAB_CREATE_KEY) könnte jeder Räume anlegen; für einen offenen Server COLLAB_OPEN_CREATE=true setzen",
+        ));
+    }
     let index = rooms::load_index(&cfg.data_dir)?;
     let (shutdown, mut shutdown_rx) = watch::channel(false);
     let app = Arc::new(App {
@@ -119,6 +137,7 @@ pub async fn start(listener: tokio::net::TcpListener, cfg: Config) -> std::io::R
         next_peer: AtomicU64::new(1),
         active: AtomicUsize::new(0),
         shutdown,
+        hashing: tokio::sync::Semaphore::new(4),
     });
     expire(&app).await;
     let addr = listener.local_addr()?;
@@ -167,13 +186,30 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers.get(header::AUTHORIZATION)?.to_str().ok()?.strip_prefix("Bearer ").map(str::trim)
 }
 
-fn client_ip(app: &App, headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
-    if app.cfg.trust_proxy
-        && let Some(ip) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next()).and_then(|v| v.trim().parse().ok())
-    {
-        return ip;
+fn client_ip(cfg: &Config, headers: &HeaderMap, peer: SocketAddr) -> IpAddr {
+    if cfg.trust_proxy && cfg.proxy_hops > 0 {
+        // Each trusted proxy appends the address it saw, so only the rightmost hops are true.
+        let hops: Vec<&str> = headers.get_all("x-forwarded-for").iter().filter_map(|v| v.to_str().ok()).flat_map(|v| v.split(',')).map(str::trim).collect();
+        if let Some(ip) = hops.len().checked_sub(cfg.proxy_hops).and_then(|i| hops.get(i)).and_then(|v| v.parse().ok()) {
+            return ip;
+        }
     }
     peer.ip()
+}
+
+/// The address a rate limit counts: IPv4 as is, IPv6 per /64 (one connection usually has a
+/// whole /64 to pick from).
+fn limit_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let [a, b, c, d, ..] = v6.segments();
+                IpAddr::V6(std::net::Ipv6Addr::new(a, b, c, d, 0, 0, 0, 0))
+            }
+        },
+    }
 }
 
 async fn expire(app: &App) {
@@ -271,13 +307,26 @@ async fn join(State(app): State<Arc<App>>, ConnectInfo(peer): ConnectInfo<Socket
         // A link opened in a browser (or a chat preview): show the code, never the token.
         return page(&code::display(&c));
     }
-    let ip = client_ip(&app, &headers, peer);
+    let ip = limit_key(client_ip(&app.cfg, &headers, peer));
     {
-        let misses = app.misses.lock().unwrap_or_else(PoisonError::into_inner);
-        if misses.get(&ip).is_some_and(|(n, since)| *n >= MAX_MISSES && since.elapsed() < MISS_WINDOW) {
+        // Every attempt counts before the expensive stretch (also those running in parallel);
+        // one that opens a room is taken back.
+        let mut misses = app.misses.lock().unwrap_or_else(PoisonError::into_inner);
+        if misses.len() > 100_000 {
+            misses.retain(|_, (_, since)| since.elapsed() < MISS_WINDOW);
+        }
+        let e = misses.entry(ip).or_insert((0, Instant::now()));
+        if e.1.elapsed() >= MISS_WINDOW {
+            *e = (0, Instant::now());
+        }
+        if e.0 >= MAX_MISSES {
             return err(StatusCode::TOO_MANY_REQUESTS, "Zu viele falsche Codes. Bitte später noch einmal.");
         }
+        e.0 += 1;
     }
+    let Ok(_permit) = app.hashing.acquire().await else {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "Bitte noch einmal versuchen");
+    };
     let key = match tokio::task::spawn_blocking(move || CodeKey::new(&c)).await {
         Ok(k) => k,
         Err(_) => return err(StatusCode::INTERNAL_SERVER_ERROR, "Bitte noch einmal versuchen"),
@@ -288,17 +337,13 @@ async fn join(State(app): State<Arc<App>>, ConnectInfo(peer): ConnectInfo<Socket
     };
     let token = meta.as_ref().and_then(|m| key.open(&m.token_sealed).filter(|t| rooms::same(&rooms::sha_hex(t), &m.token_hash)));
     match (meta, token) {
-        (Some(m), Some(token)) => Json(JoinInfo { room: m.room, token, kind: m.kind, title: m.title }).into_response(),
+        (Some(m), Some(token)) => {
+            if let Some(e) = app.misses.lock().unwrap_or_else(PoisonError::into_inner).get_mut(&ip) {
+                e.0 = e.0.saturating_sub(1);
+            }
+            Json(JoinInfo { room: m.room, token, kind: m.kind, title: m.title }).into_response()
+        }
         _ => {
-            let mut misses = app.misses.lock().unwrap_or_else(PoisonError::into_inner);
-            if misses.len() > 100_000 {
-                misses.retain(|_, (_, since)| since.elapsed() < MISS_WINDOW);
-            }
-            let e = misses.entry(ip).or_insert((0, Instant::now()));
-            if e.1.elapsed() >= MISS_WINDOW {
-                *e = (0, Instant::now());
-            }
-            e.0 += 1;
             log::info!("event=wrong_code ip={ip}");
             err(StatusCode::NOT_FOUND, "Diesen Code kennt der Server nicht")
         }
@@ -333,10 +378,18 @@ async fn delete_room(State(app): State<Arc<App>>, headers: HeaderMap, Path(room)
     StatusCode::NO_CONTENT.into_response()
 }
 
-async fn ws(State(app): State<Arc<App>>, Path(room): Path<String>, Query(q): Query<HashMap<String, String>>, upgrade: WebSocketUpgrade) -> Response {
+async fn ws(
+    State(app): State<Arc<App>>,
+    Path(room): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
     let meta = app.index.lock().unwrap_or_else(PoisonError::into_inner).rooms.get(&room).cloned();
     let Some(meta) = meta else { return err(StatusCode::NOT_FOUND, "Diesen Raum gibt es nicht") };
-    let token = q.get("token").map(String::as_str).unwrap_or("");
+    // The app sends the token as `Authorization: Bearer`, so it stays out of proxy logs; the
+    // query (`?token=`) stays for older apps and browsers, which cannot set headers.
+    let token = bearer(&headers).or_else(|| q.get("token").map(String::as_str)).unwrap_or("");
     let hash = rooms::sha_hex(token);
     if token.is_empty() || !(rooms::same(&hash, &meta.token_hash) || rooms::same(&hash, &meta.owner_hash)) {
         return err(StatusCode::FORBIDDEN, "Kein Zugang zu diesem Raum");

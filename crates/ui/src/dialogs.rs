@@ -233,6 +233,7 @@ impl AisCraftApp {
         self.sync_install_dialog();
         let Some(mut dialog) = self.dialog.take() else { return };
         let mut keep = true;
+        let mut x_clicked = false;
         let settings = matches!(dialog, Dialog::Settings { .. });
         let frame = if settings { dialog_frame(ctx, &self.tokens).inner_margin(egui::Margin::ZERO) } else { dialog_frame(ctx, &self.tokens) };
         let modal = egui::Modal::new(Id::unique("dialog")).frame(frame).backdrop_color(self.tokens.overlay).show(ctx, |ui| {
@@ -243,9 +244,15 @@ impl AisCraftApp {
                 Dialog::Install { .. } | Dialog::Share { .. } => 600.0,
                 _ => 460.0,
             });
+            let content = ui.max_rect();
             keep = self.dialog_body(ui, &mut dialog);
+            // Every dialog closes with an X in its corner (Settings draws its own in the header),
+            // as with Esc or a click beside it.
+            if !settings {
+                x_clicked = crate::widgets::corner_close(ui, &self.tokens, content);
+            }
         });
-        if modal.should_close() {
+        if modal.should_close() || x_clicked {
             // Esc or a click beside the setup of „Namen schützen“ is „Einrichtung abbrechen“.
             if let (true, Dialog::PrivacySetup(s)) = (keep, &dialog) {
                 self.privacy_setup_cancel(s);

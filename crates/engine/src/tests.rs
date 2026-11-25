@@ -1054,10 +1054,45 @@ fn ais_chat_image_generation() {
     assert!(first.contains(r#""aspectRatio":"landscape""#) && first.contains(r#""modelId":"m-img""#) && !first.contains("conversationId"), "{first}");
 
     let target = std::env::temp_dir().join(format!("aiscraft-bild-{}.png", std::process::id()));
-    engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string()})).unwrap();
+    // Without „KI-Kennzeichnung“ the file is the picture as it came.
+    let out = engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string(), "badge": false})).unwrap();
+    assert_eq!(out["badge"], false);
     assert_eq!(std::fs::read(&target).unwrap().len(), img.size as usize);
     let _ = std::fs::remove_file(&target);
+    // With it (the default) the picture has to be readable: these stand-in bytes are not.
+    let err = engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string()})).unwrap_err();
+    assert!(err.message.contains("KI-Kennzeichnung"), "{}", err.message);
+    assert!(!target.exists(), "nothing half-written");
     assert!(engine.call("chat.save_image", json!({"message_id": answer.id, "index": 3, "path": "/tmp/x.png"})).is_err());
+    // A real picture: the saved file carries the badge bottom right, the same size, and the note.
+    {
+        use craft_image_codecs::{ChannelLayout, DecodeOptions, EncodeOptions, Format, Image, SampleType};
+        let pic = Image::from_u8(400, 300, ChannelLayout::Rgb, vec![200; 400 * 300 * 3]).unwrap();
+        std::fs::write(img.local_path.as_ref().unwrap(), craft_image_codecs::encode(&pic, Format::Png, &EncodeOptions::default()).unwrap()).unwrap();
+        let read = |badge: Option<bool>| {
+            let mut p = json!({"message_id": answer.id, "path": target.display().to_string()});
+            if let Some(b) = badge {
+                p["badge"] = json!(b);
+            }
+            let out = engine.call("chat.save_image", p).unwrap();
+            let bytes = std::fs::read(&target).unwrap();
+            let px = craft_image_codecs::decode_with(&bytes, &DecodeOptions::default()).unwrap().convert(ChannelLayout::Rgb, SampleType::U8);
+            let (cx, cy, r) = crate::ai_badge::geometry(400, 300);
+            let i = (((cy - r * 0.85) as usize) * 400 + cx as usize) * 3;
+            (out["badge"].as_bool().unwrap(), (px.width(), px.height()), px.data()[i], px.data()[3], bytes.windows(13).any(|w| w == b"Erstellt mit "))
+        };
+        assert_eq!(read(None), (true, (400, 300), 0, 200, true), "badge dark, corner unchanged, note kept");
+        assert_eq!(read(Some(true)).2, 0);
+        assert_eq!(read(Some(false)), (false, (400, 300), 200, 200, true), "the original");
+        // Above 40 megapixels the badge is refused with a German hint; the original still saves.
+        let huge = crate::ai_badge::tests::png_header(8000, 6000);
+        std::fs::write(img.local_path.as_ref().unwrap(), &huge).unwrap();
+        let err = engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string()})).unwrap_err();
+        assert!(err.message.contains("40 Megapixel"), "{}", err.message);
+        engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string(), "badge": false})).unwrap();
+        assert!(std::fs::read(&target).unwrap().starts_with(&huge), "the original, with the note after the header");
+    }
+    let _ = std::fs::remove_file(&target);
 
     // The next prompt continues the server's image chat; regenerate draws again.
     engine.call("chat.send", json!({"text": "jetzt mit Mond", "aspect_ratio": "portrait"})).unwrap();
@@ -1581,14 +1616,19 @@ fn recall_from_other_services_needs_consent() {
     assert!(last.contains("FREMDDIENST") && !last.contains("EIGENERDIENST"), "{last}");
 }
 
-/// A local site for the link check: alive, gone, redirect, HEAD refused, slow.
-fn scripted_links(engine: &Engine) -> String {
-    engine.block_on(async move {
+/// A local site for the link check: alive, gone, redirect, HEAD refused, slow. The slow page
+/// answers only once the returned gate is closed, so it times out whatever the time limit is,
+/// and the fast pages can have a generous one.
+fn scripted_links(engine: &Engine) -> (String, std::sync::Arc<tokio::sync::Semaphore>) {
+    let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    let held = gate.clone();
+    let site = engine.block_on(async move {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else { return };
+                let held = held.clone();
                 tokio::spawn(async move {
                     let req = read_http(&mut sock).await;
                     let line = req.lines().next().unwrap_or("").to_string();
@@ -1602,7 +1642,8 @@ fn scripted_links(engine: &Engine) -> String {
                         "/nurget" if head => "405 Method Not Allowed".to_string(),
                         "/nurget" => "200 OK".to_string(),
                         "/langsam" => {
-                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            // Err once the gate is closed: then it answers.
+                            let _ = held.acquire().await;
                             "200 OK".to_string()
                         }
                         _ => "500 Internal Server Error".to_string(),
@@ -1614,7 +1655,8 @@ fn scripted_links(engine: &Engine) -> String {
             }
         });
         format!("http://{addr}")
-    })
+    });
+    (site, gate)
 }
 
 /// Links in answers (#52): checked on click, dead ones marked; local addresses never asked
@@ -1622,7 +1664,7 @@ fn scripted_links(engine: &Engine) -> String {
 #[test]
 fn links_in_answers_are_checked() {
     let (engine, _) = engine_with_recording("Siehe http://127.0.0.1:9/nichts und [Lehrplan](http://10.0.0.1/plan).");
-    let site = scripted_links(&engine);
+    let (site, slow_gate) = scripted_links(&engine);
     engine.call("chat.send", json!({"text": "Links bitte"})).unwrap();
     let answer = engine.state().messages.last().cloned().unwrap();
     // Without permission for local addresses (the real app): nothing in the local network is asked.
@@ -1639,7 +1681,9 @@ fn links_in_answers_are_checked() {
     m.content = format!("Quellen: {site}/da, [alt]({site}/alt), {site}/weg. Dazu {site}/nurget und {site}/langsam sowie {site}/kreis!");
     engine.ctx().store(|st| st.save_message(&m)).unwrap();
     engine.call("chat.open", json!({"id": conv})).unwrap();
-    let r = engine.call("message.check_links", json!({"message_id": m.id, "timeout_ms": 1500})).unwrap();
+    // A generous limit for the pages that answer at once; `/langsam` holds until the check is back.
+    let r = engine.call("message.check_links", json!({"message_id": m.id, "timeout_ms": 5000})).unwrap();
+    slow_gate.close();
     let status =
         |path: &str| r["links"].as_array().unwrap().iter().find(|l| l["url"] == format!("{site}{path}")).map(|l| l["status"].as_str().unwrap().to_string());
     assert_eq!(status("/da").as_deref(), Some("ok"), "{r}");
@@ -1813,7 +1857,9 @@ fn collab_two_engines_converge() {
     let _ = std::fs::remove_dir_all(&dir);
     let relay = a.block_on(async {
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        aiscraft_collab_server::start(l, aiscraft_collab_server::Config::new(dir.clone())).await.unwrap()
+        let mut cfg = aiscraft_collab_server::Config::new(dir.clone());
+        cfg.open_create = true;
+        aiscraft_collab_server::start(l, cfg).await.unwrap()
     });
     let url = format!("http://{}", relay.addr);
     assert_eq!(a.call("collab.set_server", json!({"url": url, "key": ""})).unwrap()["server"], url.as_str());
@@ -1861,6 +1907,14 @@ fn collab_two_engines_converge() {
     b.call("collab.leave", json!({"id": board})).unwrap();
     assert!(b.state().share(&board).is_none());
     assert!(text_of(&b, &board).contains("Fuchs"));
+    // Joining again: B's kept copy has the room's id but is no longer shared, so it stays local
+    // and the room gets a fresh artifact. Joining the same room twice opens the one share.
+    let again = b.call("collab.join", json!({"code": code})).unwrap()["id"].as_str().unwrap().to_string();
+    assert_ne!(again, board, "a local artifact with the room's id is never attached to the relay");
+    assert!(b.state().share(&board).is_none() && b.state().share(&again).is_some());
+    assert!(eventually(|| text_of(&b, &again).contains("Fuchs")));
+    assert_eq!(b.call("collab.join", json!({"code": code})).unwrap()["id"], again.as_str());
+    b.call("collab.leave", json!({"id": again})).unwrap();
     assert!(b.call("collab.leave", json!({"id": doc, "end": true})).is_err(), "only the owner ends a room");
     a.call("collab.leave", json!({"id": board, "end": true})).unwrap();
     assert!(b.call("collab.join", json!({"code": code})).is_err(), "the room is gone");
@@ -2504,18 +2558,38 @@ fn vertex_signs_in_with_a_key_file_and_finds_its_models() {
     let out = first.call("backend.models_check", json!({"id": id})).unwrap();
     assert_eq!(out["usable"], 2);
 
-    let before = seen.lock().unwrap().len();
-    let second = open();
-    assert_eq!(second.state().backend(&id).map(|b| b.models.len()), Some(2), "the menu from the last run");
-    assert_eq!(seen.lock().unwrap().len(), before, "no request for it");
-
     assert!(first.call("backend.login", json!({"id": id, "key_file": dir.join("fehlt.json")})).is_err());
     std::fs::write(dir.join("anders.json"), r#"{"type": "authorized_user"}"#).unwrap();
     let e = first.call("backend.login", json!({"id": id, "key_file": dir.join("anders.json")})).unwrap_err();
     assert!(e.message.contains("kein Dienstkonto"), "{e:?}");
     first.call("backend.login", json!({"id": id, "key_file": key})).unwrap();
     assert!(matches!(first.state().backend(&id).unwrap().status, crate::BackendStatus::Ready { .. }));
-    drop((first, second));
+
+    // A restart. The first run's background checks (from `backend.add` and the login) end with
+    // its runtime; a request of our own, answered after every connection made before it, marks
+    // where the second run's requests begin.
+    drop(first);
+    let mark = |what: &str| {
+        let addr = addr.trim_start_matches("http://").to_string();
+        let request = format!("GET /{what} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n");
+        rt.block_on(async move {
+            let mut sock = tokio::net::TcpStream::connect(addr).await.unwrap();
+            sock.write_all(request.as_bytes()).await.unwrap();
+            let mut out = Vec::new();
+            let _ = sock.read_to_end(&mut out).await;
+        });
+        seen.lock().unwrap().iter().position(|r| r.starts_with(&format!("GET /{what} "))).unwrap()
+    };
+    let before = mark("marke-vorher");
+    let second = open();
+    assert_eq!(second.state().backend(&id).map(|b| b.models.len()), Some(2), "the menu from the last run");
+    // A full check now: sign-in only, the models come from the last run.
+    second.call("backend.check", json!({"id": id})).unwrap();
+    assert_eq!(second.state().backend(&id).map(|b| b.models.len()), Some(2));
+    let after = mark("marke-nachher");
+    let asked: Vec<String> = seen.lock().unwrap()[before + 1..after].iter().map(|r| r.lines().next().unwrap_or_default().to_string()).collect();
+    assert!(asked.iter().all(|l| l.starts_with("POST /token ")), "no request for the menu: {asked:?}");
+    drop(second);
     let _ = std::fs::remove_dir_all(dir);
 }
 

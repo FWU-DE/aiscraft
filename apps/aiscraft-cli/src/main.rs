@@ -331,9 +331,13 @@ fn mcp_request(
     }
     let tool_name = |id: &str| id.replace('.', "_");
     match r.method {
+        // Only commands an outside program may run (CommandSpec::external): an MCP client can be
+        // steered by a prompt injection, so installs, switches, trust, secrets and deletions
+        // stay inside the app.
         "tools/list" => Ok(craft_mcp::tool_list(json!(
             commands()
                 .iter()
+                .filter(|c| c.external())
                 .map(|c| json!({
                     "name": tool_name(c.id),
                     "description": format!("{} ({}). Params: {}", c.label, c.group, if c.params.is_empty() { "none" } else { c.params }),
@@ -347,6 +351,9 @@ fn mcp_request(
                 .iter()
                 .find(|c| tool_name(c.id) == name)
                 .ok_or_else(|| craft_jsonrpc::RpcError::new(-32602, format!("Unbekanntes Werkzeug {name}")))?;
+            if !c.external() {
+                return Ok(craft_mcp::text_tool_result(&mcp_refusal(c.id), true));
+            }
             Ok(match engine.call(c.id, args) {
                 Ok(v) => craft_mcp::text_tool_result(&serde_json::to_string_pretty(&v).unwrap_or_default(), false),
                 Err(e) => craft_mcp::text_tool_result(&e.message, true),
@@ -354,6 +361,14 @@ fn mcp_request(
         }
         other => Err(craft_jsonrpc::RpcError::new(-32601, format!("Methode {other} gibt es nicht"))),
     }
+}
+
+/// Why the MCP server does not run a command that stays inside the app.
+fn mcp_refusal(id: &str) -> String {
+    format!(
+        "„{id}“ ist über den MCP-Server gesperrt: Installieren, Einschalten von Erweiterungen, Konnektoren und Werkzeugen, \
+         Einstellungen, Vertrauensregeln, Freigaben, Geheimnisse und Löschen gehen nur in AIS.ChatCraft selbst."
+    )
 }
 
 #[cfg(test)]
@@ -387,7 +402,7 @@ mod tests {
         assert_eq!(replies[0]["result"]["serverInfo"]["title"], "AIS.ChatCraft");
         assert!(replies[0]["result"]["instructions"].as_str().unwrap().contains("app_commands"));
         let tools = replies[1]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), commands().len());
+        assert_eq!(tools.len(), commands().iter().filter(|c| c.external()).count());
         assert!(tools.iter().any(|t| t["name"] == "chat_send"));
         assert_eq!(replies[2]["result"]["isError"], false);
         assert!(replies[2]["result"]["content"][0]["text"].as_str().unwrap().contains("chat.send"));
@@ -395,6 +410,43 @@ mod tests {
         assert_eq!(replies[4]["error"]["code"], -32602);
         assert_eq!(replies[5]["result"], json!({}));
         assert_eq!(replies[6]["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn mcp_server_neither_lists_nor_runs_installs_switches_or_deletions() {
+        let blocked = [
+            ("extension_install", json!({"path": "x"})),
+            ("h5p_player_install", json!({"yes": true})),
+            ("privacy_ner_install", json!({"yes": true})),
+            ("connector_add", json!({"name": "x", "command": "x"})),
+            ("tool_answer", json!({"id": "x", "allow": true})),
+            ("trust_rule_add", json!({"text": "x"})),
+            ("settings_set", json!({"trust_check": false})),
+            ("vault_add", json!({"name": "x", "value": "y"})),
+            ("chat_set_sources", json!({"tools": true})),
+            ("chat_purge", json!({"id": "x"})),
+            ("sandbox_install", json!({"yes": true})),
+        ];
+        let mut input = vec![r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.to_string()];
+        for (i, (name, args)) in blocked.iter().enumerate() {
+            input.push(json!({"jsonrpc": "2.0", "id": i + 2, "method": "tools/call", "params": {"name": name, "arguments": args}}).to_string());
+        }
+        input.push(r#"{"jsonrpc":"2.0","id":100,"method":"tools/call","params":{"name":"app_state","arguments":{}}}"#.into());
+        input.push(r#"{"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"chat_new","arguments":{}}}"#.into());
+        let replies = exchange(&input.join("\n"));
+        assert_eq!(replies.len(), blocked.len() + 3, "{replies:?}");
+        let listed: Vec<&str> = replies[0]["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        for (i, (name, _)) in blocked.iter().enumerate() {
+            assert!(!listed.contains(name), "{name} is listed");
+            let reply = &replies[i + 1]["result"];
+            assert_eq!(reply["isError"], true, "{name}: {reply}");
+            assert!(reply["content"][0]["text"].as_str().unwrap().contains("über den MCP-Server gesperrt"), "{name}: {reply}");
+        }
+        assert!(listed.contains(&"chat_send") && listed.contains(&"search") && listed.contains(&"app_state"));
+        let state = &replies[blocked.len() + 1]["result"];
+        assert_eq!(state["isError"], false, "{state}");
+        let new_chat = &replies[blocked.len() + 2]["result"];
+        assert_eq!(new_chat["isError"], false, "{new_chat}");
     }
 
     #[test]

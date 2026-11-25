@@ -93,6 +93,7 @@ itself; keep that block in step with craft-libs' root `Cargo.toml` when bumping 
 ```sh
 cargo test --workspace --exclude aiscraft          # all tests (+ `cargo test -p aiscraft`: control channel)
 cargo clippy --workspace --all-targets
+cargo deny check                                   # RustSec advisories, licences, sources (deny.toml)
 cargo test -p aiscraft-backends -- --ignored       # live: real Claude CLI, real headless browser
 cargo run -p aiscraft-ui --example snapshot -- --demo --out shot.png \
   --script '[["chat.send", {"text": "Hallo"}], ["ui.show", {"what": "settings"}]]'
@@ -207,6 +208,7 @@ a slow path comes with such a gate.
 | Every change is checked with the window content (#97) | Opening needs the owner's words or a yes and lasts for one request; press, type and keys each get a trust check whose request holds the window excerpt as data (never owner words); the window is read again before the step and a changed excerpt refuses it; never into a password field, no Windows key | `every_change_is_checked_with_the_window_content_and_reread_before_it_runs`, `opening_a_program_nobody_named_asks_and_starts_it` (engine); live: `drives_notepad_open_type_read_back_close_without_saving` (desktop, `#[ignore]`, opens Notepad, skips while Notepad is open) |
 | Nothing hidden in a step (#97, review of #98) | Typed text has no control characters (they type as shortcuts), line breaks only into documents as plain Enter, typed in chunks of 200 with the focus on that control checked before each; vault placeholders never reach a program; results and errors cannot close `untrusted_tool_result`; the element is compared by runtime id in the same UIA call that acts; replacing, keys other than moving, and every browser step are destructive (always asked); file dialogs, the VBA editor, IDEs, interpreters, remote access, browser password pages, `javascript:`/`file:` in a browser and DevTools keys are refused; only known programs are started; a step that timed out is uncertain, never retried | `hidden_shortcuts_secrets_dialogs_browsers_and_timeouts_are_handled` (engine), `control_characters_are_never_typed`, `outline_hides_passwords_and_excerpt_names_the_control`, `system_shortcuts_and_the_windows_key_are_refused` (desktop) |
 | Tests stay off the desktop | No windows, browser, mic or speakers | rule 2.4, `browser_allowed` |
+| Security review | No known RustSec vulnerability or unsound crate (ignores only with reason and issue, when no fix exists); only the licences and sources in `deny.toml` (no GPL linked; crates.io and the pinned storytold repos, git deps by `rev`); no workflow finding of medium severity or worse (actions pinned to a SHA, `persist-credentials: false`, least privilege, no `${{ }}` of untrusted input in `run:`; exceptions with reasons in `.github/zizmor.yml`); no secret in the repository or its history (fake test keys in `.gitleaks.toml`); CodeQL (Rust, Actions) clean or each alert triaged. Before every release, agents also do a full manual security review of the code (as on 2026-11-25) and file an issue per finding | `cargo-deny`, `zizmor`, `gitleaks`, `codeql` (`.github/workflows/security.yml`, required checks); optional `ai-review` (Claude on pull requests, needs the secret `ANTHROPIC_API_KEY`) |
 
 Live check against the real AIS.chat (signed in): cold, with no cache, `persona.refresh` takes
 about 25 s; warm, with cached ids, about 3 s. The app shows the cached list at once. Measure with
@@ -218,6 +220,7 @@ cold number. If the warm number grows past 5 s, look for a missing cache before 
 ```sh
 cargo test --workspace --exclude aiscraft
 cargo clippy --workspace --all-targets
+cargo deny check          # after a dependency change; `cargo install cargo-deny --locked` once
 ```
 
 Then commit with a message that says what changed for people, reference the issue (`Closes #n`),
@@ -238,6 +241,11 @@ follow craft-update (`aischatcraft-<version>-<os>-<arch>.<ext>`); `update.rs` fi
 signed once their secrets are in the repository's `release` environment; the shared workflow signs
 Linux packages only on a `release` branch, so tag builds stay unsigned there. "Run workflow" on
 Release with dry-run builds the packages and publishes nothing.
+
+Before every release: the Security workflow is green on the commit to be tagged, and agents have
+done a full manual security review of the code since the last one (first on 2026-11-25: trust
+check, secrets, network, file writes, preview process, workflows), with an issue per finding and
+no open finding of high severity.
 
 For now (owner's decision, 2026-11-25) releases have no macOS package and no signatures: our
 workflow always calls the shared one in dry-run mode (no macOS, whose `macos-15-xlarge` runner is
