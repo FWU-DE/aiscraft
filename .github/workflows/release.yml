@@ -7,14 +7,16 @@ name: Release
 # craft-update's scheme, `aischatcraft-<version>-<os>-<arch>.<ext>`.
 #
 # A pushed tag `v<version>` releases; the tag must match `[workspace.package] version` in
-# Cargo.toml. "Run workflow" with dry-run builds everything except macOS and releases nothing.
+# Cargo.toml. "Run workflow" with dry-run builds every package and releases nothing: the shared
+# workflow skips macOS there (its runner, macos-15-xlarge, is paid for), so the job `macos-check`
+# below builds the macOS packages unsigned on the standard runner instead.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       dry-run:
-        description: "Build and check only: no signing, no macOS, no draft release"
+        description: "Build and check only: no signing, macOS unsigned on the standard runner, no draft release"
         type: boolean
         default: true
 
@@ -44,6 +46,48 @@ jobs:
             echo "::error::Tag $TAG does not match the version in Cargo.toml (v$VERSION). Set [workspace.package] version, commit, and tag that commit."
             exit 1
           fi
+
+  # The dry run's stand-in for the shared macOS job: same script, unsigned, on the free runner, so
+  # packaging/macos/package.sh has run before the first tag needs it.
+  macos-check:
+    name: macOS universal (unsigned, dry run)
+    if: github.event_name == 'workflow_dispatch' && inputs.dry-run
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-macos-check
+          save-if: false
+      - name: Build and package
+        run: packaging/macos/package.sh --arch universal
+      - name: Check the app bundle
+        run: |
+          . packaging/env.sh
+          mnt="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$DIST/aischatcraft-$VERSION-macos-universal.dmg"
+          app="$mnt/AIS.ChatCraft.app"
+          for bin in aiscraft aiscraft-preview; do
+            lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/$bin"
+          done
+          plutil -lint "$app/Contents/Info.plist"
+          codesign --verify --strict --deep --verbose=2 "$app"
+          hdiutil detach "$mnt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-unsigned
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 7
 
   release:
     needs: tag
