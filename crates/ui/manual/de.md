@@ -75,7 +75,7 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 
 Bis zu fünf Favoriten stehen als Abkürzung in der Seitenleiste. Bilder speichert AIS.ChatCraft im Datenordner (`personas`) und lädt sie nach einem halben Tag neu.
 
-Chats von AIS.chat tragen in der Seitenleiste das AIS.chat-Zeichen. Über „AIS.CHAT – VERLAUF“ holst du ältere AIS.chat-Chats herüber und schreibst darin weiter.
+Chats von AIS.chat tragen in der Seitenleiste das AIS.chat-Zeichen. Über „AIS.CHAT – VERLAUF“ holst du einzelne ältere AIS.chat-Chats herüber und schreibst darin weiter. **Abgleichen** dort (oder **Mit AIS.chat abgleichen** in der Befehlspalette, Strg+K, und im Hinweis nach der Anmeldung) lädt den Verlauf neu und übernimmt alle Chats, die hier noch fehlen, höchstens 200 auf einmal; das geht jederzeit, nicht nur beim Start. Chats, die hier schon stehen, auch im Archiv oder Papierkorb, bleiben, wie sie sind. Einen hier endgültig gelöschten Chat holt der nächste Abgleich wieder, solange er im AIS.chat-Verlauf steht.
 
 ## Schnelleingabe
 

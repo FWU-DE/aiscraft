@@ -491,6 +491,16 @@ impl AisCraftApp {
                     };
                     let local: std::collections::HashSet<&str> = self.state.conversations.iter().map(|c| c.id.as_str()).collect();
                     let missing: Vec<_> = list.iter().filter(|r| !local.contains(r.id.as_str())).collect();
+                    // Load the list afresh and take over everything missing (#sync).
+                    if ui
+                        .small_button("Abgleichen")
+                        .on_hover_text(
+                            "Verlauf neu laden und alle Chats übernehmen, die hier noch fehlen. Chats im Papierkorb oder Archiv bleiben, wie sie sind.",
+                        )
+                        .clicked()
+                    {
+                        self.run("remote.sync", json!({"backend": b.config.id}));
+                    }
                     if missing.is_empty() {
                         ui.label(small_muted(&t, "Alles schon hier."));
                     }

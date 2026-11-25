@@ -654,9 +654,9 @@ fn ais_chat_login_history_and_import() {
                     } else if req.starts_with("GET /api/auth/session") {
                         ("200 OK", "application/json", r#"{"user":{"firstName":"Ada","lastName":"Lehrerin","school":{"name":"Gesamtschule"}},"expires":"2030-01-01"}"#.to_string())
                     } else if req.starts_with("GET /api/conversations") {
-                        ("200 OK", "application/json", r#"{"conversations":[{"id":"r1","name":"Alter Chat","updatedAt":"2026-11-01"}]}"#.to_string())
-                    } else if req.starts_with("GET /d/r1") {
-                        let row = r#"5:{"messages":[{"id":"u1","role":"user","content":"Hallo AIS"},{"id":"a1","role":"assistant","content":"Hallo zurück"}]}"#;
+                        ("200 OK", "application/json", r#"{"conversations":[{"id":"r1","name":"Alter Chat","updatedAt":"2026-11-01"},{"id":"r2","name":"Zweiter Chat","updatedAt":"2026-11-02"}]}"#.to_string())
+                    } else if req.starts_with("GET /d/r1") || req.starts_with("GET /d/r2") {
+                        let row = if req.starts_with("GET /d/r2") { r#"5:{"messages":[{"id":"u2","role":"user","content":"Zweite Frage"},{"id":"a2","role":"assistant","content":"Zweite Antwort"}]}"# } else { r#"5:{"messages":[{"id":"u1","role":"user","content":"Hallo AIS"},{"id":"a1","role":"assistant","content":"Hallo zurück"}]}"# };
                         ("200 OK", "text/html", format!("<script>self.__next_f.push([1,{}])</script>", serde_json::to_string(&format!("{row}\n")).unwrap()))
                     } else if req.starts_with("GET / ") {
                         let row = r#"3:{"usedBudget":250,"maxBudget":1000,"models":[{"id":"m-uuid","name":"gpt","displayName":"GPT","priceMetadata":{"type":"text"}}]}"#;
@@ -691,6 +691,29 @@ fn ais_chat_login_history_and_import() {
     assert_eq!(s.current.as_deref(), Some("r1"), "the local id is the server's id");
     assert_eq!(s.conversation("r1").unwrap().title, "Alter Chat");
     assert_eq!(s.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(), ["Hallo AIS", "Hallo zurück"]);
+
+    // „Mit AIS.chat abgleichen“: loads the list afresh and takes over what is missing, without
+    // opening it; a chat in the trash here is not taken over again.
+    let out = engine.call("remote.sync", json!({})).unwrap();
+    assert_eq!((out["on_server"].as_u64(), out["imported"].as_u64(), out["left"].as_u64()), (Some(2), Some(1), Some(0)), "{out}");
+    let s = engine.state();
+    assert_eq!(s.current.as_deref(), Some("r1"), "the open chat stays open");
+    assert_eq!(s.conversation("r2").unwrap().title, "Zweiter Chat");
+    let r2: Vec<String> = engine.ctx().store(|st| st.messages("r2")).unwrap().into_iter().map(|m| m.content).collect();
+    assert_eq!(r2, ["Zweite Frage", "Zweite Antwort"]);
+    let r1: Vec<String> = engine.ctx().store(|st| st.messages("r1")).unwrap().into_iter().map(|m| m.content).collect();
+    assert_eq!(r1, ["Hallo AIS", "Hallo zurück"], "the first chat keeps its messages");
+    engine.call("chat.delete", json!({"id": "r2"})).unwrap();
+    assert_eq!(engine.call("remote.sync", json!({"backend": "ais-chat"})).unwrap()["imported"], 0, "the trash counts as here");
+    assert!(engine.call("remote.sync", json!({"backend": "nope"})).is_err());
+}
+
+/// Without an AIS.chat service there is nothing to sync with, and other services have no history.
+#[test]
+fn remote_sync_needs_a_service_with_history() {
+    let (engine, _) = engine_with_recording("Antwort");
+    let err = engine.call("remote.sync", json!({"backend": engine.state().selection.backend_id})).unwrap_err();
+    assert!(err.message.contains("keinen Verlauf"), "{}", err.message);
 }
 
 /// Read one HTTP request, head and body (by content-length).

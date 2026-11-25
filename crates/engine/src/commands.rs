@@ -454,6 +454,15 @@ static COMMANDS: &[CommandSpec] = &[
         remote_import(c, p)
     )),
     cmd!(
+        "remote.sync",
+        "Mit AIS.chat abgleichen",
+        "Backends",
+        None,
+        "backend?: string (sonst der gewählte oder erste AIS.chat-Dienst). Lädt den Verlauf neu und übernimmt alle Chats, die hier noch fehlen (höchstens 200 auf einmal)",
+        true,
+        |c, p| Box::pin(remote_sync(c, p))
+    ),
+    cmd!(
         "settings.set",
         "Einstellung ändern",
         "Einstellungen",
@@ -1276,9 +1285,69 @@ async fn save_image(c: Ctx, p: Value) -> Result<Value> {
 async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
     let backend_id = req_str(&p, "backend")?;
     let id = req_str(&p, "id")?;
+    import_remote_chat(&c, &backend_id, &id, opt_str(&p, "title")).await?;
+    chat_open(c, json!({"id": id})).await
+}
+
+/// At most this many chats come over in one `remote.sync`; the next sync takes the rest.
+const SYNC_MAX: usize = 200;
+
+/// „Mit AIS.chat abgleichen“: load the server's list afresh and take over every chat that is not
+/// here yet. Chats that are here in any state (open, archived, in the trash) stay as they are, so
+/// a chat deleted here does not come back while it is in the trash.
+async fn remote_sync(c: Ctx, p: Value) -> Result<Value> {
+    let backend_id = match opt_str(&p, "backend") {
+        Some(id) => id,
+        None => {
+            let s = c.state();
+            let sel = &s.selection.backend_id;
+            if s.backend(sel).is_some_and(|b| b.config.kind == BackendKind::AisChat) {
+                sel.clone()
+            } else {
+                s.backends
+                    .iter()
+                    .find(|b| b.config.kind == BackendKind::AisChat)
+                    .map(|b| b.config.id.clone())
+                    .ok_or_else(|| Error::invalid("Kein AIS.chat-Dienst eingerichtet. Melde dich zuerst unter Einstellungen › Dienste bei AIS.chat an."))?
+            }
+        }
+    };
+    let backend = c.backend(&backend_id)?;
+    if !backend.capabilities().remote_history {
+        return Err(Error::invalid("Dieser Dienst hat keinen Verlauf auf dem Server zum Abgleichen."));
+    }
+    let list = backend.remote_conversations().await?;
+    c.update(|s| {
+        s.remote.insert(backend_id.clone(), list.clone());
+    });
+    let all_missing: Vec<_> = list.iter().filter(|r| !matches!(c.store(|st| st.conversation(&r.id)), Ok(Some(_)))).cloned().collect();
+    let missing = all_missing.get(..SYNC_MAX.min(all_missing.len())).unwrap_or_default();
+    let mut imported = 0usize;
+    let mut failed = Vec::new();
+    for r in missing {
+        match import_remote_chat(&c, &backend_id, &r.id, Some(r.title.clone())).await {
+            Ok(()) => imported += 1,
+            Err(e) => failed.push(format!("{}: {}", r.title, e.message)),
+        }
+    }
+    let left = all_missing.len().saturating_sub(missing.len());
+    let text = match (imported, failed.len()) {
+        (0, 0) => "Mit AIS.chat abgeglichen: alles schon hier.".to_string(),
+        (n, 0) => format!("Mit AIS.chat abgeglichen: {n} {} übernommen.", if n == 1 { "Chat" } else { "Chats" }),
+        (n, f) => format!("Mit AIS.chat abgeglichen: {n} übernommen, {f} nicht: {}", failed.join("; ").chars().take(300).collect::<String>()),
+    };
+    c.notice(if failed.is_empty() { NoticeLevel::Success } else { NoticeLevel::Warning }, text);
+    Ok(json!({"backend": backend_id, "on_server": list.len(), "imported": imported, "failed": failed, "left": left}))
+}
+
+/// Copy one chat from the server's history into the store (its id stays the server's id, so
+/// writing on continues it there), without opening it.
+async fn import_remote_chat(c: &Ctx, backend_id: &str, id: &str, title: Option<String>) -> Result<()> {
+    let (backend_id, id) = (backend_id.to_string(), id.to_string());
     let backend = c.backend(&backend_id)?;
     let msgs = backend.remote_messages(id.clone()).await?;
-    let title = opt_str(&p, "title")
+    let title = title
+        .filter(|t| !t.trim().is_empty())
         .or_else(|| c.state().remote.get(&backend_id).and_then(|l| l.iter().find(|r| r.id == id)).map(|r| r.title.clone()))
         .or_else(|| msgs.iter().find(|m| m.1 == Role::User).map(|m| aiscraft_core::title_from(&m.2)))
         .unwrap_or_else(|| "Aus AIS.chat".into());
@@ -1337,7 +1406,7 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
         s.conversations.retain(|x| x.id != conv.id);
         s.conversations.insert(0, conv);
     });
-    chat_open(c, json!({"id": id})).await
+    Ok(())
 }
 
 /// Chats whose title contains every word of the query (as people see the title, names shown
@@ -1665,8 +1734,8 @@ async fn backend_login(c: Ctx, p: Value) -> Result<Value> {
         NoticeLevel::Success,
         format!("Angemeldet bei {}: {who}", config.name),
         (config.kind == BackendKind::AisChat).then(|| NoticeAction {
-            label: "Verlauf laden".into(),
-            command: "remote.refresh".into(),
+            label: "Mit AIS.chat abgleichen".into(),
+            command: "remote.sync".into(),
             params: json!({"backend": id}),
         }),
     );
