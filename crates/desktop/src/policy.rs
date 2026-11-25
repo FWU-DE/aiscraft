@@ -16,6 +16,86 @@ const FILES: &str = "der Dateimanager";
 const PASSWORDS: &str = "Passwortmanager";
 const WALLETS: &str = "Krypto-Wallets";
 const SELF: &str = "AIS.ChatCraft selbst";
+const IDE: &str = "Programmierumgebungen und Editoren mit Terminal oder Makros";
+const REMOTE: &str = "Fernwartung und Fernzugriff";
+const DIALOG: &str = "Dateidialoge (Öffnen, Speichern unter)";
+
+/// Browsers: their address bar reaches any page and `javascript:`; steps there always ask, no
+/// developer tools, no address other than http(s), never the browser's password pages.
+const BROWSERS: &[&str] = &[
+    "msedge.exe",
+    "chrome.exe",
+    "firefox.exe",
+    "brave.exe",
+    "opera.exe",
+    "opera_gx.exe",
+    "vivaldi.exe",
+    "arc.exe",
+    "iexplore.exe",
+    "waterfox.exe",
+    "librewolf.exe",
+    "chromium.exe",
+];
+
+pub fn is_browser(exe: &str) -> bool {
+    BROWSERS.contains(&exe)
+}
+
+/// Window classes that are refused: the Office VBA editor runs code.
+const BLOCKED_CLASSES: &[(&str, &str)] = &[("wndclass_desked_gsk", IDE)];
+
+/// Classes of elements inside a window that mark a file dialog or a folder view (a „Speichern
+/// unter“ can put a file into Autostart, a folder view can start programs).
+const DIALOG_PARTS: &[&str] = &["shelldll_defview", "duiviewwndclassname", "address band root"];
+
+/// Words in a browser window's title that mark its password pages.
+const PASSWORD_PAGES: &[&str] =
+    &["passwörter", "kennwörter", "passwords", "password manager", "passwortmanager", "about:logins", "edge://wallet", "chrome://password-manager", "wallet"];
+
+/// Text that would open something other than a web page when typed into a browser's address bar.
+pub fn browser_text_refusal(text: &str) -> Option<String> {
+    let t = text.trim_start().to_lowercase();
+    let schemes = [
+        "javascript:",
+        "file:",
+        "data:",
+        "vbscript:",
+        "about:",
+        "chrome:",
+        "edge:",
+        "brave:",
+        "opera:",
+        "vivaldi:",
+        "view-source:",
+        "ms-",
+        "search-ms:",
+        "shell:",
+        "res:",
+    ];
+    schemes
+        .iter()
+        .find(|s| t.starts_with(*s))
+        .map(|s| format!("In einem Browser schreibt AIS.ChatCraft nichts, das mit „{s}“ beginnt: nur gewöhnliche Text und http(s)-Adressen."))
+}
+
+/// Why a read window is refused because of what it is, not which program owns it: a file dialog
+/// or folder view, the VBA editor, a browser's password page.
+pub fn snapshot_refusal(s: &crate::Snapshot) -> Option<String> {
+    let class = s.window.class.to_lowercase();
+    if let Some((_, why)) = BLOCKED_CLASSES.iter().find(|(c, _)| *c == class) {
+        return Some(format!("Dieses Fenster ist gesperrt: {why} bedient AIS.ChatCraft nie."));
+    }
+    if s.controls.iter().any(|c| DIALOG_PARTS.contains(&c.class.to_lowercase().as_str())) {
+        return Some(format!("Dieses Fenster ist gesperrt: {DIALOG} bedient AIS.ChatCraft nie. Bitte selbst speichern oder öffnen."));
+    }
+    browser_window_refusal(&s.window)
+}
+
+fn browser_window_refusal(w: &WindowInfo) -> Option<String> {
+    let browser = w.programs.iter().any(|p| is_browser(&p.exe));
+    let title = w.title.to_lowercase();
+    (browser && PASSWORD_PAGES.iter().any(|p| title.contains(p))).then(|| "Die Passwort-Seiten des Browsers bedient AIS.ChatCraft nie.".to_string())
+}
 
 /// Program file names (lowercase) and why they are refused.
 const BLOCKED: &[(&str, &str)] = &[
@@ -46,7 +126,58 @@ const BLOCKED: &[(&str, &str)] = &[
     ("msiexec.exe", TERMINAL),
     ("python.exe", TERMINAL),
     ("pythonw.exe", TERMINAL),
+    ("py.exe", TERMINAL),
+    ("pyw.exe", TERMINAL),
     ("node.exe", TERMINAL),
+    ("java.exe", TERMINAL),
+    ("javaw.exe", TERMINAL),
+    ("perl.exe", TERMINAL),
+    ("ruby.exe", TERMINAL),
+    ("rubyw.exe", TERMINAL),
+    ("conemu.exe", TERMINAL),
+    ("conemu64.exe", TERMINAL),
+    ("tabby.exe", TERMINAL),
+    ("hyper.exe", TERMINAL),
+    ("cmder.exe", TERMINAL),
+    ("fluent terminal.exe", TERMINAL),
+    // Editors and IDEs that run code or have a terminal inside.
+    ("code.exe", IDE),
+    ("code - insiders.exe", IDE),
+    ("cursor.exe", IDE),
+    ("windsurf.exe", IDE),
+    ("zed.exe", IDE),
+    ("devenv.exe", IDE),
+    ("idea64.exe", IDE),
+    ("idea.exe", IDE),
+    ("pycharm64.exe", IDE),
+    ("webstorm64.exe", IDE),
+    ("rider64.exe", IDE),
+    ("clion64.exe", IDE),
+    ("goland64.exe", IDE),
+    ("phpstorm64.exe", IDE),
+    ("rubymine64.exe", IDE),
+    ("datagrip64.exe", IDE),
+    ("studio64.exe", IDE),
+    ("eclipse.exe", IDE),
+    ("notepad++.exe", IDE),
+    ("sublime_text.exe", IDE),
+    ("atom.exe", IDE),
+    ("thonny.exe", IDE),
+    ("spyder.exe", IDE),
+    // Remote access: someone else's computer, or this one for someone else.
+    ("teamviewer.exe", REMOTE),
+    ("teamviewer_desktop.exe", REMOTE),
+    ("anydesk.exe", REMOTE),
+    ("rustdesk.exe", REMOTE),
+    ("quickassist.exe", REMOTE),
+    ("msra.exe", REMOTE),
+    ("mstsc.exe", REMOTE),
+    ("msrdc.exe", REMOTE),
+    ("vmconnect.exe", REMOTE),
+    ("parsecd.exe", REMOTE),
+    ("splashtop.exe", REMOTE),
+    ("vncviewer.exe", REMOTE),
+    ("tvnviewer.exe", REMOTE),
     // System settings and security.
     ("systemsettings.exe", SYSTEM),
     ("control.exe", SYSTEM),
@@ -124,6 +255,15 @@ const BLOCKED_PATHS: &[(&str, &str)] = &[
     ("\\electrum", WALLETS),
     ("\\exodus", WALLETS),
     ("\\ledger live", WALLETS),
+    ("\\microsoft vs code", IDE),
+    ("\\jetbrains\\", IDE),
+    ("\\notepad++", IDE),
+    ("\\teamviewer", REMOTE),
+    ("\\anydesk", REMOTE),
+    ("\\rustdesk", REMOTE),
+    ("\\windowsapps\\microsoftcorporationii.quickassist", REMOTE),
+    ("\\python", TERMINAL),
+    ("\\java\\", TERMINAL),
     ("\\ais.chatcraft", SELF),
     ("\\aischatcraft", SELF),
 ];
@@ -196,7 +336,11 @@ pub fn window_refusal(w: &WindowInfo, own_pid: u32, windir: &str, own_list: &[St
             return Some(format!("{} steht auf deiner Liste „Hier nie“ ({entry}).", p.exe));
         }
     }
-    None
+    let class = w.class.to_lowercase();
+    if let Some((_, why)) = BLOCKED_CLASSES.iter().find(|(c, _)| *c == class) {
+        return Some(format!("Dieses Fenster ist gesperrt: {why} bedient AIS.ChatCraft nie."));
+    }
+    browser_window_refusal(w)
 }
 
 /// A program computer use can start by name.
@@ -280,6 +424,18 @@ mod tests {
             r"D:\Tools\CMD.EXE",
             // No path: not recognised.
             "",
+            // Interpreters, IDEs, editors with macros or terminals, more terminals.
+            r"C:\Program Files\Java\jdk-21\bin\javaw.exe",
+            r"C:\Windows\py.exe",
+            r"C:\Users\a\AppData\Local\Programs\Microsoft VS Code\Code.exe",
+            r"C:\Program Files\JetBrains\IntelliJ IDEA 2026.1\bin\idea64.exe",
+            r"C:\Program Files\Notepad++\notepad++.exe",
+            r"C:\Program Files\ConEmu\ConEmu64.exe",
+            // Remote access.
+            r"C:\Program Files\TeamViewer\TeamViewer.exe",
+            r"C:\Program Files (x86)\AnyDesk\AnyDesk.exe",
+            r"C:\Program Files\RustDesk\rustdesk.exe",
+            r"C:\Program Files\WindowsApps\MicrosoftCorporationII.QuickAssist_2.0_x64__8wekyb3d8bbwe\QuickAssist.exe",
         ] {
             assert!(refused(bad), "{bad}");
         }
@@ -298,7 +454,7 @@ mod tests {
         let host = Program::new(r"C:\Windows\System32\ApplicationFrameHost.exe");
         let calc = Program::new(r"C:\Program Files\WindowsApps\Microsoft.WindowsCalculator_11\CalculatorApp.exe");
         let settings = Program::new(r"C:\Windows\ImmersiveControlPanel\SystemSettings.exe");
-        let w = |programs: Vec<Program>| WindowInfo { id: "w1".into(), title: "Fenster".into(), pid: 10, programs };
+        let w = |programs: Vec<Program>| WindowInfo { id: "w1".into(), title: "Fenster".into(), pid: 10, programs, class: String::new() };
         assert!(window_refusal(&w(vec![host.clone(), calc.clone()]), 1, WIN, &[]).is_none(), "a store app in its host");
         assert!(window_refusal(&w(vec![host.clone(), settings]), 1, WIN, &[]).is_some(), "the settings app in the same host");
         assert!(window_refusal(&w(vec![host]), 1, WIN, &[]).is_some(), "a host alone is not recognised");
@@ -308,6 +464,22 @@ mod tests {
             assert!(window_refusal(&w(vec![word.clone()]), 1, WIN, &[entry.to_string()]).unwrap().contains("Hier nie"), "{entry}");
         }
         assert!(window_refusal(&w(vec![word]), 1, WIN, &["Excel".into(), String::new()]).is_none());
+        // The VBA editor (inside Word's process) and a browser's password page.
+        let vbe = WindowInfo { class: "wndclass_desked_gsk".into(), ..w(vec![Program::new(r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE")]) };
+        assert!(window_refusal(&vbe, 1, WIN, &[]).is_some());
+        let edge = Program::new(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe");
+        let pw = WindowInfo { title: "Passwörter – Microsoft Edge".into(), ..w(vec![edge.clone()]) };
+        assert!(window_refusal(&pw, 1, WIN, &[]).is_some());
+        assert!(window_refusal(&WindowInfo { title: "Elternbrief – Microsoft Edge".into(), ..w(vec![edge]) }, 1, WIN, &[]).is_none());
+        // A file dialog inside an allowed program is recognised by its folder view.
+        let mut dialog = crate::Snapshot { window: w(vec![Program::new(r"C:\Windows\System32\notepad.exe")]), controls: vec![], truncated: false };
+        assert!(snapshot_refusal(&dialog).is_none());
+        dialog.controls.push(crate::Control { class: "SHELLDLL_DefView".into(), ..crate::fake::control("1", "Liste", "Ordneransicht", None, &[]) });
+        assert!(snapshot_refusal(&dialog).unwrap().contains("Dateidialoge"));
+        for bad in ["javascript:alert(1)", "  FILE:///C:/", "data:text/html,x", "edge://settings", "view-source:https://x"] {
+            assert!(browser_text_refusal(bad).is_some(), "{bad}");
+        }
+        assert!(browser_text_refusal("https://schule.example").is_none() && browser_text_refusal("Elternabend 7b").is_none());
         assert_eq!(known_app("Taschenrechner").map(|a| a.exe), Some("calc.exe"));
         assert_eq!(known_app("WORD").map(|a| a.name), Some("Word"));
         assert!(known_app("cmd").is_none());

@@ -49,8 +49,9 @@ fn drives_notepad_open_type_read_back_close_without_saving() {
     let win = wait("a Notepad window", || notepad_windows(d.as_ref()).into_iter().next());
     let snap = wait("the text area", || d.snapshot(&win.id).ok().filter(|s| document(s).is_some()));
     let doc = document(&snap).unwrap();
+    let ctl = snap.control(&doc).unwrap().clone();
     let text = format!("Hallo von AIS.ChatCraft {}", std::process::id());
-    d.set_text(&win.id, &doc, &text, true).unwrap();
+    d.set_text(&win.id, &ctl, &text, true).unwrap();
     let back = wait("the text read back", || {
         let s = d.snapshot(&win.id).ok()?;
         let v = s.control(&doc)?.value.clone()?;
@@ -58,7 +59,8 @@ fn drives_notepad_open_type_read_back_close_without_saving() {
     });
     assert!(back.contains(&text), "{back}");
     // Close this tab (in a new window: the window), then „Nicht speichern“.
-    d.keys(&win.id, Some(&doc), &parse_keys("Strg+W", 1).unwrap()).unwrap();
+    let ctl = d.snapshot(&win.id).unwrap().control(&doc).unwrap().clone();
+    d.keys(&win.id, Some(&ctl), &parse_keys("Strg+W", 1).unwrap()).unwrap();
     let dont_save = wait("the save question", || {
         for w in notepad_windows(d.as_ref()) {
             let s = d.snapshot(&w.id).ok()?;
@@ -66,7 +68,7 @@ fn drives_notepad_open_type_read_back_close_without_saving() {
                 let n = c.name.to_lowercase();
                 c.acts.contains(&Act::Press) && (n.contains("nicht speichern") || n.contains("don't save") || n.contains("don’t save"))
             }) {
-                return Some((w.id.clone(), c.path.clone()));
+                return Some((w.id.clone(), c.clone()));
             }
         }
         None

@@ -59,8 +59,26 @@ pub struct ComputerState {
 /// The backend and what each request may operate.
 pub(crate) struct Runtime {
     desktop: Mutex<Arc<dyn DesktopAutomation>>,
-    /// Per conversation: the request (turn id) and the programs opened for it (file names).
-    grants: Mutex<HashMap<String, (String, Vec<String>)>>,
+    /// Per conversation: the request (turn id) and what was opened for it.
+    grants: Mutex<HashMap<String, (String, Grant)>>,
+}
+
+/// What one request may read and operate: the windows opened for it, and other windows of the
+/// same processes (a program's dialogs), except a browser's.
+#[derive(Default, Clone)]
+struct Grant {
+    windows: Vec<String>,
+    pids: Vec<u32>,
+}
+
+impl Grant {
+    fn covers(&self, w: &WindowInfo) -> bool {
+        self.windows.contains(&w.id) || (self.pids.contains(&w.pid) && !browser(w))
+    }
+}
+
+fn browser(w: &WindowInfo) -> bool {
+    w.programs.iter().any(|p| policy::is_browser(&p.exe))
 }
 
 impl Runtime {
@@ -80,22 +98,25 @@ impl Runtime {
         *self.desktop.lock().unwrap_or_else(PoisonError::into_inner) = d;
     }
 
-    fn granted(&self, conv: &str, turn: &str) -> Vec<String> {
+    fn granted(&self, conv: &str, turn: &str) -> Grant {
         match self.grants.lock().unwrap_or_else(PoisonError::into_inner).get(conv) {
-            Some((t, exes)) if t == turn && !turn.is_empty() => exes.clone(),
-            _ => Vec::new(),
+            Some((t, g)) if t == turn && !turn.is_empty() => g.clone(),
+            _ => Grant::default(),
         }
     }
 
-    fn grant(&self, conv: &str, turn: &str, exes: &[String]) {
+    fn grant(&self, conv: &str, turn: &str, windows: &[WindowInfo]) {
         let mut g = self.grants.lock().unwrap_or_else(PoisonError::into_inner);
-        let entry = g.entry(conv.to_string()).or_insert_with(|| (turn.to_string(), Vec::new()));
+        let entry = g.entry(conv.to_string()).or_insert_with(|| (turn.to_string(), Grant::default()));
         if entry.0 != turn {
-            *entry = (turn.to_string(), Vec::new());
+            *entry = (turn.to_string(), Grant::default());
         }
-        for e in exes {
-            if !entry.1.contains(e) {
-                entry.1.push(e.clone());
+        for w in windows {
+            if !entry.1.windows.contains(&w.id) {
+                entry.1.windows.push(w.id.clone());
+            }
+            if !entry.1.pids.contains(&w.pid) {
+                entry.1.pids.push(w.pid);
             }
         }
     }
@@ -120,13 +141,13 @@ impl DesktopAutomation for InMemory {
     fn snapshot(&self, _window: &str) -> Result<Snapshot> {
         Err(Error::unsupported("Programme bedienen ist in dieser Umgebung nicht verfügbar."))
     }
-    fn act(&self, _w: &str, _c: &str, _a: Act) -> Result<()> {
+    fn act(&self, _w: &str, _c: &aiscraft_desktop::Control, _a: Act) -> Result<()> {
         self.ready()
     }
-    fn set_text(&self, _w: &str, _c: &str, _t: &str, _r: bool) -> Result<()> {
+    fn set_text(&self, _w: &str, _c: &aiscraft_desktop::Control, _t: &str, _r: bool) -> Result<()> {
         self.ready()
     }
-    fn keys(&self, _w: &str, _c: Option<&str>, _k: &aiscraft_desktop::KeyChord) -> Result<()> {
+    fn keys(&self, _w: &str, _c: Option<&aiscraft_desktop::Control>, _k: &aiscraft_desktop::KeyChord) -> Result<()> {
         self.ready()
     }
     fn close(&self, _w: &str) -> Result<()> {
@@ -296,12 +317,13 @@ pub(crate) fn view() -> ConnectorView {
     }
 }
 
-fn tool(name: &str) -> ConnectorTool {
+fn tool(name: &str, destructive: bool) -> ConnectorTool {
     let title = match name {
         LIST => "Programme auflisten",
         OPEN => "Programm öffnen",
         READ => "Fenster lesen",
         PRESS => "Steuerelement bedienen",
+        TYPE if destructive => "Text ersetzen",
         TYPE => "Text schreiben",
         _ => "Tastenkürzel senden",
     };
@@ -312,7 +334,8 @@ fn tool(name: &str) -> ConnectorTool {
         title: title.into(),
         description: spec.as_ref().map(|s| s.description.clone()).unwrap_or_default(),
         read_only: reads(name),
-        destructive: false,
+        // Destructive: always asked, even when the request covers it (`auto_allow_covered`).
+        destructive,
         input_schema: spec.map(|s| s.input_schema).unwrap_or(Value::Null),
         ui_resource: None,
         app_only: false,
@@ -320,11 +343,12 @@ fn tool(name: &str) -> ConnectorTool {
     }
 }
 
-/// What `prepare` found: the tool, and for steps the window content the check sees and that must
-/// not change before the step runs.
+/// What `prepare` found: the tool; for steps the window content the check sees, and the
+/// fingerprint (content and the element's identity) that must be unchanged when the step runs.
 pub(crate) struct Prepared {
     pub tool: ConnectorTool,
     pub window: Option<String>,
+    pub guard: Option<String>,
 }
 
 fn windir() -> String {
@@ -348,7 +372,18 @@ fn arg<'a>(args: &'a Value, key: &str) -> std::result::Result<&'a str, String> {
     args.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| format!("Parameter {key} fehlt"))
 }
 
-/// A window of a program opened for this request, checked against both lists.
+fn control_arg(args: &Value) -> Option<String> {
+    args.get("control").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+/// The excerpt and the identity of the element a step works on: if either changed, it does not run.
+fn fingerprint(snap: &Snapshot, control: Option<&str>) -> String {
+    let id = control.and_then(|p| snap.control(p)).map(|c| c.runtime_id.clone()).unwrap_or_default();
+    format!("{}\n#{id}", snap.excerpt(control))
+}
+
+/// A window opened for this request, checked against both lists and what it is (file dialog,
+/// VBA editor, a browser's password page).
 async fn granted_window(c: &Ctx, conv: &str, turn: &str, id: &str) -> std::result::Result<Snapshot, String> {
     let d = c.0.computer.desktop();
     let wid = id.to_string();
@@ -363,19 +398,62 @@ async fn granted_window(c: &Ctx, conv: &str, turn: &str, id: &str) -> std::resul
     if let Some(why) = refusal(c, &w) {
         return Err(format!("Abgelehnt: {why}"));
     }
-    let granted = c.0.computer.granted(conv, turn);
-    if !exes(&w).iter().any(|e| granted.contains(e)) {
-        let name = w.program().map(|p| p.exe.clone()).unwrap_or_default();
+    if !c.0.computer.granted(conv, turn).covers(&w) {
         return Err(format!(
-            "{name} ist in dieser Anfrage nicht geöffnet. Erst computer_open mit dem Programm aufrufen (die Person wird gefragt, wenn sie es nicht genannt hat)."
+            "Das Fenster {id} ist in dieser Anfrage nicht geöffnet. Erst computer_open mit dem Programm oder der Fenster-Id aufrufen (die Person wird gefragt, wenn sie es nicht genannt hat)."
         ));
     }
     let snap = blocking(move || d.snapshot(&wid)).await.map_err(|e| e.message)?;
     // The window may belong to a different program now (a reused handle): judge it again.
-    if let Some(why) = refusal(c, &snap.window) {
+    if let Some(why) = refusal(c, &snap.window).or_else(|| policy::snapshot_refusal(&snap)) {
         return Err(format!("Abgelehnt: {why}"));
     }
     Ok(snap)
+}
+
+/// What can go wrong with a step on `snap`, checked before the question and again before it
+/// runs. Returns whether the step is destructive (always asked).
+fn check_step(name: &str, args: &Value, snap: &Snapshot) -> std::result::Result<bool, String> {
+    let control = control_arg(args);
+    let ctl = match &control {
+        Some(path) => Some(snap.control(path).ok_or_else(|| format!("Steuerelement {path} gibt es in diesem Fenster nicht. Bitte computer_read aufrufen."))?),
+        None => None,
+    };
+    let in_browser = browser(&snap.window);
+    match name {
+        PRESS => {
+            let ctl = ctl.ok_or("Parameter control fehlt")?;
+            pick_act(args, ctl)?;
+            Ok(in_browser)
+        }
+        TYPE => {
+            let ctl = ctl.ok_or("Parameter control fehlt")?;
+            if ctl.password {
+                return Err("Abgelehnt: In Passwortfelder schreibt AIS.ChatCraft nie.".into());
+            }
+            let text = args.get("text").and_then(Value::as_str).ok_or("Parameter text fehlt")?;
+            let text = aiscraft_desktop::typeable(text).map_err(|e| format!("Abgelehnt: {}", e.message))?;
+            if text.contains(['\n', '\t']) && ctl.role != "Dokument" {
+                return Err("Abgelehnt: Zeilenumbrüche und Tabulatoren nur in Dokumenten; in einem Feld würden sie ein Formular abschicken.".into());
+            }
+            if in_browser && let Some(why) = policy::browser_text_refusal(&text) {
+                return Err(format!("Abgelehnt: {why}"));
+            }
+            let replace = args.get("replace").and_then(Value::as_bool).unwrap_or(false);
+            Ok(replace || in_browser)
+        }
+        _ => {
+            let times = args.get("times").and_then(Value::as_u64).unwrap_or(1).min(100) as u32;
+            let chord = aiscraft_desktop::parse_keys(arg(args, "keys")?, times).map_err(|e| format!("Abgelehnt: {}", e.message))?;
+            if in_browser && chord.browser_devtools() {
+                return Err("Abgelehnt: Entwicklerwerkzeuge und Seitenquelltext im Browser sind gesperrt.".into());
+            }
+            if ctl.is_some_and(|c| c.password) || snap.password_focused() {
+                return Err("Abgelehnt: An Passwortfelder gehen keine Tasten.".into());
+            }
+            Ok(!chord.only_moves() || in_browser)
+        }
+    }
 }
 
 /// Before anything is asked: refuse what never runs, and give the tool with the window content
@@ -387,6 +465,11 @@ pub(crate) async fn prepare(c: &Ctx, conv: &str, name: &str, args: &Value, inter
     if !interactive {
         return Err("Abgelehnt: Arbeit im Hintergrund bedient keine Programme.".into());
     }
+    // Secrets of the vault never go into a program: they would show up in the window, and so in
+    // what the model reads.
+    if args.to_string().contains("{{vault:") {
+        return Err("Abgelehnt: Tresor-Einträge gibt AIS.ChatCraft nie in Programme ein. Bitte selbst eintragen.".into());
+    }
     let d = c.0.computer.desktop();
     blocking({
         let d = d.clone();
@@ -395,42 +478,19 @@ pub(crate) async fn prepare(c: &Ctx, conv: &str, name: &str, args: &Value, inter
     .await
     .map_err(|e| e.message)?;
     match name {
-        LIST | READ => Ok(Prepared { tool: tool(name), window: None }),
+        LIST | READ => Ok(Prepared { tool: tool(name, false), window: None, guard: None }),
         OPEN => {
             let app = arg(args, "app")?;
             let target = resolve_app(c, app).await?;
-            Ok(Prepared { tool: tool(name), window: Some(target.shown()) })
+            // A browser reaches every page: opening it always asks.
+            Ok(Prepared { tool: tool(name, target.browser), window: Some(target.shown()), guard: None })
         }
         PRESS | TYPE | KEY => {
             let window = arg(args, "window")?;
-            let control = args.get("control").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
-            if name != KEY && control.is_none() {
-                return Err("Parameter control fehlt".into());
-            }
-            if name == KEY {
-                let times = args.get("times").and_then(Value::as_u64).unwrap_or(1).min(100) as u32;
-                aiscraft_desktop::parse_keys(arg(args, "keys")?, times).map_err(|e| format!("Abgelehnt: {}", e.message))?;
-            }
-            if name == TYPE {
-                let text = args.get("text").and_then(Value::as_str).ok_or("Parameter text fehlt")?;
-                if text.chars().count() > aiscraft_desktop::MAX_TYPE {
-                    return Err(format!("Der Text ist länger als {} Zeichen.", aiscraft_desktop::MAX_TYPE));
-                }
-            }
+            let control = control_arg(args);
             let snap = granted_window(c, conv, turn, window).await?;
-            if let Some(path) = control {
-                let ctl = snap.control(path).ok_or_else(|| format!("Steuerelement {path} gibt es in diesem Fenster nicht. Bitte computer_read aufrufen."))?;
-                if name == TYPE && ctl.password {
-                    return Err("Abgelehnt: In Passwortfelder schreibt AIS.ChatCraft nie.".into());
-                }
-                if name == PRESS {
-                    pick_act(args, ctl)?;
-                }
-            }
-            if name == KEY && snap.password_focused() {
-                return Err("Abgelehnt: Ein Passwortfeld hat den Fokus; dorthin gehen keine Tasten.".into());
-            }
-            Ok(Prepared { tool: tool(name), window: Some(snap.excerpt(control)) })
+            let destructive = check_step(name, args, &snap)?;
+            Ok(Prepared { tool: tool(name, destructive), window: Some(snap.excerpt(control.as_deref())), guard: Some(fingerprint(&snap, control.as_deref())) })
         }
         _ => Err(format!("Werkzeug {name} gibt es nicht")),
     }
@@ -458,13 +518,14 @@ fn pick_act(args: &Value, ctl: &aiscraft_desktop::Control) -> std::result::Resul
     }
 }
 
-/// What `computer_open` means: an open window by id, a running program, or one to start.
+/// What `computer_open` means: an open window by id, a running program, or a known one to start.
 struct AppTarget {
     label: String,
     exes: Vec<String>,
     running: Vec<WindowInfo>,
-    /// The program to start when it is not running.
+    /// The program to start when it is not running (only programs AIS.ChatCraft knows).
     start: Option<String>,
+    browser: bool,
 }
 
 impl AppTarget {
@@ -496,17 +557,17 @@ async fn resolve_app(c: &Ctx, app: &str) -> std::result::Result<AppTarget, Strin
             return Err(format!("Abgelehnt: {why}"));
         }
         let label = w.program().map(|p| p.exe.clone()).unwrap_or_default();
-        return Ok(AppTarget { label, exes: exes(w), running: vec![w.clone()], start: None });
+        return Ok(AppTarget { label, exes: exes(w), running: vec![w.clone()], start: None, browser: browser(w) });
     }
     let known: Option<&KnownApp> = policy::known_app(&lower);
-    let (label, exe, window_exes): (String, String, Vec<String>) = match known {
-        Some(k) => (k.name.to_string(), k.exe.to_string(), k.window_exes.iter().map(|s| s.to_string()).collect()),
+    let (label, window_exes): (String, Vec<String>) = match known {
+        Some(k) => (k.name.to_string(), k.window_exes.iter().map(|s| s.to_string()).collect()),
         None => {
             let exe = if lower.ends_with(".exe") { lower.clone() } else { format!("{lower}.exe") };
             if exe.contains(['\\', '/', ':', '"']) {
                 return Err("Bitte den Programmnamen angeben, keinen Pfad".into());
             }
-            (app.to_string(), exe.clone(), vec![exe])
+            (app.to_string(), vec![exe])
         }
     };
     let running: Vec<WindowInfo> = windows.into_iter().filter(|w| exes(w).iter().any(|e| window_exes.contains(e))).collect();
@@ -518,31 +579,40 @@ async fn resolve_app(c: &Ctx, app: &str) -> std::result::Result<AppTarget, Strin
         }
     }
     if !kept.is_empty() {
-        return Ok(AppTarget { label, exes: window_exes, running: kept, start: None });
+        let browser = kept.iter().any(browser);
+        return Ok(AppTarget { label, exes: window_exes, running: kept, start: None, browser });
     }
+    // Only programs AIS.ChatCraft knows are started; anything else must already run.
+    let Some(k) = known else {
+        let names: Vec<&str> = policy::KNOWN_APPS.iter().map(|a| a.name).collect();
+        return Err(format!("{label} ist nicht offen. Starten kann AIS.ChatCraft nur: {}. Bitte die Person, es selbst zu öffnen.", names.join(", ")));
+    };
     let path = {
-        let exe = exe.clone();
+        let exe = k.exe.to_string();
         blocking(move || Ok(d.locate(&exe))).await.map_err(|e| e.message)?
     };
     let Some(path) = path else {
         return Err(format!("{label} ist auf diesem Rechner nicht zu finden."));
     };
     let program = aiscraft_desktop::Program::new(&path);
-    let probe = WindowInfo { id: String::new(), title: label.clone(), pid: 0, programs: vec![program] };
+    let probe = WindowInfo { id: String::new(), title: label.clone(), pid: 0, programs: vec![program], class: String::new() };
     if let Some(why) = refusal(c, &probe) {
         return Err(format!("Abgelehnt: {why}"));
     }
-    Ok(AppTarget { label, exes: window_exes, running: Vec::new(), start: Some(path) })
+    Ok(AppTarget { label, exes: window_exes, running: Vec::new(), start: Some(path), browser: false })
 }
 
 fn window_line(w: &WindowInfo) -> String {
     format!("- {} „{}“ ({})", w.id, aiscraft_desktop::cap(&w.title, 120), w.program().map(|p| p.exe.as_str()).unwrap_or(""))
 }
 
-/// Run a call that may run. `guard` is the window content the check saw; `turn` the request.
+/// Run a call that may run. `guard` is the fingerprint the check saw; `turn` the request.
 pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value, guard: Option<&str>, turn: &str) -> Result<String> {
     if !enabled(c) {
         return Err(Error::refused("„Programme auf diesem Rechner bedienen“ ist aus."));
+    }
+    if args.to_string().contains("{{vault:") {
+        return Err(Error::refused("Tresor-Einträge gibt AIS.ChatCraft nie in Programme ein."));
     }
     let d = c.0.computer.desktop();
     match name {
@@ -562,7 +632,7 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value, guard
                     continue;
                 }
                 shown += 1;
-                let open = if exes(w).iter().any(|e| granted.contains(e)) { " [in dieser Anfrage geöffnet]" } else { "" };
+                let open = if granted.covers(w) { " [in dieser Anfrage geöffnet]" } else { "" };
                 out.push_str(&format!("{}{open}\n", window_line(w)));
                 if shown >= 100 {
                     break;
@@ -575,14 +645,14 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value, guard
                 out.push_str(&format!("({hidden} gesperrte Fenster nicht gezeigt)\n"));
             }
             let names: Vec<&str> = policy::KNOWN_APPS.iter().map(|a| a.name).collect();
-            out.push_str(&format!("\nStarten mit computer_open: {} (oder ein anderes installiertes Programm).", names.join(", ")));
+            out.push_str(&format!("\nStarten mit computer_open: {}. Andere Programme nur, wenn sie schon offen sind.", names.join(", ")));
             Ok(out)
         }
         OPEN => {
             let app = args.get("app").and_then(Value::as_str).unwrap_or("").trim();
             let target = resolve_app(c, app).await.map_err(Error::refused)?;
-            c.0.computer.grant(conv, turn, &target.exes);
             if !target.running.is_empty() {
+                c.0.computer.grant(conv, turn, &target.running);
                 let lines: Vec<String> = target.running.iter().map(window_line).collect();
                 return Ok(format!("{} ist für diese Anfrage geöffnet. Fenster:\n{}", target.label, lines.join("\n")));
             }
@@ -612,11 +682,17 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value, guard
                     .filter(|w| !before.contains(&w.id) && exes(w).iter().any(|e| target.exes.contains(e)) && refusal(c, w).is_none())
                     .collect();
                 if !new.is_empty() {
+                    c.0.computer.grant(conv, turn, &new);
                     let lines: Vec<String> = new.iter().map(window_line).collect();
                     return Ok(format!("{} ist gestartet und für diese Anfrage geöffnet. Fenster:\n{}", target.label, lines.join("\n")));
                 }
                 if started.elapsed() > LAUNCH_WAIT {
-                    return Ok(format!("{} wurde gestartet, aber noch kein Fenster gefunden. Gleich computer_list_apps aufrufen.", target.label));
+                    // A program may open its window in one already open (Notepad's tabs): that
+                    // window is not opened for the model without asking.
+                    return Ok(format!(
+                        "{} wurde gestartet, aber kein neues Fenster gefunden (vielleicht als Tab in einem schon offenen Fenster). Ein schon offenes Fenster mit computer_open und seiner Fenster-Id öffnen.",
+                        target.label
+                    ));
                 }
                 tokio::time::sleep(Duration::from_millis(300)).await;
             }
@@ -628,57 +704,49 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value, guard
         }
         PRESS | TYPE | KEY => {
             let window = args.get("window").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            let control = args.get("control").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-            // Read again right before the step: what the check saw must still be there.
+            let control = control_arg(args);
+            // Read again right before the step: what the check saw, and the same element, must
+            // still be there; the backend compares the element once more in the step itself.
             let snap = granted_window(c, conv, turn, &window).await.map_err(Error::refused)?;
-            let now = snap.excerpt(control.as_deref());
-            if guard.is_some_and(|g| g != now) {
+            if guard.is_some_and(|g| g != fingerprint(&snap, control.as_deref())) {
                 return Err(Error::refused(
                     "Das Fenster hat sich seit der Prüfung geändert; nichts wurde gemacht. Bitte computer_read aufrufen und den Schritt neu vorschlagen.",
                 ));
             }
+            check_step(name, args, &snap).map_err(Error::refused)?;
+            let ctl = control.as_deref().and_then(|p| snap.control(p)).cloned();
             let done = match name {
                 PRESS => {
-                    let path = control.clone().unwrap_or_default();
-                    let ctl = snap.control(&path).ok_or_else(|| Error::not_found(format!("Steuerelement {path} gibt es nicht")))?;
-                    let act = pick_act(args, ctl).map_err(Error::invalid)?;
+                    let ctl = ctl.ok_or_else(|| Error::not_found("Steuerelement fehlt"))?;
+                    let act = pick_act(args, &ctl).map_err(Error::invalid)?;
                     let label = format!("„{}“: {}", ctl.name, act.label());
                     blocking({
                         let (d, w) = (d.clone(), window.clone());
-                        move || d.act(&w, &path, act)
+                        move || d.act(&w, &ctl, act)
                     })
                     .await?;
                     label
                 }
                 TYPE => {
-                    let path = control.clone().unwrap_or_default();
-                    let ctl = snap.control(&path).ok_or_else(|| Error::not_found(format!("Steuerelement {path} gibt es nicht")))?;
-                    if ctl.password {
-                        return Err(Error::refused("In Passwortfelder schreibt AIS.ChatCraft nie."));
-                    }
-                    let text = args.get("text").and_then(Value::as_str).unwrap_or("").to_string();
-                    if text.chars().count() > aiscraft_desktop::MAX_TYPE {
-                        return Err(Error::invalid("Der Text ist zu lang"));
-                    }
+                    let ctl = ctl.ok_or_else(|| Error::not_found("Steuerelement fehlt"))?;
+                    let text = aiscraft_desktop::typeable(args.get("text").and_then(Value::as_str).unwrap_or(""))?;
                     let replace = args.get("replace").and_then(Value::as_bool).unwrap_or(false);
                     let n = text.chars().count();
+                    let label = format!("{n} Zeichen in „{}“ {}", ctl.name, if replace { "gesetzt" } else { "eingefügt" });
                     blocking({
-                        let (d, w, p) = (d.clone(), window.clone(), path.clone());
-                        move || d.set_text(&w, &p, &text, replace)
+                        let (d, w) = (d.clone(), window.clone());
+                        move || d.set_text(&w, &ctl, &text, replace)
                     })
                     .await?;
-                    format!("{n} Zeichen in „{}“ {}", ctl.name, if replace { "gesetzt" } else { "eingefügt" })
+                    label
                 }
                 _ => {
-                    if snap.password_focused() {
-                        return Err(Error::refused("Ein Passwortfeld hat den Fokus; dorthin gehen keine Tasten."));
-                    }
                     let times = args.get("times").and_then(Value::as_u64).unwrap_or(1).min(100) as u32;
                     let chord = aiscraft_desktop::parse_keys(args.get("keys").and_then(Value::as_str).unwrap_or(""), times)?;
                     let shown = chord.shown();
                     blocking({
-                        let (d, w, p) = (d.clone(), window.clone(), control.clone());
-                        move || d.keys(&w, p.as_deref(), &chord)
+                        let (d, w) = (d.clone(), window.clone());
+                        move || d.keys(&w, ctl.as_ref(), &chord)
                     })
                     .await?;
                     format!("Tasten {shown}")

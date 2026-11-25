@@ -33,7 +33,9 @@ pub const MAX_OUTLINE: usize = 40_000;
 /// Most characters of the excerpt the trust check sees.
 pub const MAX_EXCERPT: usize = 3000;
 /// Most characters typed in one step.
-pub const MAX_TYPE: usize = 20_000;
+pub const MAX_TYPE: usize = 5000;
+/// Characters typed per keyboard step; the focus is checked again before each.
+pub const TYPE_CHUNK: usize = 200;
 
 /// A program behind a window: its file name (lowercase, `notepad.exe`) and full path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -59,6 +61,9 @@ pub struct WindowInfo {
     /// The program that owns the window first, then programs that show content in it (an app
     /// hosted by ApplicationFrameHost). An empty path means the program could not be read.
     pub programs: Vec<Program>,
+    /// The window class (`#32770` for dialogs, `wndclass_desked_gsk` for the Office VBA editor).
+    #[serde(skip)]
+    pub class: String,
 }
 
 impl WindowInfo {
@@ -109,6 +114,40 @@ pub struct Control {
     pub focused: bool,
     pub password: bool,
     pub acts: Vec<Act>,
+    /// The class name (`SHELLDLL_DefView` marks a file dialog's folder view).
+    #[serde(skip)]
+    pub class: String,
+    /// UI Automation's runtime id: the same element, not just the same place. A step checks it
+    /// right before it acts.
+    #[serde(skip)]
+    pub runtime_id: String,
+}
+
+impl Control {
+    /// Whether `other` (read just now) is the element this control describes.
+    pub fn same_element(&self, other: &Control) -> bool {
+        self.path == other.path && self.role == other.role && self.name == other.name && self.runtime_id == other.runtime_id
+    }
+}
+
+/// Text that may be typed: no control characters (they would type as shortcuts: U+0013 is
+/// Strg+S, a line feed is Strg+Enter, which sends a mail in Outlook), except line breaks and
+/// tabs, which are sent as plain Enter and Tab. `\r\n` and `\r` become `\n`.
+pub fn typeable(text: &str) -> Result<String> {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    if let Some(bad) = text
+        .chars()
+        .find(|c| (c.is_control() && *c != '\n' && *c != '\t') || matches!(*c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))
+    {
+        return Err(Error::refused(format!(
+            "Der Text enthält ein Steuerzeichen (U+{:04X}); das würde als Tastenkürzel ankommen. Nur Text, Zeilenumbrüche und Tabulatoren.",
+            bad as u32
+        )));
+    }
+    if text.chars().count() > MAX_TYPE {
+        return Err(Error::invalid(format!("Der Text ist länger als {MAX_TYPE} Zeichen.")));
+    }
+    Ok(text)
 }
 
 /// What a read of a window found.
@@ -201,7 +240,13 @@ impl Snapshot {
     /// control, its parent, its neighbours and first children. Without a control, the start of
     /// the window. Focus is left out: it moves when the person answers in AIS.ChatCraft.
     pub fn excerpt(&self, control: Option<&str>) -> String {
-        let mut lines = vec![self.heading()];
+        // The window and the control itself always fit; the neighbourhood fills what is left.
+        let mut head = self.heading();
+        if let Some(target) = control.and_then(|p| self.control(p)) {
+            head.push_str(&format!("\nDieses Steuerelement: {}", target.line(1200, false).trim_start()));
+        }
+        let head = cap(&head, MAX_EXCERPT / 2);
+        let mut lines = Vec::new();
         let picked: Vec<&Control> = match control.and_then(|p| self.control(p)) {
             Some(target) => {
                 let parent = target.parent_path();
@@ -233,7 +278,8 @@ impl Snapshot {
             }
             lines.push(l);
         }
-        cap(&lines.join("\n"), MAX_EXCERPT)
+        let room = MAX_EXCERPT.saturating_sub(head.chars().count() + 1);
+        format!("{head}\n{}", cap(&lines.join("\n"), room))
     }
 }
 
@@ -250,13 +296,15 @@ pub trait DesktopAutomation: Send + Sync {
     fn launch(&self, path: &str) -> Result<()>;
     /// Read a window's controls (bounded).
     fn snapshot(&self, window: &str) -> Result<Snapshot>;
-    /// Press, toggle, select or expand a control through its pattern.
-    fn act(&self, window: &str, control: &str, act: Act) -> Result<()>;
-    /// Put text into a control: `replace` sets the whole value, otherwise it is typed at the cursor.
-    fn set_text(&self, window: &str, control: &str, text: &str, replace: bool) -> Result<()>;
+    /// Press, toggle, select or expand a control through its pattern. In the same step the
+    /// element at `control.path` must still be `control` ([`Control::same_element`]).
+    fn act(&self, window: &str, control: &Control, act: Act) -> Result<()>;
+    /// Put [`typeable`] text into a control: `replace` sets the whole value, otherwise it is typed
+    /// at the cursor in chunks of [`TYPE_CHUNK`], each only while the control has the focus.
+    fn set_text(&self, window: &str, control: &Control, text: &str, replace: bool) -> Result<()>;
     /// Keys to the window (or one of its controls); the window comes to the front first, and
-    /// nothing is sent unless it really has the focus then.
-    fn keys(&self, window: &str, control: Option<&str>, keys: &KeyChord) -> Result<()>;
+    /// nothing is sent unless the focus really is there then.
+    fn keys(&self, window: &str, control: Option<&Control>, keys: &KeyChord) -> Result<()>;
     /// Close a window (its program may ask about unsaved changes).
     fn close(&self, window: &str) -> Result<()>;
 }
@@ -285,13 +333,13 @@ impl DesktopAutomation for Unavailable {
     fn snapshot(&self, _window: &str) -> Result<Snapshot> {
         Err(not_yet())
     }
-    fn act(&self, _window: &str, _control: &str, _act: Act) -> Result<()> {
+    fn act(&self, _window: &str, _control: &Control, _act: Act) -> Result<()> {
         Err(not_yet())
     }
-    fn set_text(&self, _window: &str, _control: &str, _text: &str, _replace: bool) -> Result<()> {
+    fn set_text(&self, _window: &str, _control: &Control, _text: &str, _replace: bool) -> Result<()> {
         Err(not_yet())
     }
-    fn keys(&self, _window: &str, _control: Option<&str>, _keys: &KeyChord) -> Result<()> {
+    fn keys(&self, _window: &str, _control: Option<&Control>, _keys: &KeyChord) -> Result<()> {
         Err(not_yet())
     }
     fn close(&self, _window: &str) -> Result<()> {
@@ -331,12 +379,20 @@ mod tests {
             focused: false,
             password: false,
             acts,
+            class: String::new(),
+            runtime_id: format!("rt-{path}"),
         };
         let mut pw = c("2", 1, "Textfeld", "Passwort", Some("geheim"), vec![Act::Type]);
         pw.password = true;
         pw.focused = true;
         Snapshot {
-            window: WindowInfo { id: "w1".into(), title: "Brief – Editor".into(), pid: 7, programs: vec![Program::new(r"C:\Windows\notepad.exe")] },
+            window: WindowInfo {
+                id: "w1".into(),
+                title: "Brief – Editor".into(),
+                pid: 7,
+                programs: vec![Program::new(r"C:\Windows\notepad.exe")],
+                class: String::new(),
+            },
             controls: vec![
                 c("1", 1, "Menüleiste", "", None, vec![]),
                 c("1.1", 2, "Menüpunkt", "Datei", None, vec![Act::Expand]),
@@ -363,6 +419,22 @@ mod tests {
         assert!(!e.contains("Textbereich"), "only the neighbourhood: {e}");
         assert!(!e.contains("Fokus"), "focus moves when the person answers: {e}");
         assert!(s.excerpt(None).contains("Liebe Eltern"));
+        // A huge neighbourhood never pushes the control itself out of the excerpt.
+        let mut big = s.clone();
+        for i in 4..200 {
+            big.controls.push(Control { path: i.to_string(), depth: 1, name: "x".repeat(500), ..s.controls[1].clone() });
+        }
+        let e = big.excerpt(Some("3"));
+        assert!(e.contains("Dieses Steuerelement: [3] Dokument „Textbereich“") && e.chars().count() <= MAX_EXCERPT + 2, "{}", e.chars().count());
+    }
+
+    #[test]
+    fn control_characters_are_never_typed() {
+        assert_eq!(typeable("Milch\r\nBrot\tKäse").unwrap(), "Milch\nBrot\tKäse");
+        for bad in ["a\u{13}", "\u{1}", "x\u{16}", "\u{f}", "\u{7f}", "\u{85}", "\u{202e}evil"] {
+            assert_eq!(typeable(bad).unwrap_err().kind, aiscraft_core::ErrorKind::Refused, "{bad:?}");
+        }
+        assert!(typeable(&"a".repeat(MAX_TYPE + 1)).is_err());
         assert_eq!(Program::new(r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE").exe, "winword.exe");
     }
 

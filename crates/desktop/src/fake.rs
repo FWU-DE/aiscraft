@@ -25,6 +25,8 @@ pub struct FakeDesktop {
     desk: Mutex<Desk>,
     /// `Err` from [`DesktopAutomation::ready`] (e.g. running with administrator rights).
     pub not_ready: Mutex<Option<String>>,
+    /// The next step (press, text, keys) fails with this error, e.g. a timeout.
+    pub next_error: Mutex<Option<Error>>,
 }
 
 pub fn control(path: &str, role: &str, name: &str, value: Option<&str>, acts: &[Act]) -> Control {
@@ -38,6 +40,8 @@ pub fn control(path: &str, role: &str, name: &str, value: Option<&str>, acts: &[
         focused: false,
         password: false,
         acts: acts.to_vec(),
+        class: String::new(),
+        runtime_id: format!("rt-{path}"),
     }
 }
 
@@ -55,7 +59,7 @@ impl FakeDesktop {
         let mut d = self.desk();
         d.next += 1;
         let id = format!("w{}", d.next);
-        let info = WindowInfo { id: id.clone(), title: title.into(), pid: 1000 + d.next, programs: vec![Program::new(path)] };
+        let info = WindowInfo { id: id.clone(), title: title.into(), pid: 1000 + d.next, programs: vec![Program::new(path)], class: String::new() };
         d.windows.push((info, controls));
         id
     }
@@ -71,6 +75,15 @@ impl FakeDesktop {
         let mut d = self.desk();
         if let Some(c) = d.windows.iter_mut().find(|w| w.0.id == window).and_then(|w| w.1.iter_mut().find(|c| c.path == control)) {
             c.value = Some(value.into());
+        }
+    }
+
+    /// Put another element at a control's place that looks the same (same role, name, value):
+    /// only its runtime id differs.
+    pub fn swap_element(&self, window: &str, control: &str) {
+        let mut d = self.desk();
+        if let Some(c) = d.windows.iter_mut().find(|w| w.0.id == window).and_then(|w| w.1.iter_mut().find(|c| c.path == control)) {
+            c.runtime_id.push_str("-neu");
         }
     }
 
@@ -109,6 +122,13 @@ impl FakeDesktop {
         let w = d.windows.iter_mut().find(|w| w.0.id == window).ok_or_else(|| Error::not_found("Dieses Fenster gibt es nicht mehr"))?;
         let c = w.1.iter_mut().find(|c| c.path == control).ok_or_else(|| Error::not_found(format!("Steuerelement {control} gibt es nicht")))?;
         f(c)
+    }
+
+    fn take_error(&self) -> Result<()> {
+        match self.next_error.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     fn ensure_ready(&self) -> Result<()> {
@@ -156,39 +176,60 @@ impl DesktopAutomation for FakeDesktop {
         Ok(Snapshot { window: info, controls, truncated: false })
     }
 
-    fn act(&self, window: &str, control: &str, act: Act) -> Result<()> {
+    fn act(&self, window: &str, control: &Control, act: Act) -> Result<()> {
+        self.take_error()?;
         self.ensure_ready()?;
-        self.with_control(window, control, |c| {
+        self.with_control(window, &control.path, |c| {
+            if !c.same_element(control) {
+                return Err(Error::refused("An dieser Stelle steht jetzt ein anderes Steuerelement; nichts gemacht."));
+            }
             if !c.acts.contains(&act) {
                 return Err(Error::unsupported(format!("„{}“ kann nicht {}", c.name, act.label())));
             }
             Ok(())
         })?;
-        self.desk().log.push(format!("{} {window} {control}", act.label()));
+        self.desk().log.push(format!("{} {window} {}", act.label(), control.path));
         Ok(())
     }
 
-    fn set_text(&self, window: &str, control: &str, text: &str, replace: bool) -> Result<()> {
+    fn set_text(&self, window: &str, control: &Control, text: &str, replace: bool) -> Result<()> {
+        self.take_error()?;
         self.ensure_ready()?;
-        self.with_control(window, control, |c| {
+        let text = crate::typeable(text)?;
+        self.with_control(window, &control.path, |c| {
+            if !c.same_element(control) {
+                return Err(Error::refused("An dieser Stelle steht jetzt ein anderes Steuerelement; nichts getippt."));
+            }
+            if c.password {
+                return Err(Error::refused("In Passwortfelder tippt AIS.ChatCraft nie."));
+            }
             if !c.acts.contains(&Act::Type) {
                 return Err(Error::unsupported(format!("„{}“ nimmt keinen Text", c.name)));
             }
             let old = c.value.clone().unwrap_or_default();
-            c.value = Some(if replace { text.to_string() } else { format!("{old}{text}") });
+            c.value = Some(if replace { text.clone() } else { format!("{old}{text}") });
             Ok(())
         })?;
-        self.desk().log.push(format!("text {window} {control} {text}"));
+        self.desk().log.push(format!("text {window} {} {text}", control.path));
         Ok(())
     }
 
-    fn keys(&self, window: &str, control: Option<&str>, keys: &KeyChord) -> Result<()> {
+    fn keys(&self, window: &str, control: Option<&Control>, keys: &KeyChord) -> Result<()> {
+        self.take_error()?;
         self.ensure_ready()?;
+        if let Some(control) = control {
+            self.with_control(window, &control.path, |c| {
+                if !c.same_element(control) {
+                    return Err(Error::refused("An dieser Stelle steht jetzt ein anderes Steuerelement; keine Tasten gesendet."));
+                }
+                Ok(())
+            })?;
+        }
         let mut d = self.desk();
         if !d.windows.iter().any(|w| w.0.id == window) {
             return Err(Error::not_found("Dieses Fenster gibt es nicht mehr"));
         }
-        d.log.push(format!("keys {window} {} {}", control.unwrap_or("-"), keys.to_uia()));
+        d.log.push(format!("keys {window} {} {}", control.map(|c| c.path.as_str()).unwrap_or("-"), keys.to_uia()));
         Ok(())
     }
 

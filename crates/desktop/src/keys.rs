@@ -86,10 +86,26 @@ pub fn parse_keys(text: &str, times: u32) -> Result<KeyChord> {
     if system {
         return Err(Error::refused("Dieses Tastenkürzel wirkt auf das System oder andere Fenster und ist gesperrt."));
     }
+    // Office macros: the VBA editor (Alt+F11) and the macro list (Alt+F8) run code.
+    if chord.alt && matches!(chord.key.as_str(), "F11" | "F8") {
+        return Err(Error::refused("Makros und der VBA-Editor sind gesperrt (Alt+F8, Alt+F11)."));
+    }
     Ok(chord)
 }
 
 impl KeyChord {
+    /// Keys that only move (Tab, arrows, Pos1/Ende, Bild auf/ab, Esc), with Umschalt at most.
+    /// Everything else (Entf, Enter, Strg+A, Strg+S …) can change or send something.
+    pub fn only_moves(&self) -> bool {
+        !self.ctrl && !self.alt && matches!(self.key.as_str(), "TAB" | "UP" | "DOWN" | "LEFT" | "RIGHT" | "HOME" | "END" | "PAGEUP" | "PAGEDOWN" | "ESC")
+    }
+
+    /// Developer tools and page source in a browser (F12, Strg+Umschalt+I/J/C/K, Strg+U).
+    pub fn browser_devtools(&self) -> bool {
+        let k = self.key.to_lowercase();
+        self.key == "F12" || (self.ctrl && self.shift && matches!(k.as_str(), "i" | "j" | "c" | "k")) || (self.ctrl && !self.shift && k == "u")
+    }
+
     /// The spelling of UI Automation's keyboard (`{ctrl}{shift}s`, `{enter 3}`).
     pub fn to_uia(&self) -> String {
         let mut out = String::new();
@@ -152,7 +168,13 @@ mod tests {
 
     #[test]
     fn system_shortcuts_and_the_windows_key_are_refused() {
-        for bad in ["Win+R", "Windows", "Strg+Alt+Entf", "Strg+Umschalt+Esc", "Alt+Tab", "Alt+Esc", "Strg+Esc"] {
+        assert!(parse_keys("Umschalt+Tab", 1).unwrap().only_moves() && parse_keys("Pos1", 1).unwrap().only_moves());
+        for changes in ["Entf", "Enter", "Strg+A", "Strg+S", "Rücktaste", "x", "Strg+Enter"] {
+            assert!(!parse_keys(changes, 1).unwrap().only_moves(), "{changes}");
+        }
+        assert!(parse_keys("F12", 1).unwrap().browser_devtools() && parse_keys("Strg+Umschalt+I", 1).unwrap().browser_devtools());
+        assert!(!parse_keys("Strg+I", 1).unwrap().browser_devtools());
+        for bad in ["Win+R", "Windows", "Strg+Alt+Entf", "Strg+Umschalt+Esc", "Alt+Tab", "Alt+Esc", "Strg+Esc", "Alt+F11", "Alt+F8"] {
             let e = parse_keys(bad, 1).unwrap_err();
             assert_eq!(e.kind, aiscraft_core::ErrorKind::Refused, "{bad}");
         }

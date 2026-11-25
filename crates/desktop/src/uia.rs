@@ -133,7 +133,8 @@ impl Worker {
                 programs.push(p);
             }
         }
-        Ok(WindowInfo { id: format!("w{handle}"), title, pid, programs })
+        let class = el.get_classname().unwrap_or_default();
+        Ok(WindowInfo { id: format!("w{handle}"), title, pid, programs, class })
     }
 
     fn window(&mut self, id: &str) -> Result<UIElement> {
@@ -201,6 +202,8 @@ impl Worker {
             focused: el.has_keyboard_focus().unwrap_or(false),
             password,
             acts,
+            class: el.get_classname().unwrap_or_default(),
+            runtime_id: runtime_id(el),
         }
     }
 
@@ -224,9 +227,19 @@ impl Worker {
         }
     }
 
-    /// Bring the window to the front, focus the element, and check the keyboard focus is inside
-    /// the window. Nothing is typed otherwise.
-    fn focus_inside(&self, window: &UIElement, target: &UIElement) -> Result<()> {
+    /// The element at `expect.path`, if it is still the same element (role, name, runtime id).
+    fn checked(&self, window: &UIElement, expect: &Control) -> Result<UIElement> {
+        let el = self.resolve(window, &expect.path)?;
+        let role_now = el.get_control_type().ok().map(role).unwrap_or("Element");
+        let name_now = cap(&el.get_name().unwrap_or_default(), MAX_TEXT);
+        if role_now != expect.role || name_now != expect.name || runtime_id(&el) != expect.runtime_id {
+            return Err(Error::refused("An dieser Stelle steht jetzt ein anderes Steuerelement; nichts gemacht. Bitte computer_read aufrufen."));
+        }
+        Ok(el)
+    }
+
+    /// Bring the window to the front and focus the element.
+    fn front(&self, window: &UIElement, target: &UIElement) -> Result<()> {
         if let Ok(wp) = window.get_pattern::<UIWindowPattern>()
             && wp.get_window_visual_state().ok() == Some(WindowVisualState::Minimized)
         {
@@ -235,23 +248,39 @@ impl Worker {
         let _ = window.set_focus();
         target.set_focus().map_err(|e| uia_err("Das Fenster ließ sich nicht nach vorn holen", e))?;
         std::thread::sleep(Duration::from_millis(150));
+        Ok(())
+    }
+
+    /// The keyboard focus is on `target` (or inside it), or, without a target, inside the window.
+    /// Nothing is typed otherwise.
+    fn focus_check(&self, window: &UIElement, target: Option<&UIElement>) -> Result<()> {
         let hwnd: isize = window.get_native_window_handle().map(Into::into).unwrap_or(0);
         let focused = self.auto.get_focused_element().map_err(|e| uia_err("Fokus", e))?;
         let root = self.auto.get_root_element().map_err(|e| uia_err("Fokus", e))?;
         let raw = self.auto.get_raw_view_walker().map_err(|e| uia_err("Fokus", e))?;
         let mut el = focused;
         for _ in 0..200 {
-            let h: isize = el.get_native_window_handle().map(Into::into).unwrap_or(0);
-            if h != 0 && h == hwnd {
-                return Ok(());
+            match target {
+                Some(t) if self.auto.compare_elements(&el, t).unwrap_or(false) => return Ok(()),
+                None => {
+                    let h: isize = el.get_native_window_handle().map(Into::into).unwrap_or(0);
+                    if h != 0 && h == hwnd {
+                        return Ok(());
+                    }
+                }
+                _ => {}
             }
             match raw.get_parent(&el) {
                 Ok(p) if !self.auto.compare_elements(&p, &root).unwrap_or(true) => el = p,
                 _ => break,
             }
         }
-        Err(Error::refused("Das Fenster hat den Fokus nicht bekommen (ein anderes Fenster ist vorn). Nichts getippt; bitte erneut versuchen."))
+        Err(Error::refused("Der Fokus ist nicht (mehr) auf diesem Steuerelement (ein anderes Fenster ist vorn). Nichts getippt; bitte erneut versuchen."))
     }
+}
+
+fn runtime_id(el: &UIElement) -> String {
+    el.get_runtime_id().map(|v| v.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(".")).unwrap_or_default()
 }
 
 fn role(t: ControlType) -> &'static str {
@@ -377,12 +406,13 @@ impl DesktopAutomation for Uia {
         })
     }
 
-    fn act(&self, window: &str, control: &str, act: Act) -> Result<()> {
+    fn act(&self, window: &str, control: &Control, act: Act) -> Result<()> {
         self.ready()?;
-        let (id, path) = (window.to_string(), control.to_string());
+        let (id, expect) = (window.to_string(), control.clone());
         self.run(move |w| {
             let win = w.window(&id)?;
-            let el = w.resolve(&win, &path)?;
+            // Resolved and checked in the same step as the action: no other element in between.
+            let el = w.checked(&win, &expect)?;
             let r = match act {
                 Act::Press => el.get_pattern::<UIInvokePattern>().and_then(|p| p.invoke()),
                 Act::Toggle => el.get_pattern::<UITogglePattern>().and_then(|p| p.toggle()),
@@ -397,41 +427,95 @@ impl DesktopAutomation for Uia {
         })
     }
 
-    fn set_text(&self, window: &str, control: &str, text: &str, replace: bool) -> Result<()> {
+    fn set_text(&self, window: &str, control: &Control, text: &str, replace: bool) -> Result<()> {
         self.ready()?;
-        let (id, path, text) = (window.to_string(), control.to_string(), text.to_string());
-        self.run(move |w| {
-            let win = w.window(&id)?;
-            let el = w.resolve(&win, &path)?;
-            if el.is_password().unwrap_or(true) {
-                return Err(Error::refused("In Passwortfelder tippt AIS.ChatCraft nie."));
+        let text = crate::typeable(text)?;
+        if text.contains(['\n', '\t']) && control.role != "Dokument" {
+            return Err(Error::refused(
+                "Zeilenumbrüche und Tabulatoren nur in Dokumenten: in einem Feld würden sie ein Formular abschicken oder den Fokus wegbewegen.",
+            ));
+        }
+        let id = window.to_string();
+        // First step: the same element, no password field, then the value at once, or the
+        // window to the front for typing.
+        let typed_by_value = self.run({
+            let (id, expect, text) = (id.clone(), control.clone(), text.clone());
+            move |w| {
+                let win = w.window(&id)?;
+                let el = w.checked(&win, &expect)?;
+                if el.is_password().unwrap_or(true) {
+                    return Err(Error::refused("In Passwortfelder tippt AIS.ChatCraft nie."));
+                }
+                if replace
+                    && let Ok(v) = el.get_pattern::<UIValuePattern>()
+                    && !v.is_readonly().unwrap_or(true)
+                    && v.set_value(&text).is_ok()
+                {
+                    return Ok(true);
+                }
+                w.front(&win, &el)?;
+                w.focus_check(&win, Some(&el))?;
+                if replace {
+                    Keyboard::new().interval(5).send_keys("{ctrl}a{DELETE}").map_err(|e| uia_err("Tippen", e))?;
+                }
+                Ok(false)
             }
-            if replace
-                && let Ok(v) = el.get_pattern::<UIValuePattern>()
-                && !v.is_readonly().unwrap_or(true)
-                && v.set_value(&text).is_ok()
-            {
-                return Ok(());
+        })?;
+        if typed_by_value {
+            return Ok(());
+        }
+        // Then in small pieces, each only while the focus is still on this control. A line
+        // break is a plain Enter, a tab a plain Tab (never with Strg).
+        let mut pieces: Vec<String> = Vec::new();
+        let mut run = String::new();
+        for ch in text.chars() {
+            if (ch == '\n' || ch == '\t' || run.chars().count() >= crate::TYPE_CHUNK) && !run.is_empty() {
+                pieces.push(std::mem::take(&mut run));
             }
-            w.focus_inside(&win, &el)?;
-            let kb = Keyboard::new().interval(2);
-            if replace {
-                kb.send_keys("{ctrl}a{DELETE}").map_err(|e| uia_err("Tippen", e))?;
+            if ch == '\n' || ch == '\t' {
+                pieces.push(ch.to_string());
+            } else {
+                run.push(ch);
             }
-            kb.send_text(&text).map_err(|e| uia_err("Tippen", e))
-        })
+        }
+        if !run.is_empty() {
+            pieces.push(run);
+        }
+        for piece in pieces {
+            let (id, expect) = (id.clone(), control.clone());
+            self.run(move |w| {
+                let win = w.window(&id)?;
+                let el = w.checked(&win, &expect)?;
+                w.focus_check(&win, Some(&el))?;
+                let kb = Keyboard::new().interval(2);
+                match piece.as_str() {
+                    "\n" => kb.send_keys("{ENTER}"),
+                    "\t" => kb.send_keys("{TAB}"),
+                    p => kb.send_text(p),
+                }
+                .map_err(|e| uia_err("Tippen", e))
+            })?;
+        }
+        Ok(())
     }
 
-    fn keys(&self, window: &str, control: Option<&str>, keys: &KeyChord) -> Result<()> {
+    fn keys(&self, window: &str, control: Option<&Control>, keys: &KeyChord) -> Result<()> {
         self.ready()?;
-        let (id, path, keys) = (window.to_string(), control.map(str::to_string), keys.to_uia());
+        let (id, expect, keys) = (window.to_string(), control.cloned(), keys.to_uia());
         self.run(move |w| {
             let win = w.window(&id)?;
-            let el = match &path {
-                Some(p) => w.resolve(&win, p)?,
-                None => win.clone(),
+            let el = match &expect {
+                Some(c) => {
+                    let el = w.checked(&win, c)?;
+                    if el.is_password().unwrap_or(true) {
+                        return Err(Error::refused("An Passwortfelder gehen keine Tasten."));
+                    }
+                    Some(el)
+                }
+                None => None,
             };
-            w.focus_inside(&win, &el)?;
+            w.front(&win, el.as_ref().unwrap_or(&win))?;
+            w.focus_check(&win, el.as_ref())?;
             Keyboard::new().interval(20).send_keys(&keys).map_err(|e| uia_err("Tasten", e))
         })
     }
