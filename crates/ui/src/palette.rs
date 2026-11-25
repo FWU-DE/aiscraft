@@ -39,6 +39,7 @@ enum UiAction {
     ConnectorInsert,
     NewTemplate,
     ImportChats,
+    Join,
 }
 
 impl Item {
@@ -103,6 +104,9 @@ impl AisCraftApp {
             Item::Ui { label: "Neue Vorlage", group: "Vorlage", action: UiAction::NewTemplate },
             Item::Ui { label: "Chats aus claude.ai oder ChatGPT übernehmen", group: "Chat", action: UiAction::ImportChats },
         ]);
+        if self.state.collab.available {
+            items.push(Item::Ui { label: "Mit Code beitreten", group: "Zusammenarbeit", action: UiAction::Join });
+        }
         items.extend(self.state.templates.iter().map(|t| Item::Template { id: t.id.clone(), title: t.title.clone() }));
         for b in &self.state.backends {
             if matches!(b.status, BackendStatus::Ready { .. }) {
@@ -217,6 +221,7 @@ impl AisCraftApp {
                 UiAction::ConnectorInsert => self.dialog = Some(Dialog::Know(crate::know::KnowDialog::Connector { tool: None, args: Vec::new() })),
                 UiAction::NewTemplate => self.dialog = Some(Dialog::Know(crate::know::KnowDialog::edit_template(None))),
                 UiAction::ImportChats => self.dialog = Some(Dialog::ImportChats),
+                UiAction::Join => self.dialog = Some(Dialog::Join { code: String::new() }),
                 UiAction::Search => {
                     self.sidebar_open = true;
                     self.focus_search = true;

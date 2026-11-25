@@ -265,9 +265,7 @@ impl AisCraftApp {
                         self.save_if_dirty();
                         self.run("artifact.close", json!({}));
                     }
-                    if self.state.collab.available {
-                        self.share_menu(ui, meta);
-                    }
+                    self.share_button(ui, meta);
                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                         let r = ui
                             .add(egui::Label::new(crate::theme::bold(&meta.title).size(18.0).color(t.text)).truncate().sense(egui::Sense::click()))

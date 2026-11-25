@@ -238,7 +238,10 @@ impl AisCraftApp {
                 }
                 if self.state.collab.available {
                     ui.separator();
-                    self.collab_join_row(ui);
+                    if ui.button("Mit Code beitreten …").clicked() {
+                        self.dialog = Some(Dialog::Join { code: String::new() });
+                        ui.close();
+                    }
                 }
             });
         }

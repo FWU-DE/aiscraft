@@ -309,6 +309,36 @@ fn strip_fence(s: &str) -> String {
     t.to_string()
 }
 
+/// „Bereitstellen“ (#60): the files a copy of this kind of artifact is handed on as, each one an
+/// `artifact.export` with `format` (and `variant` for worksheets). The file is named after the
+/// title plus `suffix` and `ext`.
+pub(crate) fn export_paths(kind: ArtifactKind) -> Vec<Value> {
+    let path = |label: &str, hint: &str, format: &str, variant: Option<&str>, ext: &str, suffix: &str| {
+        json!({"label": label, "hint": hint, "format": format, "variant": variant, "ext": ext, "suffix": suffix})
+    };
+    match kind {
+        ArtifactKind::Document => vec![
+            path("Word (DOCX)", "Zum Weiterbearbeiten in Word oder LibreOffice", "docx", None, "docx", ""),
+            path("PDF", "Zum Ansehen und Ausdrucken", "pdf", None, "pdf", ""),
+            path("Markdown", "Als Text, z. B. für ein Wiki oder die Lernplattform", "markdown", None, "md", ""),
+        ],
+        ArtifactKind::Worksheet => vec![
+            path("Arbeitsblatt als PDF", "Zum Ausdrucken für die Klasse", "pdf", Some("arbeitsblatt"), "pdf", ""),
+            path("Lösungsblatt als PDF", "Mit den Lösungen, für dich oder zur Selbstkontrolle", "pdf", Some("loesung"), "pdf", " Lösungen"),
+            path("Arbeitsblatt als Word", "Zum Weiterbearbeiten in Word oder LibreOffice", "docx", Some("arbeitsblatt"), "docx", ""),
+            path("Lösungsblatt als Word", "Die Lösungen zum Weiterbearbeiten", "docx", Some("loesung"), "docx", " Lösungen"),
+        ],
+        ArtifactKind::App => vec![path("HTML-Datei", "Läuft in jedem Browser, ohne Internet; auch für die Lernplattform", "html", None, "html", "")],
+        ArtifactKind::Board => vec![path("PDF", "Die Inhalte des Whiteboards als Gliederung, zum Ausdrucken", "pdf", None, "pdf", "")],
+        ArtifactKind::H5p => vec![path("H5P-Datei (.h5p)", "Zum Hochladen in Moodle, mebis oder eine andere Lernplattform", "h5p", None, "h5p", "")],
+    }
+}
+
+pub(crate) async fn export_paths_cmd(c: Ctx, p: Value) -> Result<Value> {
+    let a = get_artifact(&c, &req_str(&p, "id")?)?;
+    Ok(Value::Array(export_paths(a.kind)))
+}
+
 pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let a = get_artifact(&c, &id)?;

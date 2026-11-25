@@ -1612,6 +1612,65 @@ fn links_in_answers_are_checked() {
     }));
 }
 
+/// „Bereitstellen“ (#60): each kind of artifact offers exactly its files, and every one of them is
+/// an `artifact.export` that works.
+#[test]
+fn provide_offers_the_files_of_each_kind_and_each_one_exports() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let id_of = |v: Value| v["id"].as_str().unwrap().to_string();
+    let kinds = [
+        ("Dokument", id_of(engine.call("artifact.create", json!({"kind": "document", "content": "# Elternbrief\n\nWandertag"})).unwrap()), vec![
+            ("docx", None),
+            ("pdf", None),
+            ("markdown", None),
+        ]),
+        ("Whiteboard", id_of(engine.call("artifact.create", json!({"kind": "board"})).unwrap()), vec![("pdf", None)]),
+        (
+            "Lern-App",
+            id_of(engine.call("learning_app.create", json!({"html": "<!doctype html><html><head><title>Brüche</title></head><body>1/2</body></html>"})).unwrap()),
+            vec![("html", None)],
+        ),
+        (
+            "Arbeitsblatt",
+            id_of(
+                engine
+                    .call(
+                        "worksheet.create",
+                        json!({"worksheet": {"title": "Photosynthese", "tasks": [{"type": "true_false", "prompt": "Pflanzen geben Sauerstoff ab.", "answer": true}]}}),
+                    )
+                    .unwrap(),
+            ),
+            vec![("pdf", Some("arbeitsblatt")), ("pdf", Some("loesung")), ("docx", Some("arbeitsblatt")), ("docx", Some("loesung"))],
+        ),
+        (
+            "H5P",
+            id_of(
+                engine
+                    .call("h5p.create", json!({"h5p": {"format": "aiscraft-h5p", "version": 1, "title": "Igel", "tasks": [{"type": "true_false", "prompt": "Igel schlafen im Winter.", "answer": true}]}}))
+                    .unwrap(),
+            ),
+            vec![("h5p", None)],
+        ),
+    ];
+    for (kind, id, want) in kinds {
+        let paths = engine.call("artifact.export_paths", json!({"id": id})).unwrap();
+        let got: Vec<(String, Option<String>)> = paths
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p["format"].as_str().unwrap().to_string(), p["variant"].as_str().map(str::to_string)))
+            .collect();
+        let want: Vec<(String, Option<String>)> = want.into_iter().map(|(f, v)| (f.to_string(), v.map(str::to_string))).collect();
+        assert_eq!(got, want, "{kind}: the files to provide");
+        for p in paths.as_array().unwrap() {
+            assert!(!p["label"].as_str().unwrap().is_empty() && !p["hint"].as_str().unwrap().is_empty(), "{kind}: {p}");
+            let out = engine.call("artifact.export", json!({"id": id, "format": p["format"], "variant": p["variant"]})).unwrap();
+            assert!(out.get("text").or(out.get("base64")).is_some(), "{kind} {p}: exported {out}");
+        }
+    }
+    assert_eq!(engine.call("artifact.export_paths", json!({"id": "gibt-es-nicht"})).unwrap_err().kind, aiscraft_core::ErrorKind::NotFound);
+}
+
 /// The collab plug-in without a relay: present, but nothing is shared and nothing connects.
 #[cfg(feature = "collab")]
 #[test]
