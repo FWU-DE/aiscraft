@@ -1453,8 +1453,71 @@ impl AisCraftApp {
             self.run("privacy.list_add", json!({"text": pasted.clone(), "name": "Eingefügte Namen"}));
             pasted.clear();
         }
+        ui.add_space(12.0);
+        self.ner_settings(ui);
         ui.add_space(8.0);
-        ui.label(small_muted(&t, "Grenzen: Spitznamen, Tippfehler, Namen außerhalb der Listen und Namen in Bildern oder PDF-Dateien erkennt AIS.ChatCraft nicht. Prüfe die Vorschau über dem Eingabefeld vor dem Senden."));
+        ui.label(small_muted(&t, "Grenzen: Spitznamen, Tippfehler, Namen außerhalb der Listen (ohne Namenserkennung) und Namen in Bildern oder PDF-Dateien erkennt AIS.ChatCraft nicht. Prüfe die Vorschau über dem Eingabefeld vor dem Senden."));
+    }
+
+    /// „Namenserkennung laden“ (#73): size, source and licence first; the download starts only
+    /// after the second click („Ja, laden“).
+    fn ner_settings(&mut self, ui: &mut Ui) {
+        use aiscraft_engine::privacy::ner;
+        let t = self.tokens.clone();
+        let s = self.state.privacy.ner.clone();
+        ui.label(RichText::new("Namenserkennung (Modell)").strong());
+        ui.label(muted(
+            &t,
+            "Erkennt auch Namen, die in keiner Liste stehen, etwa Nachnamen ohne Anrede. Läuft auf diesem Rechner, ohne Internet. Treffer sind unsicher und werden ersetzt; in der Vorschau lässt du einzelne stehen.",
+        ));
+        ui.add_space(4.0);
+        let ask_id = egui::Id::unique("ner-install-ask");
+        if !s.available {
+            ui.label(small_muted(&t, "Diese Ausgabe von AIS.ChatCraft enthält die Namenserkennung nicht."));
+        } else if !s.supported {
+            ui.label(small_muted(&t, "Für dieses System gibt es die Namenserkennung nicht."));
+        } else if let Some((done, total)) = s.progress {
+            let share = if total > 0 { done as f32 / total as f32 } else { 0.0 };
+            ui.add(egui::ProgressBar::new(share).text(format!("Wird geladen: {} von {} MB", done / 1_000_000, total.div_ceil(1_000_000))));
+        } else if s.installed {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(small_muted(&t, "Geladen und an."));
+                if ui.small_button("Entfernen").clicked() {
+                    self.dialog = Some(Dialog::Confirm {
+                        text: "Namenserkennung entfernen? Die geladenen Dateien werden gelöscht.".into(),
+                        command: "privacy.ner_remove".into(),
+                        params: json!({}),
+                    });
+                }
+            });
+            if let Some(p) = &s.problem {
+                ui.label(RichText::new(p).small().color(t.danger));
+            }
+        } else {
+            let size = format!("{} MB", s.size.div_ceil(1_000_000));
+            ui.label(small_muted(&t, format!("Größe: {size} (einmalig, im Datenordner)")));
+            ui.label(small_muted(&t, format!("Modell: {}", ner::MODEL_TEXT)));
+            ui.label(small_muted(&t, format!("Laufzeit: {}", ner::RUNTIME_TEXT)));
+            ui.label(small_muted(&t, "Jede Datei wird mit ihrer festen SHA-256-Prüfsumme geprüft; stimmt sie nicht, bleibt nichts davon."));
+            ui.add_space(4.0);
+            let asking = ui.data(|d| d.get_temp::<bool>(ask_id)).unwrap_or(false);
+            if !asking {
+                if ui.button("Namenserkennung laden …").clicked() {
+                    ui.data_mut(|d| d.insert_temp(ask_id, true));
+                }
+            } else {
+                ui.label(RichText::new(format!("{size} von huggingface.co und pypi.org laden?")).strong());
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(RichText::new("Ja, laden").color(t.on_accent)).fill(t.accent)).clicked() {
+                        ui.data_mut(|d| d.insert_temp(ask_id, false));
+                        self.run("privacy.ner_install", json!({"yes": true}));
+                    }
+                    if ui.button("Abbrechen").clicked() {
+                        ui.data_mut(|d| d.insert_temp(ask_id, false));
+                    }
+                });
+            }
+        }
     }
 }
 

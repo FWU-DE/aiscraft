@@ -57,6 +57,14 @@ aiscraft-board = { path = "../board" }
 aiscraft-mcp = { path = "../mcp" }
 aiscraft-voice = { path = "../voice" }
 aiscraft-collab = { path = "../collab", optional = true }
+sha2 = "0.10"
+reqwest.workspace = true
+# Name recognition with a local model (#73, feature `ner`): GLiNER through gline-rs on ONNX
+# Runtime. `load-dynamic`: the runtime library is downloaded on request and loaded at run time,
+# never linked or bundled.
+gline-rs = { version = "=1.1.0", optional = true, features = ["load-dynamic"] }
+ort = { version = "=2.0.0-rc.9", optional = true, default-features = false, features = ["load-dynamic"] }
+orp = { version = "=1.0.0", optional = true }
 
 [features]
 default = ["collab", "heif"]
@@ -65,6 +73,9 @@ collab = ["dep:aiscraft-collab"]
 # HEIC/HEIF photos (iPhone) through craft-heif. HEVC patents are a distributor's call, so a
 # package can leave it out; HEIC files then get a clear message instead.
 heif = ["craft-image-codecs/heif"]
+# Name recognition with a downloaded GLiNER model (#73); without it the download still works but
+# the model is not used.
+ner = ["dep:gline-rs", "dep:ort", "dep:orp"]
 
 [dev-dependencies]
 craft-wordmodel.workspace = true
