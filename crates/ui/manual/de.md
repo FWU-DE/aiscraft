@@ -112,9 +112,9 @@ Bei AIS.chat sind Gedächtnis, Projektanweisungen und Projektdateien zuerst aus.
 
 ## Belege in Antworten
 
-Mit Claude (API) gehen angehängte Dateien als Dokumente mit. Die Antwort nennt dann, welche Stelle einer Datei eine Aussage belegt; unter ihr steht etwa „Belege: [1] igel.txt“ oder „[2] plan.pdf, S. 3“. Fährst du über einen Beleg, siehst du die Aussage und das Zitat.
+Mit Claude (API) gehen angehängte Dateien, Dateien im Projekt und das offene Dokument als Dokumente mit. Die Antwort nennt dann, welche Stelle eine Aussage belegt: hinter der Aussage steht eine Marke wie [1], unter der Antwort etwa „Belege: [1] igel.txt“ oder „[2] plan.pdf, S. 3“. Fährst du über einen Beleg, siehst du die Aussage und das Zitat.
 
-Ein Klick zeigt die Stelle: im Text der Datei markiert, mit dem Text davor und danach. Bei PDFs steht die Seite dabei, bei Webseiten aus der Websuche das Zitat und der Link. AIS.chat, OpenAI-kompatible Server und das Claude-Abo liefern keine Belege.
+Ein Klick auf die Marke oder den Beleg zeigt die Stelle: im Text der Datei markiert, mit dem Text davor und danach. Mit **Datei öffnen** öffnest du das Original; ein PDF öffnet sich im Browser auf der belegten Seite („PDF auf Seite 3 öffnen“). Bei Webseiten aus der Websuche siehst du das Zitat und den Link. OpenAI-kompatible Server mit Websuche (etwa OpenAI, OpenRouter) liefern Webseiten als Belege. AIS.chat und das Claude-Abo liefern keine Belege.
 
 ## Projekte
 

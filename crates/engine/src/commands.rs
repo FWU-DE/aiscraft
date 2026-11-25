@@ -89,6 +89,15 @@ static COMMANDS: &[CommandSpec] = &[
         |c, p| Box::pin(async move { crate::citations::open(&c, &p) })
     ),
     cmd!(
+        "message.citation_file",
+        "Beleg im Original öffnen",
+        "Chat",
+        None,
+        "message_id?: string, index?: number (sonst der offene Beleg), dry_run?: bool (nur sagen, was sich öffnet). Öffnet die Datei des Belegs, ein PDF im Browser an der Seite",
+        false,
+        |c, p| Box::pin(async move { crate::citations::open_file(&c, &p) })
+    ),
+    cmd!(
         "chat.find",
         "Im Chat suchen",
         "Chat",

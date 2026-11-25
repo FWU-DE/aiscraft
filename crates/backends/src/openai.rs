@@ -1,7 +1,7 @@
 //! OpenAI chat completions: OpenAI itself, Ollama, LM Studio, OpenRouter, vLLM, and AIS.chat's
 //! own `/v1` API (Bearer API key).
 
-use aiscraft_core::{AccountInfo, BackendConfig, Capabilities, ChatRequest, Error, ModelInfo, Result, Role, StreamEvent, Usage};
+use aiscraft_core::{AccountInfo, BackendConfig, Capabilities, ChatRequest, Citation, Error, ModelInfo, Result, Role, StreamEvent, Usage};
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
 
@@ -88,10 +88,78 @@ pub fn body(req: &ChatRequest) -> Value {
     b
 }
 
-/// Tool calls being streamed, by index: (id, name, arguments so far).
+/// Tool calls being streamed, by index: (id, name, arguments so far); and for citations (#39)
+/// the answer's text so far and the sources already given.
 #[derive(Default)]
 pub struct ToolAcc {
     calls: std::collections::BTreeMap<u64, (String, String, String)>,
+    /// The answer's text, as characters (annotations point into it), capped.
+    text: Vec<char>,
+    /// Sources already given (address and span), so repeated annotations count once.
+    cited: std::collections::HashSet<(String, u64, u64)>,
+}
+
+/// Most characters of the answer kept for finding the cited statements.
+const MAX_TEXT: usize = 400_000;
+/// Most citations of one answer.
+const MAX_CITATIONS: usize = 100;
+/// Longest title and statement kept, in characters.
+const MAX_TITLE: usize = 200;
+const MAX_CLAIM: usize = 600;
+
+/// The statement an annotation backs: the cited span, or, when the span is only the link to the
+/// source ("([example.org](https://…))", as OpenAI's web search writes it), the sentence before it.
+fn claim_of(text: &[char], start: usize, end: usize) -> String {
+    let (start, end) = (start.min(text.len()), end.min(text.len()));
+    let span: String = text.get(start..end).map(|c| c.iter().collect()).unwrap_or_default();
+    let span = span.trim();
+    let link_only = span.is_empty() || span.starts_with('(') || span.starts_with('[') || span.contains("](");
+    let claim = if link_only {
+        let before: String = text.get(..start).map(|c| c.iter().collect()).unwrap_or_default();
+        let before = before.trim_end();
+        // A sentence ends at . ! ? or a line break; "1. Juli" (a dot after a digit) does not.
+        let mut from = 0;
+        let mut prev = ' ';
+        for (i, c) in before.char_indices() {
+            let end = matches!(c, '!' | '?' | '\n') || (c == '.' && !prev.is_ascii_digit());
+            if end && i + c.len_utf8() < before.len() {
+                from = i + c.len_utf8();
+            }
+            prev = c;
+        }
+        before.get(from..).unwrap_or("").trim().to_string()
+    } else {
+        span.to_string()
+    };
+    claim.chars().take(MAX_CLAIM).collect()
+}
+
+/// `url_citation` annotations (OpenAI web search, OpenRouter's web plugin; nested in
+/// `url_citation` or flat as in the Responses API) as citations; other kinds are skipped.
+pub fn parse_annotations(list: &[Value], acc: &mut ToolAcc) -> Vec<Citation> {
+    let mut out = Vec::new();
+    for a in list {
+        if a.get("type").and_then(Value::as_str) != Some("url_citation") {
+            continue;
+        }
+        let c = a.get("url_citation").filter(|v| v.is_object()).unwrap_or(a);
+        let Some(url) = c.get("url").and_then(Value::as_str).filter(|u| (u.starts_with("https://") || u.starts_with("http://")) && u.len() <= 2000) else {
+            continue;
+        };
+        let n = |k: &str| c.get(k).and_then(Value::as_u64);
+        let (start, end) = match (n("start_index"), n("end_index")) {
+            (Some(a), Some(b)) => (a, b.max(a)),
+            _ => (0, 0),
+        };
+        if acc.cited.len() >= MAX_CITATIONS || !acc.cited.insert((url.to_string(), start, end)) {
+            continue;
+        }
+        let title: String = c.get("title").and_then(Value::as_str).unwrap_or("").chars().take(MAX_TITLE).collect();
+        let at = |x: u64| usize::try_from(x).unwrap_or(usize::MAX);
+        let claim = if end > start { claim_of(&acc.text, at(start), at(end)) } else { String::new() };
+        out.push(Citation { cited_text: title.clone(), claim, title, url: Some(url.to_string()), ..Default::default() });
+    }
+    out
 }
 
 impl ToolAcc {
@@ -131,7 +199,19 @@ pub fn chunk_events_with(data: &str, acc: &mut ToolAcc) -> Result<Vec<StreamEven
             out.push(StreamEvent::Thinking { text: t.to_string() });
         }
         if let Some(t) = choice.pointer("/delta/content").and_then(Value::as_str).filter(|t| !t.is_empty()) {
+            if acc.text.len() < MAX_TEXT {
+                acc.text.extend(t.chars().take(MAX_TEXT - acc.text.len()));
+            }
             out.push(StreamEvent::Delta { text: t.to_string() });
+        }
+        // Sources of web search (#39): `annotations` with `url_citation` beside the text.
+        for p in ["/delta/annotations", "/message/annotations"] {
+            if let Some(list) = choice.pointer(p).and_then(Value::as_array) {
+                let citations = parse_annotations(list, acc);
+                if !citations.is_empty() {
+                    out.push(StreamEvent::Citations { citations });
+                }
+            }
         }
         for tc in choice.pointer("/delta/tool_calls").and_then(Value::as_array).into_iter().flatten() {
             let idx = tc.get("index").and_then(Value::as_u64).unwrap_or(0);
@@ -285,6 +365,43 @@ mod tests {
         assert_eq!(chunk_events("[DONE]").unwrap(), vec![StreamEvent::Done]);
         assert!(chunk_events(r#"{"error":{"message":"quota"}}"#).is_err());
         assert!(matches!(chunk_events(r#"{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":4}}"#).unwrap()[0], StreamEvent::Usage { .. }));
+    }
+
+    /// #39: `url_citation` annotations (OpenAI web search) become citations with the sentence
+    /// they back; repeats, other kinds and unsafe addresses are skipped, odd numbers never panic.
+    #[test]
+    fn url_citations_become_citations() {
+        let mut acc = ToolAcc::default();
+        chunk_events_with(r#"{"choices":[{"delta":{"content":"Die Ferien beginnen am 1. Juli. Igel "}}]}"#, &mut acc).unwrap();
+        chunk_events_with(r#"{"choices":[{"delta":{"content":"schlafen ([igel.de](https://igel.de/x))."}}]}"#, &mut acc).unwrap();
+        // "Igel schlafen " is chars 32..46, the link 46..76.
+        let ev = chunk_events_with(
+            r#"{"choices":[{"delta":{"annotations":[
+                {"type":"url_citation","url_citation":{"start_index":46,"end_index":76,"title":"Igel","url":"https://igel.de/x"}},
+                {"type":"url_citation","url_citation":{"start_index":0,"end_index":31,"title":"Ferien","url":"https://ferien.de"}},
+                {"type":"url_citation","url_citation":{"start_index":0,"end_index":31,"title":"Ferien","url":"https://ferien.de"}},
+                {"type":"file_citation","file_id":"f"},
+                {"type":"url_citation","url_citation":{"url":"javascript:alert(1)","start_index":0,"end_index":3}},
+                {"type":"url_citation","url":"https://flach.de","title":"Flach","start_index":9000,"end_index":1}
+            ]}}]}"#,
+            &mut acc,
+        )
+        .unwrap();
+        let [StreamEvent::Citations { citations }] = ev.as_slice() else { panic!("{ev:?}") };
+        assert_eq!(citations.len(), 3, "{citations:?}");
+        assert_eq!(citations[0].claim, "Igel schlafen");
+        assert_eq!((citations[0].url.as_deref(), citations[0].title.as_str()), (Some("https://igel.de/x"), "Igel"));
+        assert_eq!(citations[1].claim, "Die Ferien beginnen am 1. Juli.");
+        assert_eq!((citations[2].url.as_deref(), citations[2].claim.as_str()), (Some("https://flach.de"), ""));
+        // The same annotations again (some servers repeat them at the end) give nothing new.
+        let again = chunk_events_with(
+            r#"{"choices":[{"delta":{},"message":{"annotations":[{"type":"url_citation","url_citation":{"start_index":0,"end_index":31,"url":"https://ferien.de"}}]}}]}"#,
+            &mut acc,
+        )
+        .unwrap();
+        assert!(again.is_empty(), "{again:?}");
+        assert_eq!(claim_of(&['a'], 5, 9), "a");
+        assert_eq!(claim_of(&[], 0, 0), "");
     }
 
     /// Reasoning models stream their thinking beside the answer (#30).
