@@ -96,7 +96,7 @@ static COMMANDS: &[CommandSpec] = &[
     ),
     cmd!(
         "chat.temporary",
-        "Vorübergehender Chat",
+        "Temporärer Chat",
         "Chat",
         None,
         "on?: bool (Standard: an). An: ein neuer Chat, der nicht gespeichert wird; aus: zurück zu einem normalen neuen Chat",

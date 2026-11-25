@@ -191,8 +191,7 @@ impl AisCraftApp {
                 } else {
                     // A temporary chat (#34): switched on before the first message.
                     let temp = self.state.selection.temporary;
-                    let (kind, label) =
-                        if temp { (crate::kit::Pill::Accent2, "Vorübergehend: an") } else { (crate::kit::Pill::Ghost, "Vorübergehender Chat") };
+                    let (kind, label) = if temp { (crate::kit::Pill::Accent2, "Temporär: an") } else { (crate::kit::Pill::Ghost, "Temporärer Chat") };
                     if crate::kit::pill(ui, &t, kind, None, label, 12.5, None)
                         .on_hover_text("Wird nicht gespeichert, nicht durchsucht und legt keine Notizen an; beim Schließen ist er weg.")
                         .clicked()
@@ -237,7 +236,7 @@ impl AisCraftApp {
                                 meta.push(self.state.model_name(&self.state.selection.backend_id, &self.state.selection.model_id));
                             }
                             if c.temporary {
-                                meta.push("Vorübergehend, wird nicht gespeichert".to_string());
+                                meta.push("Temporär, wird nicht gespeichert".to_string());
                             } else {
                                 meta.push(aiscraft_engine::friendly_time(c.updated_at, aiscraft_engine::now_ms()));
                             }
@@ -1327,7 +1326,7 @@ impl AisCraftApp {
             .shadow(t.composer_shadow);
         frame.show(ui, |ui| {
             if self.state.selection.temporary {
-                ui.label(small_muted(&t, "Vorübergehender Chat: wird nicht gespeichert und ist beim Schließen weg."));
+                ui.label(small_muted(&t, "Temporärer Chat: wird nicht gespeichert und ist beim Schließen weg."));
             }
             if !self.pending_files.is_empty() {
                 let remove = self.attachment_chips(ui);
