@@ -52,9 +52,11 @@ pub fn commands() -> &'static [CommandSpec] {
         all.extend(crate::local_files::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::computer::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::sandbox::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::sandbox::browser::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::ext::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::apps::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::archive::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::explore::COMMANDS.iter().map(CommandSpec::copy));
         all
     })
 }
@@ -554,7 +556,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Einstellung ändern",
         "Einstellungen",
         None,
-        "key: theme|transparency|look_chosen|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|recall_archived|check_links|proactive|quiet_start|quiet_end|update_check|worksheet_points|ai_label|ai_label_prompt, value: any",
+        "key: theme|transparency|wait_animation|look_chosen|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|recall_archived|check_links|proactive|quiet_start|quiet_end|update_check|worksheet_points|ai_label|ai_label_prompt, value: any",
         false,
         |c, p| Box::pin(async move {
             let key = req_str(&p, "key")?;
@@ -583,6 +585,9 @@ static COMMANDS: &[CommandSpec] = &[
             }
             if key == "transparency" && !matches!(parsed.transparency.as_str(), "gradient" | "off") {
                 return Err(Error::invalid("transparency: gradient oder off"));
+            }
+            if key == "wait_animation" && !crate::state::WAIT_ANIMATIONS.contains(&parsed.wait_animation.as_str()) {
+                return Err(Error::invalid(format!("wait_animation: möglich sind {}", crate::state::WAIT_ANIMATIONS.join(", "))));
             }
             if !parsed.zoom.is_finite() {
                 parsed.zoom = 1.0;

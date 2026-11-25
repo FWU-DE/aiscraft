@@ -71,7 +71,14 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 **Assistenten, Dialogpartner und Lernszenarien.** „Entdecken“ in der Seitenleiste (oder Strg+K) öffnet eine Seite mit allem, was AIS.chat dir anbietet: eigene, an der Schule geteilte und offizielle Einträge, mit Bild und Beschreibung.
 
 - **Suchen:** Strg+F, dann Name oder Beschreibung. Groß- und Kleinschreibung und Umlaute spielen keine Rolle („uebung“ findet „Übung“). Bleibt genau ein Treffer, öffnet Enter ihn.
-- **Eingrenzen:** Alle, Assistenten, Dialogpartner, Lernszenarien; dazu „★ Favoriten“ und „Meine“.
+- **Eingrenzen:** Alle, Assistenten, Dialogpartner, Lernszenarien.
+- **Filter und Sortierung:** darunter, mit einem Klick aufgeklappt, alles, was AIS.chat auf seinen Übersichtsseiten anbietet:
+  - **Anzeigen:** Meine, Offiziell (vom Land), Schulintern (an deiner Schule geteilt; nur, wenn dein Land das Teilen in der Schule erlaubt und etwas geteilt ist), Community, Alle und Favoriten.
+  - **Sortierung:** Neueste zuerst (wie in AIS.chat voreingestellt), Älteste zuerst, Alphabetisch A-Z oder Z-A, Beliebteste zuerst (wie oft in letzter Zeit in ganz AIS.chat genutzt; bei Gleichstand das Neuere zuerst).
+  - **Filter:** Schulform, Klassenstufe, Fach, Kategorie, Bundesland und Sprache, jeweils nur, wenn ein Eintrag Werte dafür hat; in Klammern steht, wie viele Einträge ein Wert zeigt. Innerhalb einer Gruppe reicht einer der gewählten Werte („Gymnasium“ oder „Realschule“), über Gruppen hinweg muss alles passen („Gymnasium“ und „Deutsch“).
+  - Gewählte Werte stehen als Chips mit × unter dem Abschnitt, davor „N Treffer“; „Zurücksetzen“ wählt alle ab.
+
+  Die Auswahl bleibt, bis du AIS.ChatCraft beendest (wie AIS.chat sie für einen Browser-Tab behält); beim nächsten Start beginnt die Seite wieder mit „Alle“, „Neueste zuerst“ und ohne Filter, damit kein vergessener Filter Einträge versteckt. Die Werte vergibt, wer einen Eintrag in AIS.chat anlegt; fehlen sie, findet der Filter ihn nicht.
 - **Favoriten:** Zeige auf eine Karte und klicke auf den Stern oben rechts, oder auf „☆ Als Favorit markieren“ in den Details und im neuen Chat. Favoriten gelten auch in AIS.chat im Browser.
 - **Details:** Ein Klick auf eine Karte zeigt Beschreibung, Begrüßung, Aufgabe, ob die Websuche an ist, und Gesprächsanfänge. „Chat starten“ (oder Enter) beginnt einen neuen Chat; ein Gesprächsanfang startet ihn und schickt den Satz gleich ab.
 - **Zurück:** Esc, erst zur Übersicht, dann zum Chat.
@@ -298,21 +305,44 @@ Manche Konnektoren liefern zu einem Ergebnis eine kleine Oberfläche, etwa einen
 
 ### Eigener Rechner (Sandbox)
 
-Mit dem eigenen Rechner kann ein Modell Befehle ausführen, ohne deinen Computer zu berühren: Dateien umwandeln („Mach aus dem Elternbrief eine PDF“), Tabellen neu berechnen, PDFs reparieren oder zusammenfügen, Noten mit Python auswerten. Darin gibt es LibreOffice, Python 3 (mit pandas, openpyxl, matplotlib), qpdf, Ghostscript und die Noto-Schriften.
+Mit dem eigenen Rechner kann ein Modell Befehle ausführen, ohne deinen Computer zu berühren: Dateien umwandeln („Mach aus dem Elternbrief eine PDF“), Tabellen neu berechnen, PDFs reparieren oder zusammenfügen, Text in Scans erkennen, Noten mit Python auswerten. Darin gibt es LibreOffice, Python 3, Tesseract (Texterkennung), qpdf, Ghostscript und die Noto-Schriften. Es ist derselbe Arbeitsbereich wie in n8n Nod.
 
-**Einrichten:** Er ist zuerst aus. Unter **Einstellungen › Fähigkeiten** steht, was er kann, was er nicht sieht, wie groß das Abbild ist (rund 900 MB Download, etwa 4 GB auf der Platte), woher es kommt (ein Release dieses Projekts auf github.com, aus Ubuntu 24.04 gebaut) und unter welchen Lizenzen. Geladen wird erst nach **Einrichten …** und **Ja, laden und einrichten**. Das Abbild wird mit seiner festen SHA-256-Prüfsumme geprüft; stimmt sie nicht, bleibt nichts davon.
+**Einrichten:** Er ist zuerst aus. Unter **Einstellungen › Fähigkeiten** steht, was er kann, was er nicht sieht, wie groß er ist (rund 1,3 GB Download, etwa 5 GB auf der Platte), woher er kommt (die Windows-Laufzeit von n8n Nod, unverändert von github.com/n8n-io/nod) und unter welchen Lizenzen. Geladen wird erst nach **Einrichten …** und **Ja, laden und einrichten**. Die Datei wird mit ihrer in AIS.ChatCraft eingetragenen SHA-256-Prüfsumme geprüft; stimmt sie nicht, bleibt nichts davon.
 
-**Unter Windows** wird daraus eine eigene WSL2-Distribution `aiscraft-default` (bei der portablen Ausgabe mit einem Kürzel statt `default`). Deine anderen Linux-Distributionen und die WSL-Einstellungen bleiben unberührt. Fehlt WSL auf dem Rechner, steht in den Einstellungen, was zu tun ist: Eine Administratorin oder ein Administrator führt einmal `wsl --install --no-distribution` aus (bei einer alten Version `wsl --update`) und startet neu. **Unter macOS und Linux** gibt es den eigenen Rechner noch nicht.
+**Aktualisieren:** Bringt eine neue Version von AIS.ChatCraft eine neuere Nod-Laufzeit mit, steht unter **Einstellungen › Fähigkeiten** „Neue Version verfügbar“. Geladen wird erst nach **Aktualisieren …** und **Ja, laden und aktualisieren**; der Rechner wird dabei neu angelegt, die Arbeitsordner der Chats werden geleert (Anhänge im Chat bleiben). Ein eigener Rechner, der mit Version 0.2.2 eingerichtet wurde (damals mit einem eigenen Abbild von AIS.ChatCraft), führt nichts mehr aus, bis er so auf die Nod-Laufzeit umgestellt ist.
+
+**Unter Windows** wird daraus eine eigene WSL2-Distribution `aiscraft-default` (bei der portablen Ausgabe mit einem Kürzel statt `default`). Deine anderen Linux-Distributionen und die WSL-Einstellungen bleiben unberührt. Fehlt WSL auf dem Rechner, steht in den Einstellungen, was zu tun ist: Eine Administratorin oder ein Administrator führt einmal `wsl --install --no-distribution` aus (bei einer alten Version `wsl --update`) und startet neu.
+
+**Unter Linux** läuft er wie bei Nod als eigene virtuelle Maschine mit Lima und QEMU/KVM (rund 1,8 GB Download: Lima und die Laufzeit von n8n Nod, davon nur der Linux-Rechner und der Arbeitsbereich). Darin liegt nur Nods geprüftes Material, schreibgeschützt; dein Persönlicher Ordner und deine Laufwerke sind nicht eingebunden, und kein Anschluss des Rechners wird nach außen weitergeleitet. Nötig sind Hardware-Virtualisierung (`/dev/kvm`), QEMU und der OpenSSH-Client; fehlt etwas, steht in den Einstellungen der nächste Schritt, etwa „Virtualisierung im BIOS einschalten“, `sudo usermod -aG kvm $USER` oder `sudo apt install qemu-system-x86 qemu-utils`. Im Flatpak geht es noch nicht, weil QEMU dort fehlt; nimm dafür das AppImage oder das deb- bzw. rpm-Paket. **Unter macOS** gibt es den eigenen Rechner noch nicht.
 
 **Was er nicht sieht:** keine Laufwerke und Dateien deines Computers, keinen Schlüsselbund, keine Passwörter, nicht die Daten von AIS.ChatCraft. Jeder Befehl läuft in einem abgeschotteten Container: ohne Rechte und ohne `sudo`, mit 2 GB Arbeitsspeicher, 2 Prozessorkernen, 1024 Prozessen und höchstens 10 Minuten. Jeder Chat hat seinen eigenen Arbeitsordner `/work`. Dateien kommen nur hinein, wenn das Modell sie anlegt, und nur als Anhang im Chat heraus; den Anhang speicherst du wie jede erzeugte Datei.
 
-**Netz:** Standardmäßig hat der Arbeitsbereich kein Netz. **Netz im Arbeitsbereich erlauben** schaltet es für alle Chats ein; Befehle können dann Seiten im Internet erreichen und Daten dorthin schicken. Schalte es nur ein, solange du es brauchst.
+**Netz:** „Netz“ heißt hier immer nur öffentliches Internet, nie dein lokales Netz. Unter **Netz im Arbeitsbereich** wählst du für alle Chats eines Profils:
+
+- **Kein Netz** (Standard): Befehle erreichen weder das Internet noch dein Schulnetz.
+- **Nur erlaubte Seiten:** Befehle erreichen nur die Seiten auf deiner Liste, etwa `pypi.org` und `files.pythonhosted.org` für Python-Pakete oder `github.com`. Die Vorschläge fügst du mit einem Tippen hinzu, eigene Domains trägst du ein, auch mit Platzhalter (`*.example.org` gilt für alle Namen darunter). Die Liste gilt ab dem nächsten Befehl. Nur du änderst sie; das Modell hat dafür kein Werkzeug. Fragt ein Befehl eine Seite an, die nicht auf der Liste steht, wird sie abgelehnt, und das Modell sagt dir im Ergebnis, welche Seite es war und wo du sie freigeben kannst.
+- **Ganzes Internet:** Befehle erreichen jede öffentliche Seite und können Dateien aus dem Arbeitsordner dorthin schicken. Das geht nur nach einer ausdrücklichen Warnung; nimm es nur, solange du es brauchst, und sonst lieber einzelne Seiten.
+
+Mit Netz bekommt der Container trotzdem keinen eigenen Weg nach draußen. Jede Verbindung geht über einen Wächter, den AIS.ChatCraft selbst auf deinem Computer betreibt: Er prüft den Namen gegen die Liste, schaut nach, wohin der Name zeigt, und verbindet nur mit öffentlichen Adressen. **Immer gesperrt**, auch für erlaubte Seiten und bei „Ganzes Internet“: dein Schulnetz und Heimnetz (z. B. `192.168.…`, `10.…`), der Router, dein eigener Computer und seine Dienste (etwa Ollama), andere WSL-Rechner, Cloud-Metadaten (`169.254.169.254`), Namen, die auf solche Adressen zeigen, andere Anschlüsse als Webseiten (Port 80 und 443) sowie UDP und Ping. Programme, die einen Proxy kennen (pip, curl, git, Python), nutzen den Wächter von selbst. Jede Verbindung steht im **Aktionsprotokoll** mit Domain und übertragenen Bytes, auch abgelehnte.
 
 **Freigaben:** Auflisten und Lesen laufen ohne Frage. Befehle, Schreiben und Umwandeln brauchen deine Freigabe für genau diesen Befehl, diesen Ordner und dieses Zeitlimit, oder deine eigene Bitte im Chat (wie bei Konnektoren oben). Aufgaben und Zeitpläne nutzen den eigenen Rechner nie. Was ein Befehl ausgibt, behandelt AIS.ChatCraft als fremde Daten; mit „Namen schützen“ gehen Namen darin wie bei jedem Werkzeugergebnis nur als Platzhalter an das Modell. Im Aktionsprotokoll steht jeder Befehl.
 
 **Mit AIS.chat** gibt es den eigenen Rechner nicht, weil AIS.chat dem Modell keine Werkzeuge gibt; nimm dafür ein anderes Modell (z. B. Claude oder einen OpenAI-kompatiblen Dienst).
 
 **Anhalten** beendet alles, was gerade darin läuft; die Arbeitsordner bleiben. **Entfernen** löscht den Rechner mit allen Arbeitsordnern. Wird ein Chat endgültig gelöscht, geht sein Arbeitsordner mit.
+
+#### Browser im eigenen Rechner
+
+Im eigenen Rechner kann auch ein Browser laufen, mit dem das Modell Webseiten öffnet, liest und Formulare ausfüllt, zum Beispiel auf einer Lernplattform. Du schaltest ihn unter **Einstellungen › Fähigkeiten › Browser im eigenen Rechner** ein; aus ist er, bis du das tust. Es ist der Browser aus der Laufzeit von n8n Nod (Chromium, gesteuert über agent-browser); er ist schon im Download enthalten.
+
+- **Nur bei Bedarf und unsichtbar:** Der Browser startet erst, wenn das Modell ihn zum ersten Mal braucht, läuft ohne sichtbares Fenster auf einem eigenen, privaten Bildschirm im eigenen Rechner und endet nach 10 Minuten ohne Nutzung. Dabei verschwindet alles darin: Anmeldungen, Cookies, offene Seiten. **Browser beenden** in den Einstellungen beendet ihn sofort.
+- **Abgeschottet:** ein eigener Container wie der Arbeitsbereich (ohne Rechte, schreibgeschützt, 2 GB Arbeitsspeicher, 2 Prozessorkerne), ohne gemeinsamen Ordner mit dem Arbeitsbereich. Er erreicht nur öffentliche Adressen im Internet, nicht dein Schulnetz, deinen Router oder deinen Computer.
+- **Text statt Bild:** Das Modell liest Seiten als Text (die Bedienelemente mit Nummern wie `@e12`). Ein **Bildschirmfoto** legt es als Anhang in den Chat, damit du die Seite siehst.
+- **Freigaben:** Öffnen, Lesen und Warten laufen ohne Frage. **Klicken, Eingeben und Herunterladen** können etwas absenden, bezahlen oder ändern; dafür fragt AIS.ChatCraft dich mit der Seite, dem Ziel des Formulars und dem eingegebenen Wert, oder es deckt deine eigene Bitte im Chat. Aufgaben und Zeitpläne nutzen den Browser nie. Seiteninhalte sind fremde Daten; mit „Namen schützen“ gehen Namen darin nur als Platzhalter an das Modell.
+- **Passwörter** schreibt das Modell nur als Platzhalter aus dem **Tresor** (`{{vault:Name}}`); die App setzt den Wert selbst ein, das Modell sieht ihn nie, und es braucht immer deine Freigabe.
+- **Downloads** landen nur über den ausdrücklichen Schritt „Herunterladen“ (mit Freigabe) im Arbeitsordner des Chats unter `/work/downloads`, nie von selbst.
+
+**Übernehmen:** Braucht die Seite dich (Anmeldung, Captcha, Bestätigung auf dem Telefon), übergibt das Modell dir den Browser. Die Aufgabe wartet, und unter der Nachricht erscheint das Live-Bild des Browsers. Klicke ins Bild, dann klickst, scrollst und tippst du direkt im Browser. Solange du steuerst, tut das Modell nichts. Mit **Zurück an AIS.ChatCraft** gibst du ihn zurück; das Modell sieht sich die Seite neu an und macht weiter. Ohne diesen Fall siehst du vom Browser nichts.
 
 ## Tresor
 
@@ -384,6 +414,8 @@ Unter **Einstellungen › Darstellung** wählst du, wie AIS.ChatCraft aussieht. 
 **Transparenz** (nur Glas): „Verlauf“ zeigt die Glasflächen lichtdurchlässig über dem Verlauf. „Aus“ macht sie deckend. Das ist ruhiger und auf schwachen Rechnern schneller. Echte Unschärfe hinter dem Fenster (der Desktop scheint durch) gibt es nicht.
 
 **Zoom** vergrößert Schrift und Bedienelemente. **Enter sendet** schaltet zwischen Enter und Strg+Enter zum Senden um.
+
+**Warte-Animation:** Bis eine Antwort kommt, zeigt der Chat eine kleine Animation, darunter wechselt alle paar Sekunden ein Satz („Denkt nach …“, „Sortiert die Gedanken …“, „Schlägt nach …“). „Abwechselnd“ (Standard) nimmt für jede Antwort eine andere: einen Bleistift, der schreibt und wieder radiert, eine Glühbirne, aus der Ideen aufsteigen, ein Buch mit umblätternden Seiten, Planeten um eine kleine Sonne oder einen Papierflieger. In Bild-Chats tupft ein Pinsel Farbkleckse. Du kannst auch eine feste Animation wählen. **Schlicht** zeigt nur den kleinen Kreisel von früher: Das ist die ruhigste Wahl, wenn dich Bewegung stört. Die Einstellung „Animationen reduzieren“ des Betriebssystems kann AIS.ChatCraft nicht auslesen, deshalb gibt es diese Wahl hier.
 
 Die Akzentfarbe ist überall das AIS-Blau.
 

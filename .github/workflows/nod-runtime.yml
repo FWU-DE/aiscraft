@@ -1,0 +1,201 @@
+name: Nod-Laufzeit
+
+# „Eigener Rechner (Sandbox)“ (#94) uses n8n Nod's own Windows runtime, pinned in
+# crates/engine/src/sandbox/image.rs. This workflow keeps the pin current, as Nod's own updater
+# does: it looks at Nod's newest release, verifies the release's signed statement (sigstore,
+# signed by Nod's desktop-release.yml on main), reads the runtime's checksum and size and the
+# workspace image's id and checksum, and opens a pull request that updates the pinned block.
+# The app then offers the new runtime to computers that run an older one (`sandbox.update`),
+# only after the owner's yes.
+#
+# - Runs every Monday and on "Run workflow" (optionally for a given tag).
+# - Nothing is changed when the pin is current; an unsigned or inconsistent release fails.
+# - Pull requests opened with GITHUB_TOKEN do not start CI on their own: close and reopen the
+#   pull request (or push to its branch) to run it.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Nod-Release (z. B. nod-v0.9.8); leer = neuestes"
+        type: string
+        required: false
+
+concurrency:
+  group: nod-runtime
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  pin:
+    name: Nod-Laufzeit prüfen
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PIN: crates/engine/src/sandbox/image.rs
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Neuestes Release
+        id: release
+        env:
+          WANTED: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${WANTED:-$(gh release view -R n8n-io/nod --json tagName -q .tagName)}"
+          [[ "$tag" =~ ^nod-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Unerwarteter Tag: $tag"; exit 1; }
+          current="$(sed -nE 's/^pub const NOD_TAG: &str = "([^"]+)";$/\1/p' "$PIN")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "Eingetragen: $current, bei Nod: $tag"
+      - name: Release laden und Signatur prüfen
+        id: read
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir nod && cd nod
+          gh release download "$TAG" -R n8n-io/nod -p 'release-win32-x64.json' -p 'SHA256SUMS-win32-x64' -p 'nod-release.sigstore.json' -p 'runtime-win32-x64-*.json' -p 'runtime-darwin-x64-*.json'
+          ls -l
+          manifest="$(ls runtime-win32-x64-*.json)"
+          [ "$(echo "$manifest" | wc -l)" = 1 ] || { echo "::error::Nicht genau ein Laufzeit-Manifest"; exit 1; }
+          # The signed in-toto statement lists every asset's digest; each file we read must be in it,
+          # signed by Nod's desktop-release.yml built from main. Not --deny-self-hosted-runners: Nod builds
+          # its releases on self-hosted runners, so that flag refuses every genuine release (checked 2026-11-25).
+          linux="$(ls runtime-darwin-x64-*.json)"
+          [ "$(echo "$linux" | wc -l)" = 1 ] || { echo "::error::Nicht genau ein x86-64-Laufzeit-Manifest"; exit 1; }
+          for f in release-win32-x64.json SHA256SUMS-win32-x64 "$manifest" "$linux"; do
+            gh attestation verify "$f" --bundle nod-release.sigstore.json --repo n8n-io/nod \
+              --signer-workflow n8n-io/nod/.github/workflows/desktop-release.yml --source-ref refs/heads/main
+          done
+          file="$(jq -r .runtime.file release-win32-x64.json)"
+          sha="$(jq -r .runtime.sha256 release-win32-x64.json)"
+          bytes="$(jq -r .runtime.bytes release-win32-x64.json)"
+          [ "$file" = nod-Runtime-win32-x64.tar.gz ] || { echo "::error::Anderer Dateiname: $file"; exit 1; }
+          grep -qx "$sha  $file" SHA256SUMS-win32-x64 || { echo "::error::Prüfsummen passen nicht zusammen"; exit 1; }
+          [ "$(jq -r .guest.sha256 "$manifest")" = "$sha" ] || { echo "::error::Manifest gehört nicht zur Laufzeit"; exit 1; }
+          [ "$(jq -r .platform "$manifest")" = win32-x64 ] || { echo "::error::Falsche Plattform"; exit 1; }
+          ws_id="$(jq -r '.images[] | select(.name == "workspace") | .id' "$manifest")"
+          ws_sha="$(jq -r '.images[] | select(.name == "workspace") | .sha256' "$manifest")"
+          ws_file="$(jq -r '.images[] | select(.name == "workspace") | .file' "$manifest")"
+          br_id="$(jq -r '.images[] | select(.name == "browser") | .id' "$manifest")"
+          br_sha="$(jq -r '.images[] | select(.name == "browser") | .sha256' "$manifest")"
+          br_file="$(jq -r '.images[] | select(.name == "browser") | .file' "$manifest")"
+          [[ "$br_sha" =~ ^[a-f0-9]{64}$ && "$br_id" =~ ^sha256:[a-f0-9]{64}$ && "$br_file" =~ ^images/[a-z]+\.tar\.zst$ ]] || { echo "::error::Ungültiges Browser-Abbild im Manifest"; exit 1; }
+          [[ "$sha" =~ ^[a-f0-9]{64}$ && "$ws_sha" =~ ^[a-f0-9]{64}$ && "$ws_id" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::Ungültige Prüfsummen"; exit 1; }
+          [[ "$bytes" =~ ^[0-9]+$ && "$ws_file" =~ ^images/[a-z]+\.tar\.zst$ ]] || { echo "::error::Ungültige Größe oder Datei"; exit 1; }
+          {
+            echo "sha=$sha"
+            echo "bytes=$bytes"
+            echo "ws_id=$ws_id"
+            echo "ws_sha=$ws_sha"
+            echo "ws_tar=/opt/nod-assets/$ws_file"
+            echo "br_id=$br_id"
+            echo "br_sha=$br_sha"
+            echo "br_tar=/opt/nod-assets/$br_file"
+          } >> "$GITHUB_OUTPUT"
+      - name: Pin aktualisieren
+        id: pin
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          SHA: ${{ steps.read.outputs.sha }}
+          BYTES: ${{ steps.read.outputs.bytes }}
+          WS_ID: ${{ steps.read.outputs.ws_id }}
+          WS_SHA: ${{ steps.read.outputs.ws_sha }}
+          WS_TAR: ${{ steps.read.outputs.ws_tar }}
+          BR_ID: ${{ steps.read.outputs.br_id }}
+          BR_SHA: ${{ steps.read.outputs.br_sha }}
+          BR_TAR: ${{ steps.read.outputs.br_tar }}
+        run: |
+          set -euo pipefail
+          sed -i -E \
+            -e "s|^pub const NOD_TAG: &str = \".*\";$|pub const NOD_TAG: \&str = \"$TAG\";|" \
+            -e "s|^pub const RUNTIME_SHA256: &str = \".*\";$|pub const RUNTIME_SHA256: \&str = \"$SHA\";|" \
+            -e "s|^pub const RUNTIME_BYTES: u64 = [0-9_]+;$|pub const RUNTIME_BYTES: u64 = $BYTES;|" \
+            -e "s|^pub const WORKSPACE_ID: &str = \".*\";$|pub const WORKSPACE_ID: \&str = \"$WS_ID\";|" \
+            -e "s|^pub const WORKSPACE_TAR: &str = \".*\";$|pub const WORKSPACE_TAR: \&str = \"$WS_TAR\";|" \
+            -e "s|^pub const WORKSPACE_TAR_SHA256: &str = \".*\";$|pub const WORKSPACE_TAR_SHA256: \&str = \"$WS_SHA\";|" \
+            -e "s|^pub const BROWSER_ID: &str = \".*\";$|pub const BROWSER_ID: \&str = \"$BR_ID\";|" \
+            -e "s|^pub const BROWSER_TAR: &str = \".*\";$|pub const BROWSER_TAR: \&str = \"$BR_TAR\";|" \
+            -e "s|^pub const BROWSER_TAR_SHA256: &str = \".*\";$|pub const BROWSER_TAR_SHA256: \&str = \"$BR_SHA\";|" \
+            "$PIN"
+          # Linux (#102): Nod's x86-64 runtime archive and the guest files taken out of it, from
+          # the signed runtime-darwin-x64 manifest (verified above).
+          linux="$(ls nod/runtime-darwin-x64-*.json)"
+          a_url="$(jq -r .url "$linux")"
+          a_sha="$(jq -r .archive.sha256 "$linux")"
+          a_bytes="$(jq -r .archive.bytes "$linux")"
+          a_tag="$(jq -r .releaseTag "$linux")"
+          [[ "$a_url" =~ ^https://github\.com/n8n-io/nod/releases/download/nod-v[0-9.]+/nod-Runtime-darwin-x64-[a-f0-9]+\.tar\.gz$ && "$a_sha" =~ ^[a-f0-9]{64}$ && "$a_bytes" =~ ^[0-9]+$ && "$a_tag" =~ ^nod-v[0-9.]+$ ]] || { echo "::error::Ungültiges x86-64-Archiv im Manifest"; exit 1; }
+          [ "$(basename "$a_url")" = "$(jq -r .archive.file "$linux")" ] || { echo "::error::Archivname passt nicht zur Adresse"; exit 1; }
+          lima="$(sed -nE 's/^pub const LIMA_VERSION: &str = "([^"]+)";$/\1/p' "$PIN")"
+          sed -i -E \
+            -e "s|^pub const NOD_ARCHIVE_URL: &str = \".*\";$|pub const NOD_ARCHIVE_URL: \&str = \"$a_url\";|" \
+            -e "s|^pub const NOD_ARCHIVE_SHA256: &str = \".*\";$|pub const NOD_ARCHIVE_SHA256: \&str = \"$a_sha\";|" \
+            -e "s|^pub const NOD_ARCHIVE_BYTES: u64 = [0-9_]+;$|pub const NOD_ARCHIVE_BYTES: u64 = $a_bytes;|" \
+            -e "s|^pub const LINUX_VERSION: &str = \".*\";$|pub const LINUX_VERSION: \&str = \"$a_tag (Linux, Lima $lima)\";|" \
+            "$PIN"
+          for path in $(sed -nE 's/^    \("([^"]+)", "[a-f0-9]{64}", [0-9]+\),$/\1/p' "$PIN"); do
+            f_sha="$(jq -r --arg p "$path" '.files[] | select(.path == $p) | .sha256' "$linux")"
+            f_bytes="$(jq -r --arg p "$path" '.files[] | select(.path == $p) | .bytes' "$linux")"
+            [[ "$f_sha" =~ ^[a-f0-9]{64}$ && "$f_bytes" =~ ^[0-9]+$ ]] || { echo "::error::$path fehlt im x86-64-Manifest"; exit 1; }
+            sed -i -E "s|^    \(\"$path\", \"[a-f0-9]{64}\", [0-9]+\),$|    (\"$path\", \"$f_sha\", $f_bytes),|" "$PIN"
+            if [ "$path" = images/workspace.tar.zst ]; then
+              sed -i -E "s|^pub const LINUX_WORKSPACE_TAR_SHA256: &str = \".*\";$|pub const LINUX_WORKSPACE_TAR_SHA256: \&str = \"$f_sha\";|" "$PIN"
+            fi
+            if [ "$path" = images/browser.tar.zst ]; then
+              sed -i -E "s|^pub const LINUX_BROWSER_TAR_SHA256: &str = \".*\";$|pub const LINUX_BROWSER_TAR_SHA256: \&str = \"$f_sha\";|" "$PIN"
+            fi
+          done
+          git diff -- "$PIN"
+          if git diff --quiet -- "$PIN"; then
+            echo "Die eingetragene Nod-Laufzeit ist aktuell." >> "$GITHUB_STEP_SUMMARY"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Pull Request
+        if: steps.pin.outputs.changed == 'true'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          CURRENT: ${{ steps.release.outputs.current }}
+          SHA: ${{ steps.read.outputs.sha }}
+          BYTES: ${{ steps.read.outputs.bytes }}
+        run: |
+          set -euo pipefail
+          branch="nod-runtime/$TAG"
+          if git ls-remote --exit-code --heads "https://github.com/${GITHUB_REPOSITORY}.git" "$branch" >/dev/null; then
+            echo "Branch $branch gibt es schon; nichts zu tun." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "Eigener Rechner: Nod-Laufzeit $TAG
+
+          Die Windows-Laufzeit von n8n Nod $TAG (signiert von Nods desktop-release.yml) ist eingetragen.
+          Rechner mit $CURRENT bekommen „Aktualisieren“ angeboten.
+
+          Ref #94"
+          # Checkout keeps no credentials (zizmor artipacked); the token is used only for this push.
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$branch"
+          cat > body.md <<EOF
+          Neue Windows-Laufzeit von n8n Nod für „Eigener Rechner (Sandbox)“ (#94): **$CURRENT → $TAG**.
+
+          - \`nod-Runtime-win32-x64.tar.gz\`: $BYTES Bytes, SHA-256 \`$SHA\`
+          - Signatur geprüft: \`gh attestation verify\` gegen \`nod-release.sigstore.json\`, Signer \`n8n-io/nod/.github/workflows/desktop-release.yml\`
+          - Arbeitsbereich: Abbild-ID und Prüfsumme aus dem signierten Laufzeit-Manifest
+
+          Vor dem Mergen: CI anstoßen (Pull Requests von GITHUB_TOKEN starten keine Checks; schließen und wieder öffnen) und, wenn möglich, den Live-Test unter Windows laufen lassen:
+          \`cargo test -p aiscraft-engine real_wsl_runs_echo_in_the_container -- --ignored --nocapture\`
+
+          Nach dem Release bieten die Einstellungen Rechnern mit $CURRENT „Aktualisieren“ an (nur nach Ja; Arbeitsordner werden geleert).
+          EOF
+          gh pr create --base main --head "$branch" --title "Eigener Rechner: Nod-Laufzeit $TAG" --body-file body.md

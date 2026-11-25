@@ -14,6 +14,9 @@ pub struct State {
     pub citation: Option<crate::citations::CitationView>,
     /// The search in the open chat (Strg+F, #41).
     pub find: Option<crate::find::FindState>,
+    /// „Entdecken“: tab, kind, search, sort order and filters, for this run (`explore.*`).
+    #[serde(default)]
+    pub explore: aiscraft_core::ExploreFilter,
     /// Increases with every change; surfaces redraw when it moves.
     pub revision: u64,
     pub backends: Vec<BackendView>,
@@ -434,6 +437,9 @@ pub struct Settings {
     pub theme: String,
     /// Glas: "gradient" (translucent panels over the gradient) or "off" (opaque panels).
     pub transparency: String,
+    /// What a chat shows while an answer is on its way, one of [`WAIT_ANIMATIONS`]: "mix" (a
+    /// different animation per answer, the default), one animation, or "plain" (the spinner).
+    pub wait_animation: String,
     /// The person has picked a look (or closed the question) once; until then the welcome
     /// dialog asks on start.
     pub look_chosen: bool,
@@ -509,6 +515,9 @@ pub struct TrustRule {
     pub connector: String,
 }
 
+/// Accepted values of the `wait_animation` setting.
+pub const WAIT_ANIMATIONS: &[&str] = &["mix", "pencil", "bulb", "books", "planets", "plane", "brush", "plain"];
+
 /// Accepted values of the `theme` setting.
 pub const THEMES: &[&str] = &["modern", "modern-light", "modern-dark", "glas", "glas-light", "glas-dark", "system", "light", "dark", "omarchy"];
 
@@ -517,6 +526,7 @@ impl Default for Settings {
         Self {
             theme: "modern".into(),
             transparency: "gradient".into(),
+            wait_animation: "mix".into(),
             look_chosen: false,
             privacy_onboarded: false,
             memory: true,

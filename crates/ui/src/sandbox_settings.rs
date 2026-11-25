@@ -1,6 +1,7 @@
 //! „Eigener Rechner (Sandbox)“ (#94), in Einstellungen › Fähigkeiten: what it can do and what it
 //! cannot see, size, source and licence; the download starts only after the second click
-//! („Ja, laden und einrichten“). Once set up: on or off, the network switch, stop, remove.
+//! („Ja, laden und einrichten“). Once set up: on or off, the network switch, the browser in the
+//! computer (#107), stop, remove.
 
 use egui::{RichText, Ui};
 use serde_json::json;
@@ -38,23 +39,54 @@ impl AisCraftApp {
                 }
             }
         } else if s.installed {
+            if s.legacy {
+                ui.label(RichText::new(aiscraft_engine::sandbox::LEGACY).small().color(t.danger));
+            }
             let mut on = s.enabled;
-            if ui.checkbox(&mut on, format!("Eigenen Rechner nutzen ({})", s.machine)).changed() {
+            if ui.add_enabled(!s.legacy, egui::Checkbox::new(&mut on, format!("Eigenen Rechner nutzen ({})", s.machine))).changed() {
                 self.run("sandbox.set", json!({"enabled": on}));
             }
-            let mut net = s.network;
-            if ui.checkbox(&mut net, "Netz im Arbeitsbereich erlauben").changed() {
-                self.run("sandbox.set", json!({"network": net}));
-            }
-            ui.label(small_muted(
-                &t,
-                if s.network {
-                    "Netz an: Befehle können Seiten im Internet erreichen und Daten dorthin schicken. Nur einschalten, solange du es brauchst."
-                } else {
-                    "Kein Netz: Befehle erreichen weder das Internet noch dein Schulnetz."
-                },
-            ));
+            self.sandbox_network(ui, &s);
             ui.label(small_muted(&t, CANNOT));
+            // The browser in the computer (#107): off until switched on, starts only when needed.
+            let mut browser = s.browser;
+            if ui.add_enabled(s.enabled, egui::Checkbox::new(&mut browser, "Browser im eigenen Rechner (nur öffentliche Adressen)")).changed() {
+                self.run("sandbox.set", json!({"browser": browser}));
+            }
+            ui.label(small_muted(&t, aiscraft_engine::sandbox::browser::CAN));
+            ui.label(small_muted(&t, aiscraft_engine::sandbox::browser::CANNOT));
+            if s.browser_running {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(small_muted(&t, "Der Browser läuft gerade."));
+                    if ui.small_button("Browser beenden").clicked() {
+                        self.run("browser.stop", json!({}));
+                    }
+                });
+            }
+            if !s.version.is_empty() {
+                ui.label(small_muted(&t, format!("Laufzeit: n8n Nod {}", s.version.trim_start_matches("nod-"))));
+            }
+            // A newer pinned Nod runtime (as Nod's own updater offers it): only after a yes.
+            if let Some(v) = &s.update {
+                let ask_update = egui::Id::unique("sandbox-update-ask");
+                ui.label(RichText::new(format!("Neue Version verfügbar: n8n Nod {} ({} MB)", v.trim_start_matches("nod-"), image::APPROX_MB)).strong());
+                ui.label(small_muted(&t, aiscraft_engine::sandbox::UPDATE_NOTE));
+                if !ui.data(|d| d.get_temp::<bool>(ask_update)).unwrap_or(false) {
+                    if ui.button("Aktualisieren …").clicked() {
+                        ui.data_mut(|d| d.insert_temp(ask_update, true));
+                    }
+                } else {
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new(RichText::new("Ja, laden und aktualisieren").color(t.on_accent)).fill(t.accent)).clicked() {
+                            ui.data_mut(|d| d.insert_temp(ask_update, false));
+                            self.run("sandbox.update", json!({"yes": true}));
+                        }
+                        if ui.button("Abbrechen").clicked() {
+                            ui.data_mut(|d| d.insert_temp(ask_update, false));
+                        }
+                    });
+                }
+            }
             ui.horizontal_wrapped(|ui| {
                 if ui.small_button("Anhalten").on_hover_text("Beendet alles, was darin läuft; die Dateien bleiben").clicked() {
                     self.run("sandbox.stop", json!({}));
@@ -82,7 +114,13 @@ impl AisCraftApp {
                     ui.data_mut(|d| d.insert_temp(ask_id, true));
                 }
             } else {
-                ui.label(RichText::new(format!("{} MB von github.com laden und den eigenen Rechner einrichten?", image::APPROX_MB)).strong());
+                ui.label(
+                    RichText::new(format!(
+                        "{} MB (die Windows-Laufzeit von n8n Nod) von github.com laden und den eigenen Rechner einrichten?",
+                        image::APPROX_MB
+                    ))
+                    .strong(),
+                );
                 ui.horizontal(|ui| {
                     if ui.add(egui::Button::new(RichText::new("Ja, laden und einrichten").color(t.on_accent)).fill(t.accent)).clicked() {
                         ui.data_mut(|d| d.insert_temp(ask_id, false));
@@ -97,5 +135,84 @@ impl AisCraftApp {
         if let Some(p) = &s.problem {
             ui.label(RichText::new(p).small().color(t.danger));
         }
+    }
+
+    /// „Netz im Arbeitsbereich“ (#106): Kein Netz, nur erlaubte Seiten (the list with one-tap
+    /// suggestions), ganzes Internet (only after the warning, in a confirmation).
+    fn sandbox_network(&mut self, ui: &mut Ui, s: &aiscraft_engine::sandbox::SandboxState) {
+        use aiscraft_engine::sandbox::net::{self, NetMode};
+        let t = self.tokens.clone();
+        ui.add_space(4.0);
+        ui.label(RichText::new("Netz im Arbeitsbereich").strong());
+        ui.label(small_muted(&t, net::TEXT_SCOPE));
+        ui.horizontal_wrapped(|ui| {
+            for mode in [NetMode::Off, NetMode::List, NetMode::Internet] {
+                if ui.radio(s.network == mode, mode.label()).clicked() && s.network != mode {
+                    if mode == NetMode::Internet {
+                        self.dialog = Some(Dialog::Confirm {
+                            text: format!("{}\n\nGanzes Internet erlauben?", net::WARNING_INTERNET),
+                            command: "sandbox.set".into(),
+                            params: json!({"network": "internet", "yes": true}),
+                        });
+                    } else {
+                        self.run("sandbox.set", json!({"network": mode.id()}));
+                    }
+                }
+            }
+        });
+        match s.network {
+            NetMode::Off => {
+                ui.label(small_muted(&t, net::TEXT_OFF));
+            }
+            NetMode::List => {
+                ui.label(small_muted(&t, net::TEXT_LIST));
+            }
+            NetMode::Internet => {
+                ui.label(RichText::new(net::WARNING_INTERNET).small().color(t.warning));
+            }
+        }
+        if s.network == NetMode::Internet {
+            return;
+        }
+        ui.label(RichText::new("Erlaubte Seiten").small().strong());
+        if s.allow.is_empty() {
+            ui.label(small_muted(&t, "Noch keine. Vorschläge antippen oder eine Domain eintragen (z. B. pypi.org oder *.example.org)."));
+        }
+        let mut remove = None;
+        for d in &s.allow {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(d).small().monospace());
+                if ui.small_button("Entfernen").on_hover_text(format!("{d} nicht mehr erlauben")).clicked() {
+                    remove = Some(d.clone());
+                }
+            });
+        }
+        if let Some(d) = remove {
+            self.run("sandbox.allow_remove", json!({"domain": d}));
+        }
+        ui.horizontal_wrapped(|ui| {
+            for (name, domains) in net::SUGGESTIONS {
+                if domains.iter().all(|d| s.allow.iter().any(|a| a == d)) {
+                    continue;
+                }
+                if ui.small_button(format!("+ {name}")).on_hover_text(domains.join(", ")).clicked() {
+                    self.run("sandbox.allow_add", json!({"domains": domains}));
+                }
+            }
+        });
+        let field = egui::Id::unique("sandbox-allow-field");
+        let mut text = ui.data(|d| d.get_temp::<String>(field)).unwrap_or_default();
+        let (resp, add) = crate::widgets::field_then_buttons(
+            ui,
+            |ui| ui.small_button("Erlauben").clicked(),
+            |ui, w| ui.add(egui::TextEdit::singleline(&mut text).hint_text("Domain, z. B. pypi.org").desired_width(w)),
+        );
+        let entered = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (add || entered) && !text.trim().is_empty() {
+            self.run("sandbox.allow_add", json!({"domain": text.trim()}));
+            text.clear();
+        }
+        ui.data_mut(|d| d.insert_temp(field, text));
+        ui.label(small_muted(&t, "Gilt ab dem nächsten Befehl. Das Modell kann die Liste nicht ändern; abgelehnte Seiten nennt es dir im Ergebnis."));
     }
 }

@@ -121,7 +121,7 @@ async fn web_fetch(c: &Ctx, a: &Value) -> Result<String> {
             page.title.replace('\n', " "),
             page.url,
             // A page cannot close the data block it is shown in.
-            page.text.replace("untrusted_tool_result", "untrusted-tool-result")
+            defang(&page.text)
         ),
     ))
 }
@@ -310,6 +310,10 @@ pub(crate) fn specs_for(c: &Ctx, sources: &aiscraft_core::Sources) -> Vec<ToolSp
     if crate::sandbox::offered(c) && sources.allows_connector(crate::sandbox::ID) {
         out.extend(crate::sandbox::specs());
     }
+    // Its browser (#107), only while the person has it on too.
+    if crate::sandbox::browser::offered(c) && sources.allows_connector(crate::sandbox::browser::ID) {
+        out.extend(crate::sandbox::browser::specs());
+    }
     for conn in c.state().connectors.iter().filter(|x| x.enabled && x.status == "connected" && sources.allows_connector(&x.id)) {
         for t in conn.tools.iter().filter(|t| !t.app_only) {
             let mut desc = format!("[{}] {}", conn.name, if t.description.is_empty() { &t.title } else { &t.description });
@@ -322,8 +326,20 @@ pub(crate) fn specs_for(c: &Ctx, sources: &aiscraft_core::Sources) -> Vec<ToolSp
     out
 }
 
+/// Tool output cannot close or open the data block it is shown in: every spelling of the tag's
+/// name (any case, `_`, `-`, space or nothing between the words) becomes a harmless one.
+pub(crate) fn defang(text: &str) -> String {
+    static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+    match RE.get_or_init(|| regex::Regex::new(r"(?i)untrusted[\s_\-]*tool[\s_\-]*result").ok()) {
+        Some(re) => re.replace_all(text, "untrusted-tool-result").into_owned(),
+        None => text.replace("untrusted_tool_result", "untrusted-tool-result"),
+    }
+}
+
 /// Marks tool output as data for the model.
 fn wrap_untrusted(tool: &str, text: &str) -> String {
+    let text = defang(text);
+    let text = text.as_str();
     let mut t: String = text.chars().take(MAX_RESULT_CHARS).collect();
     if text.chars().count() > MAX_RESULT_CHARS {
         t.push_str("\n… (gekürzt)");
@@ -477,15 +493,25 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     // question and the action log name exactly what will run.
     let normalized;
     let call = if crate::sandbox::is_tool(&call.name) {
-        normalized = ToolCall { arguments: crate::sandbox::normalize(&call.name, &call.arguments), ..call.clone() };
+        let mut args = crate::sandbox::normalize(&call.name, &call.arguments, c.state().sandbox.network);
+        // A browser step that may change something names its page and the form's target (#107).
+        if interactive {
+            args = crate::sandbox::browser::enrich(c, conv, &call.name, args).await;
+        }
+        normalized = ToolCall { arguments: args, ..call.clone() };
         &normalized
     } else {
         call
     };
     // Built-in tools work on the person's own files and documents: placeholders of „Namen
     // schützen“ become the names again there (#55). Connectors get the call as the model wrote it,
-    // and so does the page reader: a web address goes over the network and keeps the placeholders.
-    let local = ToolCall { arguments: crate::privacy::reveal_value(c, conv, &call.arguments), ..call.clone() };
+    // and so does the page reader: a web address goes over the network and keeps the placeholders;
+    // so does the browser, except for what is typed after the person saw the values (#107).
+    let local = if crate::sandbox::browser::is_tool(&call.name) && !crate::sandbox::browser::reveals_names(&call.name) {
+        call.clone()
+    } else {
+        ToolCall { arguments: crate::privacy::reveal_value(c, conv, &call.arguments), ..call.clone() }
+    };
     let is_app = is_app_action(&call.name);
     if !is_app {
         if let Some(r) = run_file_tool(c, conv, &local) {
@@ -537,7 +563,7 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
         }
     } else if is_sandbox {
         match crate::sandbox::prepare_call(c, &call.name, &local.arguments, interactive) {
-            Ok(tool) => Some((crate::sandbox::view(), tool)),
+            Ok(tool) => Some((crate::sandbox::view_for(&call.name), tool)),
             Err(why) => return Prep::Done((why, true, if interactive { "error" } else { "denied" })),
         }
     } else {
@@ -660,7 +686,10 @@ fn logged(c: &Ctx, conv: &str, call: &ToolCall, r: Outcome) -> Outcome {
         .connectors
         .iter()
         .find_map(|k| k.tools.iter().find(|t| t.llm_name == call.name).map(|t| format!("{} · {}", k.name, if t.title.is_empty() { &t.name } else { &t.title })))
-        .or_else(|| crate::sandbox::is_tool(&call.name).then(|| format!("{} · {}", crate::sandbox::view().name, crate::sandbox::tool(&call.name).title)))
+        .or_else(|| {
+            crate::sandbox::is_tool(&call.name)
+                .then(|| format!("{} · {}", crate::sandbox::view_for(&call.name).name, crate::sandbox::tool_for(&call.name).title))
+        })
         .unwrap_or_else(|| call.name.clone());
     crate::action_log::tool(c, conv, &name, crate::action_log::summary(&crate::privacy::reveal_value(c, conv, &call.arguments), &Value::Null, &[]), &why, r.2);
     r
@@ -739,16 +768,29 @@ async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> O
         };
     }
     // The own computer (#94): what comes back is data; files become attachments of the answer.
-    if r.conn.id == crate::sandbox::ID {
-        return match crate::sandbox::execute(c, conv, &r.tool.name, &r.arguments).await {
+    if r.conn.id == crate::sandbox::ID || r.conn.id == crate::sandbox::browser::ID {
+        return match crate::sandbox::execute(c, conv, &r.tool.name, &r.arguments, &r.secrets).await {
             Ok((text, files)) => {
                 finish("done");
                 if !files.is_empty() {
                     c.0.tools.files.lock().unwrap_or_else(PoisonError::into_inner).entry(conv.to_string()).or_default().extend(files);
                 }
                 // A command's output cannot close the data block it is shown in.
-                let text = crate::vault::scrub(&text, &r.secrets).replace("untrusted_tool_result", "untrusted-tool-result");
+                let text = crate::vault::scrub(&text, &r.secrets);
                 (wrap_untrusted(&r.call.name, &text), false, "ok")
+            }
+            // A browser step that changes something and got no answer may have been sent (#24).
+            Err(e) if claim.is_some() && r.conn.id == crate::sandbox::browser::ID && matches!(e.kind, aiscraft_core::ErrorKind::Network) => {
+                finish("uncertain");
+                c.notice(NoticeLevel::Warning, format!("{UNCERTAIN}: Browser · {}. Ob der Schritt ausgeführt wurde, ist nicht klar.", r.tool.title));
+                (
+                    format!(
+                        "{UNCERTAIN}: Es ist nicht klar, ob der Schritt im Browser ausgeführt wurde ({}). Nicht erneut versuchen; sag der Person, dass sie die Seite prüfen soll.",
+                        crate::vault::scrub(&e.message, &r.secrets)
+                    ),
+                    true,
+                    "uncertain",
+                )
             }
             Err(e) => {
                 finish("failed");

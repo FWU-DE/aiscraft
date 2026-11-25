@@ -19,6 +19,7 @@ mod collab;
 mod commands;
 pub(crate) mod computer;
 mod disk;
+pub mod explore;
 mod ext;
 mod fallback;
 mod files;
@@ -809,6 +810,8 @@ mod local_files_tests;
 
 #[cfg(test)]
 mod nod_tests;
+#[cfg(test)]
+mod sandbox_browser_tests;
 #[cfg(test)]
 mod sandbox_tests;
 
