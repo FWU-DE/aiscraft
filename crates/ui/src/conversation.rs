@@ -712,10 +712,7 @@ impl AisCraftApp {
         if m.content.is_empty() && generating {
             let image_chat =
                 self.state.current.as_ref().and_then(|c| self.state.conversation(c)).is_some_and(|c| c.kind == aiscraft_core::ConversationKind::Image);
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().color(t.accent));
-                ui.label(muted(&t, if image_chat { "Bild wird gezeichnet …" } else { "Denkt nach …" }));
-            });
+            crate::waiting::show(ui, &t, &self.state.settings.wait_animation, &m.id, image_chat);
         } else if !m.content.is_empty() || images.is_empty() {
             // Diagrams from AIS.chat's create_plot tool come as ```jsxgraph-json blocks; formulas
             // and Mermaid diagrams are drawn by crate::markup. Cited statements get [n] markers

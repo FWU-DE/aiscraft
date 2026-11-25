@@ -368,6 +368,8 @@ Unter **Einstellungen › Darstellung** wählst du, wie AIS.ChatCraft aussieht. 
 
 **Zoom** vergrößert Schrift und Bedienelemente. **Enter sendet** schaltet zwischen Enter und Strg+Enter zum Senden um.
 
+**Warte-Animation:** Bis eine Antwort kommt, zeigt der Chat eine kleine Animation, darunter wechselt alle paar Sekunden ein Satz („Denkt nach …“, „Sortiert die Gedanken …“, „Schlägt nach …“). „Abwechselnd“ (Standard) nimmt für jede Antwort eine andere: einen Bleistift, der schreibt und wieder radiert, eine Glühbirne, aus der Ideen aufsteigen, ein Buch mit umblätternden Seiten, Planeten um eine kleine Sonne oder einen Papierflieger. In Bild-Chats tupft ein Pinsel Farbkleckse. Du kannst auch eine feste Animation wählen. **Schlicht** zeigt nur den kleinen Kreisel von früher: Das ist die ruhigste Wahl, wenn dich Bewegung stört. Die Einstellung „Animationen reduzieren“ des Betriebssystems kann AIS.ChatCraft nicht auslesen, deshalb gibt es diese Wahl hier.
+
 Die Akzentfarbe ist überall das AIS-Blau.
 
 ## Tastenkürzel

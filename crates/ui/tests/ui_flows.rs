@@ -827,3 +827,86 @@ fn joining_is_reachable_from_the_start_page_and_the_palette() {
     h.key_press(egui::Key::Enter);
     step_until(&mut h, "the join dialog opens from the palette", dialog);
 }
+
+/// A local OpenAI-compatible server that lists one model and never answers a chat request, so
+/// the answer stays „on its way“; the engine is set up to use it.
+fn waiting_backend(engine: &Engine) {
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let url = engine.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    let mut chunk = vec![0u8; 1 << 16];
+                    let k = sock.read(&mut chunk).await.unwrap_or(0);
+                    if chunk[..k].starts_with(b"GET") {
+                        let body = r#"{"data":[{"id":"m"}]}"#;
+                        let head = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", body.len());
+                        let _ = sock.write_all(format!("{head}{body}").as_bytes()).await;
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                });
+            }
+        });
+        format!("http://{addr}/v1")
+    });
+    let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+}
+
+/// While an answer is on its way the chat shows a waiting animation with „Denkt nach …“; the
+/// setting in Einstellungen › Darstellung picks one, and „Schlicht“ shows the spinner instead.
+#[test]
+fn wait_animation_follows_the_setting() {
+    use egui_kittest::kittest::By;
+    use serde_json::json;
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    waiting_backend(&engine);
+    let (tx, rx) = std::sync::mpsc::channel::<aiscraft_ui::UiRequest>();
+    let e = engine.clone();
+    let mut rx = Some(rx);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .allow_missing_glyphs()
+        .build_eframe(move |cc| common::app(cc, &e, rx.take(), OmarchyTheme::none()));
+    h.run_steps(4);
+    if let Some(later) = h.query_by_label("Später") {
+        later.click();
+        h.run_steps(4);
+    }
+    engine.dispatch("chat.send", json!({"text": "Hallo"}));
+    let animation = |h: &egui_kittest::Harness<'static, AisCraftApp>| h.query_by_label_contains("Warte-Animation:").is_some();
+    let spinner = |h: &egui_kittest::Harness<'static, AisCraftApp>| h.query(By::new().role(egui::accesskit::Role::ProgressIndicator)).is_some();
+    step_until(&mut h, "a waiting animation (Abwechselnd) shows", |h| animation(h) && h.query_by_label("Denkt nach …").is_some());
+    assert!(!spinner(&h), "no spinner with an animation");
+
+    // Einstellungen › Darstellung: pick the pencil.
+    let (reply, _r) = std::sync::mpsc::channel();
+    tx.send(aiscraft_ui::UiRequest::Show { what: "appearance".into(), reply }).unwrap();
+    step_until(&mut h, "the appearance tab opens", |h| h.query_by_label("Warte-Animation").is_some());
+    let combo = By::new().role(egui::accesskit::Role::ComboBox);
+    step_until(&mut h, "the choice of animation is there", |h| h.query(combo.clone()).is_some());
+    h.get(combo.clone()).scroll_to_me();
+    h.run_steps(6);
+    for _ in 0..5 {
+        if h.query_by_label("Bleistift").is_some() {
+            break;
+        }
+        h.get(combo.clone()).click();
+        h.run_steps(4);
+    }
+    click_until(&mut h, "Bleistift", "the pencil is chosen", |_| engine.state().settings.wait_animation == "pencil");
+    step_until(&mut h, "the preview and the chat show the pencil", |h| {
+        h.query_by_label("Vorschau: Bleistift").is_some() && h.query_by_label("Warte-Animation: Bleistift").is_some()
+    });
+
+    // Schlicht: the spinner, no animation, the familiar words.
+    engine.call("settings.set", json!({"key": "wait_animation", "value": "plain"})).unwrap();
+    step_until(&mut h, "Schlicht shows the spinner", |h| spinner(h) && !animation(h) && h.query_by_label("Denkt nach …").is_some());
+}
