@@ -800,7 +800,12 @@ fn run_report(cmd: &str, folder: &str, secs: u64, out: &runtime::Output) -> Stri
     };
     let mut s = format!("Befehl: {cmd}\nOrdner: /work/{folder}\nErgebnis: {status}\n");
     let so = String::from_utf8_lossy(&out.stdout);
-    let se = String::from_utf8_lossy(&out.stderr);
+    // Docker under WSL2 warns on every start that swap is not accounted (the memory limit holds).
+    let se: String = String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .filter(|l| !l.starts_with("WARNING: Your kernel does not support swap limit"))
+        .collect::<Vec<_>>()
+        .join("\n");
     if !so.trim().is_empty() {
         s.push_str(&format!("--- Ausgabe ---\n{}\n", so.trim_end()));
     }
