@@ -117,3 +117,56 @@ fn effort_is_a_per_chat_switch() {
     engine.call("chat.new", json!({})).unwrap();
     assert!(engine.state().selection.sources.effort.is_none(), "a new chat starts with the model's default");
 }
+
+/// #31: the style lands in the system prompt; switching back to normal takes it out again.
+#[test]
+fn answer_style_lands_in_the_system_prompt() {
+    let (engine, seen) = engine_with(plain);
+    engine.call("chat.set_style", json!({"style": "concise"})).unwrap();
+    engine.call("chat.send", json!({"text": "Erste Frage"})).unwrap();
+    let req = last_chat_request(&seen, "Erste Frage");
+    let body: Value = serde_json::from_str(req.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(body["messages"][0]["role"], "system");
+    assert!(body["messages"][0]["content"].as_str().unwrap().contains("Antwortstil: knapp"), "{body}");
+    // A style of one's own, from an example text.
+    engine.call("chat.set_style", json!({"style": "custom", "sample": "Moin! Kurz und schnackig, so wie hier oben im Norden."})).unwrap();
+    engine.call("chat.send", json!({"text": "Zweite Frage"})).unwrap();
+    let req = last_chat_request(&seen, "Zweite Frage");
+    assert!(req.contains("schnackig") && req.contains("nur den Stil"), "the example goes along");
+    engine.call("chat.set_style", json!({"style": "normal"})).unwrap();
+    engine.call("chat.send", json!({"text": "Dritte Frage"})).unwrap();
+    assert!(!last_chat_request(&seen, "Dritte Frage").contains("Antwortstil"));
+    assert!(engine.call("chat.set_style", json!({"style": "lustig"})).is_err());
+    engine.call("chat.new", json!({})).unwrap();
+    assert!(engine.call("chat.set_style", json!({"style": "custom", "sample": "  "})).is_err(), "a custom style needs an example");
+}
+
+/// #31: backends without a system prompt (AIS.chat) get the style as a hint in the message,
+/// once, and again only when it changes (also back to normal).
+#[test]
+fn answer_style_goes_inline_once_without_system_prompt() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let ctx = engine.ctx();
+    let mut conv = aiscraft_core::Conversation {
+        id: "c".into(),
+        title: "t".into(),
+        backend_id: "b".into(),
+        model_id: "m".into(),
+        project_id: None,
+        created_at: 0,
+        updated_at: 0,
+        pinned: false,
+        sources: aiscraft_core::Sources { style: Some("formal".into()), ..Default::default() },
+        persona: None,
+        kind: Default::default(),
+        remote_id: None,
+    };
+    let sent = crate::chat::inline_context(ctx, &conv, false, "").expect("the style goes along");
+    assert!(sent.block.contains("Antwortstil: formell") && sent.labels.contains(&"Antwortstil".to_string()));
+    assert!(crate::chat::inline_context(ctx, &conv, true, "").is_none(), "with a system prompt it is not in the message");
+    conv.sources.style_sent = sent.style_print.clone();
+    assert!(crate::chat::inline_context(ctx, &conv, false, "").is_none(), "not again while it is the same");
+    conv.sources.style = None;
+    let back = crate::chat::inline_context(ctx, &conv, false, "").expect("back to normal is said once");
+    assert!(back.block.contains("wieder wie üblich"));
+}

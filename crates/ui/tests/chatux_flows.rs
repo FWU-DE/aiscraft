@@ -105,3 +105,16 @@ fn thinking_is_folded_above_the_answer() {
     click_until(&mut h, "Nachgedacht", "the thinking opens", |h| h.query_by_label_contains("Einheiten prüfen").is_some());
     settled(&mut h, "Nachgedacht");
 }
+
+/// #31: the style is chosen in the composer; „Knapp“ reaches the chat.
+#[test]
+fn style_is_chosen_in_the_composer() {
+    let engine = engine_with(|_| vec![json!({"choices":[{"delta":{"content":"Ok."}}]})]);
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let mut h = harness(&engine);
+    step_until(&mut h, "the chat shows", |h| h.query_by_label("Stil").is_some());
+    click_until(&mut h, "Stil", "the style menu opens", |h| h.query_by_label("Knapp").is_some());
+    let e = engine.clone();
+    click_until(&mut h, "Knapp", "the style reaches the engine", move |_| e.state().selection.sources.style.as_deref() == Some("concise"));
+    step_until(&mut h, "the composer names the style", |h| h.query_by_label("Stil: Knapp").is_some());
+}

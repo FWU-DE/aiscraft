@@ -72,6 +72,8 @@ pub struct AisCraftApp {
     /// Web links for the next message, and the address being typed (`Some` while the field is open).
     pub(crate) pending_links: Vec<String>,
     pub(crate) link_input: Option<String>,
+    /// The example text being written for a custom answer style (#31).
+    pub(crate) style_draft: Option<String>,
     /// „Namen schützen“: the person's choices in the preview for the next message (#55).
     pub(crate) privacy: crate::privacy_panel::Choices,
     pub(crate) sidebar_open: bool,
@@ -229,6 +231,7 @@ impl AisCraftApp {
             pending_files: Vec::new(),
             pending_links: Vec::new(),
             link_input: None,
+            style_draft: None,
             privacy: Default::default(),
             sidebar_open: true,
             search_text: String::new(),

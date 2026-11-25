@@ -111,6 +111,15 @@ static COMMANDS: &[CommandSpec] = &[
         false,
         |c, p| Box::pin(set_sources(c, p))
     ),
+    cmd!(
+        "chat.set_style",
+        "Antwortstil wählen",
+        "Chat",
+        None,
+        "style: normal|concise|explanatory|formal|custom, sample?: string (Beispieltext für custom, bis 4000 Zeichen)",
+        false,
+        |c, p| Box::pin(set_style(c, p))
+    ),
     cmd!("chat.rename", "Chat umbenennen", "Chat", Some("F2"), "id: string, title: string", false, |c, p| Box::pin(async move {
         let title = req_str(&p, "title")?.trim().chars().take(200).collect::<String>();
         if title.is_empty() {
@@ -817,6 +826,29 @@ async fn set_sources(c: Ctx, p: Value) -> Result<Value> {
         edit_conversation(&c, &id, |conv| conv.sources = s2)?;
     }
     Ok(serde_json::to_value(src)?)
+}
+
+/// The answer style of the open chat (or of the next new one), #31.
+async fn set_style(c: Ctx, p: Value) -> Result<Value> {
+    let style = req_str(&p, "style")?;
+    let mut src = c.state().selection.sources.clone();
+    if let Some(sample) = p.get("sample") {
+        let sample = sample.as_str().ok_or_else(|| Error::invalid("sample muss ein Text sein"))?.trim();
+        src.style_sample = (!sample.is_empty()).then(|| sample.chars().take(aiscraft_core::MAX_STYLE_SAMPLE).collect());
+    }
+    match style.as_str() {
+        "normal" | "" => src.style = None,
+        "custom" if src.style_sample.is_none() => return Err(Error::invalid("Für einen eigenen Stil fehlt ein Beispieltext")),
+        s if aiscraft_core::STYLES.iter().any(|(id, _)| *id == s) => src.style = Some(s.to_string()),
+        other => return Err(Error::invalid(format!("Unbekannter Stil {other} (normal, concise, explanatory, formal, custom)"))),
+    }
+    let current = c.state().current.clone();
+    c.update(|s| s.selection.sources = src.clone());
+    if let Some(id) = current {
+        let s2 = src.clone();
+        edit_conversation(&c, &id, |conv| conv.sources = s2)?;
+    }
+    Ok(json!({"style": src.style, "sample": src.style_sample}))
 }
 
 async fn chat_delete(c: Ctx, p: Value) -> Result<Value> {

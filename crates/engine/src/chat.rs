@@ -518,6 +518,8 @@ pub(crate) struct InlineContext {
     pub labels: Vec<String>,
     /// Fitting chats with another service left out (no consent), as people read them.
     pub withheld: Vec<String>,
+    /// Fingerprint of the answer style, when its hint goes along (again).
+    pub style_print: Option<String>,
 }
 
 /// Recall keys a chat remembers as sent at most.
@@ -555,6 +557,15 @@ pub(crate) fn inline_context(c: &Ctx, conv: &Conversation, takes_system: bool, r
             print = Some(p);
         }
     }
+    // The answer style (#31): once, and again when it changes (also back to normal).
+    let mut style_print = None;
+    let style = conv.sources.style_instruction();
+    let style_fp = fingerprint(style.as_deref().unwrap_or(""));
+    if conv.sources.style_sent.as_deref() != Some(style_fp.as_str()) && (style.is_some() || conv.sources.style_sent.is_some()) {
+        parts.push(style.unwrap_or_else(|| "Antwortstil: wieder wie üblich, ohne besondere Vorgabe.".to_string()));
+        labels.push("Antwortstil".to_string());
+        style_print = Some(style_fp);
+    }
     let mut recalled = Vec::new();
     let mut withheld = Vec::new();
     if state.settings.recall && !request.trim().is_empty() {
@@ -580,13 +591,16 @@ pub(crate) fn inline_context(c: &Ctx, conv: &Conversation, takes_system: bool, r
     } else {
         format!("[Hinweise der Person für diesen Chat, aus AIS.ChatCraft]\n{}\n[Ende der Hinweise]", parts.join("\n\n"))
     };
-    Some(InlineContext { block, print, recalled, labels, withheld })
+    Some(InlineContext { block, print, recalled, labels, withheld, style_print })
 }
 
 /// Remember what went along inline (after the backend took the message).
 fn remember_inline(sources: &mut aiscraft_core::Sources, sent: &InlineContext) {
     if let Some(p) = &sent.print {
         sources.inline_sent = Some(p.clone());
+    }
+    if let Some(p) = &sent.style_print {
+        sources.style_sent = Some(p.clone());
     }
     sources.inline_recalled.extend(sent.recalled.iter().cloned());
     let extra = sources.inline_recalled.len().saturating_sub(MAX_RECALLED_KEYS);
@@ -761,6 +775,14 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     let last_user = c.store(|st| st.messages(&conv_id))?.into_iter().rev().find(|m| m.role == Role::User);
     let request = last_user.as_ref().map(|m| m.content.clone()).unwrap_or_default();
     let system = system_prompt_for(&c, &conv, backend.config().send_context, caps.system_prompt, &request);
+    // The answer style (#31) goes into the system prompt; without one (AIS.chat) into the message.
+    let system = match (caps.system_prompt, conv.sources.style_instruction()) {
+        (true, Some(style)) => Some(match system {
+            Some(s) => format!("{s}\n\n{style}"),
+            None => style,
+        }),
+        _ => system,
+    };
     let model_name = c.state().model_name(&conv.backend_id, &conv.model_id);
     let tools_on = c.state().settings.tools && conv.sources.tools;
     let mut tools = if caps.tools && tools_on { crate::tools::specs_for(&c, &conv.sources) } else { vec![] };

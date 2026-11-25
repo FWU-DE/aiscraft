@@ -363,6 +363,17 @@ pub struct Sources {
     /// `None` = the model's default. Only backends with a thinking switch (Claude) use it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// How answers are written (#31): `concise`, `explanatory`, `formal` or `custom` (after
+    /// `style_sample`); `None` = normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    /// The example text a custom style imitates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_sample: Option<String>,
+    /// For backends without a system prompt (AIS.chat): fingerprint of the style hint last sent in
+    /// a message; the hint goes along again only when the style changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_sent: Option<String>,
 }
 
 impl Default for Sources {
@@ -380,6 +391,9 @@ impl Default for Sources {
             other_services: false,
             protect: None,
             effort: None,
+            style: None,
+            style_sample: None,
+            style_sent: None,
         }
     }
 }
@@ -685,6 +699,34 @@ pub struct ImageResult {
 
 /// Thinking depths a chat can choose (#30): id and label.
 pub const EFFORTS: [(&str, &str); 4] = [("low", "Wenig"), ("medium", "Mittel"), ("high", "Gründlich"), ("max", "Sehr gründlich")];
+
+/// Answer styles a chat can choose (#31): id and label. Without one, answers are normal.
+pub const STYLES: [(&str, &str); 4] = [("concise", "Knapp"), ("explanatory", "Erklärend"), ("formal", "Formell"), ("custom", "Eigener Stil")];
+
+/// Longest example text for a custom style.
+pub const MAX_STYLE_SAMPLE: usize = 4000;
+
+impl Sources {
+    /// The instruction for the chosen answer style, or `None` for normal answers.
+    pub fn style_instruction(&self) -> Option<String> {
+        Some(match self.style.as_deref()? {
+            "concise" => "Antwortstil: knapp. Kurze Sätze, nur das Wichtigste, keine Einleitung und keine Zusammenfassung am Ende.".to_string(),
+            "explanatory" => {
+                "Antwortstil: erklärend. Schritt für Schritt, mit Beispielen und dem Warum, so dass auch Einsteigerinnen und Einsteiger folgen können."
+                    .to_string()
+            }
+            "formal" => "Antwortstil: formell. Sachlich und höflich, in vollständigen Sätzen, ohne Umgangssprache; Personen mit „Sie“ ansprechen.".to_string(),
+            "custom" => {
+                let sample = self.style_sample.as_deref().map(str::trim).filter(|s| !s.is_empty())?;
+                let sample: String = sample.chars().take(MAX_STYLE_SAMPLE).collect();
+                format!(
+                    "Antwortstil: wie im folgenden Beispieltext (Ton, Satzlänge, Wortwahl, Aufbau). Übernimm nur den Stil, nicht den Inhalt.\n<beispiel>\n{sample}\n</beispiel>"
+                )
+            }
+            _ => return None,
+        })
+    }
+}
 
 /// The aspect ratios AIS.chat offers for images.
 pub const ASPECT_RATIOS: [(&str, &str); 3] = [("quadratic", "Quadratisch"), ("landscape", "Querformat"), ("portrait", "Hochformat")];

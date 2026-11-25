@@ -1020,6 +1020,68 @@ impl AisCraftApp {
         });
     }
 
+    /// How answers are written (#31): normal, concise, explanatory, formal, or after an example.
+    fn style_menu(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        let src = self.state.selection.sources.clone();
+        let current = src.style.as_deref().and_then(|s| aiscraft_core::STYLES.iter().find(|(id, _)| *id == s)).map(|(_, l)| *l);
+        let label = match current {
+            Some(l) => format!("Stil: {l}"),
+            None => "Stil".to_string(),
+        };
+        let toggle = crate::kit::pill(ui, &t, crate::kit::Pill::Chip, None, &label, 13.5, Some(crate::icons::Icon::ChevronDown))
+            .on_hover_text("Wie die Antworten geschrieben sind");
+        let popup_id = egui::Popup::default_response_id(&toggle);
+        egui::Popup::from_toggle_button_response(&toggle).close_behavior(egui::PopupCloseBehavior::IgnoreClicks).show(|ui| {
+            ui.set_min_width(260.0);
+            ui.set_max_width(320.0);
+            ui.horizontal(|ui| {
+                ui.label(small_muted(&t, "Wie dieser Chat antwortet"));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.small_button("Schließen").clicked() {
+                        self.style_draft = None;
+                        egui::Popup::close_id(ui.ctx(), popup_id);
+                    }
+                });
+            });
+            if ui.add(egui::Button::selectable(src.style.is_none(), "Normal")).clicked() {
+                self.run("chat.set_style", json!({"style": "normal"}));
+            }
+            for (id, label) in aiscraft_core::STYLES {
+                if id == "custom" {
+                    continue;
+                }
+                if ui.add(egui::Button::selectable(src.style.as_deref() == Some(id), label)).clicked() {
+                    self.run("chat.set_style", json!({"style": id}));
+                }
+            }
+            let custom = src.style.as_deref() == Some("custom");
+            if ui.add(egui::Button::selectable(custom, "Eigener Stil …")).clicked() && self.style_draft.is_none() {
+                self.style_draft = Some(src.style_sample.clone().unwrap_or_default());
+            }
+            if let Some(draft) = self.style_draft.as_mut() {
+                ui.label(small_muted(&t, "Füge einen Text ein, dessen Stil die Antworten übernehmen sollen (etwa einen eigenen Elternbrief)."));
+                ui.add(egui::TextEdit::multiline(draft).desired_rows(4).desired_width(f32::INFINITY).hint_text("Beispieltext"));
+                let mut apply = false;
+                ui.horizontal(|ui| {
+                    apply = ui.add_enabled(!draft.trim().is_empty(), egui::Button::new("Stil übernehmen")).clicked();
+                });
+                if apply {
+                    let sample = draft.clone();
+                    self.style_draft = None;
+                    self.run("chat.set_style", json!({"style": "custom", "sample": sample}));
+                }
+            } else if custom {
+                ui.label(small_muted(&t, "Antwortet im Stil deines Beispieltexts."));
+            }
+            let takes = self.state.backend(&self.state.selection.backend_id).is_none_or(|b| b.capabilities.system_prompt);
+            if !takes && src.style.is_some() {
+                let name = self.state.backend(&self.state.selection.backend_id).map(|b| b.config.name.clone()).unwrap_or_default();
+                ui.label(small_muted(&t, format!("Geht als Hinweis in deiner nächsten Nachricht an {name} mit.")));
+            }
+        });
+    }
+
     /// A readable name for a tool the model called.
     fn tool_label(&self, name: &str) -> String {
         match name {
@@ -1395,6 +1457,7 @@ impl AisCraftApp {
                         });
                     } else {
                         self.sources_menu(ui);
+                        self.style_menu(ui);
                         self.privacy_switch(ui);
                         if !compact {
                             self.create_menu(ui);
