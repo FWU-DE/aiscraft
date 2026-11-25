@@ -201,7 +201,7 @@ impl AisCraftApp {
     /// The export menu's entries for an artifact.
     fn export_entries(&mut self, ui: &mut Ui, meta: &aiscraft_core::Artifact) {
         let formats: &[(&str, &str)] = match meta.kind {
-            ArtifactKind::Board => &[("markdown", "md"), ("json", "json")],
+            ArtifactKind::Board => &[("png", "png"), ("markdown", "md"), ("json", "json")],
             ArtifactKind::App => &[("html", "html")],
             ArtifactKind::Worksheet => &[("pdf", "pdf"), ("docx", "docx"), ("json", "json")],
             ArtifactKind::H5p => &[("h5p", "h5p"), ("json", "json")],
@@ -211,6 +211,7 @@ impl AisCraftApp {
             let label = match *ext {
                 "docx" => "Als Word (DOCX)".to_string(),
                 "h5p" => "Als H5P (.h5p)".to_string(),
+                "png" => "Als Bild (PNG)".to_string(),
                 _ => format!("Als {}", ext.to_uppercase()),
             };
             if ui.button(label).clicked() {

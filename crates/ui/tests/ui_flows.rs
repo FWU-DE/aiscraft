@@ -742,6 +742,18 @@ fn share_dialog_has_two_ways_and_the_files_of_the_kind() {
     }
     click_until(&mut h, "Fertig", "the dialog closes", |h| h.query_by_label("Bereitstellen").is_none());
 
+    // A whiteboard: a picture (PNG) and the outline as PDF.
+    let board = engine.call("artifact.create", serde_json::json!({"kind": "board", "content": "# Wald\n- Bäume"})).unwrap()["id"].as_str().unwrap().to_string();
+    step_until(&mut h, "the whiteboard opens", |_| engine.state().open_artifact.as_deref() == Some(board.as_str()));
+    h.run_steps(6);
+    click_until(&mut h, "Teilen", "the share dialog opens", |h| h.query_by_label("Bereitstellen").is_some());
+    click_until(&mut h, "Bereitstellen", "the files show", |h| h.query_by_label("Bild (PNG)").is_some());
+    assert!(h.query_by_label("PDF").is_some(), "whiteboard: the outline as PDF");
+    for other in ["Arbeitsblatt als PDF", "Word (DOCX)", "Markdown", "HTML-Datei"] {
+        assert!(h.query_by_label(other).is_none(), "whiteboard: no {other}");
+    }
+    click_until(&mut h, "Fertig", "the dialog closes", |h| h.query_by_label("Bereitstellen").is_none());
+
     // A document: Word, PDF and Markdown; the settings link leads to the server fields.
     let doc = engine.call("artifact.create", serde_json::json!({"kind": "document", "content": "# Elternbrief"})).unwrap()["id"].as_str().unwrap().to_string();
     step_until(&mut h, "the document opens", |_| engine.state().open_artifact.as_deref() == Some(doc.as_str()));
