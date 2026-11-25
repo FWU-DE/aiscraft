@@ -244,6 +244,18 @@ fn save_as_menu_under_an_answer() {
     assert!(h.get_by_label("Excel (.xlsx)").accesskit_node().is_disabled(), "no table, no Excel");
 }
 
+/// An answer with dates (#51) offers them as a calendar file in „Speichern als“.
+#[test]
+fn dates_in_an_answer_are_offered_as_a_calendar_file() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    answering_backend(&engine, "| Datum | Was |\n|---|---|\n| 3.12.2026 | Elternabend |\n| 15.6.2027 | Wandertag |");
+    engine.call("chat.send", serde_json::json!({"text": "Termine bitte"})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    click_until(&mut h, "Speichern als", "the menu opens", |h| h.query_by_label("Kalenderdatei (.ics), 2 Termine").is_some());
+    assert!(h.query_by_label("Excel (.xlsx)").is_some());
+}
+
 /// After "Neu erzeugen" the answer shows ‹ 2/2 ›; ‹ brings the first answer back.
 #[test]
 fn variant_switcher_shows_the_old_answer() {

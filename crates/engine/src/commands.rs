@@ -41,6 +41,7 @@ pub fn commands() -> &'static [CommandSpec] {
         all.extend(crate::learn::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::learn::h5p::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::learn::board::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::learn::calendar::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::ai_label::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::readability::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::attach::COMMANDS.iter().map(CommandSpec::copy));

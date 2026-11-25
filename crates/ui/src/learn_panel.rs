@@ -286,6 +286,11 @@ impl AisCraftApp {
                 ("📝 Arbeitsblatt", "worksheet.request", "Ein interaktives Arbeitsblatt zum Thema im Eingabefeld, zum Lösen am Rechner und zum Drucken"),
                 ("📦 H5P-Quiz", "h5p.request", "Ein H5P-Quiz zum Thema im Eingabefeld, als .h5p-Datei für Moodle, Mebis, ByCS und andere Lernplattformen"),
                 ("▣ Whiteboard", "board.request", "Ein Whiteboard zum Thema im Eingabefeld: Mindmap, Cluster, Ablauf oder Zeitleiste"),
+                (
+                    "📅 Termine",
+                    "calendar.request",
+                    "Termine zum Thema im Eingabefeld (Klassenarbeiten, Elternabend, Unterrichtsreihe), zum Speichern als Kalenderdatei",
+                ),
             ] {
                 if ui.add_enabled(usable, egui::Button::new(label)).on_hover_text(tip).clicked() {
                     app.composer.clear();
@@ -294,9 +299,17 @@ impl AisCraftApp {
                 }
             }
         };
-        let tip = "Lern-App, Arbeitsblatt, H5P-Quiz oder Whiteboard erstellen lassen";
+        let tip = "Lern-App, Arbeitsblatt, H5P-Quiz, Whiteboard oder Termine erstellen lassen";
         let r = if self.create_as_icon {
-            crate::kit::icon_button(ui, &t, crate::icons::Icon::Sparkles, "Erstellen: Lern-App, Arbeitsblatt, H5P-Quiz oder Whiteboard", t.text2, 19.0, 34.0)
+            crate::kit::icon_button(
+                ui,
+                &t,
+                crate::icons::Icon::Sparkles,
+                "Erstellen: Lern-App, Arbeitsblatt, H5P-Quiz, Whiteboard oder Termine",
+                t.text2,
+                19.0,
+                34.0,
+            )
         } else {
             crate::kit::pill(ui, &t, crate::kit::Pill::Chip, None, "Erstellen", 13.5, Some(crate::icons::Icon::ChevronDown)).on_hover_text(tip)
         };

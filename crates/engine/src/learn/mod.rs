@@ -18,6 +18,7 @@
 //! like `document_create`.
 
 pub mod board;
+pub mod calendar;
 pub mod formats;
 pub mod h5p;
 pub mod print;
@@ -900,6 +901,7 @@ pub(crate) fn tool_specs(worksheet_points: bool) -> Vec<ToolSpec> {
     ];
     specs.extend(h5p::tool_specs());
     specs.extend(board::tool_specs());
+    specs.extend(calendar::tool_specs());
     specs
 }
 

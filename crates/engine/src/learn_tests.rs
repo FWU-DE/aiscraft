@@ -53,6 +53,20 @@ fn route(req: &str) -> Vec<Value> {
         ]
     };
     let has_tool_result = req.contains("\"role\":\"tool\"");
+    if req.contains("Werkzeug calendar_file_create") && !has_tool_result {
+        return tool(
+            "calendar_file_create",
+            json!({"title": "Termine 7b", "events": [{"title": "Elternabend", "start": "2026-12-03T19:00", "end": "2026-12-03T20:30", "location": "Aula"}, {"title": "", "start": "kaputt"}]}),
+        );
+    }
+    if req.contains("Kalendertermine zum Thema: Leer") && !has_tool_result {
+        return text("Dazu kenne ich keine Termine.");
+    }
+    if req.contains("Kalendertermine zum Thema") && !has_tool_result {
+        return text(
+            "```ics\nBEGIN:VCALENDAR\nBEGIN:VEVENT\nSUMMARY:Klassenarbeit Mathe\nDTSTART;TZID=Europe/Berlin:20270118T080000\nDTEND;TZID=Europe/Berlin:20270118T093000\nEND:VEVENT\nBEGIN:VEVENT\nSUMMARY:Wandertag\nDTSTART;VALUE=DATE:20270615\nEND:VEVENT\nEND:VCALENDAR\n```\n- 18.1.: Klassenarbeit\n- 15.6.: Wandertag",
+        );
+    }
     if req.contains("Werkzeug board_create") && !has_tool_result {
         return tool("board_create", json!({"board": board_json()}));
     }
@@ -194,6 +208,7 @@ fn format_requests_send_the_spec_but_show_only_the_topic() {
         ("learning_app.request", "learning_app", app_prompt("Bruchrechnung (Klasse: 6)", false)),
         ("h5p.request", "h5p", crate::learn::h5p::h5p_prompt("Bruchrechnung (Klasse: 6)", 6, false)),
         ("board.request", "board", crate::learn::board::board_prompt("Bruchrechnung (Klasse: 6)", None, false)),
+        ("calendar.request", "calendar", crate::learn::calendar::calendar_prompt("Bruchrechnung (Klasse: 6)", false)),
     ];
     assert_eq!(cases.len(), formats::formats().len(), "every format in the registry is covered");
     for (command, format, expected) in cases {
@@ -282,6 +297,47 @@ fn whiteboard_format_one_round_one_repair_at_most() {
     let out = engine.call("board.request", json!({"topic": "Wasserkreislauf"})).unwrap();
     assert_eq!(out["created"], true, "{out}");
     assert!(crate::learn::tool_specs(true).iter().any(|t| t.name == "board_create" && t.description.contains("aiscraft-board")));
+}
+
+/// Dates as a calendar file (#51), a format of the registry: the request carries the iCalendar
+/// description, the answer's block is checked and saved as our own .ics (time zone, UID,
+/// folding); a table with dates works too; tool backends get the file as a download.
+#[test]
+fn dates_become_a_calendar_file() {
+    let (engine, log) = routed_engine_logged();
+    engine.call("settings.set", json!({"key": "tools", "value": false})).unwrap();
+    let out = engine.call("calendar.request", json!({"topic": "Termine 7b", "grade": "7"})).unwrap();
+    assert_eq!(out["events"], 2, "{out}");
+    assert!(log.lock().unwrap()[0].to_string().contains("BEGIN:VEVENT"), "the format goes along");
+    let mid = engine.state().messages[1].id.clone();
+    let checked = engine.call("calendar.validate", json!({"from_message": mid})).unwrap();
+    assert_eq!((checked["ok"].as_bool(), checked["events"][0]["title"].as_str()), (Some(true), Some("Klassenarbeit Mathe")));
+    let dir = tmp_dir("ics");
+    let path = dir.join("termine.ics");
+    let saved = engine.call("calendar.save", json!({"from_message": mid, "title": "Termine 7b", "path": path.display().to_string()})).unwrap();
+    assert_eq!(saved["events"], 2);
+    let ics = std::fs::read_to_string(&path).unwrap();
+    assert!(ics.contains("BEGIN:VTIMEZONE") && ics.contains("DTSTART;TZID=Europe/Berlin:20270118T080000") && ics.contains("UID:"), "{ics}");
+    assert!(!ics.contains("Erstellt mit KI"), "not labelled by default outside AIS.chat");
+    // A table with dates, and plain text without any.
+    let table = "| Datum | Was |\n|---|---|\n| 3.12.2026 | Elternabend |";
+    let path2 = dir.join("tabelle.ics");
+    engine.call("calendar.save", json!({"content": table, "path": path2.display().to_string()})).unwrap();
+    assert!(std::fs::read_to_string(&path2).unwrap().contains("SUMMARY:Elternabend"));
+    assert!(engine.call("calendar.save", json!({"content": "keine Termine", "path": path2.display().to_string()})).is_err());
+    assert_eq!(engine.call("calendar.validate", json!({"content": "nichts"})).unwrap()["ok"], false);
+    let out = engine.call("calendar.request", json!({"topic": "Leer"})).unwrap();
+    assert_eq!(out["events"], 0);
+    assert!(engine.state().notices.iter().any(|n| n.text.contains("keine Termine")));
+    // With tools: calendar_file_create puts the file into the chat; broken events are skipped.
+    engine.call("settings.set", json!({"key": "tools", "value": true})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    engine.call("calendar.request", json!({"topic": "Elternabend"})).unwrap();
+    let s = engine.state();
+    let file = s.messages.iter().flat_map(|m| &m.attachments).find(|a| a.name.ends_with(".ics")).expect("a calendar file in the chat");
+    assert_eq!(file.mime, "text/calendar");
+    let body = std::fs::read_to_string(file.local_path.as_ref().unwrap()).unwrap();
+    assert!(body.contains("SUMMARY:Elternabend") && body.contains("LOCATION:Aula"), "{body}");
 }
 
 /// AIS.chat has no tools: the format description travels in the message text, once per format

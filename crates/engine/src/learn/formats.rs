@@ -2,7 +2,8 @@
 //! tool calling (AIS.chat) can create artifacts, and the same formats as tools for backends
 //! that have them. Learning apps (```` ```html ````) and worksheets (```` ```aiscraft-worksheet ````)
 //! are the first two entries, H5P (```` ```aiscraft-h5p ````, #59) the third, the whiteboard
-//! (```` ```aiscraft-board ````, content only, laid out by `aiscraft_board::spec`) the fourth.
+//! (```` ```aiscraft-board ````, content only, laid out by `aiscraft_board::spec`) the fourth,
+//! dates (```` ```ics ````, #51) the fifth: they become a calendar file, not an artifact.
 //!
 //! Each entry has the fence languages it is recognised by, a compact description for the
 //! prompt (sent only when the format is asked for), a lenient check, the artifact kind it
@@ -16,7 +17,8 @@ pub struct OutputFormat {
     pub label: &'static str,
     /// Fence languages that carry this format.
     pub fences: &'static [&'static str],
-    pub kind: ArtifactKind,
+    /// The artifact it becomes; `None`: a file to save (calendar).
+    pub kind: Option<ArtifactKind>,
     /// The tool that creates it on backends with tool calling.
     pub tool: &'static str,
     /// First words of the request sent for this format, followed by the topic. The chat shows
@@ -74,6 +76,10 @@ fn board_description(_: &PromptOptions) -> String {
     super::board::description()
 }
 
+fn calendar_description(_: &PromptOptions) -> String {
+    super::calendar::description()
+}
+
 pub const APP_INTRO: &str = "Erstelle eine interaktive Lern-App zum Thema: ";
 pub const WORKSHEET_INTRO: &str = "Erstelle ein interaktives Arbeitsblatt zum Thema: ";
 
@@ -82,7 +88,7 @@ static FORMATS: &[OutputFormat] = &[
         id: "learning_app",
         label: "Lern-App",
         fences: &["html", "htm", "xhtml"],
-        kind: ArtifactKind::App,
+        kind: Some(ArtifactKind::App),
         tool: "learning_app_create",
         request_intro: APP_INTRO,
         prompt_description: app_description,
@@ -93,7 +99,7 @@ static FORMATS: &[OutputFormat] = &[
         id: "worksheet",
         label: "Arbeitsblatt",
         fences: &[worksheet::FENCE, "aiscraft-arbeitsblatt"],
-        kind: ArtifactKind::Worksheet,
+        kind: Some(ArtifactKind::Worksheet),
         tool: "worksheet_create",
         request_intro: WORKSHEET_INTRO,
         prompt_description: worksheet_description,
@@ -104,7 +110,7 @@ static FORMATS: &[OutputFormat] = &[
         id: "h5p",
         label: "H5P",
         fences: &[h5p::FENCE],
-        kind: ArtifactKind::H5p,
+        kind: Some(ArtifactKind::H5p),
         tool: "h5p_create",
         request_intro: super::h5p::H5P_INTRO,
         prompt_description: h5p_description,
@@ -115,12 +121,23 @@ static FORMATS: &[OutputFormat] = &[
         id: "board",
         label: "Whiteboard",
         fences: &[aiscraft_board::spec::FENCE, "aiscraft-whiteboard"],
-        kind: ArtifactKind::Board,
+        kind: Some(ArtifactKind::Board),
         tool: "board_create",
         request_intro: super::board::BOARD_INTRO,
         prompt_description: board_description,
         find: super::board::board_blocks,
         check: super::board::check,
+    },
+    OutputFormat {
+        id: "calendar",
+        label: "Termine",
+        fences: &["ics", "ical", "icalendar"],
+        kind: None,
+        tool: "calendar_file_create",
+        request_intro: super::calendar::CAL_INTRO,
+        prompt_description: calendar_description,
+        find: super::calendar::ics_blocks,
+        check: super::calendar::check,
     },
 ];
 
@@ -188,7 +205,7 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert_eq!(blocks("```aiscraft-h5p\n{\"tasks\":[{\"type\":\"true_false\",\"prompt\":\"Ja?\",\"answer\":true}]}\n```")[0].0.id, "h5p");
         assert_eq!(found[0].0.id, "learning_app");
-        assert_eq!(found[1].0.kind, ArtifactKind::Worksheet);
+        assert_eq!(found[1].0.kind, Some(ArtifactKind::Worksheet));
         for (f, b) in found {
             assert!((f.check)(b).unwrap().is_empty());
             assert!(!(f.prompt_description)(&PromptOptions::default()).is_empty());
@@ -201,6 +218,9 @@ mod tests {
         assert_eq!(found.len(), 1, "an indented list is a change block, not the format");
         assert_eq!(found[0].0.id, "board");
         assert!((found[0].0.check)(found[0].1).unwrap().is_empty());
+        let cal = blocks("```ics\nBEGIN:VCALENDAR\nBEGIN:VEVENT\nSUMMARY:Elternabend\nDTSTART:20261203T190000\nEND:VEVENT\nEND:VCALENDAR\n```");
+        assert_eq!((cal.len(), cal[0].0.id, cal[0].0.kind), (1, "calendar", None));
+        assert!((cal[0].0.check)(cal[0].1).unwrap().is_empty());
     }
 
     #[test]

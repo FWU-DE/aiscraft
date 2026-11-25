@@ -136,7 +136,10 @@ pub fn calendar_prompt(topic: &str, tools: bool) -> String {
     } else {
         "Antworte mit genau einem ```ics-Codeblock und danach einer kurzen Liste der Termine."
     };
-    format!("{CAL_INTRO}{topic}\n\nTermine mit Datum, Uhrzeit (wenn sinnvoll) und kurzem Titel, Deutsch. Wenn ein Datum unklar ist, lass den Termin weg und sag es.\n\n{}\n\n{deliver}", description())
+    format!(
+        "{CAL_INTRO}{topic}\n\nTermine mit Datum, Uhrzeit (wenn sinnvoll) und kurzem Titel, Deutsch. Wenn ein Datum unklar ist, lass den Termin weg und sag es.\n\n{}\n\n{deliver}",
+        description()
+    )
 }
 
 /// Reads the events of an iCalendar text: the problems found (skipped events) next to them.
@@ -200,9 +203,9 @@ fn event_of(props: &[ContentLine]) -> std::result::Result<Event, String> {
         return Err("ohne Titel (SUMMARY)".into());
     }
     let (start, all_day) = when("DTSTART").ok_or("ohne gültiges Datum (DTSTART)")?;
-    let end = when("DTEND").map(|(e, _)| e).or_else(|| {
-        get("DURATION").and_then(|d| craft_ical::values::parse_duration(&d.value)).map(|s| start + Duration::seconds(s.clamp(0, 366 * 86_400)))
-    });
+    let end = when("DTEND")
+        .map(|(e, _)| e)
+        .or_else(|| get("DURATION").and_then(|d| craft_ical::values::parse_duration(&d.value)).map(|s| start + Duration::seconds(s.clamp(0, 366 * 86_400))));
     let end = end.filter(|e| *e > start);
     Ok(Event { title, start, end, all_day, location: text("LOCATION"), description: text("DESCRIPTION") })
 }
@@ -212,10 +215,7 @@ fn event_of(props: &[ContentLine]) -> std::result::Result<Event, String> {
 pub fn parse_date(s: &str) -> Option<NaiveDate> {
     let s = s.trim().trim_matches(|c: char| c == '*' || c == '_');
     // Weekday in front.
-    let s = match s.find(|c: char| c.is_ascii_digit()) {
-        Some(i) => s.get(i..)?,
-        None => return None,
-    };
+    let s = s.get(s.find(|c: char| c.is_ascii_digit())?..)?;
     let s = s.trim();
     if let Ok(d) = NaiveDate::parse_from_str(s.get(..s.len().min(10))?, "%Y-%m-%d") {
         return Some(d);
@@ -287,7 +287,9 @@ pub fn table_events(answer: &str) -> Vec<Event> {
             let Some(d) = row.get(dc).and_then(|c| parse_date(c)) else { continue };
             let title = title
                 .and_then(|t| row.get(t))
-                .or_else(|| row.iter().enumerate().find(|(k, c)| Some(*k) != Some(dc) && Some(*k) != time && Some(*k) != place && !c.is_empty()).map(|(_, c)| c))
+                .or_else(|| {
+                    row.iter().enumerate().find(|(k, c)| Some(*k) != Some(dc) && Some(*k) != time && Some(*k) != place && !c.is_empty()).map(|(_, c)| c)
+                })
                 .map(|t| cap(&t.replace("**", "")))
                 .unwrap_or_default();
             if title.is_empty() {
@@ -492,7 +494,8 @@ async fn request(c: Ctx, p: Value) -> Result<Value> {
     if events.is_empty() && !tools {
         c.notice(NoticeLevel::Warning, "Die Antwort enthält keine Termine. Bitte das Modell, sie als ```ics-Block auszugeben.");
     }
-    Ok(json!({"events": events.len(), "problems": problems}))
+    // `created`: the answer holds dates to save (or the tool made the file).
+    Ok(json!({"created": !events.is_empty(), "events": events.len(), "problems": problems}))
 }
 
 pub(crate) fn tool_specs() -> Vec<ToolSpec> {
@@ -526,8 +529,10 @@ pub(crate) fn run_tool(c: &Ctx, name: &str, a: &Value) -> Option<Result<(String,
         let ics = write_ics(&events, &title, now_ms(), note.as_ref().map(|n| n.line.as_str()));
         let name = crate::office::file_name(&title, "ics");
         let path = crate::files::keep_copy(&c.0.attachments_dir, std::path::Path::new(&name), ics.as_bytes())?;
-        let att = Attachment { mime: "text/calendar".into(), size: ics.len() as u64, local_path: Some(path.display().to_string()), name, ..Attachment::default() };
-        let mut msg = format!("Kalenderdatei „{}“ mit {} Terminen erstellt. Sie steht im Chat zum Speichern bereit; nenne keinen Speicherort.", att.name, events.len());
+        let att =
+            Attachment { mime: "text/calendar".into(), size: ics.len() as u64, local_path: Some(path.display().to_string()), name, ..Attachment::default() };
+        let mut msg =
+            format!("Kalenderdatei „{}“ mit {} Terminen erstellt. Sie steht im Chat zum Speichern bereit; nenne keinen Speicherort.", att.name, events.len());
         if !problems.is_empty() {
             msg.push_str(&format!(" Übersprungen: {}", problems.join("; ")));
         }
@@ -557,8 +562,11 @@ mod tests {
         assert!(out.contains("SUMMARY:Elternabend 7b\\, mit Wahl") && out.contains("UID:") && out.contains("DTSTAMP:"));
         assert!(out.lines().all(|l| l.len() <= 76), "folded");
         assert!(out.contains("COMMENT:Erstellt mit KI"));
+        // Read back the same; the written file names every end (a day, or an hour).
         let back = parse_ics(&out).unwrap().0;
-        assert_eq!(back, events);
+        let key = |e: &Event| (e.title.clone(), e.start, e.all_day, e.location.clone());
+        assert_eq!(back.iter().map(key).collect::<Vec<_>>(), events.iter().map(key).collect::<Vec<_>>());
+        assert_eq!((back[0].end, back[1].end), (events[0].end, Some(events[1].start + Duration::days(1))));
     }
 
     #[test]
@@ -578,7 +586,14 @@ mod tests {
 
     #[test]
     fn hostile_calendar_input() {
-        for s in ["", "BEGIN:VEVENT", "END:VEVENT", "BEGIN:VEVENT\nDTSTART:9999\nSUMMARY:x\nEND:VEVENT", ":::\n;;;", "BEGIN:VEVENT\nSUMMARY:x\nDTSTART:20261301\nEND:VEVENT"] {
+        for s in [
+            "",
+            "BEGIN:VEVENT",
+            "END:VEVENT",
+            "BEGIN:VEVENT\nDTSTART:9999\nSUMMARY:x\nEND:VEVENT",
+            ":::\n;;;",
+            "BEGIN:VEVENT\nSUMMARY:x\nDTSTART:20261301\nEND:VEVENT",
+        ] {
             let _ = parse_ics(s);
             let _ = table_events(s);
         }
