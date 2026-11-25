@@ -32,7 +32,7 @@ fn harness(engine: &Engine) -> egui_kittest::Harness<'static, AisCraftApp> {
     h
 }
 
-/// A local OpenAI-compatible server: answers to a task's prompt wait for `release`, the rest come
+/// A local OpenAI-compatible server: answers to the task's prompt („Prüfe den Elternbrief“) wait for `release`, the rest come
 /// at once.
 fn gated_backend(engine: &Engine, release: Arc<AtomicBool>) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -70,7 +70,7 @@ fn gated_backend(engine: &Engine, release: Arc<AtomicBool>) -> String {
                         let _ = sock.write_all(format!("{head}{body}").as_bytes()).await;
                         return;
                     }
-                    let text = if req.contains("Aufgabe") {
+                    let text = if req.contains("Prüfe den Elternbrief") {
                         while !release.load(Ordering::SeqCst) {
                             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                         }

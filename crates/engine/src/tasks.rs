@@ -129,7 +129,7 @@ pub(crate) async fn start(c: Ctx, p: Value) -> Result<Value> {
     let ctx = c.clone();
     let tid = task_id.clone();
     // In the status line from now until the result is back.
-    let running = Running::start(c, &task_id, JobKind::Task, &title);
+    let running = Running::start(&c, &task_id, JobKind::Task, &title);
     c.spawn(async move {
         let _running = running;
         let prompt = format!("Aufgabe „{title}“:\n\n{instructions}\n\nArbeite die Aufgabe vollständig ab und schließe mit einem kurzen Ergebnis.");

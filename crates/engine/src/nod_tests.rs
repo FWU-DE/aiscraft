@@ -360,7 +360,7 @@ fn running_tasks_show_in_the_status_line_and_end_as_a_card() {
     let release = Arc::new(AtomicBool::new(false));
     let r2 = release.clone();
     let (engine, _, _) = engine_with(r#"{"data":[{"id":"m"}]}"#, move |body| {
-        if body.contains("Aufgabe") {
+        if body.contains("Prüfe den Elternbrief") {
             Reply::After(r2.clone(), "**Ergebnis**\nDer Elternbrief ist geprüft, zwei Tippfehler sind korrigiert.")
         } else {
             Reply::Text("ok")
