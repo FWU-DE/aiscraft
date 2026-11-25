@@ -237,7 +237,9 @@ Manche Konnektoren liefern zu einem Ergebnis eine kleine Oberfläche, etwa einen
 - Netz gibt es dort nur zu den Adressen, die der Konnektor ausdrücklich nennt, sonst keins. Ansichten, die beliebiges Netz (`*`), unverschlüsseltes `http`, fremde eingebettete Seiten, den falschen Typ oder mehr als 2 MB verlangen, öffnet AIS.ChatCraft nicht. Kamera, Mikrofon und Standort gibt es nie.
 - Aktionen aus der Ansicht laufen wie Aufrufe des Modells: Lesendes direkt, alles andere fragt mit genau den Angaben. Eine Ansicht erreicht nur Werkzeuge ihres eigenen Konnektors. Links aus der Ansicht öffnen erst, wenn du auf „Im Browser öffnen“ klickst.
 - Ohne Vorschaufenster (eine Fassung ohne `aiscraft-preview`) bleibt der Text des Ergebnisses im Chat; die Ansicht öffnet dann nicht, auch nicht im Browser.
-- Noch nicht: Nachrichten der Ansicht an den Chat (`ui/message`).
+- Was die Ansicht in den Chat schreibt (eine Nachricht oder Hinweise für das Modell), steht dort als eigener Eintrag „Nachricht der Ansicht …“. Er kommt nicht von dir: Das Modell sieht ihn als fremden Inhalt, und er erlaubt nie eine Aktion, auch wenn er darum bittet. Er löst keine Antwort aus; die nächste Antwort auf deine Nachricht sieht ihn. Eine Ansicht kann höchstens 20 Nachrichten schicken.
+- Das Fenster richtet sich nach der Größe, die die Ansicht wünscht (in Grenzen), und folgt deinem Look, auch wenn du ihn änderst. Eine Ansicht kann statt des großen Fensters ein kleines verlangen, das über anderen Fenstern bleibt. Höchstens acht Ansichten sind gleichzeitig offen.
+- Wurde der Aufruf abgelehnt oder abgebrochen, öffnet die Ansicht trotzdem und zeigt das.
 
 ### Lokale Dateien
 

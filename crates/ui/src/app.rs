@@ -361,6 +361,9 @@ impl AisCraftApp {
             self.tokens = theme::resolve(&key.0, system_dark, key.2 == "off", &self.omarchy);
             self.register_code_theme();
             self.theme_key = key;
+            // Open connector views (#74) follow the look.
+            let (theme, styles) = crate::views::look(&self.tokens);
+            self.run("view.context", json!({"theme": theme, "styles": styles}));
         }
         self.tokens.apply(ctx, self.state.settings.zoom);
     }

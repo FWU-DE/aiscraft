@@ -49,6 +49,8 @@ impl AisCraftApp {
                         // Tool results are shown as chips on the call, not as messages; a result
                         // with a connector's view gets its card (#74).
                         Role::Tool if m.tool_result.as_ref().is_some_and(|r| r.view.is_some()) => self.view_card(ui, m),
+                        // What an open view put into the chat: its own entry, not the person's words.
+                        Role::Tool if m.tool_result.as_ref().is_some_and(|r| r.from_view.is_some()) => self.view_entry(ui, m),
                         Role::Tool => continue,
                         _ => self.assistant_message(ui, m, Some(i) == last_assistant),
                     }
