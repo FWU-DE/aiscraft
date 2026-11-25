@@ -379,7 +379,7 @@ fn connector_tools_need_approval_unless_read_only() {
 }
 
 /// A server that records every request body and answers like an OpenAI-compatible server.
-fn recording_openai(engine: &Engine, answer: &'static str) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+pub(crate) fn recording_openai(engine: &Engine, answer: &'static str) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let seen2 = seen.clone();
     let url = engine.block_on(async move {
@@ -436,7 +436,7 @@ fn recording_openai(engine: &Engine, answer: &'static str) -> (String, std::sync
     (url, seen)
 }
 
-fn engine_with_recording(answer: &'static str) -> (Engine, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+pub(crate) fn engine_with_recording(answer: &'static str) -> (Engine, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
     let (url, seen) = recording_openai(&engine, answer);
     let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url})).unwrap()["id"].as_str().unwrap().to_string();
@@ -1082,6 +1082,7 @@ fn every_command_has_a_functional_test() {
         include_str!("privacy/tests.rs"),
         include_str!("trust_tests.rs"),
         include_str!("chatux_tests.rs"),
+        include_str!("nod_tests.rs"),
         include_str!("know_tests.rs"),
         include_str!("local_files_tests.rs"),
         include_str!("ext/tests.rs"),
@@ -2309,7 +2310,8 @@ fn every_engine_file_write_goes_through_disk() {
         if name == "disk.rs" || name.ends_with("tests.rs") {
             continue;
         }
-        let text = std::fs::read_to_string(&f).unwrap();
+        // A Windows checkout may have CRLF line ends.
+        let text = std::fs::read_to_string(&f).unwrap().replace("\r\n", "\n");
         let code = text.split("#[cfg(test)]\nmod tests").next().unwrap_or("");
         for needle in ["craft_atomic::", "std::fs::write(", "fs::write(", "File::create(", "OpenOptions"] {
             if code.contains(needle) {

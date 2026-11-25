@@ -10,8 +10,11 @@ pub enum ErrorKind {
     Network,
     /// The server answered something we do not understand.
     Protocol,
-    /// The server refused for a reason it named (quota, content filter, not allowed).
+    /// The server refused for a reason it named (content filter, not allowed).
     Refused,
+    /// The model cannot answer right now: overloaded, a server error (5xx), a timeout, a rate
+    /// limit or the quota used up. Another model may (#66).
+    Busy,
     NotFound,
     /// Bad parameters from the UI, CLI, control channel or a file.
     Invalid,
@@ -44,6 +47,9 @@ impl Error {
     }
     pub fn refused(m: impl Into<String>) -> Self {
         Self::new(ErrorKind::Refused, m)
+    }
+    pub fn busy(m: impl Into<String>) -> Self {
+        Self::new(ErrorKind::Busy, m)
     }
     pub fn not_found(m: impl Into<String>) -> Self {
         Self::new(ErrorKind::NotFound, m)

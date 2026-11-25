@@ -5,7 +5,16 @@
 
 use std::path::PathBuf;
 
+use aiscraft_core::Error;
+
 use crate::Ctx;
+
+/// Why a temporary chat with AIS.chat is refused: AIS.chat keeps it in its own history anyway.
+pub(crate) fn not_with_ais_chat() -> Error {
+    Error::unsupported(
+        "Einen temporären Chat gibt es nur mit anderen Diensten: AIS.chat speichert jeden Chat in seinem Verlauf. Wähle einen anderen Dienst oder schalte „Temporär“ aus.",
+    )
+}
 
 /// Where copies of files attached in temporary chats go; emptied when they close and at start.
 pub(crate) fn attachments_dir(c: &Ctx) -> PathBuf {

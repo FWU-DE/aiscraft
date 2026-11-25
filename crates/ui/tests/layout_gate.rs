@@ -32,7 +32,8 @@ const STAY_FRAMES: usize = 40;
 /// An answer that tests wrapping: a wide table, a long code line, a long word and a long URL.
 const LONG_ANSWER: &str = "## Photosynthese im Überblick\n\nPflanzen bauen aus Licht, Wasser und Kohlenstoffdioxid Traubenzucker auf. Ein sehr langes Wort: Donaudampfschifffahrtsgesellschaftskapitänsmützenabzeichenherstellungsbetrieb. Eine lange Adresse: https://example.org/unterricht/biologie/klasse-7/photosynthese/arbeitsmaterialien/versuche/blattfarbstoffe-chromatographie-anleitung-fuer-schuelerinnen-und-schueler.html\n\n| Stoff | Rolle | Wo | Wann | Menge | Hinweis für den Unterricht |\n|---|---|---|---|---|---|\n| Chlorophyll | fängt das Licht ein | Chloroplasten | tagsüber | viel | grüner Blattfarbstoff, mit Chromatographie sichtbar machen |\n| Wasser | liefert Elektronen | Wurzeln, Leitbündel | immer | sehr viel | Versuch mit gefärbtem Wasser und Selleriestangen |\n\n```python\n# Eine absichtlich sehr lange Codezeile, die nicht umbrochen werden darf und seitlich scrollen muss\nsauerstoff_pro_stunde = blaetter * flaeche_pro_blatt_in_quadratzentimetern * lichtstaerke_in_lux * wirkungsgrad / 1000\n```\n\n1. Blätter nehmen **Kohlenstoffdioxid** auf.\n2. Die Wurzeln liefern **Wasser**.\n\n> 6 CO2 + 6 H2O → C6H12O6 + 6 O2\n\nSoll ich daraus ein Arbeitsblatt machen?";
 
-/// A local OpenAI-compatible server that always streams `answer`.
+/// A local OpenAI-compatible server that always streams `answer`; a request that says „langsam“
+/// never gets one (a task that keeps running, #69).
 fn answer_backend(engine: &Engine, answer: &'static str) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     engine.block_on(async {
@@ -65,6 +66,10 @@ fn answer_backend(engine: &Engine, answer: &'static str) -> String {
                         let body = r#"{"data":[{"id":"m"}]}"#;
                         let head = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", body.len());
                         let _ = sock.write_all(format!("{head}{body}").as_bytes()).await;
+                        return;
+                    }
+                    if String::from_utf8_lossy(&buf).contains("langsam") {
+                        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
                         return;
                     }
                     // A request for the week's dates calls the connector tool with a view (#74).
@@ -282,6 +287,15 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
     settle(&mut h, &at("Chat"), |h| label(h, "Kopieren"));
     check(&mut h, &at("Chat"));
 
+    // Background work (#69): a finished task's card in the chat, a running one in the status line.
+    call(&engine, "task.start", json!({"title": "Elternbrief für die Klassenfahrt der 7b prüfen", "instructions": "Prüfe den Elternbrief"}));
+    assert!(
+        engine.wait_for(std::time::Duration::from_secs(10), |s| s.messages.iter().any(|m| m.activity.iter().any(|a| a.label == aiscraft_engine::TASK_RESULT))),
+        "the task's card arrived"
+    );
+    call(&engine, "task.start", json!({"title": "Noten der Klassenarbeit in die Liste eintragen und Durchschnitt berechnen", "instructions": "langsam"}));
+    settle(&mut h, &at("Chat, Aufgaben"), |h| label(h, "Details") && h.query_by_label_contains("1 Aufgabe läuft").is_some());
+    check(&mut h, &at("Chat, Aufgaben"));
     // Research in the background (#37, this one finds nothing) and the voice mode (#40) above
     // the composer.
     call(&engine, "research.set_search", json!({"url": url.trim_end_matches("/v1")}));
@@ -378,6 +392,23 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
         call(&engine, "artifact.close", json!({}));
         settle(&mut h, &at("Panel geschlossen"), |h| h.state().panel_layout().artifact.is_none());
     }
+
+    // What the settings show once used (#20, #66, #68): a style note, a backup model, a schedule
+    // idea from a request made on three earlier weeks.
+    call(
+        &engine,
+        "memory.add",
+        json!({"text": "Kurze Sätze, duzt Kolleginnen, grüßt mit „Viele Grüße“, keine Emojis, neue Absätze nach zwei oder drei Sätzen", "area": "style"}),
+    );
+    call(&engine, "fallback.set", json!({"models": [{"backend": id, "model": "m"}]}));
+    for weeks in 1..=3 {
+        call(&engine, "chat.new", json!({}));
+        call(&engine, "chat.send", json!({"text": "Fass mir die Mails der Schulleitung von dieser Woche zusammen"}));
+        let user = engine.state().messages.iter().find(|m| m.role == aiscraft_core::Role::User).map(|m| m.id.clone()).unwrap();
+        engine.backdate_message(&user, aiscraft_engine::now_ms() - weeks * 7 * 86_400_000).unwrap();
+    }
+    assert_eq!(call(&engine, "schedule.ideas", json!({})).as_array().map(Vec::len), Some(1), "a schedule idea to show");
+    call(&engine, "chat.open", json!({"id": chat}));
 
     // Settings, every tab.
     show(&mut h, &tx, "settings");

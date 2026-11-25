@@ -178,6 +178,11 @@ pub(crate) fn start(c: &Ctx) {
             if ticks.is_multiple_of(180) {
                 let _ = crate::skills::lint_memory(&ctx);
             }
+            // A minute after the start and hourly: schedule ideas from recurring requests (#68),
+            // found on the device; announced only with the hints below.
+            if ticks % 180 == 3 {
+                let _ = crate::schedule_ideas::refresh(&ctx);
+            }
             // Hourly too, half an hour later: maybe one hint.
             if ticks % 180 == 90 {
                 let _ = crate::proactive::check(&ctx, false).await;
@@ -241,6 +246,8 @@ async fn run(c: &Ctx, mut s: Schedule) -> Result<Value> {
             id
         }
     };
+    // In the status line while it runs (#69).
+    let _running = crate::tasks::Running::start(c, &conv_id, if s.watch { crate::JobKind::Watch } else { crate::JobKind::Schedule }, &s.title);
     let mut prompt = format!("(Zeitplan „{}“) {}", s.title, s.prompt);
     if s.watch {
         let last = s.last_result.clone().unwrap_or_else(|| "(noch keine)".into());
@@ -415,6 +422,25 @@ pub(crate) async fn edit(c: Ctx, p: Value) -> Result<Value> {
         Cron::parse(&r)?;
         s.cron = Some(r);
         s.run_at = None;
+    }
+    // The model per schedule (#68); the chat it writes to follows on the next run.
+    if let Some(b) = opt_str(&p, "backend").filter(|b| !b.is_empty()) {
+        if c.state().backend(&b).is_none() {
+            return Err(Error::not_found("Backend nicht gefunden"));
+        }
+        s.backend_id = b;
+    }
+    if let Some(m) = opt_str(&p, "model").filter(|m| !m.trim().is_empty()) {
+        s.model_id = m.chars().take(200).collect();
+    }
+    if (p.get("backend").is_some() || p.get("model").is_some())
+        && let Some(conv) = s.conversation_id.clone()
+    {
+        let (b, m) = (s.backend_id.clone(), s.model_id.clone());
+        let _ = crate::commands::edit_conversation(&c, &conv, |x| {
+            x.backend_id = b;
+            x.model_id = m;
+        });
     }
     update_one(&c, &s)?;
     Ok(json!({"next_run": next_run(&s, now_ms())}))

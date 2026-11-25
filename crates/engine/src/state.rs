@@ -33,6 +33,9 @@ pub struct State {
     pub selection: Selection,
     /// Conversations with an answer being generated right now.
     pub generating: Vec<String>,
+    /// Tasks, schedules and page watches running in the background (#69), for the status line.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub running: Vec<RunningJob>,
     pub remote: BTreeMap<String, Vec<RemoteConversation>>,
     pub search: Option<SearchState>,
     pub notices: Vec<Notice>,
@@ -55,6 +58,9 @@ pub struct State {
     /// Tool calls waiting for the owner's yes or no.
     pub approvals: Vec<Approval>,
     pub schedules: Vec<crate::schedules::Schedule>,
+    /// Schedules suggested from the owner's recurring requests (#68).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schedule_ideas: Vec<crate::schedule_ideas::ScheduleIdea>,
     pub skills: Vec<crate::skills::Skill>,
     /// Dictation is recording.
     pub recording: bool,
@@ -92,6 +98,24 @@ pub struct State {
     /// Readability shown under answers (`message.readability`, #48), by message id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub readability: BTreeMap<String, crate::readability::Readability>,
+}
+
+/// Work running in the background (#69).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunningJob {
+    /// The chat it works in.
+    pub id: String,
+    pub kind: JobKind,
+    pub title: String,
+    pub started_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    Task,
+    Schedule,
+    Watch,
 }
 
 /// The update check (`app.check_update`). No download, no install: a hint with a link.
@@ -426,6 +450,11 @@ pub struct Settings {
     /// The owner's own rules for the trust check (#22); changed with `trust.rule_add` and
     /// `trust.rule_remove`.
     pub trust_rules: Vec<TrustRule>,
+    /// Backup models in order (#66): when a model request fails because of the model, the answer
+    /// continues on the first one that may take it. Changed with `fallback.set`.
+    pub fallback_models: Vec<crate::fallback::FallbackModel>,
+    /// Backup models at another service may get the chat (off by default).
+    pub fallback_other_services: bool,
 }
 
 /// What a rule does: let matching actions run without asking, or never let them run.
@@ -475,6 +504,8 @@ impl Default for Settings {
             ai_label: "ais-chat".into(),
             ai_label_prompt: false,
             trust_rules: Vec::new(),
+            fallback_models: Vec::new(),
+            fallback_other_services: false,
         }
     }
 }
@@ -491,6 +522,11 @@ impl State {
     }
     pub fn conversation(&self, id: &str) -> Option<&Conversation> {
         self.conversations.iter().find(|c| c.id == id)
+    }
+    /// A temporary chat (#34) needs a backend that keeps no history of its own. AIS.chat stores
+    /// every chat in its own history, so there is none with it.
+    pub fn temporary_possible(&self, backend_id: &str) -> bool {
+        self.backend(backend_id).is_none_or(|b| b.config.kind != aiscraft_core::BackendKind::AisChat)
     }
     pub fn share(&self, artifact: &str) -> Option<&CollabView> {
         self.collab.shares.iter().find(|s| s.artifact_id == artifact)

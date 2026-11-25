@@ -590,8 +590,9 @@ mod tests {
 
     #[test]
     fn tilde_and_relative_paths() {
-        let home = Path::new("/home/a");
-        assert_eq!(expand("~/Downloads", Some(home)).unwrap(), Path::new("/home/a/Downloads"));
+        // Absolute on every system (`/home/a` is not absolute on Windows).
+        let home = Path::new(if cfg!(windows) { r"C:\home\a" } else { "/home/a" });
+        assert_eq!(expand("~/Downloads", Some(home)).unwrap(), home.join("Downloads"));
         assert_eq!(expand("~", Some(home)).unwrap(), home);
         assert!(expand("Downloads/x", Some(home)).is_err());
         assert!(expand("", Some(home)).is_err());

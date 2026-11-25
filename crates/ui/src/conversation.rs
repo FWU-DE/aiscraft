@@ -193,11 +193,13 @@ impl AisCraftApp {
                     }
                 } else {
                     // A temporary chat (#34): switched on before the first message.
+                    // Not with AIS.chat: it keeps every chat in its own history.
                     let temp = self.state.selection.temporary;
                     let (kind, label) = if temp { (crate::kit::Pill::Accent2, "Temporär: an") } else { (crate::kit::Pill::Ghost, "Temporärer Chat") };
-                    if crate::kit::pill(ui, &t, kind, None, label, 12.5, None)
-                        .on_hover_text("Wird nicht gespeichert, nicht durchsucht und legt keine Notizen an; beim Schließen ist er weg.")
-                        .clicked()
+                    if (temp || self.state.temporary_possible(&self.state.selection.backend_id))
+                        && crate::kit::pill(ui, &t, kind, None, label, 12.5, None)
+                            .on_hover_text("Wird nicht gespeichert, nicht durchsucht und legt keine Notizen an; beim Schließen ist er weg.")
+                            .clicked()
                     {
                         self.run("chat.temporary", json!({"on": !temp}));
                     }
@@ -552,6 +554,11 @@ impl AisCraftApp {
     }
 
     fn assistant_message(&mut self, ui: &mut Ui, m: &Message, is_last: bool) {
+        // A task's result is a compact card (#69).
+        if let Some(card) = aiscraft_engine::task_card(&self.state, m) {
+            self.task_card(ui, &card);
+            return;
+        }
         let t = self.tokens.clone();
         let generating = is_last && self.state.current.as_ref().is_some_and(|c| self.state.is_generating(c));
         // Token counts are for the curious: on the model name, not in the row of actions.
@@ -722,6 +729,10 @@ impl AisCraftApp {
             }
         }
         sources_row(ui, &t, m);
+        // #66: which backup model answered, and why.
+        if let Some(note) = m.activity.iter().find(|s| s.label == aiscraft_engine::FALLBACK).and_then(|s| s.detail.as_deref()) {
+            ui.add(egui::Label::new(small_muted(&t, note)).wrap());
+        }
         self.citations_row(ui, m);
         dead_links_row(ui, &t, m);
         if let Some(err) = &m.error {
@@ -1021,6 +1032,13 @@ impl AisCraftApp {
             let mut memory = src.memory_for(takes);
             if ui.checkbox(&mut memory, "Gedächtnis (deine Notizen)").changed() {
                 switch_inline("memory", memory);
+            }
+            // #20: shown once there is a style note.
+            if self.state.memory.iter().any(|n| n.area == aiscraft_core::MemoryArea::Style && !n.archived) {
+                let mut own = src.own_style;
+                if ui.add_enabled(memory, egui::Checkbox::new(&mut own, "Mein Schreibstil (bei Entwürfen)")).changed() {
+                    set("own_style", own);
+                }
             }
             let mut project = src.project_for(takes);
             if ui.checkbox(&mut project, "Projektanweisungen").changed() {
@@ -1332,6 +1350,7 @@ impl AisCraftApp {
             .inner_margin(m)
             .shadow(t.composer_shadow);
         frame.show(ui, |ui| {
+            self.status_line(ui);
             if self.state.selection.temporary {
                 ui.label(small_muted(&t, "Temporärer Chat: wird nicht gespeichert und ist beim Schließen weg."));
             }

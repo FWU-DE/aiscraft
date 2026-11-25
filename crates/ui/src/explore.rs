@@ -15,6 +15,16 @@ use crate::widgets::{accent_button, card, muted, small_muted};
 const PAGE_WIDTH: f32 = 1180.0;
 const MIN_CARD: f32 = 210.0;
 const GAP: f32 = 14.0;
+/// Cards this close below or above the visible area ask for their picture already, so it is
+/// there when they scroll in (a little more than one row of cards).
+const PICTURE_LOOKAHEAD: f32 = 320.0;
+/// At most this many pictures asked for and not yet arrived; cards past it ask in a later frame,
+/// so a fast scroll does not queue the pictures of every card it passed.
+const PICTURES_IN_FLIGHT: usize = 6;
+/// Cards ahead of the visible area use at most this many of them; visible cards keep the rest.
+const PICTURES_AHEAD: usize = 2;
+/// A request that never answers frees its place after this many seconds.
+const PICTURE_PATIENCE: f64 = 30.0;
 
 /// Entries of one kind (or all), as the grid lists them.
 type Section<'a> = (Option<PersonaKind>, Vec<&'a (String, PersonaInfo)>);
@@ -163,15 +173,37 @@ impl AisCraftApp {
         }
     }
 
+    /// Ask the engine for a persona's picture: once per run, and only while fewer than
+    /// [`PICTURES_IN_FLIGHT`] asks are open ([`PICTURES_AHEAD`] for a card not yet visible). A
+    /// card that finds no place asks again when it is drawn next.
+    fn request_persona_picture(&mut self, ctx: &egui::Context, backend: &str, p: &PersonaInfo, ahead: bool) {
+        if p.picture_url.is_none() {
+            return;
+        }
+        let key = picture_key(backend, p.kind, &p.id);
+        if self.pictures_requested.contains(&key) || self.state.persona_pictures.contains_key(&key) {
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        let arrived = &self.state.persona_pictures;
+        self.pictures_pending.retain(|k, since| !arrived.contains_key(k) && now - *since < PICTURE_PATIENCE);
+        let cap = if ahead { PICTURES_AHEAD } else { PICTURES_IN_FLIGHT };
+        if self.pictures_pending.len() >= cap {
+            ctx.request_repaint_after(std::time::Duration::from_millis(150));
+            return;
+        }
+        self.pictures_pending.insert(key.clone(), now);
+        self.pictures_requested.insert(key);
+        self.engine.dispatch_quiet("persona.picture", json!({"backend": backend, "kind": p.kind.as_str(), "id": p.id}));
+    }
+
     /// A persona's picture as a small texture (decoded once, a few per frame), fetched on first use.
     fn persona_thumb(&mut self, ctx: &egui::Context, backend: &str, p: &PersonaInfo) -> Option<egui::TextureHandle> {
         p.picture_url.as_ref()?;
         let key = picture_key(backend, p.kind, &p.id);
         let path = match self.state.persona_pictures.get(&key) {
             None => {
-                if self.pictures_requested.insert(key) {
-                    self.engine.dispatch_quiet("persona.picture", json!({"backend": backend, "kind": p.kind.as_str(), "id": p.id}));
-                }
+                self.request_persona_picture(ctx, backend, p, false);
                 return None;
             }
             Some(None) => return None,
@@ -235,6 +267,10 @@ impl AisCraftApp {
         let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &p.name));
         if !ui.is_rect_visible(rect) {
+            // Not drawn; just ahead of the visible area it asks for its picture already.
+            if ui.clip_rect().expand2(vec2(0.0, PICTURE_LOOKAHEAD)).intersects(rect) {
+                self.request_persona_picture(ui.ctx(), backend, p, true);
+            }
             return (resp, false);
         }
         // The star sits on the picture's top right corner and answers before the card does.

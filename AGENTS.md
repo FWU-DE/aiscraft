@@ -161,6 +161,7 @@ a slow path comes with such a gate.
 | Start-up shows what the last run knew | Persona list (favourites) and AIS.chat action ids come from `<data>/cache/<backend>.{personas,actions}.json` before any request; a broken cache file is ignored | `persona_list_and_action_ids_survive_a_restart` (engine) |
 | Finding AIS.chat action ids | Each JS chunk loaded at most once per run, even when pages share it; with remembered ids no page or chunk is loaded | `action_discovery_loads_each_chunk_once_and_remembered_ids_load_none` (backends) |
 | Persona lists | The three lists and the session load in parallel | none yet (code review) |
+| Pictures in Entdecken load as cards come into view | Opening the page asks only for the pictures of the cards in view and about a row ahead (`PICTURE_LOOKAHEAD`); jumping over cards asks nothing for them; a picture is asked for once per run; at most 6 asks are open at once, 2 of them for cards not yet in view (`ui/src/explore.rs`), the engine downloads 4 at once | `explore_asks_only_for_pictures_in_view` (ui, `tests/explore_pictures.rs`) |
 | Errors a person can fix are named | A full disk (`StorageFull`, `QuotaExceeded`, ENOSPC/EDQUOT, `SQLITE_FULL`) gives `aiscraft_core::DISK_FULL` with the details, classified from error codes, never from text; every engine file write goes through `engine/src/disk.rs`. A stopped local service (Ollama, LM Studio, Claude CLI, `aiscraft-preview`, a connector) is named with host:port or exit code and the next step | `every_engine_file_write_goes_through_disk`, `a_full_disk_while_saving_an_artifact_is_named_and_keeps_the_old_file` (engine), `a_store_that_cannot_grow_says_the_disk_is_full` (store), `a_stopped_local_server_is_named_with_host_and_port`, `claude_cli_that_ends_mid_answer_says_so` (backends) |
 | Names stay on the device („Namen schützen“, #55) | With protection on, no class-list name, e-mail, phone, IBAN or street address is in any request body the backend receives (message, attached text, memory, system prompt, later rounds, single calls); the mapping is not in the state agents read nor in the JSON export | `no_real_name_reaches_the_backend`, `single_calls_are_protected_and_translated_back` (engine, `privacy/tests.rs`) |
 | One request, one question at most (#63) | A batch of steps from one request asks nothing; a call nobody asked for asks once; one trust check per call that needs a yes, none for reads; the check's request holds the owner's messages with the answers they replied to and never a tool result | `one_request_covers_every_step` (engine, `trust_tests.rs`) |
@@ -201,4 +202,11 @@ follow craft-update (`aischatcraft-<version>-<os>-<arch>.<ext>`); `update.rs` fi
 `pick_asset`. Windows (Azure Trusted Signing or a PFX) and macOS (Developer ID, notarization) are
 signed once their secrets are in the repository's `release` environment; the shared workflow signs
 Linux packages only on a `release` branch, so tag builds stay unsigned there. "Run workflow" on
-Release with dry-run builds everything except macOS and publishes nothing.
+Release with dry-run builds the packages and publishes nothing.
+
+For now (owner's decision, 2026-11-25) releases have no macOS package and no signatures: our
+workflow always calls the shared one in dry-run mode (no macOS, whose `macos-15-xlarge` runner is
+paid for, no signing, no draft), and its own job `publish` drafts the release with the suite's
+`draft-release` action and publishes it on a tag. Once the runner is allowed and the certificates
+are in the `release` environment, go back to the shared workflow's own draft (see the comment in
+`release.yml`).

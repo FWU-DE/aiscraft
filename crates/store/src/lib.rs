@@ -212,6 +212,13 @@ impl Store {
             tx.commit().map_err(db_err)?;
         }
         db.execute_batch("CREATE INDEX IF NOT EXISTS messages_parent ON messages(conversation_id, parent_id)").map_err(db_err)?;
+        // Notes replaced by a newer one (#21). An added column older versions simply do not read,
+        // so the schema version stays.
+        let has_replaced: bool =
+            db.prepare("SELECT 1 FROM pragma_table_info('memory') WHERE name = 'replaced_by'").and_then(|mut st| st.exists([])).map_err(db_err)?;
+        if !has_replaced {
+            db.execute_batch("ALTER TABLE memory ADD COLUMN replaced_by TEXT").map_err(db_err)?;
+        }
         db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}")).map_err(db_err)?;
         Ok(Self { db, temp: None, temp_ids: Default::default() })
     }
@@ -707,8 +714,10 @@ impl Store {
     // ---- memory ---------------------------------------------------------------------------
 
     pub fn memory(&self) -> Result<Vec<MemoryNote>> {
-        let mut st =
-            self.db.prepare("SELECT id, area, text, source_message_id, source_quote, created_at, archived FROM memory ORDER BY created_at").map_err(db_err)?;
+        let mut st = self
+            .db
+            .prepare("SELECT id, area, text, source_message_id, source_quote, created_at, archived, replaced_by FROM memory ORDER BY created_at")
+            .map_err(db_err)?;
         let rows = st
             .query_map([], |r| {
                 Ok((
@@ -719,12 +728,13 @@ impl Store {
                     r.get::<_, String>(4)?,
                     r.get::<_, i64>(5)?,
                     r.get::<_, i64>(6)?,
+                    r.get::<_, Option<String>>(7)?,
                 ))
             })
             .map_err(db_err)?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, area, text, source_message_id, source_quote, created_at, archived) = row.map_err(db_err)?;
+            let (id, area, text, source_message_id, source_quote, created_at, archived, replaced_by) = row.map_err(db_err)?;
             out.push(MemoryNote {
                 id,
                 area: MemoryArea::parse(&area).unwrap_or(MemoryArea::Lessons),
@@ -733,6 +743,7 @@ impl Store {
                 source_quote,
                 created_at,
                 archived: archived != 0,
+                replaced_by,
             });
         }
         Ok(out)
@@ -741,9 +752,9 @@ impl Store {
     pub fn save_memory(&self, n: &MemoryNote) -> Result<()> {
         self.db
             .execute(
-                "INSERT INTO memory (id, area, text, source_message_id, source_quote, created_at, archived) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                 ON CONFLICT(id) DO UPDATE SET area = excluded.area, text = excluded.text, archived = excluded.archived",
-                params![n.id, n.area.as_str(), n.text, n.source_message_id, n.source_quote, n.created_at, n.archived as i64],
+                "INSERT INTO memory (id, area, text, source_message_id, source_quote, created_at, archived, replaced_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(id) DO UPDATE SET area = excluded.area, text = excluded.text, archived = excluded.archived, replaced_by = excluded.replaced_by",
+                params![n.id, n.area.as_str(), n.text, n.source_message_id, n.source_quote, n.created_at, n.archived as i64, n.replaced_by],
             )
             .map_err(db_err)?;
         Ok(())
@@ -1092,6 +1103,60 @@ impl Store {
         let rows = st.query_map(params![since, limit as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).map_err(db_err)?;
         rows.collect::<rusqlite::Result<_>>().map_err(db_err)
     }
+
+    /// The owner's own messages since `since`, newest first, with the chat's service and model
+    /// (#20, #68). Answers and tool results are not in it; prompts the app wrote (schedules,
+    /// tasks) are marked `automatic`.
+    pub fn own_messages(&self, since: i64, limit: usize) -> Result<Vec<OwnMessage>> {
+        let mut st = self
+            .db
+            .prepare(
+                "SELECT m.conversation_id, COALESCE(c.backend_id, ''), COALESCE(c.model_id, ''), COALESCE(c.title, ''), m.content, m.created_at, m.extra
+                 FROM messages m LEFT JOIN conversations c ON c.id = m.conversation_id
+                 WHERE m.role = 'user' AND m.active = 1 AND m.created_at >= ?1 ORDER BY m.created_at DESC LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = st
+            .query_map(params![since, limit as i64], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, String>(6)?,
+                ))
+            })
+            .map_err(db_err)?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (conversation_id, backend_id, model_id, title, content, created_at, extra) = row.map_err(db_err)?;
+            let extra: Extra = serde_json::from_str(&extra).unwrap_or_default();
+            // Schedules and tasks write their prompts as a user message with a marker; older ones
+            // are known by the chat the app named.
+            let automatic = extra.model.is_some() || title.starts_with('⏰') || title.starts_with('▶');
+            out.push(OwnMessage { conversation_id, backend_id, model_id, content, created_at, automatic });
+        }
+        Ok(out)
+    }
+
+    /// Move a message in time (tests and the offscreen demo: the history of several weeks).
+    pub fn set_message_time(&self, id: &str, at: i64) -> Result<bool> {
+        Ok(self.db.execute("UPDATE messages SET created_at = ?2 WHERE id = ?1", params![id, at]).map_err(db_err)? > 0)
+    }
+}
+
+/// One of the owner's own messages (see [`Store::own_messages`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OwnMessage {
+    pub conversation_id: String,
+    pub backend_id: String,
+    pub model_id: String,
+    pub content: String,
+    pub created_at: i64,
+    /// Written by the app (a schedule's or a task's prompt), not typed by the owner.
+    pub automatic: bool,
 }
 
 /// A message's place in the tree.
@@ -1429,11 +1494,14 @@ mod tests {
             source_quote: "merke dir: Lehrerin".into(),
             created_at: 0,
             archived: false,
+            replaced_by: None,
         };
         s.save_memory(&n).unwrap();
         n.archived = true;
+        n.replaced_by = Some("neu".into());
         s.save_memory(&n).unwrap();
         assert!(s.memory().unwrap()[0].archived);
+        assert_eq!(s.memory().unwrap()[0].replaced_by.as_deref(), Some("neu"), "#21: the replacing note is kept");
 
         s.set_setting("theme", &serde_json::json!("dark")).unwrap();
         assert_eq!(s.setting("theme").unwrap(), Some(serde_json::json!("dark")));

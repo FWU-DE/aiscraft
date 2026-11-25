@@ -32,6 +32,8 @@ pub(crate) async fn check(c: &Ctx, force: bool) -> Result<Option<String>> {
     if !force && (!s.proactive || quiet(chrono::Local::now().hour(), s.quiet_start, s.quiet_end)) {
         return Ok(None);
     }
+    // A request the owner keeps making may become a schedule (#68): found without a model.
+    let _ = crate::schedule_ideas::announce(c);
     let msgs = c.store(|st| st.user_messages_since(now_ms() - 48 * 3_600_000, 60))?;
     if msgs.is_empty() {
         return Ok(None);

@@ -459,7 +459,7 @@ pub fn action_payload(req: &ChatRequest) -> Value {
 
 fn ais_error(name: &str, message: &str) -> Error {
     match name {
-        "TokenPointsExceededError" => Error::refused("Dein Kontingent bei AIS.chat ist für diesen Zeitraum aufgebraucht."),
+        "TokenPointsExceededError" => Error::busy("Dein Kontingent bei AIS.chat ist für diesen Zeitraum aufgebraucht."),
         "ResponsibleAIError" => Error::refused("AIS.chat hat die Anfrage wegen unangemessener Inhalte blockiert."),
         "SharedChatExpiredError" => Error::refused("Dieser geteilte Chat ist abgelaufen."),
         "NotFoundError" => Error::not_found(if message.is_empty() { "Nicht gefunden" } else { message }),
@@ -1006,7 +1006,10 @@ mod tests {
         assert!(steps[1].failed && steps[1].links[0].failed && steps[1].links[0].title == "https://a.example");
         let err = map_action_event(ActionEvent::Result(json!({"stream":"$2","messageId":"m","error":{"name":"TokenPointsExceededError","message":"x"}})))
             .unwrap_err();
-        assert_eq!(err.kind, aiscraft_core::ErrorKind::Refused);
+        assert_eq!(err.kind, aiscraft_core::ErrorKind::Busy, "the quota used up: another model may answer (#66)");
+        let err =
+            map_action_event(ActionEvent::Result(json!({"stream":"$2","messageId":"m","error":{"name":"ResponsibleAIError","message":"x"}}))).unwrap_err();
+        assert_eq!(err.kind, aiscraft_core::ErrorKind::Refused, "the content: no other model");
         assert_eq!(map_action_event(ActionEvent::Result(json!({"messageId":"m9"}))).unwrap(), vec![StreamEvent::MessageId { id: "m9".into() }]);
     }
 

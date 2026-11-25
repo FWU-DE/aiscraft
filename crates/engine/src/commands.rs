@@ -154,7 +154,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Quellen des Chats",
         "Chat",
         None,
-        "tools?: bool, memory?: bool, project?: bool, history?: bool, web?: bool (web search or the page reader), inline?: bool (memory and project at the top of a message, for backends without a system prompt), other_services?: bool (recall may send excerpts from chats with other services to this one), connectors?: [id] | null (alle), protect?: bool | null (Namen schützen; null = automatisch, an sobald es eine Klassenliste gibt), effort?: low|medium|high|max | null (wie gründlich das Modell nachdenkt; null = Standard des Modells)",
+        "tools?: bool, memory?: bool, project?: bool, history?: bool, web?: bool (web search or the page reader), inline?: bool (memory and project at the top of a message, for backends without a system prompt), other_services?: bool (recall may send excerpts from chats with other services to this one), own_style?: bool (dein Schreibstil bei Schreibaufträgen), connectors?: [id] | null (alle), protect?: bool | null (Namen schützen; null = automatisch, an sobald es eine Klassenliste gibt), effort?: low|medium|high|max | null (wie gründlich das Modell nachdenkt; null = Standard des Modells)",
         false,
         |c, p| Box::pin(set_sources(c, p))
     ),
@@ -296,7 +296,7 @@ static COMMANDS: &[CommandSpec] = &[
         });
         Ok(json!({}))
     })),
-    cmd!("memory.add", "Notiz merken", "Gedächtnis", None, "text: string, area?: about|preferences|people|routines|lessons", false, |c, p| Box::pin(
+    cmd!("memory.add", "Notiz merken", "Gedächtnis", None, "text: string, area?: about|preferences|people|routines|lessons|style", false, |c, p| Box::pin(
         async move {
             let text = req_str(&p, "text")?.trim().to_string();
             if text.is_empty() {
@@ -304,11 +304,8 @@ static COMMANDS: &[CommandSpec] = &[
             }
             let area = opt_str(&p, "area").and_then(|a| MemoryArea::parse(&a)).unwrap_or(MemoryArea::About);
             // Typed by the owner into the memory panel: the note is its own source.
-            let note = MemoryNote { id: new_id(), area, source_quote: text.clone(), text, source_message_id: None, created_at: now_ms(), archived: false };
-            c.store(|st| st.save_memory(&note))?;
-            let id = note.id.clone();
-            c.update(|s| s.memory.push(note));
-            Ok(json!({"id": id}))
+            let note = crate::memory::add_from_owner(&c, area, text.clone(), None, text)?;
+            Ok(json!({"id": note.id}))
         }
     )),
     cmd!("memory.update", "Notiz ändern", "Gedächtnis", None, "id: string, text?: string, area?: string", false, |c, p| Box::pin(async move {
@@ -326,8 +323,29 @@ static COMMANDS: &[CommandSpec] = &[
         edit_memory(&c, &req_str(&p, "id")?, |n| n.archived = true)
     })),
     cmd!("memory.restore", "Notiz wiederherstellen", "Gedächtnis", None, "id: string", false, |c, p| Box::pin(async move {
-        edit_memory(&c, &req_str(&p, "id")?, |n| n.archived = false)
+        edit_memory(&c, &req_str(&p, "id")?, |n| {
+            n.archived = false;
+            n.replaced_by = None;
+        })
     })),
+    cmd!(
+        "style.learn",
+        "Schreibstil aus eigenen Texten lernen",
+        "Gedächtnis",
+        None,
+        "Liest deine eigenen Nachrichten in Chats mit dem gewählten Dienst (ohne Namen und Zahlen) und legt eine Stilnotiz an, die bei Schreibaufträgen mitgeht",
+        true,
+        |c, p| Box::pin(crate::style::learn(c, p))
+    ),
+    cmd!(
+        "memory.replace",
+        "Notiz durch neuere ersetzen",
+        "Gedächtnis",
+        None,
+        "id: string (die ältere Notiz), by: string (die neuere). Die ältere wird vergessen und zeigt „ersetzt durch“",
+        false,
+        |c, p| Box::pin(async move { crate::memory::replace(&c, &req_str(&p, "id")?, &req_str(&p, "by")?) })
+    ),
     cmd!(
         "backend.add",
         "Backend hinzufügen",
@@ -425,6 +443,9 @@ static COMMANDS: &[CommandSpec] = &[
             if key == "trust_rules" {
                 return Err(Error::invalid("Regeln ändern trust.rule_add und trust.rule_remove"));
             }
+            if key == "fallback_models" || key == "fallback_other_services" {
+                return Err(Error::invalid("Ersatzmodelle ändert fallback.set"));
+            }
             let value = p.get("value").cloned().unwrap_or(Value::Null);
             let mut settings = serde_json::to_value(&c.state().settings)?;
             let Some(obj) = settings.as_object_mut().filter(|o| o.contains_key(&key)) else {
@@ -453,6 +474,15 @@ static COMMANDS: &[CommandSpec] = &[
             c.update(|s| s.settings = parsed);
             Ok(json!({}))
         })
+    ),
+    cmd!(
+        "fallback.set",
+        "Ersatzmodelle festlegen",
+        "Einstellungen",
+        None,
+        "models?: [{backend, model}] (in dieser Reihenfolge, höchstens 5), other_services?: bool (Ersatzmodelle bei anderen Diensten dürfen den Chat bekommen)",
+        false,
+        |c, p| Box::pin(crate::fallback::set(c, p))
     ),
     cmd!("notice.dismiss", "Hinweis schließen", "App", None, "id: number", false, |c, p| Box::pin(async move {
         let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| Error::invalid("id fehlt"))?;
@@ -563,10 +593,49 @@ static COMMANDS: &[CommandSpec] = &[
         "Zeitplan ändern",
         "Zeitpläne",
         None,
-        "id: string, enabled?: bool, title?: string, prompt?: string, cron?: string",
+        "id: string, enabled?: bool, title?: string, prompt?: string, cron?: string, backend?: string, model?: string (das Modell, mit dem der Zeitplan läuft)",
         false,
         |c, p| Box::pin(crate::schedules::edit(c, p))
     ),
+    cmd!(
+        "schedule.templates",
+        "Vorlagen für Zeitpläne",
+        "Zeitpläne",
+        None,
+        "Antwort: id, title, prompt, cron, rhythm, watch, needs, missing (was fehlt und was zu tun ist), needs_url",
+        false,
+        |c, p| Box::pin(crate::schedule_templates::list(c, p))
+    ),
+    cmd!(
+        "schedule.from_template",
+        "Zeitplan aus Vorlage anlegen",
+        "Zeitpläne",
+        None,
+        "template: morgen|woche|mails|vertretung, url?: string (Seite, für vertretung), title?: string, prompt?: string, cron?: string. Fehlt ein Konnektor oder ein Modell, das Webseiten liest, sagt der Befehl, was zu tun ist",
+        false,
+        |c, p| Box::pin(crate::schedule_templates::create(c, p))
+    ),
+    cmd!(
+        "schedule.ideas",
+        "Zeitplan-Ideen suchen",
+        "Zeitpläne",
+        None,
+        "Sucht in deinen eigenen Nachrichten nach Bitten, die du immer wieder stellst (an mindestens drei Tagen, gleicher Wochentag oder gleiche Uhrzeit). Antwort: id, title, prompt, cron, rhythm, backend_id, model_id, days",
+        true,
+        |c, p| Box::pin(crate::schedule_ideas::list(c, p))
+    ),
+    cmd!(
+        "schedule.idea_accept",
+        "Zeitplan-Idee anlegen",
+        "Zeitpläne",
+        None,
+        "id: string, title?: string, prompt?: string, cron?: string, backend?: string, model?: string (Änderungen vor dem Anlegen)",
+        false,
+        |c, p| Box::pin(crate::schedule_ideas::accept(c, p))
+    ),
+    cmd!("schedule.idea_dismiss", "Zeitplan-Idee ablehnen", "Zeitpläne", None, "id: string. Die Idee kommt nicht wieder", false, |c, p| Box::pin(
+        crate::schedule_ideas::dismiss(c, p)
+    )),
     cmd!("schedule.delete", "Zeitplan löschen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::delete(c, p))),
     cmd!("schedule.run", "Zeitplan jetzt ausführen", "Zeitpläne", None, "id: string", false, |c, p| Box::pin(crate::schedules::run_now(c, p))),
     cmd!("log.list", "Aktionsprotokoll", "App", None, "limit?: number (Standard 100), conversation?: string", false, |c, p| Box::pin(crate::action_log::list(
@@ -820,6 +889,9 @@ async fn chat_temporary(c: Ctx, p: Value) -> Result<Value> {
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(Error::invalid("on muss true oder false sein")),
     };
+    if on && !c.state().temporary_possible(&c.state().selection.backend_id) {
+        return Err(crate::temporary::not_with_ais_chat());
+    }
     chat_new(c.clone(), json!({})).await?;
     if on {
         c.update(|s| {
@@ -898,6 +970,14 @@ async fn select_model(c: Ctx, p: Value) -> Result<Value> {
         return chat_new(c, json!({"backend": backend, "model": model})).await;
     }
     let current = state.current.clone();
+    // A temporary chat stays away from AIS.chat, which would keep it in its history.
+    let temporary = match &current {
+        Some(id) => state.conversation(id).is_some_and(|x| x.temporary),
+        None => state.selection.temporary,
+    };
+    if temporary && !state.temporary_possible(&backend) {
+        return Err(crate::temporary::not_with_ais_chat());
+    }
     c.update(|s| {
         s.selection.backend_id = backend.clone();
         s.selection.model_id = model.clone();
@@ -924,6 +1004,7 @@ async fn set_sources(c: Ctx, p: Value) -> Result<Value> {
     src.web = flag("web", src.web);
     src.inline = flag("inline", src.inline);
     src.other_services = flag("other_services", src.other_services);
+    src.own_style = flag("own_style", src.own_style);
     src.knowledge = flag("knowledge", src.knowledge);
     match p.get("protect") {
         Some(Value::Null) => src.protect = None,
