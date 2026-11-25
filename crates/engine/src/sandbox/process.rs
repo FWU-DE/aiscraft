@@ -50,6 +50,24 @@ pub(crate) async fn run(exe: &Path, args: &[String], env: &[(&str, String)], std
     }
 }
 
+/// Start `exe` with `args` and `env` and keep its stdin and stdout open (stderr dropped). The
+/// program ends when the returned pipe is dropped.
+pub(crate) fn spawn(exe: &Path, args: &[String], env: &[(&str, String)], missing: &str) -> Result<super::runtime::Pipe> {
+    let mut cmd = tokio::process::Command::new(exe);
+    cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut child =
+        cmd.spawn().map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { Error::unsupported(missing) } else { Error::io(exe.display(), &e) })?;
+    let (Some(input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
+        return Err(Error::protocol(format!("{}: keine Verbindung zum Programm", exe.display())));
+    };
+    Ok(super::runtime::Pipe { reader: Box::new(output), writer: Box::new(input), guard: Box::new(child) })
+}
+
 async fn read_capped<R: AsyncRead + Unpin>(r: Option<R>, max: usize) -> (Vec<u8>, bool) {
     let Some(mut r) = r else { return (Vec::new(), false) };
     let mut out = Vec::new();
