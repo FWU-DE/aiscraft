@@ -126,9 +126,7 @@ async fn cdp_call(http: &reqwest::Client, port: u16, method: &str) -> Result<Val
         .await
         .map_err(|_| Error::network("DevTools antwortet nicht"))?
         .map_err(|e| Error::network(format!("DevTools: {e}")))?;
-    sock.send(WsMessage::Text(json!({"id": 1, "method": method}).to_string().into()))
-        .await
-        .map_err(|e| Error::network(format!("DevTools: {e}")))?;
+    sock.send(WsMessage::Text(json!({"id": 1, "method": method}).to_string().into())).await.map_err(|e| Error::network(format!("DevTools: {e}")))?;
     let reply = tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(m) = sock.next().await {
             if let Ok(WsMessage::Text(t)) = m
