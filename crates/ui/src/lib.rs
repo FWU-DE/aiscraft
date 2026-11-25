@@ -5,6 +5,7 @@
 mod action_log;
 mod answer_tools;
 mod app;
+mod app_catalog;
 mod approval;
 mod archive_view;
 mod artifact_panel;

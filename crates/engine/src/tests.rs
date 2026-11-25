@@ -1111,6 +1111,7 @@ fn every_command_has_a_functional_test() {
         include_str!("nod_tests.rs"),
         include_str!("know_tests.rs"),
         include_str!("local_files_tests.rs"),
+        include_str!("accounts_tests.rs"),
         include_str!("ext/tests.rs"),
         include_str!("ext/plugin_tests.rs"),
         include_str!("apps_tests.rs"),

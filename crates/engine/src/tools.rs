@@ -560,6 +560,28 @@ async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> O
             }
         };
     }
+    // Connected apps (#26) run in the engine; a request that went out may have changed something.
+    if crate::accounts::is_account(&r.conn.id) {
+        return match crate::accounts::execute(c, &r.conn.id, &r.tool.name, &r.arguments).await {
+            Ok(text) => {
+                finish("done");
+                (wrap_untrusted(&r.call.name, &crate::vault::scrub(&text, &r.secrets)), false, "ok")
+            }
+            Err(e) if claim.is_some() && matches!(e.kind, aiscraft_core::ErrorKind::Network | aiscraft_core::ErrorKind::Protocol) => {
+                finish("uncertain");
+                c.notice(NoticeLevel::Warning, format!("{UNCERTAIN}: {} · {}. Ob die Aktion ausgeführt wurde, ist nicht klar.", r.conn.name, r.tool.title));
+                (
+                    format!("{UNCERTAIN}: Es ist nicht klar, ob die Aktion ausgeführt wurde ({}). Nicht erneut versuchen; sag der Person, dass sie das Ergebnis prüfen soll.", e.message),
+                    true,
+                    "uncertain",
+                )
+            }
+            Err(e) => {
+                finish("failed");
+                (format!("Fehler: {}", crate::vault::scrub(&e.message, &r.secrets)), true, "error")
+            }
+        };
+    }
     let client = match client_for(c, &r.conn.id).await {
         Ok(cl) => cl,
         Err(e) => {
@@ -1044,6 +1066,9 @@ pub(crate) async fn add(c: Ctx, p: Value) -> Result<Value> {
 
 pub(crate) async fn remove(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
+    if crate::accounts::is_account(&id) {
+        return crate::accounts::remove(&c, &id).await;
+    }
     let mut all = load_configs(&c);
     all.retain(|x| x.id != id);
     save_configs(&c, &all)?;
@@ -1058,6 +1083,9 @@ pub(crate) async fn remove(c: Ctx, p: Value) -> Result<Value> {
 pub(crate) async fn toggle(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let enabled = p.get("enabled").and_then(Value::as_bool).ok_or_else(|| Error::invalid("enabled fehlt"))?;
+    if crate::accounts::is_account(&id) {
+        return crate::accounts::toggle(&c, &id, enabled).await;
+    }
     let mut all = load_configs(&c);
     let cfg = all.iter_mut().find(|x| x.id == id).ok_or_else(|| Error::not_found("Konnektor nicht gefunden"))?;
     cfg.enabled = enabled;
@@ -1082,6 +1110,9 @@ pub(crate) async fn toggle(c: Ctx, p: Value) -> Result<Value> {
 
 pub(crate) async fn refresh(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
+    if crate::accounts::is_account(&id) {
+        return crate::accounts::refresh(&c, &id).await;
+    }
     c.0.tools.clients.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
     let cfg = all_configs(&c).into_iter().find(|x| x.id == id).ok_or_else(|| Error::not_found("Konnektor nicht gefunden"))?;
     connect(&c, &cfg).await?;
@@ -1123,6 +1154,18 @@ pub(crate) async fn insert(c: Ctx, p: Value) -> Result<Value> {
     let label = format!("{} · {}", conn.name, if tool.title.is_empty() { &tool.name } else { &tool.title });
     let conv = c.state().current.clone().unwrap_or_default();
     let detail = crate::action_log::summary(&arguments, &tool.input_schema, &[]);
+    if crate::accounts::is_account(&conn.id) {
+        let r = crate::accounts::execute(&c, &conn.id, &tool.name, &arguments).await;
+        crate::action_log::tool(&c, &conv, &label, detail, &crate::action_log::Why::ReadOnly, if r.is_ok() { "ok" } else { "error" });
+        let raw = r?;
+        let mut body: String = raw.trim().chars().take(MAX_INSERT_CHARS).collect();
+        if raw.trim().chars().count() > MAX_INSERT_CHARS {
+            body.push_str("\n… (gekürzt)");
+        }
+        let text = format!("[Aus {label}]\n{body}\n[Ende {label}]\n");
+        crate::templates::fill_composer(&c, text.clone(), false);
+        return Ok(serde_json::json!({"text": text, "label": label}));
+    }
     let client = match client_for(&c, &conn.id).await {
         Ok(cl) => cl,
         Err(e) => {

@@ -125,6 +125,9 @@ pub struct AisCraftApp {
     /// Settings › Dienste › Zusammenarbeit: relay address and key being typed.
     pub(crate) collab_url: String,
     pub(crate) collab_key: String,
+    /// Settings › Konnektoren › Apps verbinden (#26): the search and the category shown.
+    pub(crate) catalog_query: String,
+    pub(crate) catalog_category: String,
     /// The handbook window, when open.
     pub(crate) manual: Option<crate::manual::ManualView>,
     /// Text from a finished dictation, picked up by the composer.
@@ -299,6 +302,8 @@ impl AisCraftApp {
             attach_artifact: None,
             collab_url: String::new(),
             collab_key: String::new(),
+            catalog_query: String::new(),
+            catalog_category: String::new(),
             dictated: Default::default(),
             manual: None,
             images: Default::default(),
@@ -730,6 +735,8 @@ impl AisCraftApp {
                                 _ => false,
                             }
                         }
+                        // "app_connect:<entry>": setting up an app of the catalog (#26).
+                        w if w.starts_with("app_connect:") => self.open_connect_app(w.trim_start_matches("app_connect:")),
                         // "research", "connector_insert", "template:<id>", "template_new", "project:<id>" (#32, #37, #53, #54).
                         w if self.show_know(w) => true,
                         "none" => {

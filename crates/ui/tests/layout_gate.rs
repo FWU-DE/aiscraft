@@ -505,6 +505,9 @@ Igel, Winterschlaf und Fotosynthese.",
         ("Neue Vorlage", "template_new".to_string(), "Speichern"),
         ("Recherche", "research".to_string(), "Recherche starten"),
         ("Konnektor-Ergebnis", "connector_insert".to_string(), "Konnektor-Ergebnis einfügen"),
+        // Apps verbinden (#26): the setup of a catalog entry, with the sign-in and with a password.
+        ("App verbinden (Microsoft 365)", "app_connect:outlook-calendar".to_string(), "Im Browser anmelden"),
+        ("App verbinden (CalDAV)", "app_connect:caldav".to_string(), "App-Passwort *"),
         ("Projekt mit Projektwissen", format!("project:{pid}"), "Datei hinzufügen …"),
         ("Chats übernehmen", "import_chats".to_string(), "Exportdatei wählen …"),
     ] {

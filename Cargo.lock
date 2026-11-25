@@ -281,6 +281,7 @@ dependencies = [
  "chrono",
  "craft-atomic",
  "craft-csv",
+ "craft-dav",
  "craft-doc-binary",
  "craft-docx",
  "craft-epub",
@@ -1640,6 +1641,14 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=249a41bd9306a1b34330ac94e596a1a8b881378a#249a41bd9306a1b34330ac94e596a1a8b881378a"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-dav"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=249a41bd9306a1b34330ac94e596a1a8b881378a#249a41bd9306a1b34330ac94e596a1a8b881378a"
+dependencies = [
+ "craft-xml",
 ]
 
 [[package]]

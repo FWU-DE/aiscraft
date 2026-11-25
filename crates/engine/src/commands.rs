@@ -591,6 +591,24 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("connector.toggle", "Konnektor ein/aus", "Konnektoren", None, "id: string, enabled: bool", false, |c, p| Box::pin(crate::tools::toggle(c, p))),
     cmd!("connector.refresh", "Konnektor neu verbinden", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::refresh(c, p))),
     cmd!(
+        "connector.catalog",
+        "Apps verbinden: Katalog",
+        "Konnektoren",
+        None,
+        "query?: string (Suchwörter), category?: Mail|Kalender|Dateien. Antwort: categories, entries [{id, name, categories, provider, description, reads, writes, auth, runs, fields, setup_hint}]",
+        false,
+        |c, p| Box::pin(crate::accounts::catalog_cmd(c, p))
+    ),
+    cmd!(
+        "connector.connect",
+        "App verbinden",
+        "Konnektoren",
+        None,
+        "entry: string (ID aus connector.catalog), dazu die Felder des Eintrags (client_id, tenant, client_secret | url, username, password), write?: bool (auch schreiben, immer mit Freigabe), name?: string. Öffnet die Anmeldung im Browser. Oder id: string einer verbundenen App, um neu anzumelden",
+        false,
+        |c, p| Box::pin(crate::accounts::connect(c, p))
+    ),
+    cmd!(
         "connector.insert",
         "Konnektor-Ergebnis einfügen",
         "Konnektoren",
