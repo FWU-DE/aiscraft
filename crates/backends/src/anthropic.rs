@@ -634,8 +634,8 @@ pub fn sse_events(event: Option<&str>, data: &str) -> Result<Vec<StreamEvent>> {
         "error" => {
             let msg = v.pointer("/error/message").and_then(Value::as_str).unwrap_or("Fehler des Servers");
             let kind = v.pointer("/error/type").and_then(Value::as_str).unwrap_or("");
-            return Err(if kind == "overloaded_error" || kind == "rate_limit_error" {
-                Error::refused(msg.to_string())
+            return Err(if kind == "overloaded_error" || kind == "rate_limit_error" || kind == "api_error" {
+                Error::busy(msg.to_string())
             } else {
                 Error::protocol(msg.to_string())
             });
