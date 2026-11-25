@@ -221,10 +221,20 @@ pub struct Options {
 }
 
 impl Options {
+    /// The per-user data folder, or in portable mode (#58: `portable.txt` next to the program, as
+    /// in the portable zip) a folder next to the program, so the stick carries the data along.
     pub fn default_dirs() -> Self {
-        let dir = directories::ProjectDirs::from("ai", "uds", "aiscraft").map(|d| d.data_dir().to_path_buf());
+        let portable = std::env::current_exe().ok().and_then(|exe| portable_data_dir(&exe));
+        let dir = portable.or_else(|| directories::ProjectDirs::from("ai", "uds", "aiscraft").map(|d| d.data_dir().to_path_buf()));
         Self { data_dir: dir, secrets: None }
     }
+}
+
+/// Portable mode: with `portable.txt` beside `exe`, the data live in `AIS.ChatCraftData/aiscraft`
+/// next to it (craft-update keeps its own files in the same `AIS.ChatCraftData` folder).
+pub fn portable_data_dir(exe: &std::path::Path) -> Option<PathBuf> {
+    let parent = exe.parent()?;
+    parent.join("portable.txt").is_file().then(|| parent.join("AIS.ChatCraftData").join("aiscraft"))
 }
 
 impl Engine {

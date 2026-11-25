@@ -20,6 +20,9 @@
 //! here: `https://host[:port]` or `https://*.host`, never `*`. Lines `{"aiscraft/window": …}`
 //! from the app steer the window instead (the size a view asked for, within caps; the small
 //! window on top for the `pip` display mode) and never reach the view.
+// No console window next to the preview on Windows (#58); stdin/stdout stay usable, the app
+// talks to the preview through pipes it creates itself.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod h5p;
 
