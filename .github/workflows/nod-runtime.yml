@@ -40,7 +40,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PIN: crates/engine/src/sandbox/image.rs
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Neuestes Release
         id: release
         env:
@@ -64,12 +64,14 @@ jobs:
           ls -l
           manifest="$(ls runtime-win32-x64-*.json)"
           [ "$(echo "$manifest" | wc -l)" = 1 ] || { echo "::error::Nicht genau ein Laufzeit-Manifest"; exit 1; }
-          # The signed in-toto statement lists every asset's digest; each file we read must be in it.
+          # The signed in-toto statement lists every asset's digest; each file we read must be in it,
+          # signed by Nod's desktop-release.yml built from main. Not --deny-self-hosted-runners: Nod builds
+          # its releases on self-hosted runners, so that flag refuses every genuine release (checked 2026-11-25).
           linux="$(ls runtime-darwin-x64-*.json)"
           [ "$(echo "$linux" | wc -l)" = 1 ] || { echo "::error::Nicht genau ein x86-64-Laufzeit-Manifest"; exit 1; }
           for f in release-win32-x64.json SHA256SUMS-win32-x64 "$manifest" "$linux"; do
             gh attestation verify "$f" --bundle nod-release.sigstore.json --repo n8n-io/nod \
-              --signer-workflow n8n-io/nod/.github/workflows/desktop-release.yml
+              --signer-workflow n8n-io/nod/.github/workflows/desktop-release.yml --source-ref refs/heads/main
           done
           file="$(jq -r .runtime.file release-win32-x64.json)"
           sha="$(jq -r .runtime.sha256 release-win32-x64.json)"

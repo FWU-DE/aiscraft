@@ -87,7 +87,7 @@ provision:
       mkdir -p /etc/docker /work
       chmod 0711 /work
       cat > /etc/docker/daemon.json <<'JSON'
-      {"bridge":"none","storage-driver":"overlay2","userland-proxy":false,"iptables":true,"ip6tables":false,"ipv6":false,"log-driver":"local","log-opts":{"max-size":"10m","max-file":"2"}}
+      {"userns-remap":"default","bridge":"none","storage-driver":"overlay2","userland-proxy":false,"iptables":true,"ip6tables":false,"ipv6":false,"log-driver":"local","log-opts":{"max-size":"10m","max-file":"2"}}
       JSON
       cat > /etc/systemd/system/aiscraft-docker.service <<'UNIT'
       [Unit]

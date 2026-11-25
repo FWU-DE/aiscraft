@@ -372,6 +372,9 @@ fn step(c: &Ctx, what: Option<&str>) {
 /// A computer set up by v0.2.2 (AIS.ChatCraft's own image) before the switch to Nod's runtime.
 pub const LEGACY: &str = "Der eigene Rechner läuft noch mit dem früheren Abbild von AIS.ChatCraft und muss auf die Laufzeit von n8n Nod umgestellt werden: Einstellungen › Fähigkeiten › Aktualisieren. Bis dahin führt er nichts aus.";
 
+/// Why a call with a vault placeholder is refused.
+pub const VAULT_REFUSED: &str = "Abgelehnt: Einträge aus dem Tresor gehen nicht in den eigenen Rechner. Dort könnte ein späterer Befehl sie lesen, umformen oder weiterschicken. Ohne Tresor-Eintrag erneut versuchen oder die Person fragen.";
+
 /// What an update does to the working folders.
 pub const UPDATE_NOTE: &str = "Der eigene Rechner wird dabei neu angelegt; die Arbeitsordner der Chats werden geleert (Anhänge im Chat bleiben).";
 
@@ -570,11 +573,15 @@ pub(crate) fn forget(c: &Ctx, conv: &str) {
 /// Docker running, the image loaded, the chat's folder there (idempotent, cheap when ready).
 async fn prepare(m: &runtime::Shared, chat: Option<&str>, network: bool) -> Result<()> {
     let ws = m.workspace()?;
-    let args = [ws.image.as_str(), chat.unwrap_or(""), ws.tar, ws.tar_sha256, if network { "1" } else { "0" }];
+    let (chat_mb, all_mb) = (k::CHAT_FOLDER_MB.to_string(), k::ALL_FOLDERS_MB.to_string());
+    let args = [ws.image.as_str(), chat.unwrap_or(""), ws.tar, ws.tar_sha256, if network { "1" } else { "0" }, &chat_mb, &all_mb];
     // Loading the 2 GB workspace image the first time takes a while.
     let out = m.exec(k::machine_script(k::PREPARE_SCRIPT, &args), Vec::new(), Duration::from_secs(900), 16 * 1024).await?;
     if out.ok() {
         Ok(())
+    } else if out.code == Some(4) {
+        // A working folder over its limit: the person makes room, nothing is wrong with the computer.
+        Err(Error::storage(out.why()))
     } else if out.timed_out {
         Err(Error::unsupported(format!("Der eigene Rechner ({}) antwortet nicht. „Anhalten“ in den Einstellungen und noch einmal versuchen.", m.machine())))
     } else {
@@ -647,11 +654,17 @@ pub(crate) fn specs() -> Vec<ToolSpec> {
     ]
 }
 
-/// The arguments as they run: folder and time limit filled in, so the trust check, the approval
-/// card and the action log name exactly what will run.
-pub(crate) fn normalize(name: &str, args: &Value) -> Value {
+/// The arguments as they run: folder, time limit and whether the network is on filled in, so the
+/// trust check, the approval card, the claim and the action log name exactly what will run. The
+/// run itself never gets more network than these arguments say ([`execute`]).
+pub(crate) fn normalize(name: &str, args: &Value, network: bool) -> Value {
     let mut a = args.clone();
     if let Some(o) = a.as_object_mut() {
+        if matches!(name, RUN | CONVERT) {
+            o.insert("network".into(), json!(network));
+        } else {
+            o.remove("network");
+        }
         match name {
             RUN => {
                 let folder = o.get("folder").and_then(Value::as_str).unwrap_or(".").to_string();
@@ -721,6 +734,11 @@ pub(crate) fn prepare_call(c: &Ctx, name: &str, args: &Value, interactive: bool)
         return Err("Abgelehnt: Arbeit im Hintergrund nutzt den eigenen Rechner nicht.".into());
     }
     usable(c).map_err(|e| e.message)?;
+    // Vault values never enter the computer: once there, a later read, a transformed echo or the
+    // network would carry them past every scrub. Refused before anything is filled in.
+    if args.to_string().contains("{{vault:") {
+        return Err(VAULT_REFUSED.into());
+    }
     let check = |r: Result<String>| r.map(|_| ()).map_err(|e| e.message);
     match name {
         RUN => {
@@ -758,25 +776,62 @@ fn container_name() -> String {
     format!("aiscraft-{}", crate::new_id().replace('-', "").chars().take(16).collect::<String>())
 }
 
+/// One chat's containers: every start is named, and a time limit that ends the call also kills
+/// its container (ending `wsl.exe`/`limactl` alone would leave `docker run` going).
+struct Containers {
+    m: runtime::Shared,
+    chat: String,
+    network: bool,
+    /// What `docker run` starts (the pinned workspace image of this computer).
+    image: String,
+}
+
+impl Containers {
+    async fn run(&self, script: &str, args: &[&str], stdin: Vec<u8>, timeout: Duration, max: usize) -> Result<runtime::Output> {
+        let name = container_name();
+        let argv = k::docker_run(&self.chat, &name, self.network, &self.image, script, args);
+        let out = self.m.exec(argv, stdin, timeout, max).await?;
+        if out.timed_out {
+            let _ = self.m.exec(vec!["docker".into(), "kill".into(), name], Vec::new(), Duration::from_secs(30), 4096).await;
+        }
+        Ok(out)
+    }
+
+    /// A file of the working folder, whole or not at all (never cut off).
+    async fn read_file(&self, path: &str) -> Result<Vec<u8>> {
+        use base64::Engine as _;
+        let max = crate::files::MAX_FILE_BYTES;
+        let out = self.run(k::READ_SCRIPT, &[path, &max.to_string()], Vec::new(), Duration::from_secs(120), (max as usize).saturating_mul(2)).await?;
+        if out.timed_out {
+            return Err(Error::busy(format!("/work/{path} ließ sich nicht rechtzeitig lesen.")));
+        }
+        if !out.ok() {
+            return Err(Error::not_found(format!("/work/{path}: {}", out.why())));
+        }
+        if out.truncated {
+            return Err(Error::invalid(format!("/work/{path} ist größer als 25 MB.")));
+        }
+        let text: String = String::from_utf8_lossy(&out.stdout).split_whitespace().collect();
+        base64::engine::general_purpose::STANDARD.decode(text.as_bytes()).map_err(|e| Error::protocol(format!("/work/{path}: unlesbare Antwort ({e})")))
+    }
+}
+
 /// Run one call that may run. Files that come out become attachments of the answer.
 pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value) -> Result<(String, Vec<Attachment>)> {
-    let (m, network) = usable(c)?;
+    let (m, network_on) = usable(c)?;
+    // Never more network than the approved arguments say, and never more than is switched on now.
+    let network = network_on && matches!(name, RUN | CONVERT) && args.get("network").and_then(Value::as_bool) == Some(true);
     let chat = k::chat_folder(conv)?;
     prepare(&m, Some(&chat), network).await?;
     let image = m.workspace()?.image;
-    let start = |script: &str, a: &[&str]| k::docker_run(&chat, &container_name(), network, &image, script, a);
+    let boxes = Containers { m, chat, network, image };
     match name {
         RUN => {
             let folder = k::rel_path(args.get("folder").and_then(Value::as_str).unwrap_or("."))?;
             let secs = args.get("timeout_s").and_then(Value::as_u64).unwrap_or(DEFAULT_TIMEOUT).clamp(1, MAX_TIMEOUT);
             let cmd = arg(args, "command");
-            let argv = start(k::RUN_SCRIPT, &[&folder, cmd, &secs.to_string()]);
-            let cname = argv.get(5).cloned().unwrap_or_default();
             // The container's own `timeout` ends the command; this is the backstop.
-            let out = m.exec(argv, Vec::new(), Duration::from_secs(secs + 30), MAX_OUTPUT).await?;
-            if out.timed_out {
-                let _ = m.exec(vec!["docker".into(), "kill".into(), cname], Vec::new(), Duration::from_secs(30), 4096).await;
-            }
+            let out = boxes.run(k::RUN_SCRIPT, &[&folder, cmd, &secs.to_string()], Vec::new(), Duration::from_secs(secs + 30), MAX_OUTPUT).await?;
             Ok((run_report(cmd, &folder, secs, &out), Vec::new()))
         }
         WRITE => {
@@ -785,7 +840,7 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value) -> Re
             if text.len() > MAX_WRITE {
                 return Err(Error::invalid("Der Text ist zu groß"));
             }
-            let out = m.exec(start(k::WRITE_SCRIPT, &[&path]), text.as_bytes().to_vec(), Duration::from_secs(60), 16 * 1024).await?;
+            let out = boxes.run(k::WRITE_SCRIPT, &[&path], text.as_bytes().to_vec(), Duration::from_secs(60), 16 * 1024).await?;
             if !out.ok() {
                 return Err(Error::storage(format!("/work/{path} nicht gespeichert: {}", out.why())));
             }
@@ -793,7 +848,7 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value) -> Re
         }
         READ => {
             let path = k::rel_path(arg(args, "path"))?;
-            let bytes = read_file(&m, &start, &path).await?;
+            let bytes = boxes.read_file(&path).await?;
             let attach = args.get("attach").and_then(Value::as_bool).unwrap_or(false);
             let text = (!attach && !bytes.contains(&0)).then(|| String::from_utf8(bytes.clone()).ok()).flatten().filter(|_| !binary_name(&path));
             match text {
@@ -814,19 +869,24 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value) -> Re
             if !k::FORMATS.contains(&to) {
                 return Err(Error::invalid(format!("Format {to} gibt es nicht")));
             }
-            let out = m.exec(start(k::CONVERT_SCRIPT, &[&path, to]), Vec::new(), Duration::from_secs(300), MAX_OUTPUT).await?;
+            let out = boxes
+                .run(k::CONVERT_SCRIPT, &[&path, to, &k::CONVERT_SECS.to_string()], Vec::new(), Duration::from_secs(k::CONVERT_SECS + 30), MAX_OUTPUT)
+                .await?;
+            if out.timed_out || out.code == Some(124) {
+                return Err(Error::busy(format!("/work/{path} ließ sich nicht in {} s umwandeln.", k::CONVERT_SECS)));
+            }
             if !out.ok() {
                 return Err(Error::unsupported(format!("/work/{path} ließ sich nicht umwandeln: {}", out.why())));
             }
             let stem = path.rsplit_once('.').map(|(s, _)| s).unwrap_or(&path);
             let result = format!("{stem}.{to}");
-            let bytes = read_file(&m, &start, &result).await?;
+            let bytes = boxes.read_file(&result).await?;
             let a = attachment(c, &result, &bytes)?;
             Ok((format!("Umgewandelt: /work/{result} liegt als Anhang „{}“ im Chat.", a.name), vec![a]))
         }
         LIST => {
             let folder = k::rel_path(args.get("folder").and_then(Value::as_str).unwrap_or("."))?;
-            let out = m.exec(start(k::LIST_SCRIPT, &[&folder]), Vec::new(), Duration::from_secs(60), MAX_OUTPUT).await?;
+            let out = boxes.run(k::LIST_SCRIPT, &[&folder], Vec::new(), Duration::from_secs(60), MAX_OUTPUT).await?;
             if !out.ok() {
                 return Err(Error::not_found(format!("/work/{folder}: {}", out.why())));
             }
@@ -865,17 +925,6 @@ fn run_report(cmd: &str, folder: &str, secs: u64, out: &runtime::Output) -> Stri
         s.push_str(&format!("(Ausgabe nach {} KB gekürzt)\n", MAX_OUTPUT / 1024));
     }
     s
-}
-
-async fn read_file(m: &runtime::Shared, start: &impl Fn(&str, &[&str]) -> Vec<String>, path: &str) -> Result<Vec<u8>> {
-    use base64::Engine as _;
-    let max = crate::files::MAX_FILE_BYTES;
-    let out = m.exec(start(k::READ_SCRIPT, &[path, &max.to_string()]), Vec::new(), Duration::from_secs(120), (max as usize).saturating_mul(2)).await?;
-    if !out.ok() {
-        return Err(Error::not_found(format!("/work/{path}: {}", out.why())));
-    }
-    let text: String = String::from_utf8_lossy(&out.stdout).split_whitespace().collect();
-    base64::engine::general_purpose::STANDARD.decode(text.as_bytes()).map_err(|e| Error::protocol(format!("/work/{path}: unlesbare Antwort ({e})")))
 }
 
 /// Files that are never shown as text.
