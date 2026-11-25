@@ -14,6 +14,9 @@ const MAX_DEPTH: usize = 4;
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Kind {
     Command,
+    Page,
+    Form,
+    Input,
     Recipient,
     Subject,
     Title,
@@ -29,6 +32,9 @@ impl Kind {
     fn label(self) -> &'static str {
         match self {
             Kind::Command => "Befehl",
+            Kind::Page => "Seite",
+            Kind::Form => "Formularziel",
+            Kind::Input => "Eingabe",
             Kind::Recipient => "An",
             Kind::Subject => "Betreff",
             Kind::Title => "Titel",
@@ -73,6 +79,13 @@ fn kind_of(key: &str, schema: Option<&Value>) -> Option<Kind> {
     // A command to run (the own computer, #94, or a shell connector) is checked first.
     let k = if has(&["command", "cmd", "befehl", "script", "shell"]) {
         Some(Kind::Command)
+    // A browser step (#107): the page, where its form sends, what is typed.
+    } else if has(&["seite"]) {
+        Some(Kind::Page)
+    } else if has(&["formularziel"]) {
+        Some(Kind::Form)
+    } else if has(&["eingabe"]) {
+        Some(Kind::Input)
     } else if has(&["timeout", "zeitlimit"]) {
         Some(Kind::Limit)
     } else if has(&[

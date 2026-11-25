@@ -156,6 +156,12 @@ pub(crate) fn fill(c: &Ctx, args: &Value) -> Result<(Value, Vec<String>)> {
     Ok((filled, used))
 }
 
+/// Whether `value` is the user name of a vault entry (the browser enters it as the name, not as a
+/// password, #107).
+pub(crate) fn is_username(c: &Ctx, value: &str) -> bool {
+    !value.is_empty() && load(c).iter().any(|e| e.username == value)
+}
+
 /// Take secret values out of a tool result before the model sees it.
 pub(crate) fn scrub(text: &str, secrets: &[String]) -> String {
     let mut t = text.to_string();

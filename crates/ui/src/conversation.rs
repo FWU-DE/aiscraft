@@ -68,6 +68,7 @@ impl AisCraftApp {
                     ui.add_space(18.0);
                 }
                 self.approval_cards(ui);
+                self.browser_takeover_panel(ui);
                 ui.add_space(20.0);
             });
         });

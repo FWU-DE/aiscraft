@@ -287,6 +287,22 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
     settle(&mut h, &at("Chat"), |h| label(h, "Kopieren"));
     check(&mut h, &at("Chat"));
 
+    // The browser taken over (#107): the live picture under the messages, the way back.
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbaImage::from_pixel(288, 180, image::Rgba([236, 240, 244, 255])).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    engine
+        .show_browser_takeover(
+            &chat,
+            "Bitte melde dich mit deinem Schulkonto bei der Lernplattform an und bestätige die Anmeldung auf deinem Telefon.",
+            "https://lernen.example.org/login?weiter=%2Fkurse%2Fbiologie-7b%2Faufgaben%2Fphotosynthese-wochenplan",
+            png.into_inner(),
+        )
+        .unwrap();
+    settle(&mut h, &at("Chat, Browser übernommen"), |h| label(h, "Zurück an AIS.ChatCraft"));
+    check(&mut h, &at("Chat, Browser übernommen"));
+    call(&engine, "browser.return", json!({}));
+    settle(&mut h, &at("Browser zurückgegeben"), |h| !label(h, "Zurück an AIS.ChatCraft"));
+
     // Background work (#69): a finished task's card in the chat, a running one in the status line.
     call(&engine, "task.start", json!({"title": "Elternbrief für die Klassenfahrt der 7b prüfen", "instructions": "Prüfe den Elternbrief"}));
     assert!(

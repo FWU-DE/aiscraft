@@ -56,6 +56,11 @@ impl Workspace {
     pub(crate) fn windows() -> Workspace {
         Workspace { image: super::image::WORKSPACE_ID.into(), tar: super::image::WORKSPACE_TAR, tar_sha256: super::image::WORKSPACE_TAR_SHA256 }
     }
+
+    /// Nod's browser image in the Windows runtime (#107; also what the fake runs).
+    pub(crate) fn windows_browser() -> Workspace {
+        Workspace { image: super::image::BROWSER_ID.into(), tar: super::image::BROWSER_TAR, tar_sha256: super::image::BROWSER_TAR_SHA256 }
+    }
 }
 
 /// One private computer.
@@ -79,6 +84,10 @@ pub(crate) trait SandboxRuntime: Send + Sync {
     /// The workspace image this machine runs.
     fn workspace(&self) -> Result<Workspace> {
         Ok(Workspace::windows())
+    }
+    /// Nod's browser image in this machine (#107), loaded only when the model first needs it.
+    fn browser(&self) -> Result<Workspace> {
+        Ok(Workspace::windows_browser())
     }
     /// Run `argv` in the machine as its root, `stdin` fed in, at most `timeout`, at most
     /// `max_output` bytes kept per stream.
@@ -229,6 +238,12 @@ impl Fake {
     fn answer(&self, argv: &[String], stdin: &[u8]) -> Output {
         use super::container as k;
         let ok = |out: &[u8]| Output { code: Some(0), stdout: out.to_vec(), ..Default::default() };
+        // A call into the browser (#107): Nod's worker, played.
+        if argv.get(1).map(String::as_str) == Some("exec") && argv.get(8).map(String::as_str) == Some(k::BRIDGE_JS) {
+            let req: serde_json::Value = argv.get(9).and_then(|r| serde_json::from_str(r).ok()).unwrap_or_default();
+            let extra: serde_json::Value = argv.get(10).and_then(|r| serde_json::from_str(r).ok()).unwrap_or_default();
+            return ok(fake_browser(&req, &extra).as_bytes());
+        }
         if argv.get(2).map(String::as_str) == Some(k::PREPARE_SCRIPT) && *self.full.lock().unwrap_or_else(PoisonError::into_inner) {
             return Output { code: Some(4), stderr: "Der Arbeitsordner dieses Chats ist voll (über 2048 MB).".as_bytes().to_vec(), ..Default::default() };
         }
@@ -294,6 +309,69 @@ impl Fake {
             }
             _ => ok(b""),
         }
+    }
+}
+
+/// The page the fake browser shows: a sign-in form of a school platform with a name on it.
+#[cfg(test)]
+pub(crate) const FAKE_PAGE: &str = "- heading \"Anmeldung Lernplattform\" [ref=e1]\n- textbox \"Benutzername\" [ref=e2]\n- textbox \"Passwort\" [ref=e3]\n- button \"Anmelden\" [ref=e4]\nZuletzt angemeldet: Lea Müller";
+/// Where the fake page's form sends.
+#[cfg(test)]
+pub(crate) const FAKE_FORM: &str = "https://lernen.example.org/anmelden";
+/// The fake browser's picture (PNG signature and a little more).
+#[cfg(test)]
+pub(crate) const FAKE_PNG: &[u8] = b"\x89PNG\r\n\x1a\nein Bild der Seite";
+
+/// What Nod's worker answers to one request (and the input of a take-over).
+#[cfg(test)]
+fn fake_browser(frame: &serde_json::Value, extra: &serde_json::Value) -> String {
+    use base64::Engine as _;
+    use serde_json::json;
+    let req = frame.get("request").cloned().unwrap_or_default();
+    let id = req.get("id").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+    let input = req.get("input").cloned().unwrap_or_default();
+    let page = "https://lernen.example.org/login";
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let answer = |result: serde_json::Value| json!({"id": id, "ok": true, "result": result, "metadata": {"status": "Workspace browser is ready."}}).to_string();
+    match req.get("method").and_then(serde_json::Value::as_str).unwrap_or("") {
+        "act" => {
+            let url = input.get("url").and_then(serde_json::Value::as_str).unwrap_or(page);
+            let text = match input.get("action").and_then(serde_json::Value::as_str).unwrap_or("") {
+                "snapshot" | "open" => FAKE_PAGE.to_string(),
+                "fill" => "Feld ausgefüllt".into(),
+                "click" => "Angeklickt".into(),
+                other => format!("{other} erledigt"),
+            };
+            answer(json!({"text": text, "url": url}))
+        }
+        "currentPage" => answer(json!({"origin": "https://lernen.example.org", "url": page, "submits": {"method": "post", "to": FAKE_FORM}})),
+        "screenshot" => answer(json!(b64(FAKE_PNG))),
+        "download" => {
+            let chunk = json!({"id": id, "chunk": b64(b"%PDF-1.7 Stundenplan")}).to_string();
+            format!("{chunk}\n{}", answer(json!({"name": "stundenplan.pdf", "mimeType": "application/pdf"})))
+        }
+        "view" => {
+            let frame = json!({"id": id, "frame": b64(FAKE_PNG)}).to_string();
+            let input_id = extra.get("inputId").and_then(serde_json::Value::as_str).unwrap_or("");
+            format!("{frame}\n{}", json!({"id": id, "inputId": input_id, "ok": true}))
+        }
+        _ => answer(serde_json::Value::Null),
+    }
+}
+
+#[cfg(test)]
+impl Fake {
+    /// Every request the fake browser got (Nod's request objects), in order.
+    pub(crate) fn browser_requests(&self) -> Vec<serde_json::Value> {
+        self.calls()
+            .into_iter()
+            .filter_map(|c| match c {
+                FakeCall::Exec(argv) if argv.get(1).map(String::as_str) == Some("exec") => {
+                    argv.get(9).and_then(|r| serde_json::from_str::<serde_json::Value>(r).ok()).and_then(|f| f.get("request").cloned())
+                }
+                _ => None,
+            })
+            .collect()
     }
 }
 

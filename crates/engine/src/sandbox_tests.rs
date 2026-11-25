@@ -74,7 +74,7 @@ fn serve(engine: &Engine, files: Vec<(String, Vec<u8>)>) -> (String, Arc<Mutex<u
 const IMAGE: &[u8] = b"ein winziges Abbild eines Linux-Rechners";
 
 /// An engine in memory with a fake machine, installed and on (trust check off: no model asked).
-fn installed() -> (Engine, Arc<Fake>) {
+pub(crate) fn installed() -> (Engine, Arc<Fake>) {
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
     engine.call("settings.set", json!({"key": "trust_check", "value": false})).unwrap();
     let fake = Fake::new();
@@ -86,11 +86,11 @@ fn installed() -> (Engine, Arc<Fake>) {
     (engine, fake)
 }
 
-fn call(name: &str, args: Value) -> aiscraft_core::ToolCall {
+pub(crate) fn call(name: &str, args: Value) -> aiscraft_core::ToolCall {
     aiscraft_core::ToolCall { id: "c".into(), name: name.into(), arguments: args, outcome: None }
 }
 
-fn run_async(engine: &Engine, c: aiscraft_core::ToolCall) -> std::sync::mpsc::Receiver<(String, bool, &'static str)> {
+pub(crate) fn run_async(engine: &Engine, c: aiscraft_core::ToolCall) -> std::sync::mpsc::Receiver<(String, bool, &'static str)> {
     let (tx, rx) = std::sync::mpsc::channel();
     let engine = engine.clone();
     std::thread::spawn(move || {
@@ -101,7 +101,7 @@ fn run_async(engine: &Engine, c: aiscraft_core::ToolCall) -> std::sync::mpsc::Re
     rx
 }
 
-fn answer(engine: &Engine, allow: bool) -> crate::Approval {
+pub(crate) fn answer(engine: &Engine, allow: bool) -> crate::Approval {
     assert!(engine.wait_for(Duration::from_secs(30), |s| !s.approvals.is_empty()), "a question was asked");
     let a = engine.state().approvals[0].clone();
     engine.call("tool.answer", json!({"id": a.id, "allow": allow})).unwrap();
@@ -115,7 +115,7 @@ fn allowed(engine: &Engine, name: &str, args: Value) -> (String, bool, &'static 
     rx.recv_timeout(Duration::from_secs(30)).unwrap()
 }
 
-fn direct(engine: &Engine, name: &str, args: Value) -> (String, bool, &'static str) {
+pub(crate) fn direct(engine: &Engine, name: &str, args: Value) -> (String, bool, &'static str) {
     let ctx = engine.ctx().clone();
     engine.block_on(crate::tools::run(&ctx, "conv", &call(name, args), &Default::default(), true))
 }
@@ -732,7 +732,8 @@ fn security_review_findings_are_closed() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(&prepare[prepare.len() - 2..], ["2048", "10240"], "the folder limits go with every prepare");
+    // `$5` and `$6` (after `/bin/sh -c SCRIPT aiscraft`).
+    assert_eq!(&prepare[8..10], ["2048", "10240"], "the folder limits go with every prepare");
     assert!(fake.container_starts().iter().all(|a| a.join(" ").contains("--ulimit fsize=2147483648")));
 
     // (c) Tool output cannot close its data block in any spelling.
@@ -822,7 +823,7 @@ fn workspace_output_passes_name_protection() {
     let conv = engine.state().current.clone().unwrap();
     // A file in the chat's folder that holds a name (the person's own work, local).
     let ctx = engine.ctx().clone();
-    engine.block_on(crate::sandbox::execute(&ctx, &conv, WRITE, &json!({"path": "notiz.txt", "text": "Lea Müller braucht mehr Zeit."}))).unwrap();
+    engine.block_on(crate::sandbox::execute(&ctx, &conv, WRITE, &json!({"path": "notiz.txt", "text": "Lea Müller braucht mehr Zeit."}), &[])).unwrap();
     engine.call("chat.send", json!({"text": "Lies die Notiz im Arbeitsordner"})).unwrap();
     let posts: Vec<String> = seen.lock().unwrap().iter().filter(|r| r.starts_with("POST")).cloned().collect();
     let with_result = posts.iter().find(|r| r.contains("\"role\":\"tool\"")).expect("the tool result went back to the model");
@@ -962,7 +963,7 @@ async fn live_network(machine: &dyn crate::sandbox::runtime::SandboxRuntime, ima
 /// Download with the app's own checks (pinned checksums and sizes), outside the runtime that
 /// drives the computer: an engine owns a runtime and must not be dropped inside another one.
 #[cfg(any(windows, target_os = "linux"))]
-fn live_downloads(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+pub(crate) fn live_downloads(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
     let src = crate::sandbox::image::Source::github().expect("x86-64");
     let ctx = engine.ctx().clone();

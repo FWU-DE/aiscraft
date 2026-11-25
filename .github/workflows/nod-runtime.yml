@@ -85,6 +85,10 @@ jobs:
           ws_id="$(jq -r '.images[] | select(.name == "workspace") | .id' "$manifest")"
           ws_sha="$(jq -r '.images[] | select(.name == "workspace") | .sha256' "$manifest")"
           ws_file="$(jq -r '.images[] | select(.name == "workspace") | .file' "$manifest")"
+          br_id="$(jq -r '.images[] | select(.name == "browser") | .id' "$manifest")"
+          br_sha="$(jq -r '.images[] | select(.name == "browser") | .sha256' "$manifest")"
+          br_file="$(jq -r '.images[] | select(.name == "browser") | .file' "$manifest")"
+          [[ "$br_sha" =~ ^[a-f0-9]{64}$ && "$br_id" =~ ^sha256:[a-f0-9]{64}$ && "$br_file" =~ ^images/[a-z]+\.tar\.zst$ ]] || { echo "::error::Ungültiges Browser-Abbild im Manifest"; exit 1; }
           [[ "$sha" =~ ^[a-f0-9]{64}$ && "$ws_sha" =~ ^[a-f0-9]{64}$ && "$ws_id" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo "::error::Ungültige Prüfsummen"; exit 1; }
           [[ "$bytes" =~ ^[0-9]+$ && "$ws_file" =~ ^images/[a-z]+\.tar\.zst$ ]] || { echo "::error::Ungültige Größe oder Datei"; exit 1; }
           {
@@ -93,6 +97,9 @@ jobs:
             echo "ws_id=$ws_id"
             echo "ws_sha=$ws_sha"
             echo "ws_tar=/opt/nod-assets/$ws_file"
+            echo "br_id=$br_id"
+            echo "br_sha=$br_sha"
+            echo "br_tar=/opt/nod-assets/$br_file"
           } >> "$GITHUB_OUTPUT"
       - name: Pin aktualisieren
         id: pin
@@ -103,6 +110,9 @@ jobs:
           WS_ID: ${{ steps.read.outputs.ws_id }}
           WS_SHA: ${{ steps.read.outputs.ws_sha }}
           WS_TAR: ${{ steps.read.outputs.ws_tar }}
+          BR_ID: ${{ steps.read.outputs.br_id }}
+          BR_SHA: ${{ steps.read.outputs.br_sha }}
+          BR_TAR: ${{ steps.read.outputs.br_tar }}
         run: |
           set -euo pipefail
           sed -i -E \
@@ -112,6 +122,9 @@ jobs:
             -e "s|^pub const WORKSPACE_ID: &str = \".*\";$|pub const WORKSPACE_ID: \&str = \"$WS_ID\";|" \
             -e "s|^pub const WORKSPACE_TAR: &str = \".*\";$|pub const WORKSPACE_TAR: \&str = \"$WS_TAR\";|" \
             -e "s|^pub const WORKSPACE_TAR_SHA256: &str = \".*\";$|pub const WORKSPACE_TAR_SHA256: \&str = \"$WS_SHA\";|" \
+            -e "s|^pub const BROWSER_ID: &str = \".*\";$|pub const BROWSER_ID: \&str = \"$BR_ID\";|" \
+            -e "s|^pub const BROWSER_TAR: &str = \".*\";$|pub const BROWSER_TAR: \&str = \"$BR_TAR\";|" \
+            -e "s|^pub const BROWSER_TAR_SHA256: &str = \".*\";$|pub const BROWSER_TAR_SHA256: \&str = \"$BR_SHA\";|" \
             "$PIN"
           # Linux (#102): Nod's x86-64 runtime archive and the guest files taken out of it, from
           # the signed runtime-darwin-x64 manifest (verified above).
@@ -136,6 +149,9 @@ jobs:
             sed -i -E "s|^    \(\"$path\", \"[a-f0-9]{64}\", [0-9]+\),$|    (\"$path\", \"$f_sha\", $f_bytes),|" "$PIN"
             if [ "$path" = images/workspace.tar.zst ]; then
               sed -i -E "s|^pub const LINUX_WORKSPACE_TAR_SHA256: &str = \".*\";$|pub const LINUX_WORKSPACE_TAR_SHA256: \&str = \"$f_sha\";|" "$PIN"
+            fi
+            if [ "$path" = images/browser.tar.zst ]; then
+              sed -i -E "s|^pub const LINUX_BROWSER_TAR_SHA256: &str = \".*\";$|pub const LINUX_BROWSER_TAR_SHA256: \&str = \"$f_sha\";|" "$PIN"
             fi
           done
           git diff -- "$PIN"
