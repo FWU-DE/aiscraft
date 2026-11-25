@@ -392,6 +392,7 @@ pub(crate) async fn delete(c: Ctx, p: Value) -> Result<Value> {
     #[cfg(feature = "collab")]
     crate::collab::forget(&c, &id);
     c.store(|st| st.delete_artifact(&id))?;
+    crate::windows::forget(&c, &id);
     c.update(|s| {
         s.artifacts.retain(|a| a.id != id);
         if s.open_artifact.as_deref() == Some(&id) {

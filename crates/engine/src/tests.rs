@@ -2365,3 +2365,87 @@ fn vertex_signs_in_with_a_key_file_and_finds_its_models() {
     drop((first, second));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Contents in their own window (#75): `artifact.detach` lifts a document out of the panel, a
+/// second call only brings its one window to the front, learning apps stay in the preview window,
+/// `artifact.attach` puts it back into the panel while its chat is open and leaves it saved
+/// otherwise, and `artifact.window` remembers the place across a restart.
+#[test]
+fn detached_windows_one_per_content_and_back_into_the_panel() {
+    let dir = std::env::temp_dir().join(format!("aiscraft-windows-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let open = || Engine::open(Options { data_dir: Some(dir.clone()), secrets: Some(crate::Secrets::memory()) }).unwrap();
+    let engine = open();
+    let chat = "chat-a".to_string();
+    engine.ctx().update(|s| s.current = Some(chat.clone()));
+    let doc = engine.call("artifact.create", json!({"kind": "document", "content": "# Plan\n\nText", "conversation": chat})).unwrap()["id"].as_str().unwrap().to_string();
+    assert_eq!(engine.state().open_artifact.as_deref(), Some(doc.as_str()), "opens in the panel");
+
+    // Lifted out: the panel closes, one window.
+    let out = engine.call("artifact.detach", json!({"id": doc})).unwrap();
+    assert_eq!(out["already"], false);
+    let s = engine.state();
+    assert_eq!(s.open_artifact, None, "the panel closes");
+    assert_eq!(s.detached.len(), 1);
+    assert_eq!((s.detached[0].id.as_str(), s.detached[0].focus, s.detached[0].place), (doc.as_str(), 0, None));
+    // A second click (detach again, or open from the sidebar) brings the same window forward.
+    assert_eq!(engine.call("artifact.detach", json!({"id": doc})).unwrap()["already"], true);
+    engine.call("artifact.open", json!({"id": doc})).unwrap();
+    let s = engine.state();
+    assert_eq!(s.detached.len(), 1, "one window per content");
+    assert_eq!(s.detached[0].focus, 2, "each call asks the window to the front");
+    assert_eq!(s.open_artifact, None, "not also in the panel");
+
+    // A whiteboard from the palette: no id, the one in the panel; then presented and back.
+    let board = engine.call("artifact.create", json!({"kind": "board", "conversation": chat})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("artifact.detach", json!({})).unwrap();
+    assert_eq!(engine.state().detached.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), [doc.as_str(), board.as_str()], "several windows");
+    engine.call("artifact.detach", json!({"id": board, "present": true})).unwrap();
+    assert!(engine.state().detached[1].presenting, "presentation on");
+    engine.call("artifact.detach", json!({"id": board, "present": false})).unwrap();
+    assert!(!engine.state().detached[1].presenting, "Esc ends it");
+    assert!(engine.call("artifact.detach", json!({"id": doc, "present": true})).is_err(), "only whiteboards are presented");
+
+    // Learning apps stay in the preview window; unknown ids and nothing open are refused.
+    let app = engine.call("learning_app.create", json!({"html": "<!doctype html><html><head><title>Quiz</title></head><body>Hallo</body></html>"})).unwrap()["id"].as_str().unwrap().to_string();
+    let err = engine.call("artifact.detach", json!({"id": app})).unwrap_err();
+    assert!(err.message.contains("Vorschaufenster"), "{}", err.message);
+    assert!(engine.call("artifact.detach", json!({"id": "nope"})).is_err());
+    engine.call("artifact.close", json!({})).unwrap();
+    assert!(engine.call("artifact.detach", json!({})).is_err(), "nothing open, nothing to lift out");
+
+    // The place of the window, kept for the next time.
+    engine.call("artifact.window", json!({"id": doc, "x": 1990.0, "y": 40.0, "width": 900.0, "height": 700.0})).unwrap();
+    assert_eq!(engine.state().detached[0].place.map(|p| (p.x, p.width)), Some((1990.0, 900.0)));
+    assert!(engine.call("artifact.window", json!({"id": doc, "x": "links"})).is_err());
+    assert!(engine.call("artifact.window", json!({"id": "nope", "x": 0, "y": 0, "width": 1, "height": 1})).is_err());
+
+    // Back: the chat is open, so the document returns to the panel.
+    let back = engine.call("artifact.attach", json!({"id": doc})).unwrap();
+    assert_eq!(back["in_panel"], true);
+    let s = engine.state();
+    assert_eq!(s.open_artifact.as_deref(), Some(doc.as_str()));
+    assert_eq!(s.detached.len(), 1, "the whiteboard's window stays");
+    assert!(engine.call("artifact.attach", json!({"id": doc})).is_err(), "not in a window any more");
+    // The chat is closed: the whiteboard is simply kept.
+    engine.ctx().update(|s| s.current = None);
+    engine.call("artifact.close", json!({})).unwrap();
+    assert_eq!(engine.call("artifact.attach", json!({})).unwrap()["in_panel"], false, "without an id: the newest window");
+    assert_eq!(engine.state().open_artifact, None);
+    assert!(engine.state().detached.is_empty());
+    assert!(engine.call("artifact.get", json!({"id": board})).is_ok(), "still saved");
+
+    // Deleting closes the window.
+    engine.call("artifact.detach", json!({"id": board})).unwrap();
+    engine.call("artifact.delete", json!({"id": board})).unwrap();
+    assert!(engine.state().detached.is_empty());
+
+    // After a restart the window opens where it stood.
+    drop(engine);
+    let engine = open();
+    engine.call("artifact.detach", json!({"id": doc})).unwrap();
+    let place = engine.state().detached[0].place.unwrap();
+    assert_eq!((place.x, place.y, place.width, place.height), (1990.0, 40.0, 900.0, 700.0));
+    drop(engine);
+    let _ = std::fs::remove_dir_all(dir);
+}

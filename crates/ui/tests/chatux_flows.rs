@@ -199,3 +199,60 @@ fn citations_show_under_the_answer_and_open_at_the_passage() {
     step_until(&mut h, "the window closes", |h| h.query_by_label("Beleg").is_none());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// #75: „In eigenem Fenster“ closes the panel; what is typed in the window goes along as context
+/// with the next message; closing the window („Zurück ins Panel“) puts the document back. kittest
+/// hosts no second native window, so the window's content is drawn as the whole screen
+/// (`show_as_window`) and the main window again afterwards.
+#[test]
+fn a_detached_document_closes_the_panel_and_its_edits_go_along_as_context() {
+    fn echo(req: &str) -> Vec<Value> {
+        let answer = if req.contains("Satz aus dem Fenster") { "Kontext angekommen." } else { "Ohne Kontext." };
+        vec![json!({"choices":[{"delta":{"content": answer}}]})]
+    }
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::By;
+    let engine = engine_with(echo);
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let id = engine.call("artifact.create", json!({"kind": "document", "title": "Plan"})).unwrap()["id"].as_str().unwrap().to_string();
+    let mut h = harness(&engine);
+    step_until(&mut h, "the document in the panel", |h| h.state().panel_layout().artifact.is_some() && h.query_by_label("In eigenem Fenster").is_some());
+
+    // Lifted out: the panel is closed, the chat has the whole width.
+    click_until(&mut h, "In eigenem Fenster", "the panel closes", |h| h.state().panel_layout().artifact.is_none());
+    assert_eq!(engine.state().detached.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), [id.as_str()]);
+    h.run_steps(6);
+    assert!(h.state().panel_layout().artifact.is_none(), "stays closed");
+    assert!(h.query_by_label("In eigenem Fenster").is_none(), "no panel toolbar in the main window");
+
+    // The window: same toolbar, typing there saves the document.
+    h.state_mut().show_as_window(Some(id.clone()));
+    step_until(&mut h, "the window's toolbar", |h| h.query_by_label("Zurück ins Panel").is_some() && h.query_by_label("Im Chat").is_some());
+    assert!(h.query_by_label("Exportieren").is_some() && h.query_by_label_contains("Überarbeiten").is_some(), "the same toolbar as the panel");
+    let editor = || By::new().role(Role::MultilineTextInput);
+    h.get(editor()).click();
+    h.run_steps(2);
+    h.get(editor()).type_text("Neuer Satz aus dem Fenster.");
+    let text = |e: &Engine| e.call("artifact.get", json!({"id": id})).unwrap()["text"].as_str().unwrap_or("").to_string();
+    step_until(&mut h, "saved from the window", |_| text(&engine).contains("Satz aus dem Fenster"));
+    settled(&mut h, "Im Chat");
+    h.get_by_label("Im Chat").click();
+    h.run_steps(2);
+
+    // Back in the main window: the composer says it goes along, and the model gets it.
+    h.state_mut().show_as_window(None);
+    step_until(&mut h, "the hint in the composer", |h| h.query_by_label_contains("Plan geht als Kontext mit").is_some());
+    assert!(h.state().panel_layout().artifact.is_none(), "the panel is still closed");
+    h.get(editor()).click();
+    h.run_steps(2);
+    h.get(editor()).type_text("Was steht im Plan?");
+    h.key_press(egui::Key::Enter);
+    step_until(&mut h, "the answer with the context", |h| h.query_by_label_contains("Kontext angekommen").is_some());
+
+    // „Zurück ins Panel“ in the window: the document is in the panel again, its chat being open.
+    h.state_mut().show_as_window(Some(id.clone()));
+    click_until(&mut h, "Zurück ins Panel", "taken back", |_| engine.state().detached.is_empty());
+    h.state_mut().show_as_window(None);
+    step_until(&mut h, "the document back in the panel", |h| h.state().panel_layout().artifact.is_some());
+    assert_eq!(engine.state().open_artifact.as_deref(), Some(id.as_str()));
+}

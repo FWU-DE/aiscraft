@@ -109,8 +109,12 @@ pub struct AisCraftApp {
     pub(crate) decode_budget: usize,
     last_current: Option<String>,
     pub(crate) artifact: Option<crate::artifact_panel::ArtifactView>,
-    /// Send the open artifact as context with the next message.
-    pub(crate) attach_artifact: bool,
+    /// Contents in their own window (#75): their views and what the windows did.
+    pub(crate) windows: crate::windows::Windows,
+    /// The window being drawn right now (`None`: the panel next to the chat).
+    pub(crate) in_window: Option<String>,
+    /// The artifact („Im Chat“, in the panel or its own window) sent as context with the next message.
+    pub(crate) attach_artifact: Option<String>,
     /// Teilen: code or link to join, relay address and key being typed.
     pub(crate) collab_join: String,
     pub(crate) collab_url: String,
@@ -202,6 +206,20 @@ impl AisCraftApp {
         self.panel_layout
     }
 
+    /// A content's own window drawn as the whole screen ([`Self::show_as_window`]): the window
+    /// is the panel, and the panel must stay as wide as the window.
+    pub(crate) fn set_window_layout(&mut self, window: egui::Rect, content: egui::Rect) {
+        self.panel_layout = PanelLayout {
+            window,
+            sidebar: None,
+            sidebar_default: 0.0,
+            artifact: Some(content),
+            artifact_default: window.width(),
+            main: content,
+            overlay: self.dialog.is_some() || self.palette.is_some(),
+        };
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>, engine: Engine, control: Option<std::sync::mpsc::Receiver<UiRequest>>) -> Self {
         theme::install_fonts(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
@@ -267,7 +285,9 @@ impl AisCraftApp {
             decode_budget: 0,
             last_current: None,
             artifact: None,
-            attach_artifact: false,
+            windows: Default::default(),
+            in_window: None,
+            attach_artifact: None,
             collab_join: String::new(),
             collab_url: String::new(),
             collab_key: String::new(),
@@ -706,9 +726,17 @@ fn save_png(path: &std::path::Path, img: &egui::ColorImage) -> Result<(), String
 }
 
 impl eframe::App for AisCraftApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.state = self.engine.state();
+        if let Some(id) = self.windows.as_window.clone() {
+            // A content's own window as the whole screen (tests; see `show_as_window`).
+            self.sync_theme(&ctx);
+            self.sync_windows();
+            self.window_frame(ui, &id);
+            self.dialogs(&ctx);
+            return;
+        }
         if self.state.current != self.last_current {
             self.last_current = self.state.current.clone();
             self.editing = None;
@@ -756,7 +784,8 @@ impl eframe::App for AisCraftApp {
         }
 
         self.sync_artifact();
-        if self.state.open_artifact.is_some() {
+        self.sync_windows();
+        if let Some(open) = self.panel_artifact() {
             let w = ui.available_width();
             layout.artifact_default = (w * 0.46).clamp(380.0, 760.0);
             let panel = egui::Panel::right("artifact")
@@ -779,11 +808,9 @@ impl eframe::App for AisCraftApp {
                     if let Some(g) = &t.glass {
                         crate::backdrop::glass_edge(ui.painter(), ui.max_rect(), f32::from(t.r_panel), g.edge);
                     }
-                    self.artifact_panel(ui)
+                    self.artifact_view(ui, &open)
                 });
             layout.artifact = Some(panel.response.rect);
-        } else {
-            self.attach_artifact = false;
         }
 
         layout.main = egui::CentralPanel::default()
@@ -808,6 +835,7 @@ impl eframe::App for AisCraftApp {
         self.palette_ui(&ctx);
         layout.overlay = self.dialog.is_some() || self.manual.is_some() || self.palette.is_some() || self.state.citation.is_some();
         self.panel_layout = layout;
+        self.artifact_windows(&ctx, frame);
 
         // While an answer streams, the engine requests repaints; spinners need a steady tick too.
         if !self.state.generating.is_empty() {

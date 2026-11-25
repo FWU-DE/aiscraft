@@ -189,6 +189,18 @@ impl AisCraftApp {
     fn palette_run(&mut self, it: Item) {
         match it {
             Item::Command { id: "chat.new", .. } => self.new_chat(),
+            // The panel's content into its own window, with what is typed in it (#75).
+            Item::Command { id: "artifact.detach", .. } if self.panel_artifact().is_some() => {
+                if let Some(id) = self.panel_artifact() {
+                    self.detach_artifact(&id);
+                }
+            }
+            Item::Command { id: "artifact.attach", .. } => {
+                if let Some(id) = self.state.detached.last().map(|d| d.id.clone()) {
+                    self.save_window_if_dirty(&id);
+                }
+                self.run("artifact.attach", json!({}));
+            }
             Item::Command { id, .. } => self.run(id, json!({})),
             Item::Chat { id, .. } => self.run("chat.open", json!({"id": id})),
             Item::Project { id, .. } => {

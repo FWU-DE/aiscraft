@@ -248,10 +248,14 @@ impl AisCraftApp {
             empty_hint(ui, &t, "Noch keine Dokumente. Mit „Als Dokument“ unter einer Antwort legst du eins an.");
         }
         for a in items {
-            let open = self.state.open_artifact.as_deref() == Some(&a.id);
+            let in_window = self.state.detached.iter().any(|d| d.id == a.id);
+            let open = in_window || self.state.open_artifact.as_deref() == Some(&a.id);
             let r = self.entry(ui, crate::learn_panel::kind_lucide(a.kind), &a.title, open).on_hover_text(&a.title);
             if r.clicked() {
-                if open {
+                if in_window {
+                    // Its own window comes to the front (#75).
+                    self.run("artifact.detach", json!({"id": a.id}));
+                } else if open {
                     self.save_if_dirty();
                     self.run("artifact.close", json!({}));
                 } else {
@@ -260,6 +264,16 @@ impl AisCraftApp {
                 }
             }
             r.context_menu(|ui| {
+                if in_window {
+                    if ui.button("Zurück ins Panel").clicked() {
+                        self.save_window_if_dirty(&a.id);
+                        self.run("artifact.attach", json!({"id": a.id}));
+                        ui.close();
+                    }
+                } else if a.kind != aiscraft_core::ArtifactKind::App && ui.button("In eigenem Fenster").clicked() {
+                    self.detach_artifact(&a.id);
+                    ui.close();
+                }
                 if ui.button("Umbenennen").clicked() {
                     self.dialog = Some(Dialog::RenameArtifact { id: a.id.clone(), title: a.title.clone() });
                     ui.close();

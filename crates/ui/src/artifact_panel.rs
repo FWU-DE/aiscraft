@@ -91,9 +91,20 @@ impl AisCraftApp {
         })
     }
 
-    /// Keep the view in step with the engine: open, switch, reload on outside changes.
+    /// The artifact shown in the panel: the open one, unless it is in its own window (#75).
+    pub(crate) fn panel_artifact(&self) -> Option<String> {
+        self.state.open_artifact.clone().filter(|id| !self.state.detached.iter().any(|d| &d.id == id))
+    }
+
+    /// Keep the panel's view in step with the engine: open, switch, reload on outside changes.
     pub(crate) fn sync_artifact(&mut self) {
-        let want = self.state.open_artifact.clone();
+        let want = self.panel_artifact();
+        self.sync_view(want);
+    }
+
+    /// Keep `self.artifact` in step with the engine for `want` (the panel's artifact, or a
+    /// window's while [`crate::windows`] has swapped its view in).
+    pub(crate) fn sync_view(&mut self, want: Option<String>) {
         match (&want, &self.artifact) {
             (None, _) => self.artifact = None,
             (Some(id), Some(v)) if &v.id == id => {
@@ -167,9 +178,11 @@ impl AisCraftApp {
         v.dirty_since = None;
     }
 
-    pub(crate) fn artifact_panel(&mut self, ui: &mut Ui) {
+    /// The content `id` with its toolbar, drawn into any `Ui`: the panel next to the chat or its
+    /// own window (#75). `self.artifact` must hold this content's view.
+    pub(crate) fn artifact_view(&mut self, ui: &mut Ui, id: &str) {
         let t = self.tokens.clone();
-        let Some(meta) = self.state.open_artifact.as_ref().and_then(|id| self.state.artifacts.iter().find(|a| &a.id == id)).cloned() else { return };
+        let Some(meta) = self.state.artifacts.iter().find(|a| a.id == id).cloned() else { return };
         self.artifact_header(ui, &meta);
         self.share_strip(ui, &meta.id);
         if let Some(err) = self.artifact.as_ref().and_then(|v| v.error.clone()) {
@@ -261,9 +274,28 @@ impl AisCraftApp {
                 crate::learn_panel::kind_lucide(meta.kind).paint(ui.painter(), tile.center(), 17.0, t.on_accent);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    if crate::kit::icon_button(ui, &t, Icon::X, "Schließen", t.text2, 19.0, 34.0).clicked() {
-                        self.save_if_dirty();
-                        self.run("artifact.close", json!({}));
+                    if self.in_window.is_some() {
+                        // In its own window (#75): back into the panel; closing the window does the same.
+                        if crate::kit::icon_button(ui, &t, Icon::Panel, "Zurück ins Panel", t.text2, 19.0, 34.0).clicked() {
+                            self.save_if_dirty();
+                            self.run("artifact.attach", json!({"id": meta.id}));
+                        }
+                        if meta.kind == ArtifactKind::Board
+                            && crate::kit::icon_button(ui, &t, Icon::Monitor, "Präsentieren (Vollbild, Esc beendet)", t.text2, 18.0, 34.0).clicked()
+                        {
+                            self.save_if_dirty();
+                            self.run("artifact.detach", json!({"id": meta.id, "present": true}));
+                        }
+                    } else {
+                        if crate::kit::icon_button(ui, &t, Icon::X, "Schließen", t.text2, 19.0, 34.0).clicked() {
+                            self.save_if_dirty();
+                            self.run("artifact.close", json!({}));
+                        }
+                        if meta.kind != ArtifactKind::App
+                            && crate::kit::icon_button(ui, &t, Icon::External, "In eigenem Fenster", t.text2, 18.0, 34.0).clicked()
+                        {
+                            self.detach_artifact(&meta.id);
+                        }
                     }
                     if self.state.collab.available {
                         self.share_menu(ui, meta);
@@ -289,13 +321,14 @@ impl AisCraftApp {
                 {
                     crate::widgets::segmented_icons(ui, &t, &mut v.preview, [(false, Some(Icon::Pen), "Bearbeiten"), (true, Some(Icon::Eye), "Vorschau")]);
                 }
-                let kind = if app.attach_artifact { crate::kit::Pill::Soft } else { crate::kit::Pill::Ghost };
+                let on = app.attach_artifact.as_deref() == Some(meta.id.as_str());
+                let kind = if on { crate::kit::Pill::Soft } else { crate::kit::Pill::Ghost };
                 let icon = if meta.kind == ArtifactKind::Document { None } else { Some(Icon::Chat) };
                 if crate::kit::pill(ui, &t, kind, icon, "Im Chat", 13.0, None)
                     .on_hover_text("Inhalt bei der nächsten Nachricht als Kontext mitschicken")
                     .clicked()
                 {
-                    app.attach_artifact = !app.attach_artifact;
+                    app.attach_artifact = if on { None } else { Some(meta.id.clone()) };
                 }
             };
             let need_id = ui.scope_id().with("toolbar-left-width");
@@ -429,7 +462,7 @@ impl AisCraftApp {
         }
     }
 
-    fn board_body(&mut self, ui: &mut Ui) {
+    pub(crate) fn board_body(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let style = BoardStyle {
             // Glas: the panel's own glass shows through the canvas.
@@ -447,11 +480,14 @@ impl AisCraftApp {
             title_family: Some(egui::FontFamily::Name(crate::theme::BOLD.into())),
             ..if t.dark { BoardStyle::dark() } else { BoardStyle::light() }
         };
+        let presenting = self.presenting();
         let Some(v) = self.artifact.as_mut() else { return };
         let Some((board, view, saved)) = v.board.as_mut() else {
             ui.label(RichText::new("Whiteboard lässt sich nicht lesen.").color(t.danger));
             return;
         };
+        // Presenting (#75): the board alone, without its tool bars.
+        view.toolbar = !presenting;
         BoardView::new(board, view, &style).show(ui);
         if std::mem::take(&mut view.wants_mindmap) {
             // The last answer of the open chat becomes the mind map.

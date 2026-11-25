@@ -389,6 +389,20 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
             check(&mut h, &what);
             common::click_until(&mut h, "Abbrechen", "the link field closes", |h| !label(h, "Abbrechen"));
         }
+        // The same content in its own window (#75), drawn as the whole screen (kittest hosts no
+        // second native window): as wide as the window, nothing sticking out. Learning apps stay
+        // in the preview window.
+        if view != "Lern-App" {
+            let id = artifact.clone().unwrap_or_default();
+            call(&engine, "artifact.detach", json!({"id": id}));
+            h.state_mut().show_as_window(Some(id.clone()));
+            let what = at(&format!("{view} im eigenen Fenster"));
+            settle(&mut h, &what, |h| label(h, "Zurück ins Panel") && h.state().panel_layout().artifact.is_some() && !h.state().panel_layout().overlay);
+            check(&mut h, &what);
+            h.state_mut().show_as_window(None);
+            call(&engine, "artifact.attach", json!({"id": id}));
+            settle(&mut h, &at("zurück im Panel"), |h| h.state().panel_layout().artifact.is_some() && label(h, "In eigenem Fenster"));
+        }
         call(&engine, "artifact.close", json!({}));
         settle(&mut h, &at("Panel geschlossen"), |h| h.state().panel_layout().artifact.is_none());
     }

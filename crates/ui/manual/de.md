@@ -134,6 +134,10 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 **Im Chat:** Der Schalter „Im Chat“ schickt das geöffnete Dokument oder Whiteboard mit der nächsten Nachricht als Kontext mit. Modelle mit Werkzeugen ändern es dann direkt. AIS.chat schlägt Änderungen in einem Block vor; unter der Antwort übernimmst du sie mit „Ins Dokument übernehmen“ oder „Aufs Whiteboard“.
 
+**In eigenem Fenster:** Das Fenster-Symbol oben im Panel löst ein Dokument, Whiteboard, Arbeitsblatt oder einen H5P-Inhalt aus dem Panel; ebenso der Rechtsklick auf den Eintrag in der Seitenleiste oder „In eigenem Fenster öffnen“ in den Befehlen (Strg+K). Das Panel schließt sich, der Chat hat wieder die ganze Breite, und das Fenster lässt sich auf den zweiten Bildschirm oder den Beamer ziehen. Es zeigt denselben Inhalt mit derselben Werkzeugleiste: Bearbeiten, Versionen, Exportieren, Teilen, „Mit KI überarbeiten“ und „Im Chat“. Was du im Fenster änderst, geht mit „Im Chat“ sofort als Kontext mit; was das Modell ändert, erscheint sofort im Fenster. Mehrere Fenster gehen gleichzeitig, aber nur eines pro Inhalt: ein zweiter Klick holt das vorhandene nach vorn. Schließen des Fensters oder „Zurück ins Panel“ legt den Inhalt zurück ins Panel, wenn sein Chat offen ist; sonst bleibt er einfach gespeichert. Größe und Position merkt sich AIS.ChatCraft pro Inhalt; ist der Bildschirm von damals nicht mehr da, öffnet das Fenster auf dem Hauptbildschirm. Look, Farbschema und Zoom sind wie im Hauptfenster. Lern-Apps öffnen weiter nur im Vorschaufenster („▶ Öffnen“).
+
+**Präsentieren:** Im eigenen Fenster eines Whiteboards zeigt das Bildschirm-Symbol das Whiteboard als Vollbild ohne Werkzeugleiste. Esc beendet die Präsentation.
+
 ## Lern-Apps und Arbeitsblätter
 
 **Lern-Apps** sind kleine interaktive Programme in einer einzigen HTML-Datei, etwa ein Bruch-Trainer oder ein Quiz. **Arbeitsblätter** sind Aufgabenblätter, die Schülerinnen und Schüler am Rechner lösen und die du als Arbeitsblatt und Lösungsblatt druckst.
