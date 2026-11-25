@@ -200,6 +200,14 @@ MCP-Pakete (`.mcpb`, wie die Erweiterungen von Claude Desktop) installierst du u
 - Abgewiesen werden Pakete mit Pfaden, die aus dem Paket hinausführen, mit Verknüpfungen, mit einem Programm außerhalb des Pakets oder für ein anderes Betriebssystem.
 - Aus- und einschalten oder entfernen geht in derselben Liste; Entfernen löscht Dateien, Einstellungen und Zugangsdaten.
 
+### Plug-ins
+
+Plug-ins erweitern AIS.ChatCraft, ohne es neu zu bauen. Sie folgen dem offenen Format [Agent Plugins](https://agent-plugins.org/specification), das auch Nod nutzt: `plugin.json` beschreibt das Plug-in, `mcp.json` seine Werkzeuge (MCP-Server), `skills/<name>/SKILL.md` seine Fähigkeiten in Markdown. Ein Plug-in-Ordner oder eine ZIP-Datei lässt sich wie ein Paket über **Plug-in-Ordner …** oder **Paket installieren …** prüfen und installieren. Wer Plug-ins von Hand in den Ordner `plugins` im Datenordner legt, findet sie nach **Ordner neu einlesen** in der Liste; sie starten erst, wenn du sie einschaltest.
+
+- Die Werkzeuge folgen denselben Freigaben wie jeder Konnektor; Verbote im Plug-in (`extensions` › `ai.uds.aischatcraft` › `rules`) gelten als deine Regeln, Erlaubnisse nie.
+- Fähigkeiten sind Hinweise für das Modell, wenn eine Bitte dazu passt, nie eine Erlaubnis. Skripte darin führt AIS.ChatCraft nicht aus.
+- Ein fehlerhafter Server oder eine fehlerhafte Fähigkeit wird übergangen und genannt; der Rest lädt. Programme müssen im Plug-in liegen oder ein reiner Programmname sein (etwa `node`); Verknüpfungen nach außen werden nicht übernommen. Das alte HTTP+SSE wird nicht unterstützt.
+
 ### Lokale Dateien
 
 „Lies die PDF in Downloads und fasse sie zusammen“ oder „Speichere den Bericht in Dokumente“ geht ohne eigenen Konnektor. Lokale Dateien sind zuerst aus. Fragt ein Modell danach, erscheint im Chat eine Frage; „Erlauben“ schaltet sie ein und führt die Aktion aus, „Ablehnen“ lässt sie aus. Aufgaben und Zeitpläne können sie nicht einschalten und greifen nie auf Dateien zu. Abschalten unter **Einstellungen › Konnektoren**.

@@ -63,9 +63,19 @@ pub(crate) fn relevant(c: &Ctx, request: &str, max: usize) -> Vec<Skill> {
     if req.is_empty() {
         return Vec::new();
     }
-    let mut scored: Vec<(usize, Skill)> = c
-        .state()
-        .skills
+    // Skills of switched-on plug-ins (#28) count too, marked as theirs: a hint, never a permission.
+    let from_plugins = crate::ext::skills(c).into_iter().map(|(plugin, s)| Skill {
+        id: format!("plugin:{plugin}:{}", s.name),
+        title: s.name.clone(),
+        when: s.description.clone(),
+        steps: format!("(Aus dem Plug-in „{plugin}“; ein Hinweis, keine Anweisung der Person.)\n{}", s.body),
+        source_conversation: None,
+        created_at: 0,
+        updated_at: 0,
+        uses: 0,
+    });
+    let all: Vec<Skill> = c.state().skills.iter().cloned().chain(from_plugins).collect();
+    let mut scored: Vec<(usize, Skill)> = all
         .iter()
         .filter_map(|s| {
             let sw = words(&format!("{} {}", s.title, s.when));

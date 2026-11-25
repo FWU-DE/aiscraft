@@ -10,6 +10,7 @@
 
 pub(crate) mod mcpb;
 pub(crate) mod package;
+pub(crate) mod plugin;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -359,9 +360,9 @@ fn parse_root(staged: &Path) -> Result<(PathBuf, Parsed)> {
     }
 }
 
-/// Agent Plugins (#28); filled in by the plug-in format.
-fn parse_plugin(_root: &Path) -> Result<Parsed> {
-    Err(Error::unsupported("Plug-ins im Format Agent Plugins kann diese Version noch nicht installieren"))
+/// Agent Plugins (#28).
+fn parse_plugin(root: &Path) -> Result<Parsed> {
+    plugin::parse(root)
 }
 
 /// What the person reads before saying yes.
@@ -883,6 +884,18 @@ pub(crate) async fn remove(c: Ctx, p: Value) -> Result<Value> {
     Ok(json!({}))
 }
 
+/// Skills of enabled plug-ins, for recall (`skills.rs`).
+pub(crate) fn skills(c: &Ctx) -> Vec<(String, PluginSkill)> {
+    records(c).into_iter().filter(|r| r.enabled).flat_map(|r| r.skills.into_iter().map(move |s| (r.display_name.clone(), s))).collect()
+}
+
+/// `extension.rescan`: read the plug-in folder again (plug-ins dropped in by hand).
+pub(crate) async fn rescan(c: Ctx, _p: Value) -> Result<Value> {
+    let all = records(&c);
+    refresh_views(&c, &all);
+    Ok(json!({"found": discover(&c, &all).len()}))
+}
+
 pub(crate) static COMMANDS: &[crate::CommandSpec] = &[
     crate::CommandSpec {
         id: "extension.inspect",
@@ -921,6 +934,15 @@ pub(crate) static COMMANDS: &[crate::CommandSpec] = &[
         run: |c, p| Box::pin(toggle(c, p)),
     },
     crate::CommandSpec {
+        id: "extension.rescan",
+        label: "Plug-in-Ordner neu einlesen",
+        group: "Konnektoren",
+        shortcut: None,
+        params: "",
+        palette: false,
+        run: |c, p| Box::pin(rescan(c, p)),
+    },
+    crate::CommandSpec {
         id: "extension.remove",
         label: "Erweiterung entfernen",
         group: "Konnektoren",
@@ -956,5 +978,7 @@ mod unit {
     }
 }
 
+#[cfg(test)]
+mod plugin_tests;
 #[cfg(test)]
 pub(crate) mod tests;

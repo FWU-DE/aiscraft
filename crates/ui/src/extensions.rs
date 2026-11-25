@@ -86,6 +86,9 @@ impl AisCraftApp {
             {
                 self.run("extension.inspect", json!({"path": path.display().to_string()}));
             }
+            if ui.button("Ordner neu einlesen").clicked() {
+                self.run("extension.rescan", json!({}));
+            }
             if ui.button("Plug-in-Ordner …").clicked()
                 && let Some(dir) = rfd::FileDialog::new().pick_folder()
             {
