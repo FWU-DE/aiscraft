@@ -67,7 +67,16 @@ Das [Handbuch](crates/ui/manual/de.md) beschreibt jede Funktion; in der App öff
 
 ## Installieren
 
-Fertige Pakete gibt es noch nicht; der Release-Workflow ist vorbereitet ([#58](https://github.com/FWU-DE/aiscraft/issues/58)). Bis dahin aus dem Quellcode:
+Fertige Pakete stehen unter [Releases](https://github.com/FWU-DE/aiscraft/releases/latest):
+
+| System | Datei |
+|---|---|
+| Windows | `aischatcraft-<version>-windows-x64.msi` (Installer) oder `…-windows-x64-portable.zip` (ohne Installation); für ARM-Geräte `arm64` |
+| Linux | `.AppImage` (jede Distribution), `.deb` (Debian, Ubuntu, Mint), `.rpm` (Fedora, openSUSE), `.flatpak` oder `.tar.gz`, je für `x86_64` und `aarch64` |
+
+`SHA256SUMS.txt` im Release enthält die Prüfsummen. Die Pakete sind noch nicht signiert; Windows warnt deshalb beim ersten Start (SmartScreen: „Weitere Informationen“ › „Trotzdem ausführen“). Für macOS gibt es noch kein Paket.
+
+Aus dem Quellcode (auch macOS):
 
 ```sh
 git clone https://github.com/FWU-DE/aiscraft && cd aiscraft
