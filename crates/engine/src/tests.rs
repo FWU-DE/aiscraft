@@ -510,6 +510,25 @@ fn document_flow_end_to_end() {
     assert!(engine.call("artifact.get", json!({"id": b})).is_err());
 }
 
+/// An outline indented without bullets keeps its three levels on the board (#78).
+#[test]
+fn board_from_an_indented_outline_without_bullets() {
+    let (engine, _) = engine_with_recording("Antwort");
+    let outline = "Quadratische Gleichungen\n  Formen\n    Normalform\n    Scheitelpunktform\n  Lösen\n    Mitternachtsformel\n";
+    let b = engine.call("artifact.create", json!({"kind": "board", "content": outline})).unwrap()["id"].as_str().unwrap().to_string();
+    let text = engine.call("artifact.get", json!({"id": b})).unwrap()["text"].as_str().unwrap().to_string();
+    for link in [
+        "Quadratische Gleichungen → Formen",
+        "Quadratische Gleichungen → Lösen",
+        "Formen → Normalform",
+        "Formen → Scheitelpunktform",
+        "Lösen → Mitternachtsformel",
+    ] {
+        assert!(text.contains(link), "{link} fehlt in\n{text}");
+    }
+    assert!(!text.contains("Quadratische Gleichungen → Normalform"), "{text}");
+}
+
 /// Everything around chats, projects, memory and artifacts that is not sending.
 #[test]
 fn management_commands() {

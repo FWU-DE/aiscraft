@@ -328,6 +328,87 @@ fn outline_parsing() {
     assert!(parse_outline(&wide).count() <= 301);
 }
 
+/// Texts of the children of `node`.
+fn kids(node: &crate::OutlineNode) -> Vec<&str> {
+    node.children.iter().map(|c| c.text.as_str()).collect()
+}
+
+const QUADRATIC: &str = "Quadratische Gleichungen\n  Formen\n    Normalform\n    Scheitelpunktform\n  Lösen\n    Mitternachtsformel\n";
+
+#[test]
+fn indented_outline_without_bullets_keeps_its_levels() {
+    // Spaces (#78).
+    let root = parse_outline(QUADRATIC);
+    assert_eq!(root.text, "Quadratische Gleichungen");
+    assert_eq!(kids(&root), ["Formen", "Lösen"]);
+    assert_eq!(kids(&root.children[0]), ["Normalform", "Scheitelpunktform"]);
+    assert_eq!(kids(&root.children[1]), ["Mitternachtsformel"]);
+
+    // Tabs.
+    let tabs = parse_outline("Wetter\n\tRegen\n\t\tNiesel\n\tSonne");
+    assert_eq!(tabs.text, "Wetter");
+    assert_eq!(kids(&tabs), ["Regen", "Sonne"]);
+    assert_eq!(kids(&tabs.children[0]), ["Niesel"]);
+
+    // Uneven depths: 3 and 5 spaces, then back to 2.
+    let uneven = parse_outline("Tiere\n   Säuger\n        Hund\n     Katze\n  Vögel\n      Amsel");
+    assert_eq!(uneven.text, "Tiere");
+    assert_eq!(kids(&uneven), ["Säuger", "Vögel"]);
+    assert_eq!(kids(&uneven.children[0]), ["Hund", "Katze"]);
+    assert_eq!(kids(&uneven.children[1]), ["Amsel"]);
+
+    // Several top lines without a centre of their own: „Übersicht“ holds them.
+    let two = parse_outline("A\n  A1\nB\n  B1");
+    assert_eq!(two.text, "Übersicht");
+    assert_eq!(kids(&two), ["A", "B"]);
+    assert_eq!(kids(&two.children[1]), ["B1"]);
+}
+
+#[test]
+fn outline_mixed_with_bullets_and_mermaid_mind_maps() {
+    // Some lines with a bullet, some without: everything by indentation.
+    let mixed = parse_outline("Bruchrechnung\n  - Kürzen\n      Teiler suchen\n  Erweitern\n    - gleicher Faktor");
+    assert_eq!(mixed.text, "Bruchrechnung");
+    assert_eq!(kids(&mixed), ["Kürzen", "Erweitern"]);
+    assert_eq!(kids(&mixed.children[0]), ["Teiler suchen"]);
+    assert_eq!(kids(&mixed.children[1]), ["gleicher Faktor"]);
+
+    // A title line, then a list on the same indentation.
+    let titled = parse_outline("Thema Wasser\n- Kreislauf\n  - Verdunstung\n- Nutzung");
+    assert_eq!(titled.text, "Thema Wasser");
+    assert_eq!(kids(&titled), ["Kreislauf", "Nutzung"]);
+    assert_eq!(kids(&titled.children[0]), ["Verdunstung"]);
+
+    // Mermaid mindmap, with and without its header line, shapes and icons removed.
+    let body = "  root((Quadratische Gleichungen))\n    Formen\n      [Normalform]\n      id(Scheitelpunktform)\n      ::icon(fa fa-book)\n    Lösen\n      Mitternachtsformel";
+    for text in [body.to_string(), format!("mindmap\n{body}")] {
+        let root = parse_outline(&text);
+        assert_eq!(root.text, "Quadratische Gleichungen");
+        assert_eq!(kids(&root), ["Formen", "Lösen"]);
+        assert_eq!(kids(&root.children[0]), ["Normalform", "Scheitelpunktform"]);
+    }
+    // Brackets in ordinary text stay.
+    assert_eq!(parse_outline("Lösen (quadratisch)\n  x").text, "Lösen (quadratisch)");
+
+    // Flat text and prose under headings stay as before.
+    assert_eq!(kids(&parse_outline("Erste Zeile\nZweite Zeile\nDritte")), ["Zweite Zeile", "Dritte"]);
+    let prose = parse_outline("# Titel\nEin Satz.\n  noch einer\n## Teil\n- Punkt");
+    assert_eq!(prose.text, "Titel");
+    assert_eq!(kids(&prose), ["Teil"]);
+
+    // Limits hold.
+    let deep: String = (0..60).map(|i| format!("{}x{i}\n", "  ".repeat(i))).collect();
+    let mut depth = 0;
+    let mut node = parse_outline(&deep);
+    while let Some(child) = node.children.first().cloned() {
+        node = child;
+        depth += 1;
+    }
+    assert!(depth <= 6, "{depth}");
+    let wide: String = (0..5000).map(|i| format!("{}{i}\n", if i % 2 == 0 { "" } else { "  " })).collect();
+    assert!(parse_outline(&wide).count() <= 301);
+}
+
 fn overlaps(a: &Element, b: &Element) -> bool {
     a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 }
