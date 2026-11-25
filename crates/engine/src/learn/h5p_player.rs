@@ -44,7 +44,7 @@ pub const SUMS: &str = "SHA256SUMS.txt";
 pub const APPROX_MB: u64 = 3;
 pub const LICENSE: &str = "GPL-3.0 (H5P-Kern), MIT (h5p-standalone und Inhaltstypen)";
 /// The bundle's SHA-256, once the first bundle is published (see the module docs).
-pub const PINNED_SHA256: Option<&str> = None;
+pub const PINNED_SHA256: Option<&str> = Some("137cdb1b6110deae8e0406e6a0fc08a3c18200aae09201db028ea19cb9779615");
 /// `manifest.json` names the bundle so.
 const MANIFEST_NAME: &str = "aiscraft-h5p-player";
 /// Files the preview needs from a bundle.

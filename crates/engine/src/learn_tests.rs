@@ -1000,3 +1000,20 @@ fn real_h5p_player_bundle_installs() {
     }
     engine.call("h5p.player_remove", json!({})).unwrap();
 }
+
+/// The published player (release h5p-player-v1) with the pinned checksum, into
+/// `AISCRAFT_H5P_DOWNLOAD_DIR` (about 3 MB; only by hand:
+/// `AISCRAFT_H5P_DOWNLOAD_DIR=<leerer Ordner> cargo test -p aiscraft-engine -- --ignored real_published`).
+#[test]
+#[ignore]
+fn real_published_h5p_player_installs() {
+    let dir = std::path::PathBuf::from(std::env::var("AISCRAFT_H5P_DOWNLOAD_DIR").unwrap());
+    let engine = Engine::open(Options { data_dir: Some(dir), secrets: Some(crate::Secrets::memory()) }).unwrap();
+    // Test builds never download on their own; this test asks for the real release.
+    *engine.ctx().0.h5p_player_source.lock().unwrap() = Some(crate::learn::h5p_player::Source::github());
+    let out = engine.call("h5p.player_install", json!({"yes": true})).unwrap();
+    assert_eq!(out["installed"], true, "{out}");
+    let st = engine.call("h5p.player_status", json!({})).unwrap();
+    assert!(st["libraries"].as_u64().unwrap() >= 5, "{st}");
+    assert_eq!(st["pinned"], true, "{st}");
+}
