@@ -534,7 +534,10 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("artifact.export", "Artefakt exportieren", "Artefakte", None, "id: string, format?: markdown|html|docx|pdf|json, path?: string", false, |c, p| {
         Box::pin(crate::artifacts::export(c, p))
     }),
-    cmd!("artifact.versions", "Versionen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::versions(c, p))),
+    cmd!("artifact.export_paths", "Dateien zum Bereitstellen", "Artefakte", None, "id: string (je Eintrag: label, hint, format, variant, ext, suffix für artifact.export)", false, |c, p| {
+        Box::pin(crate::artifacts::export_paths_cmd(c, p))
+    }),
+    cmd!("artifact.versions", "Versionen","Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::versions(c, p))),
     cmd!("artifact.restore", "Version wiederherstellen", "Artefakte", None, "id: string, version: number", false, |c, p| Box::pin(crate::artifacts::restore(
         c, p
     ))),

@@ -622,7 +622,11 @@ impl AisCraftApp {
     /// The three things worked on last: chats, documents and whiteboards by their last change.
     fn recent_section(&mut self, ui: &mut Ui, w: f32) {
         let t = self.tokens.clone();
-        self.section_title(ui, Icon::History, t.text2, "Zuletzt bearbeitet", None);
+        // Joining someone else's document (#60) starts here, not in one's own share dialog.
+        let join = self.state.collab.available.then_some("Mit Code beitreten");
+        if self.section_title(ui, Icon::History, t.text2, "Zuletzt bearbeitet", join) {
+            self.dialog = Some(Dialog::Join { code: String::new() });
+        }
         enum Item {
             Chat(String),
             Artifact(String),

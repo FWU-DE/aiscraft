@@ -13,7 +13,8 @@ use crate::theme::{self, OmarchyTheme, ThemeWatcher, Tokens};
 pub enum UiRequest {
     /// Save a PNG of the window.
     Screenshot { path: PathBuf, reply: std::sync::mpsc::Sender<Result<Value, String>> },
-    /// Open a dialog by name: settings, memory, login, add_backend, palette, welcome, look.
+    /// Open a dialog by name: settings, memory, login, add_backend, palette, welcome, look, share
+    /// (the open artifact's), join.
     Show { what: String, reply: std::sync::mpsc::Sender<Result<Value, String>> },
 }
 
@@ -111,8 +112,7 @@ pub struct AisCraftApp {
     pub(crate) artifact: Option<crate::artifact_panel::ArtifactView>,
     /// Send the open artifact as context with the next message.
     pub(crate) attach_artifact: bool,
-    /// Teilen: code or link to join, relay address and key being typed.
-    pub(crate) collab_join: String,
+    /// Settings › Dienste › Zusammenarbeit: relay address and key being typed.
     pub(crate) collab_url: String,
     pub(crate) collab_key: String,
     /// The handbook window, when open.
@@ -268,7 +268,6 @@ impl AisCraftApp {
             last_current: None,
             artifact: None,
             attach_artifact: false,
-            collab_join: String::new(),
             collab_url: String::new(),
             collab_key: String::new(),
             dictated: Default::default(),
@@ -652,6 +651,18 @@ impl AisCraftApp {
                         }
                         "palette" => {
                             self.palette = Some(Palette::default());
+                            true
+                        }
+                        // The share dialog of the open artifact (#60).
+                        "share" => match self.state.open_artifact.clone() {
+                            Some(id) => {
+                                self.dialog = Some(Dialog::Share { id, way: None });
+                                true
+                            }
+                            None => false,
+                        },
+                        "join" => {
+                            self.dialog = Some(Dialog::Join { code: String::new() });
                             true
                         }
                         "personas" => {

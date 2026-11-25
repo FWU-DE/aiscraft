@@ -262,7 +262,7 @@ async fn share(c: Ctx, p: Value) -> Result<Value> {
     }
     let url = c.state().collab.server.clone();
     if url.is_empty() {
-        return Err(Error::invalid("Kein Server für die Zusammenarbeit eingestellt. Unter „Teilen“ die Adresse eintragen."));
+        return Err(Error::invalid("Kein Server für die Zusammenarbeit eingestellt. Die Adresse unter Einstellungen › Dienste › Zusammenarbeit eintragen."));
     }
     let server = Server::parse(&url).map_err(err)?;
     let key = c.0.secrets.get(SERVER_KEY)?;
@@ -285,7 +285,7 @@ async fn join(c: Ctx, p: Value) -> Result<Value> {
             let code = code::normalize(&given).ok_or_else(|| Error::invalid("Das ist weder ein Code (XXXXX-XXXXX) noch ein Link zum Beitreten"))?;
             let url = c.state().collab.server.clone();
             if url.is_empty() {
-                return Err(Error::invalid("Kein Server für die Zusammenarbeit eingestellt. Den ganzen Link einfügen oder die Adresse eintragen."));
+                return Err(Error::invalid("Kein Server für die Zusammenarbeit eingestellt. Den ganzen Link einfügen oder die Adresse unter Einstellungen › Dienste › Zusammenarbeit eintragen."));
             }
             (Server::parse(&url).map_err(err)?, code)
         }

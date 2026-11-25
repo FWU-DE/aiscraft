@@ -99,6 +99,15 @@ pub enum Dialog {
     },
     /// Chats from claude.ai or ChatGPT (#42).
     ImportChats,
+    /// „Teilen“ (#60): the two ways, live together or a copy as a file.
+    Share {
+        id: String,
+        way: Option<crate::share::ShareWay>,
+    },
+    /// „Mit Code beitreten“ (#60), outside the share dialog.
+    Join {
+        code: String,
+    },
 }
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
@@ -214,7 +223,7 @@ impl AisCraftApp {
                 Dialog::Settings { .. } => (ctx.content_rect().width() - 48.0).clamp(600.0, 940.0),
                 Dialog::Welcome { .. } => 640.0,
                 Dialog::Login { .. } | Dialog::WelcomeSignIn => 520.0,
-                Dialog::Install { .. } => 600.0,
+                Dialog::Install { .. } | Dialog::Share { .. } => 600.0,
                 _ => 460.0,
             });
             keep = self.dialog_body(ui, &mut dialog);
@@ -633,6 +642,11 @@ impl AisCraftApp {
             }
             Dialog::Know(d) => self.know_dialog(ui, d),
             Dialog::ImportChats => self.import_chats_dialog(ui),
+            Dialog::Share { id, way } => {
+                let id = id.clone();
+                self.share_body(ui, &id, way)
+            }
+            Dialog::Join { code } => self.join_body(ui, code),
             Dialog::Confirm { text, command, params } => {
                 ui.label(RichText::new(text.as_str()).strong());
                 ui.add_space(8.0);
@@ -982,6 +996,7 @@ impl AisCraftApp {
                 }
                 ui.add_space(10.0);
                 self.fallback_section(ui);
+                self.collab_settings(ui);
             }
             SettingsTab::Connectors => {
                 ui.label(muted(&t, "Konnektoren sind MCP-Server. Ihre Werkzeuge können Modelle aufrufen, die das unterstützen (OpenAI-kompatibel, Claude über API). AIS.chat über die Anmeldung und das Claude-Abo nutzen keine eigenen Werkzeuge."));

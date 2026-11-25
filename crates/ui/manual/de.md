@@ -176,11 +176,15 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 ## Gemeinsam bearbeiten
 
-Dokumente und Whiteboards lassen sich live mit anderen bearbeiten. Dafür braucht es einen Server für die Zusammenarbeit (`aiscraft-collab-server`, z. B. von der Schule oder dem Träger betrieben). Ohne Server bleibt alles auf deinem Rechner.
+„Teilen“ oben in Dokument, Whiteboard, Arbeitsblatt oder Lern-App fragt zuerst, was du vorhast. **Gemeinsam bearbeiten** heißt: Es gibt ein Original, und alle mit dem Code schreiben live daran mit. **Bereitstellen** heißt: Du gibst eine Kopie als Datei weiter (zum Ansehen, Ausdrucken oder für die Lernplattform), das Original bleibt bei dir, und spätere Änderungen gehen nicht mit.
 
-**Teilen:** „Teilen“ oben im Dokument oder Whiteboard. Beim ersten Mal die Adresse des Servers eintragen (und den Schlüssel, falls er einen verlangt). „Teilen starten“ zeigt einen Code wie `K7M2Q-X9TDA` und einen Link; beides weitergeben.
+**Bereitstellen:** Je nach Art gibt es die passenden Dateien: Dokument als Word, PDF oder Markdown; Arbeitsblatt als Arbeitsblatt- und Lösungsblatt, jeweils als PDF oder Word; Lern-App als HTML-Datei, die in jedem Browser läuft; Whiteboard als PDF (die Inhalte als Gliederung); H5P-Inhalt als `.h5p`-Datei.
 
-**Beitreten:** „Teilen“ › Code oder Link einfügen › „Beitreten“, oder in der Seitenleiste „+“ bei Dokumente & Boards. Mit dem Link geht es auch ohne eingetragenen Server.
+Für gemeinsames Bearbeiten braucht es einen Server für die Zusammenarbeit (`aiscraft-collab-server`, z. B. von der Schule oder dem Träger betrieben). Die Adresse (und den Schlüssel, falls er einen verlangt) trägst du einmal unter **Einstellungen › Dienste › Zusammenarbeit** ein. Ohne Server bleibt alles auf deinem Rechner. Der Inhalt geteilter Dokumente liegt auf diesem Server; Räume, die lange niemand öffnet, löscht er.
+
+**Teilen:** „Teilen“ › „Gemeinsam bearbeiten“ › „Teilen starten“ zeigt einen Code wie `K7M2Q-X9TDA` und einen Link; beides weitergeben. Ist etwas schon geteilt, zeigt „Geteilt“ gleich Code, Link, wer im Raum ist und „Nicht mehr teilen“.
+
+**Beitreten:** „Mit Code beitreten“ auf der Startseite (bei „Zuletzt bearbeitet“), in der Seitenleiste unter „+“ bei Dokumente & Whiteboards oder in der Befehlspalette (Strg+K). Code oder Link einfügen › „Beitreten“. Mit dem Link geht es auch ohne eingetragenen Server.
 
 Änderungen erscheinen bei allen sofort. Ohne Verbindung arbeitest du weiter; beim nächsten Verbinden gleicht AIS.ChatCraft alles ab. „Nicht mehr teilen“ hört auf abzugleichen, deine Kopie bleibt. „Raum für alle beenden“ (nur wer geteilt hat) löscht den Raum auf dem Server. Wer den Code hat, kann mitbearbeiten.
 

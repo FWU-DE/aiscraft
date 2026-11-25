@@ -389,6 +389,21 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
             check(&mut h, &what);
             common::click_until(&mut h, "Abbrechen", "the link field closes", |h| !label(h, "Abbrechen"));
         }
+        // „Teilen“ (#60): the dialog with both ways, then the files this kind is provided as.
+        let what = at(&format!("Teilen › {view}"));
+        show(&mut h, &tx, "share");
+        settle(&mut h, &what, |h| label(h, "Bereitstellen") && label(h, "Gemeinsam bearbeiten"));
+        check(&mut h, &what);
+        common::click_until(&mut h, "Bereitstellen", "the files show", |h| h.query_by_label_contains("Das Original bleibt bei dir;").is_some());
+        let what = at(&format!("Teilen › Bereitstellen › {view}"));
+        settle(&mut h, &what, |h| label(h, "Fertig"));
+        check(&mut h, &what);
+        common::click_until(&mut h, "Gemeinsam bearbeiten", "the way to work together shows", |h| label(h, "Server in den Einstellungen eintragen"));
+        let what = at(&format!("Teilen › Gemeinsam bearbeiten › {view}"));
+        settle(&mut h, &what, |h| label(h, "Server in den Einstellungen eintragen"));
+        check(&mut h, &what);
+        show(&mut h, &tx, "none");
+        settle(&mut h, &at("Teilen geschlossen"), |h| !h.state().panel_layout().overlay);
         call(&engine, "artifact.close", json!({}));
         settle(&mut h, &at("Panel geschlossen"), |h| h.state().panel_layout().artifact.is_none());
     }
