@@ -339,6 +339,7 @@ dependencies = [
 name = "aiscraft-preview"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "tao",
  "wry",
 ]

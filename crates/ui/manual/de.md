@@ -208,6 +208,15 @@ Plug-ins erweitern AIS.ChatCraft, ohne es neu zu bauen. Sie folgen dem offenen F
 - Fähigkeiten sind Hinweise für das Modell, wenn eine Bitte dazu passt, nie eine Erlaubnis. Skripte darin führt AIS.ChatCraft nicht aus.
 - Ein fehlerhafter Server oder eine fehlerhafte Fähigkeit wird übergangen und genannt; der Rest lädt. Programme müssen im Plug-in liegen oder ein reiner Programmname sein (etwa `node`); Verknüpfungen nach außen werden nicht übernommen. Das alte HTTP+SSE wird nicht unterstützt.
 
+### Ansichten von Konnektoren
+
+Manche Konnektoren liefern zu einem Ergebnis eine kleine Oberfläche, etwa einen Kalender zum Auswählen oder eine Tabelle zum Filtern (MCP Apps, wie in Claude Desktop). Unter dem Ergebnis erscheint dann die Karte **Ansicht öffnen**. Die Ansicht öffnet im eigenen Vorschaufenster, nie im Hauptfenster, in den Farben deines Looks.
+
+- Netz gibt es dort nur zu den Adressen, die der Konnektor ausdrücklich nennt, sonst keins. Ansichten, die beliebiges Netz (`*`), unverschlüsseltes `http`, fremde eingebettete Seiten, den falschen Typ oder mehr als 2 MB verlangen, öffnet AIS.ChatCraft nicht. Kamera, Mikrofon und Standort gibt es nie.
+- Aktionen aus der Ansicht laufen wie Aufrufe des Modells: Lesendes direkt, alles andere fragt mit genau den Angaben. Eine Ansicht erreicht nur Werkzeuge ihres eigenen Konnektors. Links aus der Ansicht öffnen erst, wenn du auf „Im Browser öffnen“ klickst.
+- Ohne Vorschaufenster (eine Fassung ohne `aiscraft-preview`) bleibt der Text des Ergebnisses im Chat; die Ansicht öffnet dann nicht, auch nicht im Browser.
+- Noch nicht: Nachrichten der Ansicht an den Chat (`ui/message`).
+
 ### Lokale Dateien
 
 „Lies die PDF in Downloads und fasse sie zusammen“ oder „Speichere den Bericht in Dokumente“ geht ohne eigenen Konnektor. Lokale Dateien sind zuerst aus. Fragt ein Modell danach, erscheint im Chat eine Frage; „Erlauben“ schaltet sie ein und führt die Aktion aus, „Ablehnen“ lässt sie aus. Aufgaben und Zeitpläne können sie nicht einschalten und greifen nie auf Dateien zu. Abschalten unter **Einstellungen › Konnektoren**.

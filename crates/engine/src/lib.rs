@@ -4,6 +4,7 @@
 
 mod action_log;
 mod ai_label;
+mod apps;
 mod artifacts;
 mod attach;
 mod bridge;
@@ -680,6 +681,8 @@ mod tests;
 #[cfg(test)]
 mod trust_tests;
 
+#[cfg(test)]
+mod apps_tests;
 #[cfg(test)]
 mod chatux_tests;
 #[cfg(test)]

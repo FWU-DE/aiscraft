@@ -977,7 +977,8 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
                     tool_msg.role = Role::Tool;
                     tool_msg.model = None;
                     tool_msg.content = text;
-                    tool_msg.tool_result = Some(aiscraft_core::ToolResultInfo { call_id: call.id.clone(), name: call.name.clone(), is_error });
+                    let view = crate::tools::take_view(&c, &call.id);
+                    tool_msg.tool_result = Some(aiscraft_core::ToolResultInfo { call_id: call.id.clone(), name: call.name.clone(), is_error, view });
                     put_message(&c, &conv_id, &tool_msg);
                 }
                 if *cancel_rx.borrow() {

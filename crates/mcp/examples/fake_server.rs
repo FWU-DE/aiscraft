@@ -3,6 +3,9 @@
 //! `FAKE_MCP_MODE`: unset = normal, `silent` = never answers, `exit` = dies at once.
 //! Tools: `echo`, `fail`, `slow` (never answers), `delay` (answers after `ms`), `crash`,
 //! `image`, `ask` (sends the client a `roots/list` request first), `notify`, `huge`.
+//! `FAKE_MCP_MODE=apps` adds tools with views (MCP Apps): `board` (read-only, a good view),
+//! `board_save` (only for the view, changes something), `board_model` (only for the model),
+//! `board_huge`, `board_type`, `board_star` (hostile views), and answers `resources/read`.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 use std::io::{BufRead, Write};
@@ -93,15 +96,31 @@ fn main() {
                             "nextCursor": "page-2"
                         }),
                     ),
-                    Some("page-2") => result(
-                        &out,
-                        &id,
-                        json!({"tools": [
-                            {"name": "fail", "annotations": {"destructiveHint": true}},
-                            {"name": "slow"}, {"name": "delay"}, {"name": "crash"}, {"name": "image"},
-                            {"name": "ask"}, {"name": "notify"}, {"name": "huge"}
-                        ]}),
-                    ),
+                    Some("page-2") => {
+                        let mut tools = vec![
+                            json!({"name": "fail", "annotations": {"destructiveHint": true}}),
+                            json!({"name": "slow"}),
+                            json!({"name": "delay"}),
+                            json!({"name": "crash"}),
+                            json!({"name": "image"}),
+                            json!({"name": "ask"}),
+                            json!({"name": "notify"}),
+                            json!({"name": "huge"}),
+                        ];
+                        if mode == "apps" {
+                            let view = |n: &str, uri: &str, vis: Value, ro: bool| {
+                                json!({"name": n, "description": format!("{n} mit Ansicht"), "annotations": {"readOnlyHint": ro},
+                                       "_meta": {"ui": {"resourceUri": uri, "visibility": vis}}})
+                            };
+                            tools.push(view("board", "ui://fake/board.html", json!(["model", "app"]), true));
+                            tools.push(view("board_save", "ui://fake/board.html", json!(["app"]), false));
+                            tools.push(view("board_model", "ui://fake/board.html", json!(["model"]), true));
+                            tools.push(view("board_huge", "ui://fake/huge.html", json!([]), true));
+                            tools.push(view("board_type", "ui://fake/type.html", json!([]), true));
+                            tools.push(view("board_star", "ui://fake/star.html", json!([]), true));
+                        }
+                        result(&out, &id, json!({"tools": tools}))
+                    }
                     Some(_) => write(&out, &json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": "bad cursor"}})),
                 }
             }
@@ -145,6 +164,11 @@ fn main() {
                         write(&out, &json!({"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info", "data": "hello"}}));
                         result(&out, &id, text("notified"));
                     }
+                    n if n.starts_with("board") => result(
+                        &out,
+                        &id,
+                        json!({"content": [{"type": "text", "text": format!("{n}: 3 Termine")}], "structuredContent": {"termine": 3, "args": args}}),
+                    ),
                     "huge" => {
                         // A line over the 16 MiB cap with this request's id, then the real answer.
                         let junk = "x".repeat(17 * 1024 * 1024);
@@ -153,6 +177,23 @@ fn main() {
                     }
                     _ => write(&out, &json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": format!("unknown tool {name}")}})),
                 }
+            }
+            "resources/read" => {
+                let uri = msg.pointer("/params/uri").and_then(Value::as_str).unwrap_or("");
+                let page = "<!doctype html><html><body><h1>Termine</h1><script>window.parent.postMessage({jsonrpc:'2.0',id:1,method:'ui/initialize',params:{}}, '*')</script></body></html>";
+                let mime = "text/html;profile=mcp-app";
+                let content = match uri {
+                    "ui://fake/board.html" => json!({"uri": uri, "mimeType": mime, "text": page,
+                        "_meta": {"ui": {"csp": {"connectDomains": ["https://api.example.org"]}, "permissions": {"camera": {}}}}}),
+                    "ui://fake/huge.html" => json!({"uri": uri, "mimeType": mime, "text": "x".repeat(3 * 1024 * 1024)}),
+                    "ui://fake/type.html" => json!({"uri": uri, "mimeType": "text/html", "text": page}),
+                    "ui://fake/star.html" => json!({"uri": uri, "mimeType": mime, "text": page, "_meta": {"ui": {"csp": {"connectDomains": ["*"]}}}}),
+                    _ => {
+                        write(&out, &json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32002, "message": "Resource not found"}}));
+                        continue;
+                    }
+                };
+                result(&out, &id, json!({"contents": [content]}));
             }
             _ if msg.get("id").is_some() => write(&out, &json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "Method not found"}})),
             _ => {}

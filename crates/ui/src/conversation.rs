@@ -45,7 +45,9 @@ impl AisCraftApp {
                     let top = ui.cursor().min.y;
                     match m.role {
                         Role::User => self.user_message(ui, m),
-                        // Tool results are shown as chips on the call, not as messages.
+                        // Tool results are shown as chips on the call, not as messages; a result
+                        // with a connector's view gets its card (#74).
+                        Role::Tool if m.tool_result.as_ref().is_some_and(|r| r.view.is_some()) => self.view_card(ui, m),
                         Role::Tool => continue,
                         _ => self.assistant_message(ui, m, Some(i) == last_assistant),
                     }

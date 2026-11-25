@@ -35,6 +35,7 @@ mod sidebar;
 pub mod theme;
 mod trust_rules;
 mod update;
+mod views;
 mod widgets;
 pub mod worksheet;
 

@@ -422,6 +422,9 @@ pub(crate) fn tool(name: &str, destructive: bool) -> ConnectorTool {
         read_only: name == LIST,
         destructive,
         input_schema: spec.map(|s| s.input_schema).unwrap_or(Value::Null),
+        ui_resource: None,
+        app_only: false,
+        app_callable: false,
     }
 }
 

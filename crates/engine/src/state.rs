@@ -195,6 +195,15 @@ pub struct ConnectorTool {
     pub destructive: bool,
     #[serde(skip)]
     pub input_schema: serde_json::Value,
+    /// The `ui://` view the tool comes with (MCP Apps, #74).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_resource: Option<String>,
+    /// Only for the view: the model neither sees nor calls it.
+    #[serde(default)]
+    pub app_only: bool,
+    /// A view of the same connector may call it.
+    #[serde(default)]
+    pub app_callable: bool,
 }
 
 /// A tool call the model wants to make and the owner has to allow.

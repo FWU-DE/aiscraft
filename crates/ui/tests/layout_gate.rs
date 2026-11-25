@@ -67,6 +67,16 @@ fn answer_backend(engine: &Engine, answer: &'static str) -> String {
                         let _ = sock.write_all(format!("{head}{body}").as_bytes()).await;
                         return;
                     }
+                    // A request for the week's dates calls the connector tool with a view (#74).
+                    let text = String::from_utf8_lossy(&buf).to_string();
+                    let board = text.split('"').find(|w| w.ends_with("__board") && w.len() < 64).map(str::to_string);
+                    if let Some(board) = board.filter(|_| text.contains("Termine der Woche") && !text.contains(r#""role":"tool""#)) {
+                        let c = json!({"choices":[{"delta":{"tool_calls": [{"index": 0, "id": "c0", "function": {"name": board, "arguments": "{}"}}]}}]});
+                        let done = json!({"choices":[{"delta":{}, "finish_reason": "tool_calls"}]});
+                        let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
+                        let _ = sock.write_all(format!("data: {c}\n\ndata: {done}\n\ndata: [DONE]\n\n").as_bytes()).await;
+                        return;
+                    }
                     let c = json!({"choices":[{"delta":{"content": answer}}]});
                     let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
                     let _ = sock.write_all(format!("data: {c}\n\ndata: [DONE]\n\n").as_bytes()).await;
@@ -294,6 +304,24 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
     check(&mut h, &at("Chat, Suche"));
     h.key_press(egui::Key::Escape);
     settle(&mut h, &at("Chat, Suche geschlossen"), |h| !label(h, "Im Chat suchen"));
+
+    // A connector tool's result with a view (#74): the card under it.
+    let fake = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/examples/fake_server");
+    if fake.is_file() {
+        call(
+            &engine,
+            "connector.add",
+            json!({"name": "Kalender der Gesamtschule am Stadtpark", "command": fake.display().to_string(), "env": "FAKE_MCP_MODE=apps"}),
+        );
+        call(&engine, "chat.new", json!({}));
+        call(&engine, "chat.send", json!({"text": "Zeig mir die Termine der Woche"}));
+        settle(&mut h, &at("Chat mit Ansicht"), |h| label(h, "Ansicht öffnen"));
+        check(&mut h, &at("Chat mit Ansicht"));
+        call(&engine, "chat.open", json!({"id": chat}));
+        settle(&mut h, &at("Chat"), |h| label(h, "Kopieren"));
+    } else {
+        eprintln!("skipped the view card: build it with `cargo build -p aiscraft-mcp --example fake_server`");
+    }
 
     // Chat next to each kind of panel.
     let panels: [(&str, &str, Value); 6] = [

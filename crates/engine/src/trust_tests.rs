@@ -249,6 +249,7 @@ fn background_work_never_runs_a_change() {
     let ev = crate::trust::Evidence {
         messages: vec![crate::trust::OwnerMessage { n: 1, text: "Schick es".into(), answered: Some("Soll ich?".into()) }],
         turn: "t1".into(),
+        from_view: false,
     };
     let (_, err, outcome) = engine.block_on(crate::tools::run(engine.ctx(), "conv", &call, &ev, false));
     assert!(err && outcome == "denied");
@@ -293,6 +294,7 @@ fn own_rules_allow_forbid_and_prohibitions_win() {
     let ev = crate::trust::Evidence {
         messages: vec![crate::trust::OwnerMessage { n: 1, text: "Schreib allen".into(), answered: Some("Soll ich?".into()) }],
         turn: "t1".into(),
+        from_view: false,
     };
     let call = |args: Value| aiscraft_core::ToolCall { id: "c".into(), name: notify.clone(), arguments: args, outcome: None };
     // Allow: runs without a question.
@@ -371,6 +373,7 @@ fn a_call_cut_off_midway_is_uncertain_and_never_retried() {
     let ev = crate::trust::Evidence {
         messages: vec![crate::trust::OwnerMessage { n: 1, text: "ja, mach das".into(), answered: Some("Soll ich den Server neu starten?".into()) }],
         turn: "t1".into(),
+        from_view: false,
     };
     let call = aiscraft_core::ToolCall { id: "c".into(), name: crash.llm_name.clone(), arguments: json!({"neu": true}), outcome: None };
     let (text, err, outcome) = engine.block_on(crate::tools::run(engine.ctx(), "conv", &call, &ev, true));
@@ -406,6 +409,7 @@ fn a_covered_action_runs_once_per_request() {
     let ev = crate::trust::Evidence {
         messages: vec![crate::trust::OwnerMessage { n: 1, text: "ja".into(), answered: Some("Soll ich?".into()) }],
         turn: "t1".into(),
+        from_view: false,
     };
     let call = aiscraft_core::ToolCall { id: "c".into(), name: notify, arguments: json!({"x": 1}), outcome: None };
     let first = engine.block_on(crate::tools::run(engine.ctx(), "conv", &call, &ev, true));
@@ -448,6 +452,7 @@ fn action_log_says_what_ran_and_why() {
     let ev = crate::trust::Evidence {
         messages: vec![crate::trust::OwnerMessage { n: 1, text: "Lade das Kollegium ein".into(), answered: None }],
         turn: "t1".into(),
+        from_view: false,
     };
     let call = |name: &str, args: Value| aiscraft_core::ToolCall { id: "c".into(), name: name.into(), arguments: args, outcome: None };
     let ctx = engine.ctx();
