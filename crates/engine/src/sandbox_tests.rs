@@ -141,7 +141,7 @@ fn nothing_is_downloaded_or_started_before_the_yes() {
     assert!(asked["can"].as_str().unwrap().contains("LibreOffice"));
     assert!(asked["cannot"].as_str().unwrap().contains("Dateien") && asked["cannot"].as_str().unwrap().contains("Netz"));
     assert!(asked["size_text"].as_str().unwrap().ends_with("MB") && asked["license"].as_str().unwrap().contains("MPL-2.0"));
-    assert!(asked["source"].as_str().unwrap().contains("FWU-DE/aiscraft"));
+    assert!(asked["source"].as_str().unwrap().contains("n8n-io/nod") && asked["license"].as_str().unwrap().contains("Nod"));
     let status = engine.call("sandbox.status", json!({})).unwrap();
     assert_eq!((status["supported"].as_bool(), status["installed"].as_bool()), (Some(true), Some(false)));
     // Switching on before it is set up: refused, nothing started.
@@ -219,7 +219,7 @@ fn every_container_start_is_locked_down() {
     for (i, argv) in starts.iter().enumerate() {
         let j = argv.join(" ");
         let online = i == quiet;
-        assert!(j.contains(if online { "--network bridge" } else { "--network none" }), "{i}: {j}");
+        assert!(j.contains(if online { "--network aiscraft-net" } else { "--network none" }), "{i}: {j}");
         for need in [
             "--cap-drop ALL",
             "--security-opt no-new-privileges",
@@ -333,6 +333,39 @@ fn workspace_tools_follow_nods_rule() {
     assert_eq!(engine.call("sandbox.stop", json!({})).unwrap()["stopped"], true);
     assert!(fake.calls().contains(&FakeCall::Stop));
     assert!(engine.call("sandbox.set", json!({})).is_err());
+}
+
+/// Updates as in Nod: when the app pins a newer Nod runtime than the installed one (its checksum
+/// differs), the settings offer it; nothing is downloaded before the yes; the yes replaces the
+/// computer and records the new version; the same checksum offers nothing.
+#[test]
+fn a_newer_pinned_nod_runtime_is_offered_and_installed_only_after_yes() {
+    let (engine, fake) = installed();
+    let ctx = engine.ctx().clone();
+    assert!(engine.state().sandbox.update.is_none(), "the pinned runtime is installed");
+    assert_eq!(engine.call("sandbox.update", json!({"yes": true})).unwrap()["updated"], false, "nothing newer, nothing loaded");
+
+    // An app built with newer pins (the workflow's pull request) meets the older computer.
+    const NEWER: &[u8] = b"die naechste Nod-Laufzeit";
+    let (url, count) = release(&engine, NEWER.to_vec(), format!("{}  image.tar.gz\n", sha(NEWER)));
+    ctx.0.sandbox.set_source(&url, "image.tar.gz", Some(&sha(NEWER)));
+    crate::sandbox::refresh(&ctx);
+    let offered = engine.state().sandbox.update.clone().expect("the newer runtime is offered");
+    assert!(offered.starts_with("test-"), "{offered}");
+    let asked = engine.call("sandbox.update", json!({})).unwrap();
+    assert_eq!(asked["needs_yes"], true);
+    assert!(asked["note"].as_str().unwrap().contains("Arbeitsordner"));
+    assert_eq!(*count.lock().unwrap(), 0, "no download without the yes");
+    let creates = |f: &Fake| f.calls().iter().filter(|c| matches!(c, FakeCall::Create(_))).count();
+    assert_eq!(creates(&fake), 1);
+
+    // The yes: the old computer goes, the new one is created, the version is recorded.
+    engine.call("sandbox.update", json!({"yes": true})).unwrap();
+    assert_eq!(creates(&fake), 2);
+    assert!(fake.calls().contains(&FakeCall::Destroy));
+    let s = engine.state().sandbox.clone();
+    assert!(s.update.is_none() && s.installed && s.enabled && s.version == offered, "{s:?}");
+    assert!(engine.call("sandbox.update", json!({})).unwrap()["updated"] == false);
 }
 
 /// An OpenAI-compatible server: on „Lies die Notiz“ the model reads a file from the workspace,
@@ -461,8 +494,15 @@ fn real_wsl_runs_echo_in_the_container() {
             wsl.destroy().await.unwrap();
         }
         wsl.create(image, dir.join("machine")).await.expect("imported");
-        let prep =
-            wsl.exec(k::machine_script(k::PREPARE_SCRIPT, &[k::IMAGE, "live", k::IMAGE_TAR]), Vec::new(), Duration::from_secs(300), 65536).await.unwrap();
+        let prep = wsl
+            .exec(
+                k::machine_script(k::PREPARE_SCRIPT, &[k::IMAGE, "live", k::IMAGE_TAR, crate::sandbox::image::WORKSPACE_TAR_SHA256, "0"]),
+                Vec::new(),
+                Duration::from_secs(300),
+                65536,
+            )
+            .await
+            .unwrap();
         assert!(prep.ok(), "{prep:?}");
         let argv = k::docker_run(
             "live",

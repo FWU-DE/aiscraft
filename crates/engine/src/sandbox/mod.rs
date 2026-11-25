@@ -7,8 +7,8 @@
 //!   (`sandbox.install` with `yes: true`). Engines in memory (tests, scripts) never download or
 //!   start anything; tests hand them a fake machine.
 //! - The machine is private to AIS.ChatCraft: on Windows an own WSL2 distribution (`wsl.rs`); on
-//!   macOS and Linux it is not available yet (Lima, later). The image is built and published by
-//!   this repository (`image.rs`).
+//!   macOS and Linux it is not available yet (Lima, later). The image is n8n Nod's own Windows
+//!   runtime, pinned and updated as Nod does it (`image.rs`).
 //! - Work runs in a locked-down container in that machine (`container.rs`): no capabilities, no
 //!   network unless switched on, 2 GB RAM, 2 CPUs, 1024 processes, one folder per chat.
 //! - The tools follow Nod's rule like connector tools (`tools.rs`): listing and reading run;
@@ -56,7 +56,7 @@ const MAX_WRITE: usize = 5 * 1024 * 1024;
 const MAX_READ_TEXT: usize = 256 * 1024;
 
 /// What people say before they switch it on.
-pub const CAN: &str = "Führt Befehle in einem abgeschotteten Linux aus (Python 3, LibreOffice, qpdf, Ghostscript, Noto-Schriften): Dateien umwandeln (DOCX, ODT und PPTX in PDF), Tabellen neu berechnen, PDFs reparieren oder zusammenfügen, Daten auswerten.";
+pub const CAN: &str = "Führt Befehle in einem abgeschotteten Linux aus (Python 3, LibreOffice, Texterkennung, qpdf, Ghostscript, Noto-Schriften): Dateien umwandeln (DOCX, ODT und PPTX in PDF), Tabellen neu berechnen, PDFs reparieren oder zusammenfügen, Daten auswerten.";
 pub const CANNOT: &str = "Er sieht weder deine Dateien und Laufwerke noch Schlüsselbund, Passwörter oder die Daten von AIS.ChatCraft, und er erreicht ohne deine Erlaubnis kein Netz. Dateien kommen nur hinein, wenn das Modell sie anlegt, und nur als Anhang im Chat heraus. Befehle, Schreiben und Umwandeln brauchen deine Freigabe.";
 pub const NOT_WITH_AIS: &str = "Mit AIS.chat nicht verfügbar: AIS.chat gibt dem Modell keine Werkzeuge.";
 
@@ -81,6 +81,10 @@ pub struct SandboxState {
     pub progress: Option<(u64, u64)>,
     /// The step of the installation running now.
     pub step: Option<String>,
+    /// The Nod runtime installed („nod-v0.9.7“).
+    pub version: String,
+    /// A newer pinned Nod runtime than the installed one (`sandbox.update`), as people read it.
+    pub update: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -95,6 +99,8 @@ struct Marker {
     layout: u32,
     machine: String,
     sha256: String,
+    #[serde(default)]
+    version: String,
 }
 
 /// What the engine holds for the workspace.
@@ -148,8 +154,14 @@ impl Runtime {
     /// Test hook: the image comes from a local server.
     #[cfg(test)]
     pub(crate) fn set_source(&self, base: &str, asset: &str, pinned: Option<&str>) {
-        *self.source.lock().unwrap_or_else(PoisonError::into_inner) =
-            Some(image::Source { base: base.into(), asset: asset.into(), pinned: pinned.map(str::to_string) });
+        *self.source.lock().unwrap_or_else(PoisonError::into_inner) = Some(image::Source {
+            base: base.into(),
+            asset: asset.into(),
+            sums: "SHA256SUMS.txt".into(),
+            pinned: pinned.map(str::to_string),
+            bytes: None,
+            version: format!("test-{}", pinned.unwrap_or("").chars().take(6).collect::<String>()),
+        });
     }
 
     #[cfg(test)]
@@ -184,7 +196,13 @@ fn save(c: &Ctx, st: &Saved) -> Result<()> {
 pub(crate) fn refresh(c: &Ctx) {
     let saved = saved(c);
     let machine = c.0.sandbox.machine();
-    let installed = read_marker(c).is_some();
+    let marker = read_marker(c);
+    let installed = marker.is_some();
+    // As Nod compares its guest: the installed runtime against the pinned one.
+    let update = match (&marker, c.0.sandbox.source()) {
+        (Some(m), Some(src)) if src.pinned.as_deref().is_some_and(|p| p != m.sha256) => Some(src.version.clone()),
+        _ => None,
+    };
     c.update(|s| {
         let st = &mut s.sandbox;
         st.installed = installed;
@@ -193,11 +211,16 @@ pub(crate) fn refresh(c: &Ctx) {
         st.supported = machine.as_ref().is_some_and(|m| m.supported());
         st.kind = machine.as_ref().map(|m| m.kind().to_string()).unwrap_or_default();
         st.machine = machine.as_ref().map(|m| m.machine()).unwrap_or_default();
+        st.version = marker.as_ref().map(|m| m.version.clone()).unwrap_or_default();
+        st.update = update;
     });
 }
 
 pub(crate) fn load(c: &Ctx) {
     refresh(c);
+    if let Some(v) = c.state().sandbox.update.clone() {
+        c.notice(NoticeLevel::Info, format!("Für den eigenen Rechner gibt es eine neue Version ({v}). Einstellungen › Fähigkeiten › Aktualisieren."));
+    }
 }
 
 fn set_problem(c: &Ctx, p: Option<String>) {
@@ -228,6 +251,8 @@ pub(crate) fn offer(c: &Ctx) -> Value {
         "enabled": s.enabled,
         "network": s.network,
         "problem": s.problem,
+        "version": s.version,
+        "update": s.update,
     })
 }
 
@@ -251,6 +276,15 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         params: "yes: bool (die Antwort der Person auf die Frage mit Größe, Quelle und Lizenz; ohne yes nur die Frage). Lädt das Abbild, legt den Rechner an und schaltet ihn ein",
         palette: false,
         run: |c, p| Box::pin(install(c, p)),
+    },
+    CommandSpec {
+        id: "sandbox.update",
+        label: "Eigenen Rechner aktualisieren",
+        group: "Fähigkeiten",
+        shortcut: None,
+        params: "yes: bool (die Antwort der Person; ohne yes nur die Frage). Lädt die neuere Nod-Laufzeit, wenn ihre Prüfsumme von der eingerichteten abweicht, und legt den Rechner neu an (Arbeitsordner werden geleert)",
+        palette: false,
+        run: |c, p| Box::pin(update(c, p)),
     },
     CommandSpec {
         id: "sandbox.set",
@@ -315,12 +349,35 @@ fn step(c: &Ctx, what: Option<&str>) {
     c.update(|s| s.sandbox.step = what.map(str::to_string));
 }
 
+/// What an update does to the working folders.
+pub const UPDATE_NOTE: &str = "Der eigene Rechner wird dabei neu angelegt; die Arbeitsordner der Chats werden geleert (Anhänge im Chat bleiben).";
+
 /// `sandbox.install`: only with `yes: true`; without it, the question's content.
 async fn install(c: Ctx, p: Value) -> Result<Value> {
+    set_up(c, p, false).await
+}
+
+/// `sandbox.update`: a newer pinned Nod runtime replaces the installed one, as in Nod only when
+/// its checksum differs, and only with `yes: true`.
+async fn update(c: Ctx, p: Value) -> Result<Value> {
+    refresh(&c);
+    if !c.state().sandbox.installed {
+        return Err(Error::invalid("Der eigene Rechner ist nicht eingerichtet; „Einrichten …“ lädt die aktuelle Version."));
+    }
+    if c.state().sandbox.update.is_none() {
+        return Ok(json!({"updated": false, "version": c.state().sandbox.version}));
+    }
+    set_up(c, p, true).await
+}
+
+async fn set_up(c: Ctx, p: Value, updating: bool) -> Result<Value> {
     if p.get("yes").and_then(Value::as_bool) != Some(true) {
         let mut o = offer(&c);
         if let Some(m) = o.as_object_mut() {
             m.insert("needs_yes".into(), json!(true));
+            if updating {
+                m.insert("note".into(), json!(UPDATE_NOTE));
+            }
         }
         return Ok(o);
     }
@@ -352,8 +409,8 @@ async fn install(c: Ctx, p: Value) -> Result<Value> {
         let _ = std::fs::remove_file(&file);
         created?;
         step(&c, Some("Arbeitsumgebung wird vorbereitet"));
-        prepare(&machine, None).await?;
-        let marker = Marker { layout: LAYOUT, machine: machine.machine(), sha256 };
+        prepare(&machine, None, saved(&c).network).await?;
+        let marker = Marker { layout: LAYOUT, machine: machine.machine(), sha256, version: src.version.clone() };
         crate::disk::write(&rt.dir.join(MARKER), &serde_json::to_vec_pretty(&marker)?)?;
         let mut st = saved(&c);
         st.enabled = true;
@@ -370,7 +427,14 @@ async fn install(c: Ctx, p: Value) -> Result<Value> {
         set_problem(&c, Some(e.message.clone()));
     }
     r?;
-    c.notice(NoticeLevel::Success, "Eigener Rechner eingerichtet und an. Befehle darin laufen erst nach deiner Freigabe.");
+    c.notice(
+        NoticeLevel::Success,
+        if updating {
+            format!("Eigener Rechner auf {} aktualisiert.", src.version)
+        } else {
+            "Eigener Rechner eingerichtet und an. Befehle darin laufen erst nach deiner Freigabe.".to_string()
+        },
+    );
     Ok(offer(&c))
 }
 
@@ -460,9 +524,10 @@ pub(crate) fn forget(c: &Ctx, conv: &str) {
 // ---- the machine ----------------------------------------------------------------------------
 
 /// Docker running, the image loaded, the chat's folder there (idempotent, cheap when ready).
-async fn prepare(m: &runtime::Shared, chat: Option<&str>) -> Result<()> {
-    let out =
-        m.exec(k::machine_script(k::PREPARE_SCRIPT, &[k::IMAGE, chat.unwrap_or(""), k::IMAGE_TAR]), Vec::new(), Duration::from_secs(240), 16 * 1024).await?;
+async fn prepare(m: &runtime::Shared, chat: Option<&str>, network: bool) -> Result<()> {
+    let args = [k::IMAGE, chat.unwrap_or(""), k::IMAGE_TAR, image::WORKSPACE_TAR_SHA256, if network { "1" } else { "0" }];
+    // Loading the 2 GB workspace image the first time takes a while.
+    let out = m.exec(k::machine_script(k::PREPARE_SCRIPT, &args), Vec::new(), Duration::from_secs(900), 16 * 1024).await?;
     if out.ok() {
         Ok(())
     } else if out.timed_out {
@@ -649,7 +714,7 @@ fn container_name() -> String {
 pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value) -> Result<(String, Vec<Attachment>)> {
     let (m, network) = usable(c)?;
     let chat = k::chat_folder(conv)?;
-    prepare(&m, Some(&chat)).await?;
+    prepare(&m, Some(&chat), network).await?;
     let start = |script: &str, a: &[&str]| k::docker_run(&chat, &container_name(), network, script, a);
     match name {
         RUN => {
