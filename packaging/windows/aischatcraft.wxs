@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AIS.ChatCraft MSI (WiX v5), built by package.ps1. Per machine into Program Files, silent with
+     `msiexec /i aischatcraft-<version>-windows-x64.msi /qn` (Intune, SCCM). The UpgradeCode never
+     changes: every later MSI replaces the installed one. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="AIS.ChatCraft" Manufacturer="FWU" Version="$(var.Version)" UpgradeCode="B3EACC63-1EDE-408F-956E-38F71B19C6BF" Scope="perMachine" Compressed="yes" Language="1031">
+    <SummaryInformation Description="AIS.ChatCraft: Desktop-Client für AIS.chat und weitere KI-Dienste" Manufacturer="FWU" />
+    <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
+         (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="Eine neuere Version von AIS.ChatCraft ist bereits installiert." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="AisChatCraftIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="AisChatCraftIcon.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/FWU-DE/aiscraft" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/FWU-DE/aiscraft/releases" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/FWU-DE/aiscraft/issues" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="AIS.ChatCraft" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="AIS.ChatCraft" Level="1">
+      <ComponentGroupRef Id="AisChatCraftFiles" />
+    </Feature>
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <UI>
+      <!-- No licence page: straight from the welcome to the folder. -->
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Order="2" Condition="NOT Installed" />
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="NOT Installed" />
+    </UI>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="AisChatCraftFiles" Directory="INSTALLFOLDER">
+      <Component Id="AisChatCraftApp" Guid="B3DEF4E1-F5CC-46D8-85F3-421269AA618B">
+        <File Id="AisChatCraftExe" Source="$(var.BinDir)\aiscraft.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="AIS.ChatCraft" Description="Chatten mit AIS.chat und anderen KI-Diensten" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="AisChatCraftIcon.ico" IconIndex="0" />
+        </File>
+        <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\aiscraft.exe" Value="[#AisChatCraftExe]" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\AIS.ChatCraft" Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" />
+      </Component>
+      <!-- Found next to aiscraft.exe; learning apps open in it. -->
+      <Component Id="AisChatCraftPreview" Guid="970A129B-0718-485D-89B0-7B04E0156228">
+        <File Id="AisChatCraftPreviewExe" Source="$(var.BinDir)\aiscraft-preview.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="AisChatCraftCli" Guid="3C64C5A3-5F10-4658-A805-0B0069EC5C33">
+        <File Id="AisChatCraftCliExe" Source="$(var.BinDir)\aiscraft-cli.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="AisChatCraftCollab" Guid="A0ED84AE-7727-4CC7-9BB3-D326989350A7">
+        <File Id="AisChatCraftCollabExe" Source="$(var.BinDir)\aiscraft-collab-server.exe" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

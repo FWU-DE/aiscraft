@@ -161,6 +161,7 @@ a slow path comes with such a gate.
 | Errors a person can fix are named | A full disk (`StorageFull`, `QuotaExceeded`, ENOSPC/EDQUOT, `SQLITE_FULL`) gives `aiscraft_core::DISK_FULL` with the details, classified from error codes, never from text; every engine file write goes through `engine/src/disk.rs`. A stopped local service (Ollama, LM Studio, Claude CLI, `aiscraft-preview`, a connector) is named with host:port or exit code and the next step | `every_engine_file_write_goes_through_disk`, `a_full_disk_while_saving_an_artifact_is_named_and_keeps_the_old_file` (engine), `a_store_that_cannot_grow_says_the_disk_is_full` (store), `a_stopped_local_server_is_named_with_host_and_port`, `claude_cli_that_ends_mid_answer_says_so` (backends) |
 | Names stay on the device („Namen schützen“, #55) | With protection on, no class-list name, e-mail, phone, IBAN or street address is in any request body the backend receives (message, attached text, memory, system prompt, later rounds, single calls); the mapping is not in the state agents read nor in the JSON export | `no_real_name_reaches_the_backend`, `single_calls_are_protected_and_translated_back` (engine, `privacy/tests.rs`) |
 | Panels keep their size | In every main view (start page, chat with a long Markdown answer, chat + document, H5P, learning app, whiteboard, worksheet, the link field, every settings tab, Entdecken, the welcome) at 100 % (1280×800) and 150 % (1333×889), in Modern, Glas and Omarchy: no panel grows from frame to frame, sidebar and artifact panel keep their default width, no control sticks out of the window or across a panel edge, no two controls of one row lie on each other. Rows with trailing buttons use `widgets::field_then_buttons` (buttons first, the field takes the rest), never `available_width() - N` | `layout_gate_modern`, `layout_gate_glas`, `layout_gate_omarchy` (ui, `tests/layout_gate.rs`; `AisCraftApp::panel_layout`) |
+| UI tests don't depend on load or on each other | No process-wide state the UI reads per frame: each app has its own Omarchy theme source (`theme::OmarchyTheme`, tests pass theirs through `common::app`), and toasts and the theme watcher count egui's input time, not the wall clock. `cargo test -p aiscraft-ui --test ui_flows --no-run`, then `seq 1 16 \| xargs -P 8` over the test binary (and `layout_gate`): 0 failures | `each_app_reads_its_own_omarchy_theme` (ui, `tests/ui_flows.rs`); the stress run before a change to the UI tests |
 | Never crash on hostile input | Caps on every size, no panics | workspace lints, panic hunt |
 | Tests stay off the desktop | No windows, browser, mic or speakers | rule 2.4, `browser_allowed` |
 
@@ -181,5 +182,16 @@ and push. If the user runs the app, reinstall it with `packaging/install.sh` (bi
 `~/.local/bin`, launcher entry and icons under `~/.local/share`) and restart it.
 
 Packaging: `packaging/install.sh` (per user, no sudo), `packaging/PKGBUILD` (Arch), the launcher
-entry `packaging/ai.uds.aischatcraft.desktop` and icons in `packaging/icons/` (the AIS.chat logo
+entry `packaging/linux/ai.uds.aischatcraft.desktop` and icons in `packaging/icons/` (the AIS.chat logo
 from FWU-DE/ais-chat on a white tile, rendered with `rsvg-convert`).
+
+Releases: set `[workspace.package] version` in `Cargo.toml`, commit, push a tag `v<version>`.
+`.github/workflows/release.yml` checks that tag against the version and calls the Craft suite's
+shared release workflow (`storytold/craft-common-actions`, `release.yml`), which runs our
+`packaging/linux/package.sh`, `packaging/linux/flatpak-bundle.sh`, `packaging/macos/package.sh` and
+`packaging/windows/package.ps1` and creates a draft release with `SHA256SUMS.txt`. Package names
+follow craft-update (`aischatcraft-<version>-<os>-<arch>.<ext>`); `update.rs` finds them with
+`pick_asset`. Windows (Azure Trusted Signing or a PFX) and macOS (Developer ID, notarization) are
+signed once their secrets are in the repository's `release` environment; the shared workflow signs
+Linux packages only on a `release` branch, so tag builds stay unsigned there. "Run workflow" on
+Release with dry-run builds everything except macOS and publishes nothing.

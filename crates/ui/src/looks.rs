@@ -32,7 +32,7 @@ impl AisCraftApp {
         let t = self.tokens.clone();
         let (look, mode) = self.current_look();
         // Omarchy only where there is an Omarchy desktop (or it is chosen already).
-        let with_omarchy = with_omarchy && (theme::omarchy_available() || look == Look::Omarchy);
+        let with_omarchy = with_omarchy && (self.omarchy_available || look == Look::Omarchy);
         let looks: Vec<_> = LOOKS.iter().filter(|(l, ..)| with_omarchy || *l != Look::Omarchy).collect();
         let n = looks.len() as f32;
         let gap = 12.0;
@@ -45,7 +45,9 @@ impl AisCraftApp {
             ui.spacing_mut().item_spacing.x = gap;
             for (l, name, line) in looks {
                 let preview = match l {
-                    Look::Omarchy => Some(t.clone()).filter(|t| t.look == Look::Omarchy).unwrap_or_else(|| theme::resolve("omarchy", dark, false)),
+                    Look::Omarchy => {
+                        Some(t.clone()).filter(|t| t.look == Look::Omarchy).unwrap_or_else(|| theme::resolve("omarchy", dark, false, &self.omarchy))
+                    }
                     l => theme::tokens(*l, dark),
                 };
                 if look_card(ui, &t, &preview, *l == look, name, line, w, cap_h).clicked() {

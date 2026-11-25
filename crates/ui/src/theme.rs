@@ -4,7 +4,7 @@
 //! colours. The values of Modern and Glas come from `design/build/themes.py`.
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::SystemTime;
 
 use egui::epaint::Shadow;
 use egui::{Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Stroke, TextStyle, Visuals};
@@ -803,8 +803,8 @@ pub fn tokens(look: Look, dark: bool) -> Tokens {
 }
 
 /// Which tokens to use for a `theme` setting (see [`parse`]); `solid` turns Glas' translucency
-/// off (setting `transparency` = "off").
-pub fn resolve(setting: &str, system_dark: bool, solid: bool) -> Tokens {
+/// off (setting `transparency` = "off"). Omarchy's colours come from `omarchy`.
+pub fn resolve(setting: &str, system_dark: bool, solid: bool, omarchy: &OmarchyTheme) -> Tokens {
     let (look, mode) = parse(setting);
     let dark = match mode {
         Mode::System => system_dark,
@@ -812,77 +812,85 @@ pub fn resolve(setting: &str, system_dark: bool, solid: bool) -> Tokens {
         Mode::Dark => true,
     };
     let t = match look {
-        Look::Omarchy => omarchy_colors().and_then(|c| Tokens::from_omarchy(&c)).unwrap_or_else(|| tokens(Look::Modern, dark)),
+        Look::Omarchy => omarchy.tokens().unwrap_or_else(|| tokens(Look::Modern, dark)),
         look => tokens(look, dark),
     };
     if solid { t.solid() } else { t }
 }
 
-/// A theme directory set by the program itself (tests): `Some(dir)` replaces the desktop's,
-/// even when `dir` does not exist.
-static OMARCHY_OVERRIDE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+/// Where an app reads the Omarchy desktop theme (`colors.toml`) from. Each app has its own, so
+/// nothing a test sets for one app changes another app running at the same time (a global
+/// directory once let one UI test reshape the welcome dialog under another test's click, #71).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OmarchyTheme {
+    dir: Option<PathBuf>,
+}
 
-/// Use this Omarchy theme directory instead of the desktop's (tests, offscreen pictures); `None`
-/// goes back to the desktop's.
-pub fn set_omarchy_dir(dir: Option<PathBuf>) {
-    if let Ok(mut d) = OMARCHY_OVERRIDE.lock() {
-        *d = dir;
+impl OmarchyTheme {
+    /// The desktop's theme: `AISCRAFT_OMARCHY_THEME` (offscreen snapshots) or
+    /// `~/.local/state/omarchy/current/theme`.
+    pub fn desktop() -> Self {
+        let dir = std::env::var_os("AISCRAFT_OMARCHY_THEME")
+            .map(PathBuf::from)
+            .filter(|d| d.is_dir())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state/omarchy/current/theme")));
+        Self { dir }
+    }
+
+    /// The theme in this directory (tests); a directory that does not exist means no Omarchy.
+    pub fn at(dir: impl Into<PathBuf>) -> Self {
+        Self { dir: Some(dir.into()) }
+    }
+
+    /// No Omarchy theme, whatever the desktop has (tests).
+    pub fn none() -> Self {
+        Self { dir: None }
+    }
+
+    fn colors_file(&self) -> Option<PathBuf> {
+        self.dir.as_ref().filter(|d| d.is_dir()).map(|d| d.join("colors.toml"))
+    }
+
+    /// The tokens of the theme, if there is a readable one.
+    pub fn tokens(&self) -> Option<Tokens> {
+        std::fs::read_to_string(self.colors_file()?).ok().and_then(|c| Tokens::from_omarchy(&c))
+    }
+
+    /// Whether there is an Omarchy theme to follow.
+    pub fn available(&self) -> bool {
+        self.tokens().is_some()
+    }
+
+    /// When `colors.toml` last changed (`None`: no theme).
+    fn stamp(&self) -> Option<SystemTime> {
+        std::fs::metadata(self.colors_file()?).and_then(|m| m.modified()).ok()
     }
 }
 
-/// Whether an Omarchy desktop theme is there to follow.
-pub fn omarchy_available() -> bool {
-    omarchy_colors().and_then(|c| Tokens::from_omarchy(&c)).is_some()
-}
-
-fn omarchy_dir() -> Option<PathBuf> {
-    if let Some(dir) = OMARCHY_OVERRIDE.lock().ok().and_then(|d| d.clone()) {
-        return dir.is_dir().then_some(dir);
-    }
-    // Another theme directory for offscreen snapshots, without touching the desktop's theme.
-    if let Some(dir) = std::env::var_os("AISCRAFT_OMARCHY_THEME").map(PathBuf::from).filter(|d| d.is_dir()) {
-        return Some(dir);
-    }
-    let home = std::env::var_os("HOME")?;
-    let dir = PathBuf::from(home).join(".local/state/omarchy/current/theme");
-    dir.is_dir().then_some(dir)
-}
-
-fn omarchy_colors() -> Option<String> {
-    std::fs::read_to_string(omarchy_dir()?.join("colors.toml")).ok()
-}
-
-/// Notices when the desktop theme changes, checking at most every two seconds.
+/// Notices when the desktop theme changes, looking at most every two seconds of egui's clock
+/// (the input time, which the test harness advances per frame, never the wall clock).
 pub struct ThemeWatcher {
-    last_check: Instant,
+    theme: OmarchyTheme,
+    last_check: f64,
     stamp: Option<SystemTime>,
 }
 
 impl ThemeWatcher {
-    pub fn new() -> Self {
-        Self { last_check: Instant::now(), stamp: Self::stamp() }
+    pub fn new(theme: OmarchyTheme) -> Self {
+        let stamp = theme.stamp();
+        Self { theme, last_check: 0.0, stamp }
     }
 
-    fn stamp() -> Option<SystemTime> {
-        let dir = omarchy_dir()?;
-        std::fs::metadata(dir.join("colors.toml")).and_then(|m| m.modified()).ok()
-    }
-
-    pub fn changed(&mut self) -> bool {
-        if self.last_check.elapsed() < Duration::from_secs(2) {
+    /// Whether `colors.toml` changed since the last look; `now` is egui's input time in seconds.
+    pub fn changed(&mut self, now: f64) -> bool {
+        if (now - self.last_check).abs() < 2.0 {
             return false;
         }
-        self.last_check = Instant::now();
-        let now = Self::stamp();
-        let changed = now != self.stamp;
-        self.stamp = now;
+        self.last_check = now;
+        let stamp = self.theme.stamp();
+        let changed = stamp != self.stamp;
+        self.stamp = stamp;
         changed
-    }
-}
-
-impl Default for ThemeWatcher {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -995,6 +1003,25 @@ mod tests {
     }
 
     #[test]
+    fn omarchy_theme_comes_from_its_own_directory_and_the_watcher_counts_egui_time() {
+        let dir = std::env::temp_dir().join(format!("aiscraft-omarchy-unit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("colors.toml"), "background = \"#1e1e2e\"\nforeground = \"#cdd6f4\"\naccent = \"#89b4fa\"\n").unwrap();
+        let theme = OmarchyTheme::at(&dir);
+        assert!(theme.available());
+        assert_eq!(resolve("omarchy", false, false, &theme).look, Look::Omarchy);
+        assert!(!OmarchyTheme::none().available());
+        assert!(!OmarchyTheme::at(dir.join("fehlt")).available());
+        assert_eq!(resolve("omarchy", false, false, &OmarchyTheme::none()).look, Look::Modern, "no theme: Modern");
+        let mut watcher = ThemeWatcher::new(theme);
+        assert!(!watcher.changed(0.5), "nothing changed");
+        std::fs::remove_file(dir.join("colors.toml")).unwrap();
+        assert!(!watcher.changed(1.0), "not before two seconds of egui time, however long the wall clock took");
+        assert!(watcher.changed(2.5), "after two seconds of egui time");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn theme_settings_round_trip() {
         for look in [Look::Modern, Look::Glas] {
             for mode in [Mode::System, Mode::Light, Mode::Dark] {
@@ -1008,10 +1035,10 @@ mod tests {
         assert_eq!(parse("whatever"), (Look::Modern, Mode::System));
         assert_eq!(parse("mutig-dark"), (Look::Modern, Mode::Dark), "the early name still works");
         assert_eq!(parse(""), (Look::Modern, Mode::System));
-        let t = resolve("glas-dark", false, false);
+        let t = resolve("glas-dark", false, false, &OmarchyTheme::none());
         assert!(t.dark && t.look == Look::Glas && t.glass.is_some());
-        assert!(!resolve("modern", false, false).dark);
-        assert!(resolve("modern", true, false).dark);
+        assert!(!resolve("modern", false, false, &OmarchyTheme::none()).dark);
+        assert!(resolve("modern", true, false, &OmarchyTheme::none()).dark);
     }
 
     /// The design values from design/build/themes.py arrive unchanged.

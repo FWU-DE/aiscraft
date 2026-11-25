@@ -1,0 +1,3 @@
+# shellcheck config for the packaging scripts: `cd packaging && shellcheck -x **/*.sh`.
+source-path=SCRIPTDIR
+external-sources=true

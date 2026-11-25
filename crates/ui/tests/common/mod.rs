@@ -4,9 +4,21 @@
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 use aiscraft_ui::AisCraftApp;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 pub type Harness = egui_kittest::Harness<'static, AisCraftApp>;
+
+/// The app as the tests open it: no Omarchy theme, whatever the desktop has, unless a test gives
+/// one. Each app has its own theme source, so tests running side by side can't change each
+/// other's screen (#71).
+pub fn app(
+    cc: &eframe::CreationContext<'_>,
+    engine: &aiscraft_engine::Engine,
+    control: Option<std::sync::mpsc::Receiver<aiscraft_ui::UiRequest>>,
+    omarchy: aiscraft_ui::theme::OmarchyTheme,
+) -> AisCraftApp {
+    AisCraftApp::new(cc, engine.clone(), control).with_omarchy_theme(omarchy)
+}
 
 /// Whether the control with this label is the chosen one (selected or toggled on).
 pub fn chosen(h: &egui_kittest::Harness<'static, AisCraftApp>, label: &str) -> bool {
@@ -27,7 +39,7 @@ pub fn step_until(h: &mut egui_kittest::Harness<'static, AisCraftApp>, what: &st
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    panic!("timed out waiting for: {what}");
+    panic!("timed out waiting for: {what}: {}", screen(h));
 }
 
 /// Draws frames until a widget with this label is there and has stopped moving, so a click hits
@@ -43,7 +55,7 @@ pub fn settled(h: &mut egui_kittest::Harness<'static, AisCraftApp>, label: &str)
         h.step();
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    panic!("„{label}“ did not settle");
+    panic!("„{label}“ did not settle: {}", screen(h));
 }
 
 /// Clicks `label` until `done` holds. Under heavy load (many test processes at once) a simulated
@@ -65,5 +77,14 @@ pub fn click_until(
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
-    panic!("clicking „{label}“ did not lead to: {what}");
+    panic!("clicking „{label}“ did not lead to: {what}: {}", screen(h));
+}
+
+/// Every labelled node with its rect, for failure messages: what was on screen instead.
+pub fn screen(h: &egui_kittest::Harness<'static, AisCraftApp>) -> String {
+    let labels: Vec<String> = h
+        .query_all(egui_kittest::kittest::By::new().predicate(|n| n.label().is_some()))
+        .map(|n| format!("{:?}@{:?}", n.accesskit_node().label().unwrap_or_default(), n.rect()))
+        .collect();
+    labels.join(" | ")
 }

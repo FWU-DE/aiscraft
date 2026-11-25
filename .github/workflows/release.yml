@@ -1,0 +1,87 @@
+name: Release
+
+# Release packages for every platform come from the Craft suite's shared workflow
+# (storytold/craft-common-actions, .github/workflows/release.yml), like the other Craft apps: our
+# packaging/ scripts build them, the shared jobs install WiX, nfpm and flatpak-builder, sign when
+# the secrets exist, write SHA256SUMS.txt and create the draft release. Asset names follow
+# craft-update's scheme, `aischatcraft-<version>-<os>-<arch>.<ext>`.
+#
+# A pushed tag `v<version>` releases; the tag must match `[workspace.package] version` in
+# Cargo.toml. "Run workflow" with dry-run builds everything except macOS and releases nothing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Build and check only: no signing, no macOS, no draft release"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The shared workflow names the release after Cargo.toml's version, not after the tag.
+  tag:
+    name: Tag matches Cargo.toml
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compare
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          . packaging/env.sh
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::Tag $TAG does not match the version in Cargo.toml (v$VERSION). Set [workspace.package] version, commit, and tag that commit."
+            exit 1
+          fi
+
+  release:
+    needs: tag
+    # Runs after `tag` passed, or without it on "Run workflow".
+    if: ${{ !cancelled() && (needs.tag.result == 'success' || needs.tag.result == 'skipped') }}
+    # The shared workflow creates the draft release (contents) and may push a Flatpak OCI image
+    # (packages).
+    permissions:
+      contents: write
+      packages: write
+    # Tracked at @main like every Craft app, so suite-wide fixes arrive without a pull request here.
+    uses: storytold/craft-common-actions/.github/workflows/release.yml@main
+    with:
+      app-name: aiscraft
+      app-title: AIS.ChatCraft
+      dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+      # Desktop only: no WebAssembly build, no FreeBSD and RISC-V builds (WebKitGTK, cross deps).
+      has-web: false
+      has-freebsd: false
+      has-riscv64: false
+      # The shared Arch package can't declare webkit2gtk-4.1 and gtk3; packaging/PKGBUILD does.
+      has-arch: false
+    # Signing is inactive until these exist in the repository's `release` environment: without
+    # them Windows and macOS builds are unsigned (with a warning). The shared workflow signs Linux
+    # packages only on a `release` branch, so tag builds stay unsigned there.
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+      AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}

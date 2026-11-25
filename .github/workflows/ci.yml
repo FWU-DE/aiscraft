@@ -1,11 +1,9 @@
 name: CI
 
-# Tests and builds AIS.ChatCraft on Linux, macOS and Windows. Every run uploads the release binaries
-# of all three as artifacts; a pushed tag `v*` also attaches them to a draft GitHub release.
+# Tests AIS.ChatCraft on Linux, macOS and Windows. Release packages: release.yml (tags `v*`).
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -16,7 +14,7 @@ env:
   # time and disk (Windows PDBs most of all).
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
-# A newer push to a pull request cancels its older run; runs on main and tags always finish.
+# A newer push to a pull request cancels its older run; runs on main always finish.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -75,90 +73,19 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
-  build:
-    name: build (${{ matrix.name }})
-    needs: test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: linux-x86_64, os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
-          - { name: macos-arm64, os: macos-15, target: aarch64-apple-darwin }
-          - { name: macos-x86_64, os: macos-15, target: x86_64-apple-darwin }
-          - { name: windows-x86_64, os: windows-2025, target: x86_64-pc-windows-msvc }
+  # The release scripts run only on tags (release.yml); check them on every push.
+  packaging:
+    name: packaging scripts
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Linux system packages
-        if: runner.os == 'Linux'
+      - name: Shell scripts
+        working-directory: packaging
+        run: shellcheck -x env.sh linux/*.sh macos/*.sh
+      - name: Desktop entry and AppStream data
         run: |
-          # A runner sometimes gets only some package lists (2026-11-24: only Microsoft's), and
-          # every install then fails with "Unable to locate package"; retry the whole step.
-          for i in 1 2 3; do
-            sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y --no-install-recommends \
-            pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev \
-            libgl1-mesa-dev libgtk-3-dev libasound2-dev libdbus-1-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev && break
-            echo "apt failed, retry $i"; sleep 15
-          done
-          dpkg -s libwebkit2gtk-4.1-dev libgtk-3-dev >/dev/null
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: release-${{ matrix.target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Build release binaries
-        run: cargo build --release --locked --target ${{ matrix.target }} -p aiscraft -p aiscraft-cli -p aiscraft-collab-server -p aiscraft-preview
-
-      - name: Package
-        shell: bash
-        env:
-          NAME: aischatcraft-${{ matrix.name }}
-          TARGET: ${{ matrix.target }}
-          OS: ${{ runner.os }}
-        run: bash packaging/ci-package.sh
-
-      - name: Smoke test
-        if: matrix.target != 'x86_64-apple-darwin'
-        shell: bash
-        run: |
-          ext=""; [ "$RUNNER_OS" = Windows ] && ext=".exe"
-          "target/${{ matrix.target }}/release/aiscraft-cli$ext" --version
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: aischatcraft-${{ matrix.name }}
-          path: dist/*
-          if-no-files-found: error
-
-  release:
-    name: draft release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - name: Checksums
-        working-directory: dist
-        run: sha256sum * > SHA256SUMS.txt
-      - name: Create or update the draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        working-directory: dist
-        run: |
-          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber -- *
-          else
-            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --draft --title "AIS.ChatCraft ${TAG#v}" --generate-notes -- *
-          fi
+          sudo apt-get update -o Acquire::Retries=3 && sudo apt-get install -y --no-install-recommends desktop-file-utils appstream libxml2-utils
+          desktop-file-validate packaging/linux/ai.uds.aischatcraft.desktop
+          sed -e 's/@VERSION@/0.0.0/' -e 's/@DATE@/2026-01-01/' packaging/linux/ai.uds.aischatcraft.metainfo.xml.in > /tmp/metainfo.xml
+          appstreamcli validate --no-net --explain /tmp/metainfo.xml
+          xmllint --noout packaging/macos/*.plist packaging/macos/Info.plist.in packaging/windows/aischatcraft.wxs

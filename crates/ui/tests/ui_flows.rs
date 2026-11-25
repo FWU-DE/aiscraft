@@ -6,6 +6,7 @@ mod common;
 
 use aiscraft_engine::{Engine, Options};
 use aiscraft_ui::AisCraftApp;
+use aiscraft_ui::theme::OmarchyTheme;
 use common::{chosen, click_until, settled, step_until};
 use egui_kittest::kittest::Queryable;
 
@@ -14,7 +15,7 @@ fn harness(engine: &Engine) -> egui_kittest::Harness<'static, AisCraftApp> {
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))
         .allow_missing_glyphs()
-        .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
+        .build_eframe(move |cc| common::app(cc, &e, None, OmarchyTheme::none()));
     h.run_steps(4);
     // Close the welcome dialog a fresh profile shows ("Später"), or the look question a profile
     // that is set up already shows once ("Fertig").
@@ -352,7 +353,7 @@ fn welcome_asks_for_the_look_once() {
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))
         .allow_missing_glyphs()
-        .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
+        .build_eframe(move |cc| common::app(cc, &e, None, OmarchyTheme::none()));
     h.run_steps(4);
     assert!(h.query_by_label("Willkommen bei AIS.ChatCraft").is_some(), "full welcome");
     assert_eq!(engine.state().settings.theme, "modern", "Modern, like the system, is preselected");
@@ -372,7 +373,7 @@ fn welcome_asks_for_the_look_once() {
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))
         .allow_missing_glyphs()
-        .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
+        .build_eframe(move |cc| common::app(cc, &e, None, OmarchyTheme::none()));
     h.run_steps(4);
     assert!(h.query_by_label("AIS.ChatCraft sieht jetzt neu aus").is_some(), "look step only");
     assert!(h.query_by_label("Willkommen bei AIS.ChatCraft").is_none());
@@ -394,7 +395,7 @@ fn welcome_asks_for_the_look_once() {
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))
         .allow_missing_glyphs()
-        .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
+        .build_eframe(move |cc| common::app(cc, &e, None, OmarchyTheme::none()));
     h.run_steps(4);
     assert!(h.query_by_label("AIS.ChatCraft sieht jetzt neu aus").is_none() && h.query_by_label("Willkommen bei AIS.ChatCraft").is_none());
 }
@@ -430,18 +431,17 @@ fn omarchy_card_only_with_an_omarchy_theme() {
     let dir = std::env::temp_dir().join(format!("aiscraft-omarchy-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("colors.toml"), "background = \"#1e1e2e\"\nforeground = \"#cdd6f4\"\naccent = \"#89b4fa\"\n").unwrap();
-    let open = |engine: &Engine| {
+    let open = |engine: &Engine, omarchy: OmarchyTheme| {
         let e = engine.clone();
         let mut h = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1280.0, 800.0))
             .allow_missing_glyphs()
-            .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), None));
+            .build_eframe(move |cc| common::app(cc, &e, None, omarchy.clone()));
         h.run_steps(4);
         h
     };
-    aiscraft_ui::theme::set_omarchy_dir(Some(dir.clone()));
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
-    let mut h = open(&engine);
+    let mut h = open(&engine, OmarchyTheme::at(&dir));
     assert!(h.query_by_label("Omarchy").is_some(), "card with an Omarchy theme");
     assert_eq!(engine.state().settings.theme, "modern", "Modern stays the default");
     h.get_by_label("Omarchy").click();
@@ -451,10 +451,34 @@ fn omarchy_card_only_with_an_omarchy_theme() {
     assert!(h.query_by_label("Wie das System").is_none(), "no scheme switch for Omarchy");
     assert!(h.query_by_label_contains("bestimmt das Omarchy-Theme").is_some(), "a hint instead");
 
-    aiscraft_ui::theme::set_omarchy_dir(Some(dir.join("fehlt")));
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
-    let h = open(&engine);
+    let h = open(&engine, OmarchyTheme::at(dir.join("fehlt")));
     assert!(h.query_by_label("Omarchy").is_none(), "no card without an Omarchy theme");
-    aiscraft_ui::theme::set_omarchy_dir(None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two apps side by side, one with an Omarchy theme and one without: each shows the welcome for
+/// its own theme source, also while the other runs. A process-wide theme directory once let one
+/// test reshape the welcome dialog under another test's click (#71).
+#[test]
+fn each_app_reads_its_own_omarchy_theme() {
+    let dir = std::env::temp_dir().join(format!("aiscraft-omarchy-own-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("colors.toml"), "background = \"#1e1e2e\"\nforeground = \"#cdd6f4\"\naccent = \"#89b4fa\"\n").unwrap();
+    let open = |omarchy: OmarchyTheme| {
+        let e = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+        egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .allow_missing_glyphs()
+            .build_eframe(move |cc| common::app(cc, &e, None, omarchy.clone()))
+    };
+    let mut with = open(OmarchyTheme::at(&dir));
+    let mut without = open(OmarchyTheme::none());
+    for _ in 0..4 {
+        with.step();
+        without.step();
+        assert!(with.query_by_label("Omarchy").is_some(), "the card where the app has a theme");
+        assert!(without.query_by_label("Omarchy").is_none(), "no card where it has none");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }

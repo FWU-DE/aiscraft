@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: packaging/macos/package.sh substitutes @VERSION@ (full, e.g. 0.2.0-rc.1),
+     @SHORT_VERSION@ (numeric X.Y.Z) and @BUILD_SHA@. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>de</string>
+  <key>CFBundleDisplayName</key>
+  <string>AIS.ChatCraft</string>
+  <key>CFBundleName</key>
+  <string>AIS.ChatCraft</string>
+  <key>CFBundleExecutable</key>
+  <string>aiscraft</string>
+  <key>CFBundleIdentifier</key>
+  <string>ai.uds.aischatcraft</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleSignature</key>
+  <string>????</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@SHORT_VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@SHORT_VERSION@</string>
+  <key>AISChatCraftVersion</key>
+  <string>@VERSION@</string>
+  <key>AISChatCraftBuildCommit</key>
+  <string>@BUILD_SHA@</string>
+  <key>CFBundleIconFile</key>
+  <string>AIS.ChatCraft</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.education</string>
+  <!-- Must match MACOSX_DEPLOYMENT_TARGET in package.sh. -->
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+  <key>NSRequiresAquaSystemAppearance</key>
+  <false/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Für die Spracheingabe im Chat.</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>AIS.ChatCraft, MIT OR Apache-2.0.</string>
+</dict>
+</plist>

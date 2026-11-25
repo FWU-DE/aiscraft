@@ -24,13 +24,24 @@ const DAY_MS: i64 = 24 * 3600 * 1000;
 /// Release notes kept in the state (the full text is on the release page).
 const MAX_NOTES: usize = 4000;
 
-/// AIS.ChatCraft as craft-update knows it. The asset stem is `aischatcraft`
-/// (`aischatcraft-linux-x86_64.tar.gz` …), which a later self-update would look for.
+/// The first part of every release package's name (`aischatcraft-0.2.0-windows-x64.msi`).
+pub(crate) const ASSET_STEM: &str = "aischatcraft";
+
+/// AIS.ChatCraft as craft-update knows it; a later self-update looks for packages named after
+/// [`ASSET_STEM`].
 static APP: craft_update::App = craft_update::App {
     developer: "FWU",
     bundle_id_override: Some("ai.uds.aischatcraft"),
-    ..craft_update::App::new("aischatcraft", "AIS.ChatCraft", "Native client for AIS.chat", REPO)
+    ..craft_update::App::new(ASSET_STEM, "AIS.ChatCraft", "Native client for AIS.chat", REPO)
 };
+
+/// When this program was started as craft-update's restart helper (Windows: it waits for the
+/// old copy to exit, runs the new MSI or unpacks the portable zip, then starts the app), does that
+/// and returns its result; `None` for a normal start. `args` without the program name. Called first
+/// thing in `main`; elsewhere and on other systems it is always `None`.
+pub fn finish_update_helper(args: &[std::ffi::OsString]) -> Option<std::result::Result<(), String>> {
+    craft_update::self_update::finish(&APP, args)
+}
 
 /// Where an engine gets its release list from.
 #[derive(Debug, Clone, Default)]
@@ -153,20 +164,13 @@ fn info(r: &craft_update::Release) -> UpdateInfo {
     }
 }
 
-/// The CI asset for this computer (`aischatcraft-linux-x86_64.tar.gz` …), if the release has it.
+/// This computer's package in the release, named after craft-update's scheme
+/// (`aischatcraft-<version>-<os>-<arch>.<ext>`, see packaging/): on Windows the MSI, else the
+/// portable zip; on macOS the DMG; on Linux the AppImage, else deb, rpm, Flatpak or tarball.
 /// craft-update only keeps assets whose link is the repository's own release download.
 fn platform_asset(r: &craft_update::Release) -> Option<String> {
-    let os = if cfg!(target_os = "macos") {
-        "macos"
-    } else if cfg!(windows) {
-        "windows"
-    } else {
-        "linux"
-    };
-    let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "x86_64" };
-    let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
-    let name = format!("aischatcraft-{os}-{arch}.{ext}");
-    r.assets.iter().find(|a| a.name == name).map(|a| a.url.clone())
+    let platform = craft_update::Platform::current()?;
+    craft_update::pick_asset(r, &[ASSET_STEM], platform, platform.download_kinds()).map(|(a, _)| a.url.clone())
 }
 
 /// Check now. `background`: only when switched on and a day after the last check, and errors
@@ -309,6 +313,34 @@ mod unit {
         assert!(offer(Some(i("99.0.0")), Some("99.0.0")).is_none(), "skipped");
         assert!(offer(Some(i("99.1.0")), Some("99.0.0")).is_some(), "newer than the skipped one");
         assert!(offer(Some(i("0.0.1")), None).is_none(), "older than this build");
+    }
+
+    #[test]
+    fn packages_are_found_by_craft_update_names_only() {
+        let release = |names: &[&str]| craft_update::Release {
+            assets: names.iter().map(|n| craft_update::Asset { name: (*n).into(), size: 1, url: format!("https://x/{n}"), sha256: None }).collect(),
+            ..Default::default()
+        };
+        // The names before #58 carry no version: no package, the hint links the release page.
+        assert_eq!(platform_asset(&release(&["aischatcraft-linux-x86_64.tar.gz", "aischatcraft-windows-x86_64.zip", "aischatcraft-macos-arm64.tar.gz"])), None);
+        let all = release(&[
+            "aischatcraft-0.2.0-linux-x86_64.tar.gz",
+            "aischatcraft-0.2.0-linux-x86_64.AppImage",
+            "aischatcraft-0.2.0-linux-aarch64.AppImage",
+            "aischatcraft-0.2.0-macos-universal.dmg",
+            "aischatcraft-cli-0.2.0-macos-universal.zip",
+            "aischatcraft-0.2.0-windows-x64-portable.zip",
+            "aischatcraft-0.2.0-windows-x64.msi",
+            "SHA256SUMS.txt",
+        ]);
+        let found = platform_asset(&all).unwrap_or_default();
+        if cfg!(windows) {
+            assert!(found.ends_with("windows-x64.msi"), "{found}");
+        } else if cfg!(target_os = "macos") {
+            assert!(found.ends_with("macos-universal.dmg"), "{found}");
+        } else if cfg!(target_arch = "x86_64") {
+            assert!(found.ends_with("linux-x86_64.AppImage"), "{found}");
+        }
     }
 
     #[test]
