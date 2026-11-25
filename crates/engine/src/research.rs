@@ -381,13 +381,7 @@ async fn finish(c: &Ctx, id: &str, question: &str, origin: Option<String>, out: 
     };
     match result {
         Ok((artifact, sources)) => {
-            update_run(c, id, |r| {
-                r.status = "done".into();
-                r.step = format!("Fertig: {} Quellen", sources.len());
-                r.sources = sources.clone();
-                r.artifact_id = Some(artifact.clone());
-                r.done = r.total;
-            });
+            // The chat and the inbox hear about it first: once the run says done, everything is there.
             if let Some(origin) = origin {
                 note_in_chat(c, &origin, &format!("**Recherche „{short}“ ist fertig.** Der Bericht mit {} Quellen liegt als Dokument bereit.", sources.len()));
             }
@@ -398,6 +392,13 @@ async fn finish(c: &Ctx, id: &str, question: &str, origin: Option<String>, out: 
                 &format!("„{short}“ ist fertig"),
                 Some(NoticeAction { label: "Bericht öffnen".into(), command: "artifact.open".into(), params: json!({"id": artifact}) }),
             );
+            update_run(c, id, |r| {
+                r.status = "done".into();
+                r.step = format!("Fertig: {} Quellen", sources.len());
+                r.sources = sources.clone();
+                r.artifact_id = Some(artifact.clone());
+                r.done = r.total;
+            });
         }
         Err(e) => {
             let (status, text) = if was_stopped || e.kind == aiscraft_core::ErrorKind::Cancelled {
@@ -405,14 +406,14 @@ async fn finish(c: &Ctx, id: &str, question: &str, origin: Option<String>, out: 
             } else {
                 ("failed", e.message.clone())
             };
+            if status == "failed" {
+                crate::inbox::notify(c, NoticeLevel::Error, "Recherche", &format!("„{short}“ ist gescheitert: {text}"), None);
+            }
             update_run(c, id, |r| {
                 r.status = status.into();
                 r.step = text.clone();
                 r.error = (status == "failed").then(|| text.clone());
             });
-            if status == "failed" {
-                crate::inbox::notify(c, NoticeLevel::Error, "Recherche", &format!("„{short}“ ist gescheitert: {text}"), None);
-            }
         }
     }
 }
