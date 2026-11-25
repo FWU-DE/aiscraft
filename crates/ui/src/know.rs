@@ -30,6 +30,10 @@ pub enum KnowDialog {
         tool: Option<String>,
         args: Vec<(String, String)>,
     },
+    Research {
+        question: String,
+        search: String,
+    },
 }
 
 impl KnowDialog {
@@ -309,6 +313,32 @@ impl AisCraftApp {
                     keep = false;
                 }
             }
+            KnowDialog::Research { question, search } => {
+                ui.heading("Recherche");
+                ui.label(small_muted(&t, "Mehrere Suchen, viele Quellen, ein Bericht als Dokument mit Quellenverzeichnis. Läuft im Hintergrund."));
+                ui.add_space(6.0);
+                ui.add(egui::TextEdit::multiline(question).hint_text("Worüber soll ich recherchieren?").desired_rows(3).desired_width(f32::INFINITY));
+                ui.add_space(6.0);
+                ui.label("Suchdienst (SearXNG, freiwillig)");
+                ui.add(egui::TextEdit::singleline(search).hint_text("https://suche.example.org").desired_width(f32::INFINITY));
+                ui.label(small_muted(&t, "Ohne Suchdienst nutzt die Recherche die Websuche des Dienstes (Claude API, AIS.chat)."));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!question.trim().is_empty(), egui::Button::new("Recherche starten")).clicked() {
+                        if search.trim() != self.state.research.search_url
+                            && let Err(e) = self.engine.call("research.set_search", json!({"url": search.trim()}))
+                        {
+                            self.engine.ctx().notice(aiscraft_engine::NoticeLevel::Error, e.message);
+                            return;
+                        }
+                        self.run("research.start", json!({"question": question}));
+                        keep = false;
+                    }
+                    if ui.button("Abbrechen").clicked() {
+                        keep = false;
+                    }
+                });
+            }
         }
         keep
     }
@@ -378,10 +408,55 @@ impl AisCraftApp {
         });
     }
 
+    /// The voice mode while it runs (#40), and research in the background (#37), above the field.
+    pub(crate) fn composer_bars(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        let runs: Vec<aiscraft_engine::research::Run> = self.state.research.runs.iter().take(3).cloned().collect();
+        for run in runs {
+            ui.horizontal(|ui| {
+                let ((), action) = crate::widgets::field_then_buttons(
+                    ui,
+                    |ui| -> Option<(&'static str, Value)> {
+                        if run.status == "running" {
+                            return ui.small_button("Abbrechen").clicked().then(|| ("research.stop", json!({"id": run.id})));
+                        }
+                        let mut out = None;
+                        if ui.small_button("×").on_hover_text("Ausblenden").clicked() {
+                            out = Some(("research.dismiss", json!({"id": run.id})));
+                        }
+                        if let Some(a) = &run.artifact_id
+                            && ui.small_button("Bericht öffnen").clicked()
+                        {
+                            self.run("research.dismiss", json!({"id": run.id}));
+                            out = Some(("artifact.open", json!({"id": a})));
+                        }
+                        out
+                    },
+                    |ui, w| {
+                        let q: String = run.question.chars().take(50).collect();
+                        let step = if run.status == "running" && run.total > 0 {
+                            format!("{} ({}/{})", run.step, run.done.min(run.total), run.total)
+                        } else {
+                            run.step.clone()
+                        };
+                        ui.add_sized([w.max(40.0), 20.0], egui::Label::new(small_muted(&t, format!("Recherche „{q}“: {step}"))).truncate());
+                    },
+                );
+                if let Some((cmd, p)) = action {
+                    self.run(cmd, p);
+                }
+            });
+            if run.status == "running" {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
+            }
+        }
+    }
+
     /// `ui.show` targets of this file; `false` when `what` is none of them.
     pub(crate) fn show_know(&mut self, what: &str) -> bool {
         use crate::dialogs::Dialog;
         let d = match what {
+            "research" => KnowDialog::Research { question: String::new(), search: self.state.research.search_url.clone() },
             "connector_insert" => KnowDialog::Connector { tool: None, args: Vec::new() },
             "template_new" => KnowDialog::edit_template(None),
             w if w.starts_with("template:") => match self.state.templates.iter().find(|t| Some(t.id.as_str()) == w.strip_prefix("template:")) {

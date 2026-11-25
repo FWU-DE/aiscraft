@@ -1391,6 +1391,7 @@ impl AisCraftApp {
             {
                 ui.label(small_muted(&t, format!("📄 {} geht als Kontext mit", a.title)));
             }
+            self.composer_bars(ui);
             if !image_mode {
                 self.privacy_preview(ui);
             }

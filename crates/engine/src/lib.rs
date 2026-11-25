@@ -26,6 +26,7 @@ pub mod privacy;
 mod proactive;
 pub mod quick;
 pub mod readability;
+pub mod research;
 mod schedules;
 mod secrets;
 mod skills;
@@ -140,6 +141,7 @@ pub(crate) struct Inner {
     tools: tools::ToolRuntime,
     bridge: bridge::Bridge,
     voice: voice::Voice,
+    research: research::Stops,
     #[cfg(feature = "collab")]
     collab: collab::Hub,
     /// Copies of attached files, so they stay readable for later requests.
@@ -230,6 +232,7 @@ impl Engine {
             tools: Default::default(),
             bridge: Default::default(),
             voice: Default::default(),
+            research: Default::default(),
             #[cfg(feature = "collab")]
             collab: Default::default(),
             browser_allowed: opts.data_dir.is_some() && std::env::var_os("AISCRAFT_NO_BROWSER").is_none(),
@@ -285,7 +288,9 @@ impl Engine {
             let inbox = inbox::load(&engine.ctx);
             let templates = templates::load(&engine.ctx);
             let project_files = knowledge::load(&engine.ctx);
+            let search_url = research::load(&engine.ctx);
             engine.ctx.update(|s| {
+                s.research.search_url = search_url;
                 s.templates = templates;
                 s.project_files = project_files;
                 s.schedules = schedules;

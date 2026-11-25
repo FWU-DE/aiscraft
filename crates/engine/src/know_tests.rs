@@ -311,3 +311,88 @@ fn project_knowledge_is_citable_for_claude() {
     assert!(crate::knowledge::pick(engine.ctx(), &again, "Igel", false).is_some(), "services without a history get it every time");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// #37: research with a scripted model and a scripted search server (SearXNG): the plan's
+/// searches run, the pages are read, the report becomes a document with a list of sources, the
+/// progress is in the state, the starting chat and the inbox hear about it; stopping works; a
+/// service without a web search and without a search server is told what is missing.
+#[test]
+fn research_searches_reads_and_writes_a_report_with_sources() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    engine.allow_local_web().unwrap();
+    let base = Arc::new(Mutex::new(String::new()));
+    let b2 = base.clone();
+    let (url, seen) = scripted(&engine, move |line, body| {
+        let base = b2.lock().unwrap().clone();
+        if line.starts_with("GET /v1/models") {
+            return models();
+        }
+        if line.starts_with("GET /search") {
+            let hits = if line.contains("Nahrung") {
+                json!({"results": [{"title": "Was Igel fressen", "url": format!("{base}/nahrung"), "content": "Insekten"}, {"title": "Doppelt", "url": format!("{base}/schlaf")}]})
+            } else {
+                json!({"results": [{"title": "Igel im Winter", "url": format!("{base}/schlaf"), "content": "Winterschlaf"}, {"title": "Kaputt", "url": "javascript:alert(1)"}]})
+            };
+            return ("application/json".into(), hits.to_string().into_bytes());
+        }
+        if line.starts_with("GET /schlaf") {
+            return (
+                "text/html".into(),
+                b"<html><head><title>Igel im Winter</title></head><body><p>Igel halten von November bis Maerz Winterschlaf.</p></body></html>".to_vec(),
+            );
+        }
+        if line.starts_with("GET /nahrung") {
+            return ("text/html".into(), b"<html><body><p>Igel fressen Kaefer und Regenwuermer.</p></body></html>".to_vec());
+        }
+        if body.contains("Du planst eine Webrecherche") {
+            if body.contains("langsam") {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+            }
+            return sse("1. Igel Winterschlaf\n2. Igel Nahrung");
+        }
+        if body.contains("Recherchebericht") {
+            return sse("# Igel im Jahreslauf\n\nIgel schlafen im Winter [1] und fressen Käfer [2].");
+        }
+        sse("ok")
+    });
+    *base.lock().unwrap() = url.clone();
+    engine_at(&engine, &url);
+
+    let err = engine.call("research.start", json!({"question": "Was machen Igel?"})).unwrap_err();
+    assert!(err.message.contains("Suchdienst"), "{}", err.message);
+    assert!(engine.call("research.set_search", json!({"url": "ftp://x"})).is_err());
+    engine.call("research.set_search", json!({"url": url})).unwrap();
+    assert_eq!(engine.state().research.search_url, url);
+
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let origin = engine.state().current.clone().unwrap();
+    let id = engine.call("research.start", json!({"question": "Was machen Igel im Jahreslauf?"})).unwrap()["id"].as_str().unwrap().to_string();
+    assert!(engine.call("research.start", json!({"question": "  "})).is_err());
+    assert!(engine.wait_for(std::time::Duration::from_secs(20), |s| s.research.runs.iter().any(|r| r.id == id && r.status != "running")), "research ends");
+    let run = engine.state().research.runs.iter().find(|r| r.id == id).cloned().unwrap();
+    assert_eq!(run.status, "done", "{run:?}");
+    assert_eq!(run.sources.len(), 2, "two pages, the double and the bad link left out: {:?}", run.sources);
+    let doc = engine.call("artifact.get", json!({"id": run.artifact_id.clone().unwrap()})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(doc.starts_with("# Igel im Jahreslauf") && doc.contains("## Quellen") && doc.contains(&format!("({url}/schlaf)")), "{doc}");
+    assert!(engine.state().open_artifact.as_deref() != run.artifact_id.as_deref(), "no panel pushed open");
+    let searches: Vec<String> = seen.lock().unwrap().iter().filter(|s| s.line.starts_with("GET /search")).map(|s| s.line.clone()).collect();
+    assert_eq!(searches.len(), 2, "{searches:?}");
+    let write = posts(&seen, "/chat/completions").into_iter().find(|b| b.contains("Recherchebericht")).unwrap();
+    assert!(write.contains("November bis Maerz") && write.contains("Kaefer"), "the pages were read");
+    assert!(engine.state().inbox.iter().any(|i| i.text.contains("fertig")));
+    let msgs = engine.ctx().store(|st| st.messages(&origin)).unwrap();
+    assert!(msgs.last().unwrap().content.contains("Recherche"), "the starting chat hears about it");
+
+    // Stopping a running research.
+    let id2 = engine.call("research.start", json!({"question": "langsam: Igel"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("research.stop", json!({"id": id2})).unwrap();
+    assert!(engine.wait_for(std::time::Duration::from_secs(20), |s| s.research.runs.iter().any(|r| r.id == id2 && r.status != "running")));
+    assert_eq!(engine.state().research.runs.iter().find(|r| r.id == id2).unwrap().status, "stopped");
+    assert!(engine.call("research.stop", json!({"id": id2})).is_err(), "not running any more");
+    engine.call("research.dismiss", json!({"id": id})).unwrap();
+    assert!(engine.state().research.runs.iter().all(|r| r.id != id));
+    assert!(engine.call("artifact.get", json!({"id": run.artifact_id.clone().unwrap()})).is_ok(), "the report stays");
+    assert!(engine.call("research.dismiss", json!({"id": id})).is_err());
+    engine.call("research.set_search", json!({"url": ""})).unwrap();
+    assert!(engine.state().research.search_url.is_empty());
+}

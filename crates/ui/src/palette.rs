@@ -35,6 +35,7 @@ enum UiAction {
     Export,
     Search,
     Explore,
+    Research,
     ConnectorInsert,
     NewTemplate,
 }
@@ -96,6 +97,7 @@ impl AisCraftApp {
             Item::Ui { label: "Chat exportieren", group: "Chat", action: UiAction::Export },
             Item::Ui { label: "Alle Chats durchsuchen", group: "Suche", action: UiAction::Search },
             Item::Ui { label: "Assistenten, Dialogpartner & Lernszenarien entdecken", group: "AIS.chat", action: UiAction::Explore },
+            Item::Ui { label: "Recherche starten", group: "Chat", action: UiAction::Research },
             Item::Ui { label: "Konnektor-Ergebnis einfügen", group: "Konnektoren", action: UiAction::ConnectorInsert },
             Item::Ui { label: "Neue Vorlage", group: "Vorlage", action: UiAction::NewTemplate },
         ]);
@@ -206,6 +208,10 @@ impl AisCraftApp {
                 UiAction::Manual => self.manual = Some(Default::default()),
                 UiAction::Export => self.export_dialog(),
                 UiAction::Explore => self.open_explore(),
+                UiAction::Research => {
+                    self.dialog =
+                        Some(Dialog::Know(crate::know::KnowDialog::Research { question: String::new(), search: self.state.research.search_url.clone() }))
+                }
                 UiAction::ConnectorInsert => self.dialog = Some(Dialog::Know(crate::know::KnowDialog::Connector { tool: None, args: Vec::new() })),
                 UiAction::NewTemplate => self.dialog = Some(Dialog::Know(crate::know::KnowDialog::edit_template(None))),
                 UiAction::Search => {

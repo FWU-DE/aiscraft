@@ -71,6 +71,9 @@ pub struct State {
     /// The update check: running version, what the last check found.
     #[serde(default)]
     pub update: UpdateState,
+    /// Research in the background (#37).
+    #[serde(default)]
+    pub research: crate::research::ResearchState,
     /// Templates for recurring tasks (#54).
     #[serde(default)]
     pub templates: Vec<crate::templates::Template>,

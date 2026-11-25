@@ -217,9 +217,13 @@ pub(crate) async fn create(c: Ctx, p: Value) -> Result<Value> {
         Ok(())
     })?;
     let id = a.id.clone();
+    // Work in the background (research, #37) does not push a panel open.
+    let open = p.get("open").and_then(Value::as_bool).unwrap_or(true);
     c.update(|s| {
         s.artifacts.insert(0, a);
-        s.open_artifact = Some(id.clone());
+        if open {
+            s.open_artifact = Some(id.clone());
+        }
         s.artifact_rev = s.artifact_rev.wrapping_add(1);
     });
     Ok(json!({"id": id}))
