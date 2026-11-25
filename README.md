@@ -72,12 +72,11 @@ Fertige Pakete stehen unter [Releases](https://github.com/FWU-DE/aiscraft/releas
 | System | Datei |
 |---|---|
 | Windows | `aischatcraft-<version>-windows-x64.msi` (Installer) oder `…-windows-x64-portable.zip` (ohne Installation); für ARM-Geräte `arm64` |
-| macOS (Apple Silicon und Intel) | `aischatcraft-<version>-macos-universal.dmg`, die Kommandozeile in `aischatcraft-cli-<version>-macos-universal.zip` |
 | Linux | `.AppImage` (jede Distribution), `.deb` (Debian, Ubuntu, Mint), `.rpm` (Fedora, openSUSE), `.flatpak` oder `.tar.gz`, je für `x86_64` und `aarch64` |
 
-`SHA256SUMS.txt` im Release enthält die Prüfsummen. Solange die Pakete noch nicht signiert sind, warnt Windows (SmartScreen: „Weitere Informationen“ › „Trotzdem ausführen“) und macOS (beim ersten Start Rechtsklick › „Öffnen“).
+`SHA256SUMS.txt` im Release enthält die Prüfsummen. Die Pakete sind noch nicht signiert; Windows warnt deshalb beim ersten Start (SmartScreen: „Weitere Informationen“ › „Trotzdem ausführen“). Für macOS gibt es noch kein Paket.
 
-Aus dem Quellcode:
+Aus dem Quellcode (auch macOS):
 
 ```sh
 git clone https://github.com/FWU-DE/aiscraft && cd aiscraft
