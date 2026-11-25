@@ -3,8 +3,8 @@
 //! locally when the answer is shown, copied or exported. The pattern is LLM Guard's
 //! Anonymize/Vault/Deanonymize, like the vault's placeholders (`vault.rs`), in Rust.
 //!
-//! - Finding: class lists (per project or for all chats) and rules with checksums, see
-//!   [`detect`]. No model (stage c is an extension point there).
+//! - Finding: class lists (per project or for all chats), rules with checksums and common first
+//!   names with context rules (stage c without a model), see [`detect`] and [`common`].
 //! - The mapping placeholder → original lives per chat in the local database (settings key
 //!   `privacy.map.<chat>`), never in logs, never in the state agents read (`#[serde(skip)]`),
 //!   never in a request.
@@ -17,6 +17,7 @@
 //!   (a name that is also a word, a lower-case name, a date of school age) are replaced too:
 //!   privacy first (owner, 2026-11-24); the preview lets the person take single ones back.
 
+pub mod common;
 pub mod detect;
 #[cfg(test)]
 mod tests;
@@ -341,7 +342,7 @@ fn year() -> i32 {
 
 fn detector(c: &Ctx, project: Option<&str>, m: &Mapping, extra: &[String]) -> Detector {
     let manual: Vec<String> = m.manual.iter().chain(extra).cloned().collect();
-    Detector::new(&people_for(c, project), &m.known(), &manual, year())
+    Detector::new(&people_for(c, project), &m.known(), &manual, year()).with_common_names()
 }
 
 // ---- protecting -----------------------------------------------------------------------------
