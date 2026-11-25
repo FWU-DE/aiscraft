@@ -1198,7 +1198,17 @@ fn check_in_tool_answers_in_the_same_chat() {
         arguments: json!({"title": "Nachfragen", "prompt": "Hat Frau Yilmaz geantwortet?", "at": "in 2 Tagen"}),
         outcome: None,
     };
-    let (text, err, _) = engine.block_on(crate::tools::run(engine.ctx(), &conv, &call, &Default::default(), true));
+    // A schedule the model plans on its own needs the owner's yes.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (e2, c2, conv2) = (engine.clone(), call.clone(), conv.clone());
+    std::thread::spawn(move || {
+        let _ = tx.send(e2.block_on(crate::tools::run(e2.ctx(), &conv2, &c2, &Default::default(), true)));
+    });
+    assert!(engine.wait_for(Duration::from_secs(30), |s| !s.approvals.is_empty()));
+    assert!(engine.state().schedules.is_empty(), "nothing planned before the yes");
+    let id = engine.state().approvals[0].id.clone();
+    engine.call("tool.answer", json!({"id": id, "allow": true})).unwrap();
+    let (text, err, _) = rx.recv_timeout(Duration::from_secs(30)).unwrap();
     assert!(!err && text.starts_with("Geplant für"), "{text}");
     let s = engine.state();
     assert_eq!(s.schedules[0].conversation_id.as_deref(), Some(conv.as_str()));
