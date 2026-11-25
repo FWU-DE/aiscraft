@@ -176,6 +176,9 @@ pub(crate) async fn create(c: Ctx, p: Value) -> Result<Value> {
         ArtifactKind::Worksheet => {
             return crate::learn::ws_create_cmd(c, json!({"content": p.get("content"), "from_message": p.get("from_message"), "title": p.get("title")})).await;
         }
+        ArtifactKind::Board if opt_str(&p, "content").is_some_and(|t| t.trim_start().starts_with('{')) => {
+            return crate::learn::board::create_cmd(c, json!({"content": p.get("content"), "title": p.get("title")})).await;
+        }
         ArtifactKind::H5p => {
             return crate::learn::h5p::create_cmd(c, json!({"content": p.get("content"), "from_message": p.get("from_message"), "title": p.get("title")}))
                 .await;
@@ -309,8 +312,14 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
         return r;
     }
     let state = state_of(&c, &id)?;
-    let text = artifact_text(a.kind, &state)?;
     let format = opt_str(&p, "format").unwrap_or_else(|| "markdown".into());
+    let mut text = artifact_text(a.kind, &state)?;
+    // „Erstellt mit KI“ (#57) at the end of a handout; not in the board's own JSON.
+    if format != "json"
+        && let Some(note) = crate::ai_label::note_for_artifact(&c, &a)
+    {
+        text.push_str(&note.markdown());
+    }
     // Word and PDF are binary: written to `path`, or returned as base64.
     if let Some(bytes) = crate::office::document_bytes(&format, &a.title, &text) {
         let bytes = bytes?;
@@ -397,6 +406,9 @@ pub(crate) fn board_add_outline(c: &Ctx, id: &str, outline: &str) -> Result<usiz
     if outline.trim().is_empty() {
         return Err(Error::invalid("Die Gliederung ist leer"));
     }
+    // An `aiscraft-board` JSON block (#56) adds its cards as an outline.
+    let from_spec = outline.trim_start().starts_with('{').then(|| aiscraft_board::spec::parse_lenient(outline).ok()).flatten().map(|(s, _)| s.to_outline());
+    let outline = from_spec.as_deref().unwrap_or(outline);
     let mut board = Board::from_state(&state_of(c, id)?).map_err(|e| Error::invalid(format!("Whiteboard beschädigt: {e}")))?;
     let right = board.elements().iter().map(|e| e.x + e.w).fold(0.0_f64, f64::max);
     let ids = board.add_outline(&outline.chars().take(20_000).collect::<String>(), right + 400.0, 0.0);
@@ -435,7 +447,8 @@ pub fn change_blocks(answer: &str) -> Vec<(ArtifactKind, String)> {
         let content = body.get(..end).unwrap_or("").to_string();
         let kind = match lang {
             "aiscraft-dokument" | "aiscraft-document" => Some(ArtifactKind::Document),
-            "aiscraft-whiteboard" | "aiscraft-board" => Some(ArtifactKind::Board),
+            // A JSON block is the whiteboard format (#56, its own card), not points to add.
+            "aiscraft-whiteboard" | "aiscraft-board" if !content.trim_start().starts_with('{') => Some(ArtifactKind::Board),
             _ => None,
         };
         if let Some(k) = kind

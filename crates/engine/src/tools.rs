@@ -213,7 +213,7 @@ async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<Stri
 /// Creating a file in the app's own data folder changes nothing of the person's, so it runs
 /// without asking; saving it elsewhere is the person's save dialog.
 fn run_file_tool(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<String>> {
-    let r = crate::office::run_tool(c, &call.name, &call.arguments)?;
+    let r = crate::office::run_tool(c, &call.name, &call.arguments).or_else(|| crate::learn::calendar::run_tool(c, &call.name, &call.arguments))?;
     Some(r.map(|(text, file)| {
         c.0.tools.files.lock().unwrap_or_else(PoisonError::into_inner).entry(conv.to_string()).or_default().push(file);
         text

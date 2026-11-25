@@ -709,6 +709,7 @@ impl AisCraftApp {
                     crate::markup::Segment::App(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::App, src),
                     crate::markup::Segment::Worksheet(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::Worksheet, src),
                     crate::markup::Segment::H5p(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::H5p, src),
+                    crate::markup::Segment::Board(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::Board, src),
                     seg => {
                         if let Some(crate::markup::Action::Board(outline)) = crate::markup::show(ui, &mut self.md, &t, &seg, (&m.id, k)) {
                             self.run("artifact.create", json!({"kind": "board", "content": outline}));
@@ -778,7 +779,10 @@ impl AisCraftApp {
                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                 use crate::icons::Icon;
                 use crate::kit::{Pill, pill};
-                if pill(ui, &t, Pill::Ghost, Some(Icon::Copy), "Kopieren", 13.0, None).on_hover_text("Antwort in die Zwischenablage").clicked() {
+                let copy = pill(ui, &t, Pill::Ghost, Some(Icon::Copy), "Kopieren", 13.0, None)
+                    .on_hover_text("Antwort in die Zwischenablage; Rechtsklick: mit Kennzeichnung");
+                self.copy_menu(&copy, m);
+                if copy.clicked() {
                     ui.ctx().copy_text(m.content.clone());
                 }
                 if pill(ui, &t, Pill::Ghost, Some(Icon::Speaker), "Vorlesen", 13.0, None)
@@ -806,10 +810,12 @@ impl AisCraftApp {
                 {
                     self.run("message.check_links", json!({"message_id": m.id}));
                 }
+                self.answer_tools(ui, &t, m);
                 if is_last && crate::kit::icon_button(ui, &t, Icon::Refresh, "Neu erzeugen (Strg+R)", t.muted, 17.0, 32.0).clicked() {
                     self.run("chat.regenerate", json!({}));
                 }
             });
+            self.readability_line(ui, &t, m);
         } else if !generating && !m.content.is_empty() {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;

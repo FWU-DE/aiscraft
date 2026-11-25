@@ -17,6 +17,8 @@
 //! in the app's own data changes nothing of the person's, so these tools run without asking,
 //! like `document_create`.
 
+pub mod board;
+pub mod calendar;
 pub mod formats;
 pub mod h5p;
 pub mod print;
@@ -502,8 +504,8 @@ async fn app_open(c: Ctx, p: Value) -> Result<Value> {
 async fn app_save(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let path = req_str(&p, "path")?;
-    let (_, html) = app_of(&c, &id)?;
-    crate::disk::write(Path::new(&path), with_csp(&html).as_bytes())?;
+    let (a, html) = app_of(&c, &id)?;
+    crate::disk::write(Path::new(&path), labeled_app(&c, &a, &with_csp(&html)).as_bytes())?;
     c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
     Ok(json!({"path": path}))
 }
@@ -720,21 +722,25 @@ fn variant(p: &Value) -> print::Variant {
 }
 
 /// Bytes of a worksheet export: (bytes, extension).
-pub(crate) fn worksheet_bytes(ws: &Worksheet, format: &str, v: print::Variant) -> Result<(Vec<u8>, &'static str)> {
+/// A worksheet as a file; `note`: Markdown put under the sheet („Erstellt mit KI“, #57), not
+/// into the JSON.
+pub(crate) fn worksheet_bytes(ws: &Worksheet, format: &str, v: print::Variant, note: &str) -> Result<(Vec<u8>, &'static str)> {
+    let md = || format!("{}{note}", print::worksheet_markdown(ws, v));
+    let title = format!("{} ({})", ws.title, v.label());
     Ok(match format {
-        "pdf" => (print::worksheet_pdf(ws, v)?, "pdf"),
-        "docx" | "word" => (print::worksheet_docx(ws, v)?, "docx"),
+        "pdf" => (crate::office::pdf::markdown_pdf(&title, &md())?, "pdf"),
+        "docx" | "word" => (crate::office::markdown_docx(&title, &md())?, "docx"),
         "json" => (worksheet::to_json(ws).into_bytes(), "json"),
-        "markdown" | "md" => (print::worksheet_markdown(ws, v).into_bytes(), "md"),
+        "markdown" | "md" => (md().into_bytes(), "md"),
         other => return Err(Error::invalid(format!("Format {other} gibt es für Arbeitsblätter nicht (pdf, docx, json, markdown)"))),
     })
 }
 
 async fn ws_export(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
-    let (_, ws, _) = worksheet_of(&c, &id)?;
+    let (a, ws, _) = worksheet_of(&c, &id)?;
     let format = opt_str(&p, "format").unwrap_or_else(|| "pdf".into());
-    let (bytes, _) = worksheet_bytes(&ws, &format, variant(&p))?;
+    let (bytes, _) = worksheet_bytes(&ws, &format, variant(&p), &note_md(&c, &a))?;
     if let Some(path) = opt_str(&p, "path") {
         crate::disk::write(Path::new(&path), &bytes)?;
         c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
@@ -751,11 +757,24 @@ async fn ws_print(c: Ctx, p: Value) -> Result<Value> {
         return Err(Error::unsupported("In dieser Umgebung öffnet AIS.ChatCraft keine anderen Programme (Tests, Skripte, AISCRAFT_NO_BROWSER)"));
     }
     let v = variant(&p);
-    let bytes = print::worksheet_pdf(&ws, v)?;
+    let (bytes, _) = worksheet_bytes(&ws, "pdf", v, &note_md(&c, &a))?;
     let named = Artifact { title: format!("{} {}", a.title, v.label()), ..a };
     let path = open_copy(&c, &named, "pdf", &bytes)?;
     system_open(&path)?;
     Ok(json!({"path": path.display().to_string()}))
+}
+
+/// The AI note (#57) of an artifact as Markdown to put under it; empty when the setting says no.
+fn note_md(c: &Ctx, a: &Artifact) -> String {
+    crate::ai_label::note_for_artifact(c, a).map(|n| n.markdown()).unwrap_or_default()
+}
+
+/// A learning app with the AI note (#57) as a footer before `</body>` (or at the end).
+fn labeled_app(c: &Ctx, a: &Artifact, html: &str) -> String {
+    let Some(note) = crate::ai_label::note_for_artifact(c, a) else { return html.to_string() };
+    let at = html.to_ascii_lowercase().rfind("</body>").unwrap_or(html.len());
+    let (head, tail) = html.split_at_checked(at).unwrap_or((html, ""));
+    format!("{head}{}\n{tail}", note.html())
 }
 
 /// `artifact.export` for learning apps and worksheets; `None` for other kinds.
@@ -763,11 +782,11 @@ pub(crate) fn export_for(c: &Ctx, a: &Artifact, p: &Value) -> Option<Result<Valu
     let format = opt_str(p, "format");
     let bytes: Result<Vec<u8>> = match a.kind {
         ArtifactKind::App => match format.as_deref().unwrap_or("html") {
-            "html" => app_of(c, &a.id).map(|(_, h)| with_csp(&h).into_bytes()),
+            "html" => app_of(c, &a.id).map(|(_, h)| labeled_app(c, a, &with_csp(&h)).into_bytes()),
             other => Err(Error::invalid(format!("Format {other} gibt es für Lern-Apps nicht (html)"))),
         },
         ArtifactKind::Worksheet => {
-            worksheet_of(c, &a.id).and_then(|(_, ws, _)| worksheet_bytes(&ws, format.as_deref().unwrap_or("pdf"), variant(p)).map(|(b, _)| b))
+            worksheet_of(c, &a.id).and_then(|(_, ws, _)| worksheet_bytes(&ws, format.as_deref().unwrap_or("pdf"), variant(p), &note_md(c, a)).map(|(b, _)| b))
         }
         ArtifactKind::H5p => h5p::export_bytes(c, a, format.as_deref()),
         _ => return None,
@@ -881,12 +900,14 @@ pub(crate) fn tool_specs(worksheet_points: bool) -> Vec<ToolSpec> {
         },
     ];
     specs.extend(h5p::tool_specs());
+    specs.extend(board::tool_specs());
+    specs.extend(calendar::tool_specs());
     specs
 }
 
 /// Runs one of the tools above; `None` when `name` is none of them.
 pub(crate) fn run_tool(c: &Ctx, name: &str, a: &Value) -> Option<Result<String>> {
-    if let Some(r) = h5p::run_tool(c, name, a) {
+    if let Some(r) = h5p::run_tool(c, name, a).or_else(|| board::run_tool(c, name, a)) {
         return Some(r);
     }
     let s = |k: &str| a.get(k).and_then(Value::as_str).unwrap_or("").to_string();

@@ -3,6 +3,7 @@
 //! lives here; everything else lives in the engine.
 
 mod action_log;
+mod answer_tools;
 mod app;
 mod approval;
 mod artifact_panel;
