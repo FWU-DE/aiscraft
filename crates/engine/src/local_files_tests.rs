@@ -51,7 +51,8 @@ fn secrets_hidden_folders_and_places_outside_are_always_refused() {
         "~/Dokumente/.env",
         "~/Dokumente/server.pem",
         "~/Library/Keychains",
-        "/etc/passwd",
+        // An absolute path outside the home folder (`/etc/passwd` is not absolute on Windows).
+        if cfg!(windows) { r"C:\Windows\win.ini" } else { "/etc/passwd" },
         "~/../outside/fremd.txt",
     ] {
         let e = resolve_existing(&p, bad).unwrap_err();
@@ -147,7 +148,9 @@ fn off_by_default_switched_on_by_a_question_in_the_chat_never_in_the_background(
     assert!(err && outcome == "denied");
 
     // Refused paths end without a question.
-    for bad in [json!({"path": "~/.ssh/id_ed25519"}), json!({"path": "~/Downloads/schluessel.txt"}), json!({"path": "~/Downloads/raus.txt"})] {
+    // The two links exist only where the test can make symlinks (Unix).
+    let links = if cfg!(unix) { vec![json!({"path": "~/Downloads/schluessel.txt"}), json!({"path": "~/Downloads/raus.txt"})] } else { vec![] };
+    for bad in std::iter::once(json!({"path": "~/.ssh/id_ed25519"})).chain(links) {
         let (text, err, _) = engine.block_on(crate::tools::run(&ctx, "conv", &call(READ, bad), &Default::default(), true));
         assert!(err && (text.contains("gesperrt") || text.contains("außerhalb")), "{text}");
     }
