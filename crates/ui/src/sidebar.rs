@@ -34,6 +34,8 @@ impl AisCraftApp {
                 ui.add_space(4.0);
                 self.artifacts_section(ui);
                 ui.add_space(4.0);
+                self.schedules_section(ui);
+                ui.add_space(4.0);
                 self.personas_section(ui);
                 self.chat_list(ui);
                 self.archive_links(ui);
@@ -415,6 +417,66 @@ impl AisCraftApp {
                     ui.close();
                 }
             });
+        }
+    }
+
+    /// Scheduled actions: always visible in the navigation, active ones by their next run.
+    /// A click opens the schedule's chat (or the settings page before its first run).
+    fn schedules_section(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        if self.heading(ui, "Zeitpläne", Some("Neuer Zeitplan")).is_some_and(|r| r.clicked()) {
+            self.dialog = Some(Dialog::AddSchedule { title: String::new(), prompt: String::new(), when: "0 7 * * 1-5".into(), recurring: true, watch: false });
+        }
+        let now = aiscraft_engine::now_ms();
+        let mut list: Vec<_> = self.state.schedules.iter().map(|s| (s.clone(), aiscraft_engine::schedule_next_run(s, now))).collect();
+        list.sort_by_key(|(s, next)| (!s.enabled || next.is_none(), next.unwrap_or(i64::MAX)));
+        if list.is_empty() {
+            empty_hint(ui, &t, "Noch keine Zeitpläne. Mit „+“ lässt du einen Auftrag regelmäßig oder einmal zu einer Zeit laufen.");
+            return;
+        }
+        const SHOWN: usize = 5;
+        for (s, next) in list.iter().take(SHOWN) {
+            let active = s.conversation_id.is_some() && self.state.current == s.conversation_id;
+            let when = match (s.enabled, next) {
+                (false, _) => "pausiert".to_string(),
+                (true, Some(n)) => format!("nächster Lauf {}", aiscraft_engine::format_local(*n)),
+                (true, None) => "kein weiterer Lauf".to_string(),
+            };
+            let label = if s.enabled { s.title.clone() } else { format!("{} (pausiert)", s.title) };
+            let r = self.entry(ui, Icon::Calendar, &label, active).on_hover_text(format!("{} · {when}", s.title));
+            if r.clicked() {
+                self.explore = None;
+                match &s.conversation_id {
+                    Some(c) => self.run("chat.open", json!({"id": c})),
+                    None => self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Schedules, new_note: String::new() }),
+                }
+            }
+            r.context_menu(|ui| {
+                if ui.button("Jetzt ausführen").clicked() {
+                    self.run("schedule.run", json!({"id": s.id}));
+                    ui.close();
+                }
+                if ui.button(if s.enabled { "Pausieren" } else { "Fortsetzen" }).clicked() {
+                    self.run("schedule.update", json!({"id": s.id, "enabled": !s.enabled}));
+                    ui.close();
+                }
+                if ui.button("Bearbeiten …").clicked() {
+                    self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Schedules, new_note: String::new() });
+                    ui.close();
+                }
+                if ui.button(RichText::new("Löschen").color(t.danger)).clicked() {
+                    self.dialog = Some(Dialog::Confirm {
+                        text: format!("Zeitplan „{}“ löschen?", s.title),
+                        command: "schedule.delete".into(),
+                        params: json!({"id": s.id}),
+                    });
+                    ui.close();
+                }
+            });
+        }
+        let label = if list.len() > SHOWN { format!("Alle Zeitpläne ({})", list.len()) } else { "Alle Zeitpläne".to_string() };
+        if self.entry(ui, Icon::Sliders, &label, false).on_hover_text("Zeitpläne verwalten").clicked() {
+            self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Schedules, new_note: String::new() });
         }
     }
 
