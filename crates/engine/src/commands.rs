@@ -497,6 +497,15 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("connector.remove", "Konnektor entfernen", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::remove(c, p))),
     cmd!("connector.toggle", "Konnektor ein/aus", "Konnektoren", None, "id: string, enabled: bool", false, |c, p| Box::pin(crate::tools::toggle(c, p))),
     cmd!("connector.refresh", "Konnektor neu verbinden", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::refresh(c, p))),
+    cmd!(
+        "connector.insert",
+        "Konnektor-Ergebnis einfügen",
+        "Konnektoren",
+        None,
+        "tool: string (Name aus tools.list), arguments?: {…} (von der Person geschrieben). Nur lesende Werkzeuge; das Ergebnis kommt zur Prüfung ins Eingabefeld und geht erst beim Senden mit",
+        false,
+        |c, p| Box::pin(crate::tools::insert(c, p))
+    ),
     cmd!("tool.answer", "Werkzeugaufruf erlauben oder ablehnen", "Konnektoren", None, "id: string, allow: bool", false, |c, p| Box::pin(crate::tools::answer(
         c, p
     ))),

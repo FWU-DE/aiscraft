@@ -958,6 +958,71 @@ pub(crate) async fn refresh(c: Ctx, p: Value) -> Result<Value> {
     Ok(json!({}))
 }
 
+/// Longest connector result put into the composer (#53), in characters.
+const MAX_INSERT_CHARS: usize = 20_000;
+
+/// `connector.insert` (#53): run a read-only connector tool with arguments the person wrote
+/// and put the result into the composer, for backends that call no tools themselves (AIS.chat).
+/// Nothing leaves the device until the person sends; „Namen schützen“ applies then as to any
+/// text. Tools that change something, vault values and work without a person never run here.
+pub(crate) async fn insert(c: Ctx, p: Value) -> Result<Value> {
+    let name = p.get("tool").and_then(Value::as_str).ok_or_else(|| Error::invalid("Parameter tool (Text) fehlt"))?.to_string();
+    let arguments = match p.get("arguments") {
+        None | Some(Value::Null) => serde_json::json!({}),
+        Some(v) if v.is_object() => v.clone(),
+        Some(_) => return Err(Error::invalid("arguments muss ein Objekt sein")),
+    };
+    if arguments.to_string().contains("{{vault:") {
+        return Err(Error::invalid("Tresor-Werte gehen hier nicht. Schreibe die Angaben selbst hinein."));
+    }
+    let (conn, tool) = c
+        .state()
+        .connectors
+        .iter()
+        .find_map(|x| x.tools.iter().find(|t| t.llm_name == name || t.name == name).map(|t| (x.clone(), t.clone())))
+        .ok_or_else(|| Error::not_found(format!("Werkzeug {name} gibt es nicht (Konnektor verbunden?)")))?;
+    if !conn.enabled {
+        return Err(Error::invalid(format!("{} ist ausgeschaltet", conn.name)));
+    }
+    if !tool.read_only {
+        return Err(Error::invalid(format!(
+            "{} kann etwas verändern. Hier laufen nur Werkzeuge, die nur lesen; Aktionen gehen mit Diensten, die Werkzeuge aufrufen (etwa Claude).",
+            if tool.title.is_empty() { &tool.name } else { &tool.title }
+        )));
+    }
+    let label = format!("{} · {}", conn.name, if tool.title.is_empty() { &tool.name } else { &tool.title });
+    let conv = c.state().current.clone().unwrap_or_default();
+    let detail = crate::action_log::summary(&arguments, &tool.input_schema, &[]);
+    let client = match client_for(&c, &conn.id).await {
+        Ok(cl) => cl,
+        Err(e) => {
+            crate::action_log::tool(&c, &conv, &label, detail, &crate::action_log::Why::ReadOnly, "error");
+            return Err(Error::network(format!("Konnektor {} nicht erreichbar: {}", conn.name, e.message)));
+        }
+    };
+    let res = client.call_tool(&tool.name, arguments).await;
+    let outcome = match &res {
+        Ok(r) if !r.is_error => "ok",
+        _ => "error",
+    };
+    crate::action_log::tool(&c, &conv, &label, detail, &crate::action_log::Why::ReadOnly, outcome);
+    let res = res?;
+    let raw = res.text();
+    if res.is_error {
+        return Err(Error::invalid(format!("{label}: {}", raw.chars().take(500).collect::<String>())));
+    }
+    let mut body: String = raw.trim().chars().take(MAX_INSERT_CHARS).collect();
+    if raw.trim().chars().count() > MAX_INSERT_CHARS {
+        body.push_str("\n… (gekürzt)");
+    }
+    if body.is_empty() {
+        body = "(kein Ergebnis)".into();
+    }
+    let text = format!("[Aus {label}]\n{body}\n[Ende {label}]\n");
+    crate::templates::fill_composer(&c, text.clone(), false);
+    Ok(serde_json::json!({"text": text, "label": label}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

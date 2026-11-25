@@ -135,3 +135,38 @@ fn templates_fill_fields_and_send() {
     assert!(engine.call("template.delete", json!({"id": id})).is_err());
     assert!(engine.call("template.use", json!({"id": "nope"})).is_err());
 }
+
+/// #53: a read-only connector tool with the person's own arguments; the result goes into the
+/// composer and nothing is sent; tools that change something and vault values are refused; the
+/// action log names the call.
+#[test]
+fn connector_result_goes_into_the_composer() {
+    let Some(bin) = crate::trust_tests::fake_server() else {
+        eprintln!("skipped: build it with `cargo build -p aiscraft-mcp --example fake_server`");
+        return;
+    };
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let (url, seen) = scripted(&engine, |line, _| if line.starts_with("GET") { models() } else { sse("ok") });
+    engine_at(&engine, &url);
+    engine.call("connector.add", json!({"name": "Kalender", "command": bin.display().to_string()})).unwrap();
+    let s = engine.state();
+    let echo = s.connectors[0].tools.iter().find(|t| t.name == "echo").unwrap().llm_name.clone();
+    let notify = s.connectors[0].tools.iter().find(|t| t.name == "notify").unwrap().llm_name.clone();
+
+    let out = engine.call("connector.insert", json!({"tool": echo, "arguments": {"text": "Elternabend am Dienstag"}})).unwrap();
+    let text = out["text"].as_str().unwrap();
+    assert!(text.contains("Elternabend am Dienstag") && text.starts_with("[Aus Kalender"), "{text}");
+    assert!(!text.contains("untrusted_tool_result"), "the person reads it as it is");
+    let fill = engine.state().composer_fill.clone().unwrap();
+    assert!(!fill.replace && fill.text == text, "added to the composer");
+    assert!(posts(&seen, "/chat/completions").is_empty(), "nothing leaves before sending");
+
+    let err = engine.call("connector.insert", json!({"tool": notify, "arguments": {}})).unwrap_err();
+    assert!(err.message.contains("nur lesen"), "{}", err.message);
+    assert!(engine.call("connector.insert", json!({"tool": echo, "arguments": {"text": "{{vault:x}}"}})).is_err());
+    assert!(engine.call("connector.insert", json!({"tool": "gibt_es_nicht"})).is_err());
+    assert!(engine.call("connector.insert", json!({"tool": echo, "arguments": "text"})).is_err());
+
+    let log = engine.call("log.list", json!({})).unwrap();
+    assert!(log.to_string().contains("Kalender"), "the call is in the action log: {log}");
+}

@@ -9,6 +9,9 @@ use crate::app::AisCraftApp;
 use crate::icons::Icon;
 use crate::widgets::small_muted;
 
+/// The composer command that opens the connector dialog (#53).
+pub const CONNECTOR_COMMAND: &str = "/konnektor";
+
 #[derive(Debug, Clone)]
 pub enum KnowDialog {
     /// Fill a template's fields.
@@ -21,6 +24,11 @@ pub enum KnowDialog {
         title: String,
         text: String,
         persona: Option<(String, Value)>,
+    },
+    /// A read-only connector tool with the person's own arguments.
+    Connector {
+        tool: Option<String>,
+        args: Vec<(String, String)>,
     },
 }
 
@@ -47,6 +55,33 @@ impl KnowDialog {
     }
 }
 
+/// The fields of a connector tool's input schema: (name, required, description).
+fn schema_fields(schema: &Value) -> Vec<(String, bool, String)> {
+    let required: Vec<&str> = schema.get("required").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .map(|o| {
+            o.iter()
+                .take(20)
+                .map(|(k, v)| {
+                    (k.clone(), required.contains(&k.as_str()), v.get("description").and_then(Value::as_str).unwrap_or("").chars().take(120).collect())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A typed value: numbers, true/false and JSON stay what they are, the rest is text.
+fn typed(v: &str, kind: Option<&str>) -> Value {
+    match kind {
+        Some("number") | Some("integer") => v.trim().parse::<f64>().map(|n| json!(n)).unwrap_or_else(|_| json!(v)),
+        Some("boolean") => json!(matches!(v.trim(), "true" | "ja" | "1")),
+        Some("array") | Some("object") => serde_json::from_str(v).unwrap_or_else(|_| json!(v)),
+        _ => json!(v),
+    }
+}
+
 impl AisCraftApp {
     /// Text the engine put into the composer (#53, #54), and `/konnektor` typed there.
     pub(crate) fn know_frame(&mut self, ctx: &egui::Context) {
@@ -65,6 +100,10 @@ impl AisCraftApp {
                 }
                 self.focus_composer = true;
             }
+        }
+        if self.composer.trim() == CONNECTOR_COMMAND && self.dialog.is_none() {
+            self.composer.clear();
+            self.dialog = Some(crate::dialogs::Dialog::Know(KnowDialog::Connector { tool: None, args: Vec::new() }));
         }
     }
 
@@ -201,6 +240,75 @@ impl AisCraftApp {
                     }
                 });
             }
+            KnowDialog::Connector { tool, args } => {
+                ui.heading("Konnektor-Ergebnis einfügen");
+                ui.label(small_muted(
+                    &t,
+                    "Ein Werkzeug, das nur liest, mit deinen Angaben. Das Ergebnis kommt ins Eingabefeld; du prüfst es und schickst es selbst ab.",
+                ));
+                ui.add_space(6.0);
+                let tools: Vec<(String, String, Value)> = self
+                    .state
+                    .connectors
+                    .iter()
+                    .filter(|k| k.enabled)
+                    .flat_map(|k| {
+                        k.tools.iter().filter(|x| x.read_only).map(move |x| {
+                            (x.llm_name.clone(), format!("{} · {}", k.name, if x.title.is_empty() { &x.name } else { &x.title }), x.input_schema.clone())
+                        })
+                    })
+                    .collect();
+                if tools.is_empty() {
+                    ui.label("Kein verbundener Konnektor hat Werkzeuge, die nur lesen. Konnektoren richtest du in den Einstellungen ein.");
+                } else {
+                    let current = tool
+                        .as_ref()
+                        .and_then(|x| tools.iter().find(|(n, _, _)| n == x))
+                        .map(|(_, l, _)| l.clone())
+                        .unwrap_or_else(|| "Werkzeug wählen".into());
+                    egui::ComboBox::from_id_salt("connector-tool").selected_text(current).width(340.0).show_ui(ui, |ui| {
+                        for (name, label, schema) in &tools {
+                            if ui.selectable_label(tool.as_deref() == Some(name.as_str()), label).clicked() {
+                                *tool = Some(name.clone());
+                                *args = schema_fields(schema).into_iter().map(|(k, _, _)| (k, String::new())).collect();
+                            }
+                        }
+                    });
+                    let schema = tool.as_ref().and_then(|x| tools.iter().find(|(n, _, _)| n == x)).map(|(_, _, s)| s.clone()).unwrap_or(Value::Null);
+                    let fields = schema_fields(&schema);
+                    if tool.is_some() {
+                        ui.add_space(6.0);
+                        egui::Grid::new("connector-args").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+                            for (name, value) in args.iter_mut() {
+                                let (req, desc) = fields.iter().find(|(k, _, _)| k == name).map(|(_, r, d)| (*r, d.clone())).unwrap_or((false, String::new()));
+                                ui.label(if req { format!("{name} *") } else { name.clone() });
+                                ui.add(egui::TextEdit::singleline(value).hint_text(desc).desired_width(280.0));
+                                ui.end_row();
+                            }
+                        });
+                    }
+                    ui.add_space(8.0);
+                    let missing = fields.iter().any(|(k, r, _)| *r && args.iter().find(|(n, _)| n == k).is_none_or(|(_, v)| v.trim().is_empty()));
+                    ui.horizontal(|ui| {
+                        if ui.add_enabled(tool.is_some() && !missing, egui::Button::new("Einfügen")).clicked() {
+                            let props = schema.get("properties").cloned().unwrap_or(Value::Null);
+                            let map: serde_json::Map<String, Value> = args
+                                .iter()
+                                .filter(|(_, v)| !v.trim().is_empty())
+                                .map(|(k, v)| (k.clone(), typed(v, props.get(k).and_then(|p| p.get("type")).and_then(Value::as_str))))
+                                .collect();
+                            self.run("connector.insert", json!({"tool": tool, "arguments": map}));
+                            keep = false;
+                        }
+                        if ui.button("Abbrechen").clicked() {
+                            keep = false;
+                        }
+                    });
+                }
+                if tools.is_empty() && ui.button("Schließen").clicked() {
+                    keep = false;
+                }
+            }
         }
         keep
     }
@@ -227,6 +335,7 @@ impl AisCraftApp {
     pub(crate) fn show_know(&mut self, what: &str) -> bool {
         use crate::dialogs::Dialog;
         let d = match what {
+            "connector_insert" => KnowDialog::Connector { tool: None, args: Vec::new() },
             "template_new" => KnowDialog::edit_template(None),
             w if w.starts_with("template:") => match self.state.templates.iter().find(|t| Some(t.id.as_str()) == w.strip_prefix("template:")) {
                 Some(t) => KnowDialog::use_template(t),
@@ -236,5 +345,21 @@ impl AisCraftApp {
         };
         self.dialog = Some(Dialog::Know(d));
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connector_fields_come_from_the_schema() {
+        let s = json!({"properties": {"query": {"type": "string", "description": "Suchwörter"}, "max": {"type": "integer"}}, "required": ["query"]});
+        let f = schema_fields(&s);
+        assert!(f.contains(&("query".into(), true, "Suchwörter".into())));
+        assert_eq!(typed("5", Some("integer")), json!(5.0));
+        assert_eq!(typed("ja", Some("boolean")), json!(true));
+        assert_eq!(typed("x", None), json!("x"));
+        assert!(schema_fields(&Value::Null).is_empty());
     }
 }
