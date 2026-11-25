@@ -308,6 +308,9 @@ pub struct BackendView {
     /// Why the last attempt to load them failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personas_error: Option<String>,
+    /// Every model tried and whether it worked (Vertex AI: models the project has not enabled).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_checks: Vec<aiscraft_core::ModelCheck>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

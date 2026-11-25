@@ -110,7 +110,7 @@ fn wait_backend(engine: &Engine, id: &str) {
     use aiscraft_core::BackendKind;
     engine.wait_for(Duration::from_secs(20), |s| {
         s.backend(id).is_none_or(|b| {
-            let needs_secret = matches!(b.config.kind, BackendKind::AisChat | BackendKind::Anthropic);
+            let needs_secret = matches!(b.config.kind, BackendKind::AisChat | BackendKind::Anthropic | BackendKind::Vertex);
             !matches!(b.status, BackendStatus::Checking | BackendStatus::Unknown) || (needs_secret && !b.has_secret)
         })
     });

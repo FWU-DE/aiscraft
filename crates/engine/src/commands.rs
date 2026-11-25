@@ -333,7 +333,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Backend hinzufügen",
         "Backends",
         None,
-        "kind: ais_chat|openai|anthropic|claude_cli, name?: string, base_url?: string, secret?: string",
+        "kind: ais_chat|openai|anthropic|claude_cli|vertex, name?: string, base_url?: string (Vertex: Region, Standard global), secret?: string, key_file?: string (Vertex: Pfad zur JSON-Schlüsseldatei des Dienstkontos)",
         false,
         |c, p| Box::pin(backend_add(c, p))
     ),
@@ -347,7 +347,10 @@ static COMMANDS: &[CommandSpec] = &[
         |c, p| Box::pin(backend_update(c, p))
     ),
     cmd!("backend.remove", "Backend entfernen", "Backends", None, "id: string", false, |c, p| Box::pin(backend_remove(c, p))),
-    cmd!("backend.login", "Anmelden", "Backends", None, "id: string, secret: string", false, |c, p| Box::pin(backend_login(c, p))),
+    cmd!("backend.login", "Anmelden", "Backends", None, "id: string, secret?: string, key_file?: string (Vertex: JSON-Schlüsseldatei)", false, |c, p| {
+        Box::pin(backend_login(c, p))
+    }),
+    cmd!("backend.models_check", "Modelle neu prüfen", "Backends", None, "id?: string", true, |c, p| Box::pin(models_check(c, p))),
     cmd!("backend.logout", "Abmelden", "Backends", None, "id: string", false, |c, p| Box::pin(async move {
         let id = req_str(&p, "id")?;
         c.0.secrets.set(&id, None)?;
@@ -720,16 +723,34 @@ pub(crate) async fn refresh_backend(c: &Ctx, id: &str) -> Result<()> {
     // No image models is fine (most backends, or switched off by the state).
     let image_models = backend.image_models().await.unwrap_or_default();
     let default = backend.config().default_model.clone();
+    let checks = backend.model_checks();
     c.update(|s| {
         if let Some(b) = s.backends.iter_mut().find(|b| b.config.id == id) {
             b.models = models.clone();
             b.image_models = image_models.clone();
+            b.model_checks = checks.clone();
         }
         if s.selection.backend_id == id && s.selection.kind == ConversationKind::Chat && !models.iter().any(|m| m.id == s.selection.model_id) {
             s.selection.model_id = default.filter(|d| models.iter().any(|m| &m.id == d)).or_else(|| models.first().map(|m| m.id.clone())).unwrap_or_default();
         }
     });
+    if !checks.is_empty() {
+        c.save_backend_cache(id);
+    }
     Ok(())
+}
+
+/// Try every model of a backend again (Vertex AI): usable ones go into the menu, the others are
+/// listed in the settings with the reason.
+async fn models_check(c: Ctx, p: Value) -> Result<Value> {
+    let id = opt_str(&p, "id").unwrap_or_else(|| c.state().selection.backend_id.clone());
+    let backend = c.backend(&id)?;
+    backend.discover_models().await?;
+    refresh_backend(&c, &id).await?;
+    let checks = backend.model_checks();
+    let usable = checks.iter().filter(|m| m.usable).count();
+    c.notice(NoticeLevel::Info, format!("{}: {usable} von {} Modellen nutzbar", backend.config().name, checks.len()));
+    Ok(json!({"usable": usable, "models": checks}))
 }
 
 pub(crate) fn edit_conversation(c: &Ctx, id: &str, f: impl FnOnce(&mut Conversation)) -> Result<()> {
@@ -1327,12 +1348,14 @@ async fn persona_start(c: Ctx, p: Value) -> Result<Value> {
 // ---- backends ---------------------------------------------------------------------------
 
 async fn backend_add(c: Ctx, p: Value) -> Result<Value> {
-    let kind = BackendKind::parse(&req_str(&p, "kind")?).ok_or_else(|| Error::invalid("kind muss ais_chat, openai, anthropic oder claude_cli sein"))?;
+    let kind =
+        BackendKind::parse(&req_str(&p, "kind")?).ok_or_else(|| Error::invalid("kind muss ais_chat, openai, anthropic , claude_cli oder vertex sein"))?;
     let base_url = opt_str(&p, "base_url").filter(|u| !u.trim().is_empty()).unwrap_or_else(|| kind.default_base_url().to_string());
     let name = opt_str(&p, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| match kind {
         BackendKind::AisChat => "AIS.chat".into(),
         BackendKind::Anthropic => "Claude (API)".into(),
         BackendKind::ClaudeCli => "Claude (Abo)".into(),
+        BackendKind::Vertex => "Google Vertex AI".into(),
         BackendKind::OpenAi if base_url.contains("11434") => "Ollama".into(),
         BackendKind::OpenAi if base_url.contains("1234") => "LM Studio".into(),
         BackendKind::OpenAi if base_url.contains("openrouter") => "OpenRouter".into(),
@@ -1353,7 +1376,7 @@ async fn backend_add(c: Ctx, p: Value) -> Result<Value> {
     };
     // Build first so a bad address is reported before anything is saved.
     aiscraft_backends::build(config.clone(), None, c.secret_sink())?;
-    if let Some(secret) = opt_str(&p, "secret").filter(|s| !s.trim().is_empty()) {
+    if let Some(secret) = secret_param(&p)? {
         c.0.secrets.set(&config.id, Some(&normalize_secret(kind, &secret)?))?;
     }
     c.store(|st| st.save_backend(&config))?;
@@ -1372,11 +1395,29 @@ fn kind_slug(k: BackendKind) -> &'static str {
         BackendKind::OpenAi => "openai",
         BackendKind::Anthropic => "anthropic",
         BackendKind::ClaudeCli => "claude",
+        BackendKind::Vertex => "vertex",
     }
+}
+
+/// The secret of `backend.add` and `backend.login`: `secret` as given, or the content of
+/// `key_file` (the service account key of Vertex AI, read here so it never passes the UI).
+fn secret_param(p: &Value) -> Result<Option<String>> {
+    if let Some(secret) = opt_str(p, "secret").filter(|s| !s.trim().is_empty()) {
+        return Ok(Some(secret));
+    }
+    let Some(path) = opt_str(p, "key_file").filter(|s| !s.trim().is_empty()) else { return Ok(None) };
+    let path = std::path::PathBuf::from(path.trim());
+    let meta = std::fs::metadata(&path).map_err(|e| Error::not_found(format!("Schlüsseldatei nicht lesbar: {} ({e})", path.display())))?;
+    if !meta.is_file() || meta.len() > aiscraft_backends::vertex::MAX_KEY_BYTES as u64 {
+        return Err(Error::invalid("Das ist keine Schlüsseldatei; gesucht ist die JSON-Datei eines Dienstkontos (etwa 2 KB)"));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| Error::invalid(format!("Schlüsseldatei nicht lesbar: {} ({e})", path.display())))?;
+    Ok(Some(text))
 }
 
 fn normalize_secret(kind: BackendKind, secret: &str) -> Result<String> {
     match kind {
+        BackendKind::Vertex => aiscraft_backends::vertex::normalize_key(secret),
         BackendKind::AisChat => aiscraft_backends::normalize_session_cookie(secret)
             .ok_or_else(|| Error::invalid(format!("Das ist kein AIS.chat-Sitzungs-Cookie. Gesucht ist der Wert von {}.", aiscraft_backends::SESSION_COOKIE))),
         _ => Ok(secret.trim().to_string()),
@@ -1456,9 +1497,12 @@ pub(crate) async fn browser_login(c: Ctx, p: Value) -> Result<Value> {
 async fn backend_login(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let config = c.backend(&id)?.config().clone();
-    let secret = normalize_secret(config.kind, &req_str(&p, "secret")?)?;
+    let raw = secret_param(&p)?.ok_or_else(|| Error::invalid("secret oder key_file fehlt"))?;
+    let secret = normalize_secret(config.kind, &raw)?;
     c.0.secrets.set(&id, Some(&secret))?;
     c.install_backend(config.clone())?;
+    // A new key may belong to another project: its models are tried afresh.
+    c.backend(&id)?.seed_model_checks(Vec::new());
     refresh_backend(&c, &id).await?;
     let account = match c.state().backend(&id).map(|b| b.status.clone()) {
         Some(BackendStatus::Ready { account }) => account,

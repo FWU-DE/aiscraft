@@ -984,7 +984,11 @@ impl AisCraftApp {
     fn sources_menu(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let src = self.state.selection.sources.clone();
-        let caps = self.state.backend(&self.state.selection.backend_id).map(|b| b.capabilities).unwrap_or_default();
+        let caps = self
+            .state
+            .backend(&self.state.selection.backend_id)
+            .map(|b| b.capabilities.for_model(b.config.kind, &self.state.selection.model_id))
+            .unwrap_or_default();
         let takes_label = self.state.backend(&self.state.selection.backend_id).is_none_or(|b| b.capabilities.system_prompt);
         let on = [src.tools, src.memory_for(takes_label), src.project_for(takes_label), src.history].iter().filter(|x| **x).count();
         let label = if on == 4 && src.connectors.is_none() { "Quellen".to_string() } else { format!("Quellen ({on}/4)") };
@@ -1064,7 +1068,11 @@ impl AisCraftApp {
                 }
             }
             // How much Claude thinks before it answers (#30): per chat.
-            if self.state.backend(&self.state.selection.backend_id).is_some_and(|b| b.config.kind == BackendKind::Anthropic) {
+            if self
+                .state
+                .backend(&self.state.selection.backend_id)
+                .is_some_and(|b| aiscraft_core::speaks_anthropic(b.config.kind, &self.state.selection.model_id))
+            {
                 ui.separator();
                 ui.label(small_muted(&t, "Nachdenken vor der Antwort"));
                 ui.horizontal_wrapped(|ui| {

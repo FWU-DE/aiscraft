@@ -38,7 +38,8 @@ pub(crate) async fn report(c: Ctx, p: Value) -> Result<Value> {
             let backend = state.backend(&r.backend_id);
             let kind = backend.map(|b| b.config.kind);
             // Only API backends bill per token; a subscription or AIS.chat does not.
-            let usd = (kind == Some(aiscraft_core::BackendKind::Anthropic))
+            let usd = kind
+                .is_some_and(|k| aiscraft_core::speaks_anthropic(k, &r.model))
                 .then(|| price(&r.model).map(|(i, o)| (r.input_tokens as f64 * i + r.output_tokens as f64 * o) / 1e6))
                 .flatten();
             json!({

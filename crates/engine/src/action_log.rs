@@ -58,7 +58,7 @@ pub(crate) fn summary(args: &Value, schema: &Value, secrets: &[String]) -> Strin
 
 fn cost(c: &Ctx, backend_id: &str, model: &str, input: u64, output: u64) -> Option<f64> {
     let kind = c.state().backend(backend_id).map(|b| b.config.kind);
-    (kind == Some(aiscraft_core::BackendKind::Anthropic))
+    kind.is_some_and(|k| aiscraft_core::speaks_anthropic(k, model))
         .then(|| crate::usage::price(model).map(|(i, o)| (input as f64 * i + output as f64 * o) / 1e6))
         .flatten()
 }

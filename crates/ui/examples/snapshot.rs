@@ -20,6 +20,7 @@
 //! files on the window). `--theme modern|glas|system|…` (see `aiscraft_engine::THEMES`),
 //! `--system light|dark` for what "Wie das System" follows.
 //! `--demo-claude` adds a local stand-in for the Claude API that cites attached files (#39).
+//! `--demo-vertex` adds a local stand-in for Google Vertex AI (service account, model checks).
 //! `--demo-update` hands the update check a made-up newer release (no request to GitHub) and
 //! checks, so the hint shows (`["ui.show", {"what": "about"}]` for the settings part).
 //! The engine runs in memory; nothing touches your real data.
@@ -494,6 +495,9 @@ fn main() {
     if args.iter().any(|a| a == "--demo-claude") {
         demo_claude(&engine);
     }
+    if args.iter().any(|a| a == "--demo-vertex") {
+        demo_vertex(&engine);
+    }
     if args.iter().any(|a| a == "--demo-update") {
         let release = json!([{"tag_name": "v0.2.0", "name": "AIS.ChatCraft 0.2.0", "draft": false, "prerelease": false,
             "html_url": "https://github.com/FWU-DE/aiscraft/releases/tag/v0.2.0", "body": "- Startseite\n- Bilder in AIS.chat", "assets": []}]);
@@ -651,4 +655,17 @@ impl egui::DroppedFile for ScriptFile {
     fn bytes(&self) -> Result<Vec<u8>, String> {
         std::fs::read(&self.0).map_err(|e| e.to_string())
     }
+}
+
+/// A local stand-in for Google Vertex AI (`--demo-vertex`): a service account key signs in,
+/// Claude Opus 5.5 and Gemini 2.5 Flash are usable, the other known models are not enabled.
+/// Look at it with `["ui.show", {"what": "settings"}]`.
+fn demo_vertex(engine: &Engine) {
+    let (addr, _) = engine.block_on(aiscraft_backends::vertex_fake::fake_google());
+    let key = std::env::temp_dir().join(format!("aiscraft-demo-vertex-{}.json", std::process::id()));
+    std::fs::write(&key, aiscraft_backends::vertex_fake::fake_key(&addr)).unwrap();
+    let id = engine.call("backend.add", json!({"kind": "vertex", "base_url": addr, "key_file": key})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    engine.call("chat.select_model", json!({"backend": id, "model": "claude-opus-5-5"})).unwrap();
+    let _ = std::fs::remove_file(key);
 }

@@ -527,10 +527,26 @@ impl Ctx {
         if let Some(actions) = cached.actions {
             backend.seed_actions(actions);
         }
+        // Models tried in an earlier run (Vertex): the menu is there before any request.
+        let cached_checks = cached.models.filter(|_| has_secret).unwrap_or_default();
+        if !cached_checks.is_empty() {
+            backend.seed_model_checks(cached_checks.clone());
+        }
         let caps = backend.capabilities();
         self.0.backends.lock().unwrap_or_else(PoisonError::into_inner).insert(config.id.clone(), backend);
         self.update(|s| {
-            let models = s.backend(&config.id).map(|b| b.models.clone()).unwrap_or_default();
+            let mut models = s.backend(&config.id).map(|b| b.models.clone()).unwrap_or_default();
+            let mut model_checks = s.backend(&config.id).map(|b| b.model_checks.clone()).unwrap_or_default();
+            if model_checks.is_empty() {
+                model_checks = cached_checks.clone();
+            }
+            if models.is_empty() {
+                models = cached_checks
+                    .iter()
+                    .filter(|m| m.usable)
+                    .map(|m| aiscraft_core::ModelInfo { id: m.id.clone(), name: m.name.clone(), description: None, vision: true, context_window: None })
+                    .collect();
+            }
             let quota = s.backend(&config.id).and_then(|b| b.quota);
             let personas = s.backend(&config.id).and_then(|b| b.personas.clone()).or(cached.personas);
             let image_models = s.backend(&config.id).map(|b| b.image_models.clone()).unwrap_or_default();
@@ -544,6 +560,7 @@ impl Ctx {
                 personas,
                 personas_error: None,
                 image_models,
+                model_checks,
             };
             match s.backends.iter_mut().find(|b| b.config.id == config.id) {
                 Some(b) => *b = view,
@@ -571,6 +588,7 @@ impl Ctx {
             actions: read::<std::collections::BTreeMap<String, String>>(self.cache_file(backend, "actions"), 256 * 1024)
                 .map(|m| m.into_iter().take(200).filter(|(k, v)| k.len() <= 100 && v.len() <= 100).collect()),
             personas: read(self.cache_file(backend, "personas"), 16 * 1024 * 1024),
+            models: read::<Vec<aiscraft_core::ModelCheck>>(self.cache_file(backend, "models"), 1024 * 1024).map(|m| m.into_iter().take(100).collect()),
         }
     }
 
@@ -587,6 +605,10 @@ impl Ctx {
         }
         if let Some(list) = personas {
             files.push((self.cache_file(backend, "personas"), serde_json::to_vec(&list).unwrap_or_default()));
+        }
+        let checks = b.model_checks();
+        if !checks.is_empty() {
+            files.push((self.cache_file(backend, "models"), serde_json::to_vec(&checks).unwrap_or_default()));
         }
         if files.is_empty() {
             return;
@@ -700,4 +722,5 @@ pub(crate) fn chat_system_prompt_for_test(c: &Ctx, conv: &aiscraft_core::Convers
 struct BackendCache {
     actions: Option<std::collections::BTreeMap<String, String>>,
     personas: Option<Vec<aiscraft_core::PersonaInfo>>,
+    models: Option<Vec<aiscraft_core::ModelCheck>>,
 }

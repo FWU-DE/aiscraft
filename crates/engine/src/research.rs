@@ -166,7 +166,7 @@ async fn start(c: Ctx, p: Value) -> Result<Value> {
         return Err(Error::invalid("Kein Modell gewählt"));
     }
     let search_url = state.research.search_url.clone();
-    let caps = backend.capabilities();
+    let caps = backend.capabilities().for_model(backend.config().kind, &state.selection.model_id);
     let own_search = caps.web_search || backend.config().kind == aiscraft_core::BackendKind::AisChat;
     if search_url.is_empty() && !own_search {
         return Err(Error::unsupported(
