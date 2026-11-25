@@ -73,26 +73,10 @@ pub(crate) struct CheckedView {
 }
 
 /// A declared domain: `https://host[:port]`, `https://*.host` (and `wss://` for connections).
-/// Never `*`, `http:`, other schemes, paths, quotes or keywords.
+/// Never `*`, `http:`, other schemes, paths, quotes or keywords, IP addresses, local names or a
+/// wildcard over a public suffix (`aiscraft_core::net`, which the preview checks again).
 pub(crate) fn domain_ok(d: &str, connect: bool) -> bool {
-    let rest = match d.split_once("://") {
-        Some(("https", r)) => r,
-        Some(("wss", r)) if connect => r,
-        _ => return false,
-    };
-    let host = rest.strip_prefix("*.").unwrap_or(rest);
-    let (host, port) = match host.rsplit_once(':') {
-        Some((h, p)) => (h, Some(p)),
-        None => (host, None),
-    };
-    let port_ok = port.is_none_or(|p| !p.is_empty() && p.len() <= 5 && p.chars().all(|c| c.is_ascii_digit()));
-    let labels: Vec<&str> = host.split('.').collect();
-    port_ok
-        && d.len() <= 253
-        && labels.len() >= 2
-        && labels
-            .iter()
-            .all(|l| !l.is_empty() && l.len() <= 63 && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') && !l.starts_with('-') && !l.ends_with('-'))
+    aiscraft_core::net::view_domain_ok(d, connect)
 }
 
 /// The policy the preview enforces: inline code only, no network but the declared domains.
@@ -228,9 +212,23 @@ pub(crate) struct Live {
     pub context_entry: Option<String>,
     /// The window size last asked for.
     pub size: Option<(u32, u32)>,
+    /// When the person (or the rules) refused calls of this view, newest last; a view that
+    /// keeps asking after refusals is held back ([`MAX_DENIALS`] per [`DENIAL_WINDOW`]).
+    pub denials: Vec<std::time::Instant>,
 }
 
+/// Refused calls of one view within [`DENIAL_WINDOW`] after which its calls are refused without
+/// asking until the window has passed: a view cannot bury the person in approval questions.
+pub(crate) const MAX_DENIALS: usize = 3;
+pub(crate) const DENIAL_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
 impl Live {
+    /// Whether the view is held back for now (forgets refusals older than the window).
+    pub(crate) fn held_back(&mut self, now: std::time::Instant) -> bool {
+        self.denials.retain(|t| now.saturating_duration_since(*t) < DENIAL_WINDOW);
+        self.denials.len() >= MAX_DENIALS
+    }
+
     pub(crate) fn shared(theme: &str, styles: BTreeMap<String, String>) -> Arc<Mutex<Live>> {
         Arc::new(Mutex::new(Live { theme: theme.into(), styles, mode: "fullscreen".into(), ..Default::default() }))
     }
@@ -358,7 +356,7 @@ pub(crate) async fn open(c: Ctx, p: Value) -> Result<Value> {
     let path = dir.join(format!("ansicht-{}.html", crate::new_id()));
     crate::disk::write(&path, checked.html.as_bytes())?;
     let mut cmd = tokio::process::Command::new(&bin);
-    cmd.arg("--file").arg(&path).arg("--title").arg(title.chars().take(80).collect::<String>()).arg("--bridge");
+    cmd.args(crate::learn::preview_args(&[std::ffi::OsStr::new("--file"), path.as_os_str()], &title)).arg("--bridge");
     for d in &checked.connect {
         cmd.arg("--connect").arg(d);
     }
@@ -690,13 +688,18 @@ pub(crate) async fn handle(c: &Ctx, s: &Session, msg: Value) -> Vec<Value> {
             let Some(tool) = tool.filter(|t| t.app_callable) else {
                 return vec![error(&id, -32601, "Dieses Werkzeug steht der Ansicht nicht zur Verfügung")];
             };
+            if s.live().held_back(std::time::Instant::now()) {
+                return vec![error(&id, -32000, "Diese Ansicht wurde gerade mehrmals abgelehnt; sie kann in einer Minute wieder fragen")];
+            }
             // The same rules as the model's calls: reads run, the rest asks the person.
-            let (text, is_error, outcome) = crate::tools::run_from_view(c, &s.conversation, &tool.llm_name, args).await;
+            let ((text, is_error, outcome), structured) = crate::tools::run_from_view(c, &s.conversation, &tool.llm_name, args).await;
+            if outcome == "denied" {
+                s.live().denials.push(std::time::Instant::now());
+            }
             let mut result = json!({"content": [{"type": "text", "text": crate::tools::unwrap_untrusted(&text)}], "isError": is_error});
-            if let (Some(sc), Some(o)) = (crate::tools::take_structured(c, &tool.llm_name), result.as_object_mut()) {
+            if let (Some(sc), Some(o)) = (structured, result.as_object_mut()) {
                 o.insert("structuredContent".into(), sc);
             }
-            let _ = outcome;
             vec![reply(&id, result)]
         }
         "resources/read" => {
@@ -858,6 +861,11 @@ mod tests {
             "https://example.org;",
             "example.org",
             "https://localhost",
+            "https://127.0.0.1",
+            "https://[::1]",
+            "https://*.github.io",
+            "https://*.co.uk",
+            "https://drucker.local",
         ] {
             assert!(!domain_ok(bad, true), "{bad}");
         }

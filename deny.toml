@@ -1,0 +1,82 @@
+# cargo-deny: supply-chain gate for every dependency in Cargo.lock (AGENTS.md §6, „Security
+# review“). Run locally with `cargo deny check`; CI runs it in .github/workflows/security.yml.
+
+[graph]
+# Every platform we ship, so Windows- and macOS-only crates are checked too.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-pc-windows-msvc",
+  "aarch64-pc-windows-msvc",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+# RustSec: vulnerabilities and unsound code always fail. Unmaintained crates fail only when we
+# depend on them directly ("workspace"); transitive ones (2026-11-25: yaml-rust, proc-macro-error,
+# paste, number_prefix, bincode, smallstr, zvariant/zbus_names) are for the crate that pulls them
+# in. See them with `unmaintained = "all"`.
+unmaintained = "workspace"
+yanked = "warn"
+# Each ignore names the advisory, why it does not apply or why no fix exists, and the issue that
+# tracks it. Never ignore a vulnerability that has a fixed version: update instead.
+ignore = [
+  # chrono is unmaintained, no safe upgrade exists; not a vulnerability. Moving to jiff: #109.
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, no fix; migration tracked in #109" },
+]
+
+[licenses]
+# AIS.ChatCraft is MIT OR Apache-2.0. Only permissive licences and file-level copyleft (MPL-2.0:
+# symphonia, cssparser/selectors, option-ext; unchanged sources, so nothing to publish) may be
+# linked. GPL/LGPL/AGPL code must never be linked into the app: the H5P core (GPL-3.0) ships as a
+# separate download (h5p-player.yml), never in a crate. A dual licence such as
+# "MIT OR Apache-2.0 OR LGPL-2.1-or-later" passes through its permissive branch.
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "0BSD",
+  "BSL-1.0",
+  "CC0-1.0",
+  "Unlicense",
+  "Unicode-3.0",
+  "CDLA-Permissive-2.0", # webpki-roots: Mozilla's root certificate list as data
+  "OFL-1.1",             # epaint_default_fonts: bundled fonts
+  "Ubuntu-font-1.0",     # epaint_default_fonts: bundled fonts
+  "IJG",                 # jpeg-encoder: Independent JPEG Group licence (permissive)
+  "MPL-2.0",             # file-level copyleft, see above
+]
+confidence-threshold = 0.9
+# Our own crates are not published; their licence comes from [workspace.package].
+[licenses.private]
+ignore = true
+
+[bans]
+# Duplicate versions are normal in a GUI stack (windows-sys, bitflags, …); they cost build time,
+# not safety. Wildcard versions (`*`) are forbidden: every dependency names a version.
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies inside the workspace have no version; that is fine.
+allow-wildcard-paths = true
+highlight = "all"
+
+[sources]
+# Only crates.io and the pinned storytold repositories (craft-libs, the egui and winit forks,
+# see [patch.crates-io] in Cargo.toml). Anything else fails.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+  "https://github.com/storytold/craft-libs",
+  "https://github.com/storytold/egui.git",
+  "https://github.com/storytold/winit.git",
+]
+# Git dependencies must be pinned to a full commit (`rev = "<sha>"`), never a branch or tag.
+required-git-spec = "rev"

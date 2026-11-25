@@ -62,7 +62,84 @@ impl CommandSpec {
     fn copy(&self) -> CommandSpec {
         CommandSpec { id: self.id, label: self.label, group: self.group, shortcut: self.shortcut, params: self.params, palette: self.palette, run: self.run }
     }
+
+    /// Whether an outside program may list and run this command, e.g. an MCP client through
+    /// `aiscraft-cli mcp`. Such a client may itself be steered by a prompt injection, so it gets
+    /// chats, search, artifacts and learning materials, but nothing that installs, downloads or
+    /// enables code or tools (extensions, connectors, sandbox, computer use, players, models),
+    /// changes settings, trust rules or approvals, touches secrets, the vault or the name
+    /// mapping, plants instructions (memory, skills, schedules) or deletes data.
+    ///
+    /// Fail closed by category: a namespace not in [`EXTERNAL_NAMESPACES`] stays inside the app,
+    /// so new feature areas (say `computer.*`) are not reachable until someone decides they may
+    /// be; within an allowed namespace, [`OWNER_ONLY_VERBS`] and [`OWNER_ONLY_VERB_WORDS`] keep
+    /// out switches, installs and deletions.
+    pub fn external(&self) -> bool {
+        external_id(self.id)
+    }
 }
+
+/// [`CommandSpec::external`] by id, so ids of commands that do not exist yet can be checked.
+pub fn external_id(id: &str) -> bool {
+    let (namespace, verb) = id.split_once('.').unwrap_or((id, ""));
+    EXTERNAL_NAMESPACES.contains(&namespace) && !OWNER_ONLY_VERBS.contains(&verb) && !verb.split('_').any(|word| OWNER_ONLY_VERB_WORDS.contains(&word))
+}
+
+/// Command namespaces an outside program may use (see [`CommandSpec::external`]). Everything
+/// else, e.g. `backend`, `settings`, `connector`, `tool`, `trust`, `vault`, `privacy`,
+/// `extension`, `sandbox`, `computer`, `collab`, `memory`, `skill`, `schedule`, `files`, `view`,
+/// `voice`, stays inside the app.
+const EXTERNAL_NAMESPACES: &[&str] = &[
+    "app",
+    "artifact",
+    "attachment",
+    "board",
+    "calendar",
+    "chat",
+    "file",
+    "h5p",
+    "learning_app",
+    "log",
+    "message",
+    "notice",
+    "persona",
+    "project",
+    "remote",
+    "research",
+    "search",
+    "task",
+    "template",
+    "tools",
+    "usage",
+    "worksheet",
+];
+
+/// Whole verbs that stay inside the app even in an allowed namespace: settings switches
+/// (`chat.set_sources` turns on tools and connectors), update handling.
+const OWNER_ONLY_VERBS: &[&str] = &["set", "set_sources", "set_search", "check_update", "update_open", "update_skip", "update_dismiss"];
+
+/// Words of a verb (split at `_`) that keep a command inside the app: installs, downloads,
+/// switches, sign-in and every deletion.
+const OWNER_ONLY_VERB_WORDS: &[&str] = &[
+    "install",
+    "uninstall",
+    "download",
+    "enable",
+    "disable",
+    "toggle",
+    "allow",
+    "approve",
+    "answer",
+    "login",
+    "logout",
+    "secret",
+    "key",
+    "player",
+    "remove",
+    "delete",
+    "purge",
+    "empty",
+];
 
 pub fn find(id: &str) -> Option<&'static CommandSpec> {
     commands().iter().find(|c| c.id == id)
@@ -225,7 +302,15 @@ static COMMANDS: &[CommandSpec] = &[
         set_aspect(&c, &req_str(&p, "ratio")?)?;
         Ok(json!({}))
     })),
-    cmd!("chat.save_image", "Bild speichern", "Chat", None, "message_id: string, index?: number, path: string", false, |c, p| Box::pin(save_image(c, p))),
+    cmd!(
+        "chat.save_image",
+        "Bild speichern",
+        "Chat",
+        None,
+        "message_id: string, index?: number, path: string, badge?: bool (KI-Kennzeichnung ins Bild, Standard true; nur erzeugte Bilder)",
+        false,
+        |c, p| Box::pin(save_image(c, p))
+    ),
     cmd!(
         "message.check_links",
         "Links in einer Antwort prüfen",
@@ -1231,7 +1316,6 @@ async fn chat_export(c: Ctx, p: Value) -> Result<Value> {
 }
 
 async fn save_document(c: Ctx, p: Value) -> Result<Value> {
-    use base64::Engine as _;
     let mid = req_str(&p, "message_id")?;
     let step = p.get("step").and_then(Value::as_u64).ok_or_else(|| Error::invalid("step fehlt"))? as usize;
     let path = req_str(&p, "path")?;
@@ -1243,16 +1327,31 @@ async fn save_document(c: Ctx, p: Value) -> Result<Value> {
         .and_then(|m| m.activity.get(step))
         .and_then(|s| s.document.clone())
         .ok_or_else(|| Error::not_found("Dokument nicht gefunden"))?;
-    let binary = ["docx", "pptx", "xlsx", "pdf", "odt"].contains(&doc.format.as_str());
-    let bytes = if binary {
-        base64::engine::general_purpose::STANDARD.decode(doc.content.trim()).unwrap_or_else(|_| doc.content.into_bytes())
-    } else {
-        // Text documents: placeholders back to the names (#55).
-        crate::privacy::reveal(&c, c.state().current.as_deref().unwrap_or(""), &doc.content).into_bytes()
-    };
+    let bytes = document_file_bytes(&c, &doc)?;
     crate::disk::write(std::path::Path::new(&path), &bytes)?;
     c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
     Ok(json!({"path": path}))
+}
+
+/// The file of a document AIS.chat generated (`generateDocument`). For `docx` and `pdf` AIS.chat
+/// sends Markdown and converts it in the browser, so it is converted here (names shown again
+/// first, #55); content that already is such a file (base64 of a ZIP or PDF) is kept as it is.
+fn document_file_bytes(c: &Ctx, doc: &aiscraft_core::GeneratedDocument) -> Result<Vec<u8>> {
+    use base64::Engine as _;
+    let format = doc.format.to_ascii_lowercase();
+    if ["docx", "pptx", "xlsx", "pdf", "odt"].contains(&format.as_str())
+        && let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(doc.content.trim())
+        && (raw.starts_with(b"PK\x03\x04") || raw.starts_with(b"%PDF"))
+    {
+        return Ok(raw);
+    }
+    // Placeholders back to the names (#55).
+    let text = crate::privacy::reveal(c, c.state().current.as_deref().unwrap_or(""), &doc.content);
+    let title = if doc.title.trim().is_empty() { doc.file_name.rsplit_once('.').map_or(doc.file_name.as_str(), |(stem, _)| stem) } else { doc.title.as_str() };
+    match crate::office::document_bytes(&format, title, &text) {
+        Some(bytes) => bytes,
+        None => Ok(text.into_bytes()),
+    }
 }
 
 fn set_aspect(c: &Ctx, ratio: &str) -> Result<()> {
@@ -1269,19 +1368,25 @@ async fn save_image(c: Ctx, p: Value) -> Result<Value> {
     let mid = req_str(&p, "message_id")?;
     let index = p.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
     let path = req_str(&p, "path")?;
-    let src = c
+    // „KI-Kennzeichnung“: on by default, like AIS.chat; only generated images (answers) get it.
+    let badge = p.get("badge").and_then(Value::as_bool).unwrap_or(true);
+    let (src, generated) = c
         .state()
         .messages
         .iter()
         .find(|m| m.id == mid)
-        .and_then(|m| m.attachments.iter().filter(|a| a.mime.starts_with("image/")).nth(index))
-        .and_then(|a| a.local_path.clone())
+        .and_then(|m| {
+            let a = m.attachments.iter().filter(|a| a.mime.starts_with("image/")).nth(index)?;
+            Some((a.local_path.clone()?, m.role == aiscraft_core::Role::Assistant))
+        })
         .ok_or_else(|| Error::not_found("Bild nicht gefunden"))?;
     let size = std::fs::metadata(&src).map_err(|e| Error::storage(format!("{src}: {e}")))?.len();
     if size > crate::files::MAX_FILE_BYTES {
         return Err(Error::invalid("Das Bild ist größer als 25 MB"));
     }
     let bytes = std::fs::read(&src).map_err(|e| Error::storage(format!("{src}: {e}")))?;
+    let badged = badge && generated;
+    let bytes = if badged { crate::ai_badge::bake(&bytes)?.bytes } else { bytes };
     // „Erstellt mit KI“ (#57) as the picture's comment.
     let bytes = match crate::ai_label::note_for_message(&c, Some(&mid)) {
         Some(note) => crate::ai_label::picture_with_note(&bytes, &note.plain()),
@@ -1289,7 +1394,7 @@ async fn save_image(c: Ctx, p: Value) -> Result<Value> {
     };
     crate::disk::write(std::path::Path::new(&path), &bytes)?;
     c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
-    Ok(json!({"path": path}))
+    Ok(json!({"path": path, "badge": badged}))
 }
 
 async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
@@ -1750,4 +1855,70 @@ async fn backend_login(c: Ctx, p: Value) -> Result<Value> {
         }),
     );
     Ok(serde_json::to_value(account)?)
+}
+
+#[cfg(test)]
+mod external_tests {
+    use super::{commands, external_id};
+
+    #[test]
+    fn outside_programs_get_no_installs_switches_secrets_or_deletions() {
+        for id in [
+            "extension.install",
+            "extension.toggle",
+            "h5p.player_install",
+            "h5p.player_remove",
+            "privacy.ner_install",
+            "privacy.reveal",
+            "privacy.mapping",
+            "sandbox.install",
+            "sandbox.set",
+            "connector.add",
+            "connector.toggle",
+            "tool.answer",
+            "trust.rule_add",
+            "vault.add",
+            "vault.code",
+            "settings.set",
+            "fallback.set",
+            "backend.login",
+            "backend.update",
+            "memory.add",
+            "skill.create",
+            "schedule.create",
+            "files.local_set",
+            "chat.set_sources",
+            "chat.purge",
+            "chat.empty_trash",
+            "chat.delete",
+            "artifact.delete",
+            "project.delete",
+            "research.set_search",
+            "app.update_open",
+            // Feature areas that do not exist yet stay closed by category.
+            "computer.set",
+            "computer.never_allow",
+            "sandbox.update",
+            "sandbox.remove",
+            "anything.new",
+        ] {
+            assert!(!external_id(id), "{id} must stay inside the app");
+        }
+        for id in [
+            "chat.send",
+            "chat.new",
+            "chat.open",
+            "chat.export",
+            "search",
+            "artifact.get",
+            "app.state",
+            "app.commands",
+            "worksheet.create",
+            "tools.list",
+            "persona.refresh",
+        ] {
+            assert!(external_id(id), "{id} should be usable from outside");
+            assert!(commands().iter().any(|c| c.id == id && c.external()), "{id} is a command");
+        }
+    }
 }

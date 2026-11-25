@@ -33,7 +33,9 @@ pub(crate) struct Http {
 impl Http {
     pub(crate) fn new(url: &str, headers: &BTreeMap<String, String>) -> Result<Self> {
         let parsed = reqwest::Url::parse(url.trim()).map_err(|_| Error::invalid(format!("„{}“ ist keine gültige Adresse.", preview(url, 200))))?;
-        if !matches!(parsed.scheme(), "http" | "https") {
+        // Plain http only on this computer: the headers carry keys and tokens.
+        let local = parsed.host_str().is_some_and(aiscraft_core::is_loopback_host);
+        if !(parsed.scheme() == "https" || (parsed.scheme() == "http" && local)) {
             return Err(Error::invalid(format!("Die Adresse des Konnektors muss mit https:// beginnen: {}", preview(url, 200))));
         }
         let mut map = HeaderMap::new();
@@ -48,12 +50,24 @@ impl Http {
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .connect_timeout(Duration::from_secs(15))
-            .redirect(reqwest::redirect::Policy::limited(5))
+            .redirect(same_origin_redirects())
             .build()
             .map_err(|e| Error::network(format!("HTTP-Client: {e}")))?;
         Ok(Self { client, url: parsed, headers: map, session: Mutex::new(None), protocol: Mutex::new(None), shutdown: watch::Sender::new(false) })
     }
+}
 
+/// Redirects only within the connector's own origin (scheme, host, port), at most five: the
+/// custom headers (API keys, tokens) are sent along, so they must never reach another host or
+/// drop to plain http. A redirect elsewhere comes back as the 3xx answer and is named.
+fn same_origin_redirects() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let same = attempt.previous().first().is_some_and(|first| first.origin() == attempt.url().origin());
+        if attempt.previous().len() > 5 || !same { attempt.stop() } else { attempt.follow() }
+    })
+}
+
+impl Http {
     pub(crate) fn set_protocol_version(&self, version: &str) {
         *lock(&self.protocol) = HeaderValue::from_str(version).ok();
     }
@@ -119,6 +133,15 @@ impl Http {
 
     async fn status_error(&self, name: &str, resp: Response, is_init: bool) -> Error {
         let status = resp.status();
+        if status.is_redirection() {
+            let to = resp.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok()).map(|l| preview(l, 200)).unwrap_or_default();
+            return Error::refused(format!(
+                "Der Konnektor „{name}“ leitet auf eine andere Adresse um (HTTP {}{}). Schlüssel und Kopfzeilen gehen nur an die eingetragene \
+                 Adresse; ist die neue Adresse richtig, bitte sie beim Konnektor eintragen.",
+                status.as_u16(),
+                if to.is_empty() { String::new() } else { format!(", nach {to}") }
+            ));
+        }
         let body = read_capped(name, resp, 16 * 1024).await.unwrap_or_default();
         let detail = serde_json::from_str::<Value>(&body)
             .ok()

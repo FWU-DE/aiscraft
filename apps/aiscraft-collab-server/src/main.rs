@@ -13,10 +13,13 @@ struct Cli {
     /// Data directory (rooms, snapshots, logs).
     #[arg(long, env = "COLLAB_DATA", default_value = "./collab-data")]
     data: PathBuf,
-    /// Key needed to make rooms (`Authorization: Bearer …`). Without it anyone who reaches the
-    /// server can share. Pass it by environment, not on the command line.
+    /// Key needed to make rooms (`Authorization: Bearer …`). Required unless --open-create.
+    /// Pass it by environment, not on the command line.
     #[arg(long, env = "COLLAB_CREATE_KEY", hide_env_values = true)]
     create_key: Option<String>,
+    /// Run without a create key: anyone who reaches the server can make rooms.
+    #[arg(long, env = "COLLAB_OPEN_CREATE")]
+    open_create: bool,
     #[arg(long, env = "COLLAB_MAX_ROOMS", default_value_t = 5000)]
     max_rooms: usize,
     /// Largest room in MiB.
@@ -30,6 +33,10 @@ struct Cli {
     /// Take client addresses from X-Forwarded-For (behind Traefik, Caddy, nginx).
     #[arg(long, env = "COLLAB_TRUST_PROXY")]
     trust_proxy: bool,
+    /// Reverse proxies in front that append to X-Forwarded-For; the client is that many entries
+    /// from the right.
+    #[arg(long, env = "COLLAB_PROXY_HOPS", default_value_t = 1)]
+    proxy_hops: usize,
 }
 
 #[tokio::main]
@@ -43,6 +50,8 @@ async fn main() -> std::process::ExitCode {
     cfg.max_peers = cli.max_peers.max(1);
     cfg.idle_days = cli.idle_days;
     cfg.trust_proxy = cli.trust_proxy;
+    cfg.proxy_hops = cli.proxy_hops;
+    cfg.open_create = cli.open_create;
     let open = cfg.create_key.is_none();
     let listener = match tokio::net::TcpListener::bind(&cli.listen).await {
         Ok(l) => l,
