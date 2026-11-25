@@ -80,7 +80,8 @@ fn posted(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
 }
 
 /// Real names, contact data and the bank account of the made-up class.
-const SECRETS: &[&str] = &["Lea", "Müller", "Jonas", "Schmidt", "lea.mueller@example.org", "0171 2345678", "DE89 3704 0044 0532 0130 00", "Lindenstraße 5"];
+const SECRETS: &[&str] =
+    &["Lea", "Müller", "Klaus", "Jonas", "Schmidt", "lea.mueller@example.org", "0171 2345678", "DE89 3704 0044 0532 0130 00", "Lindenstraße 5"];
 
 /// Quality gate (AGENTS.md §6): with protection on, no real name or contact detail is in any
 /// byte the backend receives — not in the message, not in an attached document, not in memory,
@@ -102,7 +103,7 @@ fn no_real_name_reaches_the_backend() {
     std::fs::write(&notes, "Elternkontakt Jonas Schmidt: 0171 2345678, lea.mueller@example.org, Lindenstraße 5, 10115 Berlin").unwrap();
 
     let text = "Schreib eine Zeugnisbemerkung für Lea Müller (geb. 03.05.2014). Leas Mitarbeit ist gut, Jonas hilft ihr. \
-                Das Mark der Sache: IBAN DE89 3704 0044 0532 0130 00.";
+                Das Mark der Sache: IBAN DE89 3704 0044 0532 0130 00. Gestern war Klaus wieder unruhig.";
     // The preview shows exactly what goes out; "Mark" is unsure and replaced too (privacy first),
     // the person can take it back.
     let pv = engine.call("privacy.preview", json!({"text": text})).unwrap();
@@ -110,6 +111,8 @@ fn no_real_name_reaches_the_backend() {
     let out = pv["outgoing"].as_str().unwrap();
     assert!(out.starts_with("Schreib eine Zeugnisbemerkung für [S1] [N1] (geb. [Geburtsdatum 1]). [S1]s Mitarbeit ist gut, [S2] hilft ihr."), "{out}");
     assert!(out.contains("Das [S3] der Sache: IBAN [IBAN 1]."), "{out}");
+    // Klaus is in no class list: the built-in first names find him (unsure, replaced) (#73).
+    assert!(out.ends_with("Gestern war [Name 1] wieder unruhig."), "{out}");
     let mark = pv["hits"].as_array().unwrap().iter().find(|h| h["text"] == "Mark").unwrap();
     assert_eq!((mark["ambiguous"].as_bool(), mark["on"].as_bool()), (Some(true), Some(true)));
     assert!(engine.state().privacy.preview.as_ref().is_some_and(|p| p.outgoing == out));
@@ -136,7 +139,7 @@ fn no_real_name_reaches_the_backend() {
     assert!(s.messages[0].content.contains("[S1] [N1]") && !s.messages[0].content.contains("Müller"));
     assert_eq!(
         s.messages[0].activity.iter().find(|a| a.label == PROTECTED).and_then(|a| a.detail.clone()).as_deref(),
-        Some("12 Angaben ersetzt"),
+        Some("13 Angaben ersetzt"),
         "Mark (unsure) is replaced too"
     );
     assert!(s.messages[0].attachments[0].text.as_deref().unwrap_or("").contains("[Telefon 1]"));
@@ -168,6 +171,25 @@ fn no_real_name_reaches_the_backend() {
     engine.call("chat.delete", json!({"id": conv})).unwrap();
     assert!(mapping(engine.ctx(), &conv).entries.is_empty());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Stage c without a model (#73): a common first name is found without any class list once
+/// protection is on, replaced by default and kept with a tap.
+#[test]
+fn common_first_names_without_a_class_list() {
+    let (engine, seen) = engine_with(&["[Name 1] braucht Ruhe."]);
+    engine.call("chat.set_sources", json!({"protect": true})).unwrap();
+    let text = "Gestern war Klaus wieder unruhig, ich habe mit Frau Koch gesprochen. Die Rose blüht.";
+    let pv = engine.call("privacy.preview", json!({"text": text})).unwrap();
+    assert_eq!(pv["outgoing"], "Gestern war [Name 1] wieder unruhig, ich habe mit Frau [Name 2] gesprochen. Die Rose blüht.");
+    assert!(pv["hits"].as_array().unwrap().iter().all(|h| h["ambiguous"] == true && h["on"] == true));
+    let kept = engine.call("privacy.preview", json!({"text": text, "off": [{"text": "Klaus", "n": 0}]})).unwrap();
+    assert!(kept["outgoing"].as_str().unwrap().starts_with("Gestern war Klaus wieder"));
+    engine.call("chat.send", json!({"text": text})).unwrap();
+    let req = posted(&seen).pop().unwrap();
+    assert!(!req.contains("Klaus") && !req.contains("Koch") && req.contains("[Name 1]"), "{req}");
+    let s = engine.state();
+    assert_eq!(engine.shown_messages(&s)[1].content, "Klaus braucht Ruhe.");
 }
 
 /// Model calls outside a chat (revising a document, tidying memory) are protected too.

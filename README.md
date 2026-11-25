@@ -117,3 +117,5 @@ Fehler, Ideen und Code sind willkommen, siehe [CONTRIBUTING.md](CONTRIBUTING.md)
 ## Lizenz
 
 [MIT](LICENSE-MIT) oder [Apache 2.0](LICENSE-APACHE), nach Wahl.
+
+Ausnahme: die Vornamenliste für „Namen schützen“ (`crates/engine/src/privacy/vornamen.txt`) beruht auf den Vornamen der in Berlin geborenen Kinder, BerlinOnline GmbH auf Basis von Daten des LABO ([berlin/haeufige-vornamen-berlin](https://github.com/berlin/haeufige-vornamen-berlin)), unter [CC BY 3.0 DE](https://creativecommons.org/licenses/by/3.0/de/); bearbeitet (zusammengeführt, Wortnamen markiert, ergänzt).
