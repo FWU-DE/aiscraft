@@ -130,6 +130,8 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 **Whiteboards:** Doppelklick legt eine Notiz an. Eine ausgewählte Notiz zeigt „+“ an ihren Seiten für verbundene Notizen. Tab legt eine Unternotiz an. F1 oder „?“ auf dem Whiteboard zeigt alle Kürzel.
 
+**Zoomen auf dem Whiteboard:** Unten rechts auf der Zeichenfläche liegt eine kleine Leiste: „−“ und „+“ zoomen in festen Stufen um die Mitte der Ansicht (von 5 % bis 800 %), dazwischen steht die Zoomstufe. Ein Klick auf die Prozentzahl öffnet ein Menü mit **Alles zeigen** (Umschalt+1), **Auswahl zeigen** (Umschalt+2), 50 %, 100 % (Strg+0), 200 %, **Hineinzoomen** (Strg++) und **Herauszoomen** (Strg+−). Außerdem zoomen Strg+Mausrad und zwei Finger auf dem Touchpad oder Touchscreen.
+
 **Dateien vom Modell:** Modelle mit Werkzeugen erstellen auf Wunsch Excel-Tabellen (mit Kopfzeile und Formeln), PowerPoint-Folien (Titel, Stichpunkte, Tabellen, Sprechernotizen) sowie Word-Dateien und PDFs, z. B. „Mach mir eine Notenliste als Excel-Datei“. Die Datei erscheint als Karte unter der Antwort; „Speichern …“ fragt, wohin sie soll. AIS.ChatCraft führt dafür keinen Code des Modells aus. PDFs nutzen die Standardschriften; Emojis und seltene Zeichen erscheinen dort als ?.
 
 **Im Chat:** Der Schalter „Im Chat“ schickt das geöffnete Dokument oder Whiteboard mit der nächsten Nachricht als Kontext mit. Modelle mit Werkzeugen ändern es dann direkt. AIS.chat schlägt Änderungen in einem Block vor; unter der Antwort übernimmst du sie mit „Ins Dokument übernehmen“ oder „Aufs Whiteboard“.
