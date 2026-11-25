@@ -1,0 +1,14 @@
+# gitleaks: secret scan of the repository (.github/workflows/security.yml, job `gitleaks`).
+# Gitleaks' default rules, plus allowlists for fake keys in tests. Each entry says why it is fake.
+# A real secret is never allowlisted: rotate it, then remove it from the history.
+title = "AIS.ChatCraft"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake keys in tests and the demo snapshot (sk-ant-test, sk-test, …): local scripted servers only"
+regexes = [
+  '''sk-(ant-)?test[A-Za-z0-9_-]*''',
+  '''-----BEGIN (RSA )?PRIVATE KEY-----\\nAAAA\\n-----END (RSA )?PRIVATE KEY-----''',
+]
