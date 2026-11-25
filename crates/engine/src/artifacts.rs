@@ -468,6 +468,39 @@ pub(crate) fn context_block(c: &Ctx, id: &str, without_tools: bool) -> Result<St
     Ok(block)
 }
 
+/// The open document for a chat message, for Claude (API) (#39): a document or whiteboard goes
+/// as a document of its own (title, text), so the answer can cite it; the message keeps a short
+/// note naming it (and how to propose changes without tools). Other kinds go as `context_block`.
+pub(crate) fn context_document(c: &Ctx, id: &str, without_tools: bool) -> Result<(String, Option<(String, String)>)> {
+    let a = get_artifact(c, id)?;
+    if !matches!(a.kind, ArtifactKind::Document | ArtifactKind::Board) {
+        return Ok((context_block(c, id, without_tools)?, None));
+    }
+    let text = artifact_text(a.kind, &state_of(c, id)?)?;
+    let title = if a.title.trim().is_empty() { a.kind.label().to_string() } else { a.title.clone() };
+    let mut note = format!("(Das offene {} „{title}“ liegt als Dokument bei.)", a.kind.label());
+    if without_tools {
+        note.push_str(match a.kind {
+            ArtifactKind::Document => "\n\n(Wenn du dieses Dokument ändern sollst, gib die vollständige neue Fassung in einem Codeblock mit der Sprache `aiscraft-dokument` aus.)",
+            _ => "\n\n(Wenn du dieses Whiteboard ergänzen sollst, gib nur die neuen Punkte als eingerückte Markdown-Liste in einem Codeblock mit der Sprache `aiscraft-whiteboard` aus.)",
+        });
+    }
+    Ok((note, Some((title, text))))
+}
+
+/// The text of the document or whiteboard named `title` (for citations, #39): the chat's own
+/// first, else the newest one with that title.
+pub(crate) fn text_by_title(c: &Ctx, conv: &str, title: &str) -> Option<String> {
+    let state = c.state();
+    let a = state
+        .artifacts
+        .iter()
+        .filter(|a| matches!(a.kind, ArtifactKind::Document | ArtifactKind::Board))
+        .filter(|a| a.title == title || (a.title.trim().is_empty() && a.kind.label() == title))
+        .max_by_key(|a| (a.conversation_id.as_deref() == Some(conv), a.updated_at))?;
+    artifact_text(a.kind, &state_of(c, &a.id).ok()?).ok()
+}
+
 /// Marked change blocks in an answer: (kind, content), for "Ins Dokument übernehmen".
 pub fn change_blocks(answer: &str) -> Vec<(ArtifactKind, String)> {
     let mut out = Vec::new();

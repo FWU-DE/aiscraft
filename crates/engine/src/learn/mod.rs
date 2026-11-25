@@ -590,7 +590,7 @@ pub(crate) fn preview_gone_message(code: Option<i32>) -> String {
 }
 
 /// Opens a file with the system's default program (browser, PDF viewer).
-fn system_open(path: &Path) -> Result<()> {
+pub(crate) fn system_open(path: &Path) -> Result<()> {
     let mut cmd = if cfg!(target_os = "macos") {
         std::process::Command::new("open")
     } else if cfg!(target_os = "windows") {

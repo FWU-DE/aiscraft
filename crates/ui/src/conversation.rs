@@ -712,8 +712,10 @@ impl AisCraftApp {
             });
         } else if !m.content.is_empty() || images.is_empty() {
             // Diagrams from AIS.chat's create_plot tool come as ```jsxgraph-json blocks; formulas
-            // and Mermaid diagrams are drawn by crate::markup.
-            for (k, seg) in crate::markup::segments(&m.content).into_iter().enumerate() {
+            // and Mermaid diagrams are drawn by crate::markup. Cited statements get [n] markers
+            // (#39) that open the citation like the entries under the answer.
+            let content = crate::citations::with_markers(&m.content, &m.citations);
+            for (k, seg) in crate::markup::segments(&content).into_iter().enumerate() {
                 match seg {
                     crate::markup::Segment::Plot(src) => self.plot_block(ui, &m.id, k, src),
                     crate::markup::Segment::App(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::App, src),
@@ -726,6 +728,12 @@ impl AisCraftApp {
                         }
                     }
                 }
+            }
+            // Such addresses never reach the browser, also when a model writes one itself.
+            if let Some(i) = crate::citations::take_marker_click(ui.ctx())
+                && i < m.citations.len()
+            {
+                self.run("message.citation", json!({"message_id": m.id, "index": i}));
             }
         }
         sources_row(ui, &t, m);

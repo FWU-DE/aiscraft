@@ -97,11 +97,15 @@ pub(crate) fn open(c: &Ctx, p: &Value) -> Result<Value> {
             crate::files::is_text(&a.mime).then(|| std::fs::read_to_string(path).ok()).flatten()
         })
     });
-    // Not attached: a file of the chat's project knowledge (#32).
+    // Not attached: the chat's open document (sent as a document), else a file of the chat's
+    // project knowledge (#32).
     let (text, file_path) = match (text, file.as_ref().and_then(|a| a.local_path.clone())) {
-        (None, None) if citation.url.is_none() => match crate::knowledge::text_by_name(c, &conv, &citation.title) {
-            Some((t, p)) => (Some(t), Some(p)),
-            None => (None, None),
+        (None, None) if citation.url.is_none() => match crate::artifacts::text_by_title(c, &conv, &citation.title) {
+            Some(t) => (Some(t), None),
+            None => match crate::knowledge::text_by_name(c, &conv, &citation.title) {
+                Some((t, p)) => (Some(t), Some(p)),
+                None => (None, None),
+            },
         },
         other => other,
     };
@@ -123,9 +127,72 @@ pub(crate) fn open(c: &Ctx, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// A `file://` address for a local path, with `#page=N` for a PDF page (browsers' PDF viewers
+/// open there).
+pub(crate) fn file_url(path: &str, page: Option<u64>) -> String {
+    let unified = path.replace('\\', "/");
+    let mut out = String::from("file://");
+    if !unified.starts_with('/') {
+        out.push('/');
+    }
+    for b in unified.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => out.push(char::from(b)),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    if let Some(p) = page {
+        out.push_str(&format!("#page={p}"));
+    }
+    out
+}
+
+/// `message.citation_file`: open the file of the opened citation (or of `message_id`/`index`)
+/// with the system: a PDF in the browser's PDF viewer at the page, other files with their
+/// program. `dry_run` only says what would open.
+pub(crate) fn open_file(c: &Ctx, p: &Value) -> Result<Value> {
+    let view = if p.get("message_id").is_some() || p.get("index").is_some() {
+        let v = open(c, p)?;
+        serde_json::from_value::<CitationView>(v)?
+    } else {
+        c.state().citation.clone().ok_or_else(|| Error::invalid("Kein Beleg offen (message_id und index angeben)"))?
+    };
+    let path = view.path.clone().ok_or_else(|| Error::not_found("Zu diesem Beleg liegt keine Datei auf diesem Gerät"))?;
+    if !std::path::Path::new(&path).is_file() {
+        return Err(Error::not_found(format!("Die Datei {} gibt es nicht mehr", view.citation.title)));
+    }
+    let pdf = path.to_lowercase().ends_with(".pdf");
+    let page = view.citation.pages.map(|(a, _)| a).filter(|_| pdf);
+    let url = page.map(|n| file_url(&path, Some(n)));
+    let out = json!({"path": path, "page": page, "url": url});
+    if p.get("dry_run").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(out);
+    }
+    if !c.0.browser_allowed {
+        return Err(Error::unsupported("In dieser Umgebung öffnet AIS.ChatCraft keine Dateien (Tests, Skripte, AISCRAFT_NO_BROWSER)"));
+    }
+    // A PDF at its page in the browser; when that fails, the file with its program and the page
+    // named in a note.
+    let at_page = url.as_deref().is_some_and(|u| webbrowser::open(u).is_ok());
+    if !at_page {
+        crate::learn::system_open(std::path::Path::new(&path))?;
+        if let Some(n) = view.citation.pages.map(|(a, _)| a) {
+            c.notice(crate::NoticeLevel::Info, format!("{} geöffnet – die Stelle steht auf Seite {n}.", view.citation.title));
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_urls_point_at_the_page() {
+        assert_eq!(file_url("/home/a/Lehrplan Bio.pdf", Some(3)), "file:///home/a/Lehrplan%20Bio.pdf#page=3");
+        assert_eq!(file_url(r"C:\Daten\plan#1.pdf", None), "file:///C:/Daten/plan%231.pdf");
+        assert_eq!(file_url("/ä.pdf", Some(1)), "file:///%C3%A4.pdf#page=1");
+    }
 
     #[test]
     fn the_passage_is_found_by_position_or_by_text() {

@@ -195,7 +195,16 @@ fn citations_show_under_the_answer_and_open_at_the_passage() {
         h.query_by_label("Beleg").is_some() && h.query_by_label_contains("Igel fressen Insekten. Im Winter halten sie Winterschlaf.").is_some()
     });
     assert_eq!(engine.state().citation.as_ref().map(|c| c.passage.as_str()), Some("Im Winter halten sie Winterschlaf."));
+    // The original file can be opened from the window (a text file: no page).
+    assert!(h.query_by_label("Datei öffnen").is_some(), "the window offers the original");
     engine.call("message.citation", json!({"close": true})).unwrap();
     step_until(&mut h, "the window closes", |h| h.query_by_label("Beleg").is_none());
+    // The [1] marker after the cited sentence in the answer opens the same citation, and no
+    // browser is asked to open its address.
+    step_until(&mut h, "the marker shows in the answer", |h| h.query_by_label("[1]").is_some());
+    let e = engine.clone();
+    click_until(&mut h, "[1]", "the marker opens the citation", move |_| e.state().citation.as_ref().is_some_and(|c| c.index == 0));
+    let opened = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::OpenUrl(u) if u.url.starts_with("aiscraft-beleg:")));
+    assert!(!opened, "the marker stays in the app");
     let _ = std::fs::remove_dir_all(dir);
 }

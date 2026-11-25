@@ -358,11 +358,19 @@ pub(crate) async fn send_full(
         );
     }
 
-    let context = match artifact {
-        Some(id) => Some(crate::artifacts::context_block(&c, &id, !caps.tools && !caps.tools_via_mcp)?),
-        None => None,
+    // The open document: for Claude (API) a document of its own that the answer can cite (#39),
+    // elsewhere text in front of the message.
+    let model_id = c.state().conversation(&conv).map(|x| x.model_id.clone()).unwrap_or_default();
+    let without_tools = !caps.tools && !caps.tools_via_mcp;
+    let (context, doc) = match artifact {
+        Some(id) if aiscraft_core::speaks_anthropic(backend.config().kind, &model_id) => {
+            let (note, doc) = crate::artifacts::context_document(&c, &id, without_tools)?;
+            (Some(note), doc)
+        }
+        Some(id) => (Some(crate::artifacts::context_block(&c, &id, without_tools)?), None),
+        None => (None, None),
     };
-    generate_with(c, conv, context, true).await
+    generate_with_doc(c, conv, context, doc, true).await
 }
 
 /// The step that marks a message as sent through the „Namen schützen“ preview.
@@ -818,6 +826,11 @@ fn put_message(c: &Ctx, conv_id: &str, m: &Message) {
 }
 
 async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interactive: bool) -> Result<Value> {
+    generate_with_doc(c, conv_id, context, None, interactive).await
+}
+
+/// `doc`: the open document as (title, text), sent as a document for Claude (API) (#39).
+async fn generate_with_doc(c: Ctx, conv_id: String, context: Option<String>, doc: Option<(String, String)>, interactive: bool) -> Result<Value> {
     let conv = c.state().conversation(&conv_id).cloned().ok_or_else(|| Error::not_found("Chat nicht gefunden"))?;
     let backend = c.backend(&conv.backend_id)?;
     let caps = backend.capabilities().for_model(backend.config().kind, &conv.model_id);
@@ -944,21 +957,28 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         let mut history = c.store(|st| st.messages(&conv_id))?;
         history.retain(|m| m.id != answer.id);
         files::hydrate(&mut history);
-        if as_documents
-            && let Some(k) = &knowledge
+        if let Some(g) = guard.as_mut() {
+            g.messages(&mut history);
+        }
+        // Project files and the open document as documents of their own for Claude (API), so
+        // the answer can cite them (#39). They pass „Namen schützen“ here, also when the message
+        // itself was reviewed before sending.
+        let docs: Vec<&(String, String)> =
+            if as_documents { knowledge.iter().flat_map(|k| k.docs.iter()).chain(doc.iter()).collect() } else { doc.iter().collect() };
+        if !docs.is_empty()
             && let Some(last) = history.iter_mut().rev().find(|m| m.role == Role::User)
         {
-            for (name, text) in &k.docs {
+            for (name, text) in docs {
                 last.attachments.push(aiscraft_core::Attachment {
                     name: name.clone(),
                     mime: "text/plain".into(),
-                    text: Some(text.clone()),
+                    text: Some(match guard.as_mut() {
+                        Some(g) => g.text(text),
+                        None => text.clone(),
+                    }),
                     ..Default::default()
                 });
             }
-        }
-        if let Some(g) = guard.as_mut() {
-            g.messages(&mut history);
         }
         // An attached document or board goes in front of the last user message, for this request only.
         if let Some(ctx_block) = &context
