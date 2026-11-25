@@ -502,3 +502,25 @@ fn voice_mode_listens_answers_reads_aloud_and_listens_again() {
     }
     assert!(!dev.recording.load(std::sync::atomic::Ordering::Relaxed), "the loop let go of the microphone");
 }
+
+/// AIS.chat keeps the chat in its own history, so project files go there only with the same
+/// consent as memory and project instructions (`inline`); without it nothing of them is sent.
+#[test]
+fn project_files_reach_ais_chat_only_with_consent() {
+    let (engine, posted) = crate::tests::ais_engine();
+    let dir = temp_dir("knowledge-ais");
+    let txt = dir.join("lehrplan.txt");
+    std::fs::write(&txt, "Lehrplan Biologie 7: Igel und Winterschlaf.").unwrap();
+    let pid = engine.call("project.create", json!({"name": "Bio 7b"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("project.file_add", json!({"project": pid, "path": txt.display().to_string()})).unwrap();
+    engine.call("chat.new", json!({"project": pid, "backend": "ais-chat", "model": "m-uuid"})).unwrap();
+    engine.call("chat.send", json!({"text": "Plane die Stunde"})).unwrap();
+    let sent = posted.lock().unwrap().join("\n");
+    assert!(sent.contains("Plane die Stunde"), "the message went out: {sent}");
+    assert!(!sent.contains("Winterschlaf"), "no project files without consent");
+    assert!(engine.state().messages[0].activity.iter().all(|s| s.label != crate::knowledge::KNOWLEDGE));
+    engine.call("chat.set_sources", json!({"inline": true})).unwrap();
+    engine.call("chat.send", json!({"text": "Und die nächste"})).unwrap();
+    assert!(posted.lock().unwrap().join("\n").contains("Winterschlaf"), "with consent they go along");
+    let _ = std::fs::remove_dir_all(dir);
+}

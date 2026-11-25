@@ -860,8 +860,10 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     // skills and earlier chats once per chat. The message says what went along.
     let inline = inline_context(&c, &conv, caps.system_prompt, &request);
     // Project knowledge (#32): fitting parts of the project's files; documents with citations for
-    // Claude (API), text in front of the message elsewhere. The message names the files.
-    let knowledge = crate::knowledge::pick(&c, &conv, &request, caps.remote_history);
+    // Claude (API), text in front of the message elsewhere. The message names the files. Backends
+    // without a system prompt (AIS.chat) keep it in their history, so it needs the same consent as
+    // memory and project instructions (`inline`).
+    let knowledge = if caps.system_prompt || conv.sources.inline { crate::knowledge::pick(&c, &conv, &request, caps.remote_history) } else { None };
     let as_documents = aiscraft_core::speaks_anthropic(backend.config().kind, &conv.model_id);
     let mut last_user = last_user;
     if let (Some(k), Some(user)) = (&knowledge, last_user.as_mut()) {
