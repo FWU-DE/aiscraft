@@ -31,7 +31,8 @@ pub(crate) struct ToolRuntime {
     files: Mutex<HashMap<String, Vec<aiscraft_core::Attachment>>>,
     /// Views of tool results (#74) by call id, until the chat loop puts them on the tool message.
     views: Mutex<HashMap<String, aiscraft_core::ToolView>>,
-    /// Structured results of calls from a view, by tool name, until the view gets them.
+    /// Structured results of calls from a view, by call id, until the view that made the call
+    /// gets them (two views calling the same tool never get each other's).
     structured: Mutex<HashMap<String, Value>>,
     /// Views open right now (#74), for host events.
     pub(crate) open_views: crate::apps::OpenViews,
@@ -120,7 +121,7 @@ async fn web_fetch(c: &Ctx, a: &Value) -> Result<String> {
             page.title.replace('\n', " "),
             page.url,
             // A page cannot close the data block it is shown in.
-            page.text.replace("untrusted_tool_result", "untrusted-tool-result")
+            defang(&page.text)
         ),
     ))
 }
@@ -197,9 +198,7 @@ async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<Stri
         }
         "schedule_create" => {
             let mut p = a.clone();
-            if let Some(o) = p.as_object_mut()
-                && let Some(conv) = c.state().current.clone()
-            {
+            if let Some(o) = p.as_object_mut() {
                 // A check-in answers in the chat it was promised in.
                 o.insert("conversation".into(), json!(conv));
             }
@@ -215,6 +214,50 @@ async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<Stri
         }
         _ => return None,
     })
+}
+
+// ---- app actions: built-in tools that act later or elsewhere -------------------------------
+
+/// Built-in tools whose effect outlives the answer: a schedule sends its prompt into a chat
+/// later, a task works in the background. A model must not plant either on its own (a web page
+/// could ask for it), so they need the owner's yes, unless the owner's current request covers
+/// them or an allowing rule names them. Work without a person present never starts them.
+const APP_ACTIONS: &[&str] = &["schedule_create", "task_start"];
+
+/// The connector id app actions use for the trust check, the question, rules and the log.
+pub(crate) const APP_ID: &str = "aiscraft-app";
+
+fn is_app_action(name: &str) -> bool {
+    APP_ACTIONS.contains(&name)
+}
+
+fn app_view() -> ConnectorView {
+    ConnectorView {
+        id: APP_ID.into(),
+        name: "AIS.ChatCraft".into(),
+        enabled: true,
+        target: String::new(),
+        status: "connected".into(),
+        error: None,
+        tools: Vec::new(),
+        extension: None,
+    }
+}
+
+fn app_tool(name: &str) -> ConnectorTool {
+    let spec = builtin_specs().into_iter().find(|s| s.name == name);
+    ConnectorTool {
+        llm_name: name.to_string(),
+        name: name.to_string(),
+        title: if name == "task_start" { "Aufgabe starten" } else { "Zeitplan anlegen" }.into(),
+        description: spec.as_ref().map(|s| s.description.clone()).unwrap_or_default(),
+        read_only: false,
+        destructive: false,
+        input_schema: spec.map(|s| s.input_schema).unwrap_or(Value::Null),
+        ui_resource: None,
+        app_only: false,
+        app_callable: false,
+    }
 }
 
 // ---- file tools (#38): spreadsheets, slides, Word and PDF; see office.rs --------------------
@@ -275,8 +318,20 @@ pub(crate) fn specs_for(c: &Ctx, sources: &aiscraft_core::Sources) -> Vec<ToolSp
     out
 }
 
+/// Tool output cannot close or open the data block it is shown in: every spelling of the tag's
+/// name (any case, `_`, `-`, space or nothing between the words) becomes a harmless one.
+pub(crate) fn defang(text: &str) -> String {
+    static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+    match RE.get_or_init(|| regex::Regex::new(r"(?i)untrusted[\s_\-]*tool[\s_\-]*result").ok()) {
+        Some(re) => re.replace_all(text, "untrusted-tool-result").into_owned(),
+        None => text.replace("untrusted_tool_result", "untrusted-tool-result"),
+    }
+}
+
 /// Marks tool output as data for the model.
 fn wrap_untrusted(tool: &str, text: &str) -> String {
+    let text = defang(text);
+    let text = text.as_str();
     let mut t: String = text.chars().take(MAX_RESULT_CHARS).collect();
     if text.chars().count() > MAX_RESULT_CHARS {
         t.push_str("\n… (gekürzt)");
@@ -326,7 +381,7 @@ fn args_hash(args: &Value) -> String {
 
 /// Whether a call needs the owner (a connector tool that is not read-only, or a vault value).
 fn needs_owner(c: &Ctx, call: &ToolCall) -> bool {
-    if call.arguments.to_string().contains("{{vault:") {
+    if call.arguments.to_string().contains("{{vault:") || is_app_action(&call.name) {
         return true;
     }
     if crate::local_files::is_tool(&call.name) {
@@ -411,31 +466,45 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     // question and the action log name exactly what will run.
     let normalized;
     let call = if crate::sandbox::is_tool(&call.name) {
-        normalized = ToolCall { arguments: crate::sandbox::normalize(&call.name, &call.arguments), ..call.clone() };
+        normalized = ToolCall { arguments: crate::sandbox::normalize(&call.name, &call.arguments, c.state().sandbox.network), ..call.clone() };
         &normalized
     } else {
         call
     };
     // Built-in tools work on the person's own files and documents: placeholders of „Namen
-    // schützen“ become the names again there (#55). Connectors get the call as the model wrote it.
+    // schützen“ become the names again there (#55). Connectors get the call as the model wrote it,
+    // and so does the page reader: a web address goes over the network and keeps the placeholders.
     let local = ToolCall { arguments: crate::privacy::reveal_value(c, conv, &call.arguments), ..call.clone() };
-    if let Some(r) = run_file_tool(c, conv, &local) {
-        return Prep::Done(match r {
-            Ok(t) => (t, false, "ok"),
-            Err(e) => (e.message, true, "error"),
-        });
-    }
-    if let Some(r) = run_builtin(c, conv, &local).await {
-        return Prep::Done(match r {
-            Ok(t) => (t, false, "ok"),
-            Err(e) => (e.message, true, "error"),
-        });
+    let is_app = is_app_action(&call.name);
+    if !is_app {
+        if let Some(r) = run_file_tool(c, conv, &local) {
+            return Prep::Done(match r {
+                Ok(t) => (t, false, "ok"),
+                Err(e) => (e.message, true, "error"),
+            });
+        }
+        if let Some(r) = run_builtin(c, conv, if call.name == WEB_FETCH { call } else { &local }).await {
+            return Prep::Done(match r {
+                Ok(t) => (t, false, "ok"),
+                Err(e) => (e.message, true, "error"),
+            });
+        }
     }
     // Local files (#25): the person's own files, so with the names „Namen schützen“ replaced.
     let is_local = crate::local_files::is_tool(&call.name);
     // The own computer (#94) is local too: its files are the person's work, with the names.
     let is_sandbox = crate::sandbox::is_tool(&call.name);
-    let found = if is_local {
+    let found = if is_app {
+        if call.name == "task_start" && c.state().conversation(conv).is_some_and(|x| x.title.starts_with("▶ ")) {
+            return Prep::Done(("In einer Aufgabe startet keine weitere Aufgabe.".into(), true, "denied"));
+        }
+        // Without a person present nothing plans or starts more work: a schedule's prompt or a
+        // task must not plant another one.
+        if !interactive {
+            return Prep::Done(("Abgelehnt: Zeitpläne und Aufgaben legt nur die Person an, und gerade ist niemand da.".into(), true, "denied"));
+        }
+        Some((app_view(), app_tool(&call.name)))
+    } else if is_local {
         match crate::local_files::prepare(c, &call.name, &local.arguments, interactive) {
             Ok(tool) => Some((crate::local_files::view(), tool)),
             Err(why) => return Prep::Done((why, true, if interactive { "error" } else { "denied" })),
@@ -458,14 +527,20 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     // The model may only call what this chat offers; a name it made up or remembered from
     // before the sources changed does not run.
     if let Some(conv_sources) = c.state().conversation(conv).map(|x| x.sources.clone())
+        && !is_app
         && !conv_sources.allows_connector(&conn.id)
     {
         return Prep::Done((format!("{} ist in diesem Chat nicht freigegeben.", conn.name), true, "denied"));
     }
-    // Vault placeholders: fill them in here; using a secret always needs the owner's yes.
-    let (arguments, secrets) = match crate::vault::fill(c, if is_local || is_sandbox { &local.arguments } else { &call.arguments }) {
-        Ok(x) => x,
-        Err(e) => return Prep::Done((e.message, true, "error")),
+    // Vault placeholders: fill them in here; using a secret always needs the owner's yes. A
+    // schedule or a task keeps them as written: no secret is stored in a prompt.
+    let (arguments, secrets) = if is_app {
+        (local.arguments.clone(), Vec::new())
+    } else {
+        match crate::vault::fill(c, if is_local || is_sandbox { &local.arguments } else { &call.arguments }) {
+            Ok(x) => x,
+            Err(e) => return Prep::Done((e.message, true, "error")),
+        }
     };
     let ready = Box::new(Ready { conn, tool, call: call.clone(), arguments, secrets, why: crate::action_log::Why::ReadOnly });
     // While local files are off, the first call asks once: the yes switches them on and runs it.
@@ -501,7 +576,12 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     }
     // A rule the owner set runs what it names; a covering request does when that is switched on.
     // Deleting tools and vault values always ask.
-    let covered = trust.as_ref().is_some_and(|t| t.covered && (t.rule.is_some() || settings.auto_allow_covered));
+    // A schedule or a task is covered only by the request being answered right now, never by
+    // an older message of the chat.
+    let current = ev.current_source();
+    let covered = trust
+        .as_ref()
+        .is_some_and(|t| t.covered && (t.rule.is_some() || (settings.auto_allow_covered && (!is_app || current.as_deref() == Some(t.source.as_str())))));
     let auto = covered && !ready.tool.destructive && ready.secrets.is_empty();
     // The same action ended uncertain before: the person checks first, nothing reruns on its own.
     let hash = args_hash(&call.arguments);
@@ -572,6 +652,24 @@ async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> O
             let _ = c.store(|st| st.finish_claim(key, state, crate::now_ms()));
         }
     };
+    // A schedule or a task the owner allowed: AIS.ChatCraft's own work, its text is no data.
+    if r.conn.id == APP_ID {
+        let call = ToolCall { arguments: r.arguments.clone(), ..r.call.clone() };
+        return match run_builtin(c, conv, &call).await {
+            Some(Ok(text)) => {
+                finish("done");
+                (text, false, "ok")
+            }
+            Some(Err(e)) => {
+                finish("failed");
+                (e.message, true, "error")
+            }
+            None => {
+                finish("failed");
+                (format!("Werkzeug {} gibt es nicht.", r.call.name), true, "error")
+            }
+        };
+    }
     if r.conn.id == crate::local_files::ID {
         return match crate::local_files::execute(c, &r.tool.name, &r.arguments) {
             Ok(text) => {
@@ -593,7 +691,7 @@ async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> O
                     c.0.tools.files.lock().unwrap_or_else(PoisonError::into_inner).entry(conv.to_string()).or_default().extend(files);
                 }
                 // A command's output cannot close the data block it is shown in.
-                let text = crate::vault::scrub(&text, &r.secrets).replace("untrusted_tool_result", "untrusted-tool-result");
+                let text = crate::vault::scrub(&text, &r.secrets);
                 (wrap_untrusted(&r.call.name, &text), false, "ok")
             }
             Err(e) => {
@@ -947,8 +1045,8 @@ fn remember_view(c: &Ctx, r: &Ready, res: &aiscraft_mcp::ToolResult) {
             s.clear();
         }
         match structured {
-            Some(v) => s.insert(r.call.name.clone(), v),
-            None => s.remove(&r.call.name),
+            Some(v) => s.insert(r.call.id.clone(), v),
+            None => s.remove(&r.call.id),
         };
     }
 }
@@ -958,19 +1056,36 @@ pub(crate) fn take_view(c: &Ctx, call_id: &str) -> Option<aiscraft_core::ToolVie
     c.0.tools.views.lock().unwrap_or_else(PoisonError::into_inner).remove(call_id)
 }
 
-/// The structured result of a view's last call of this tool.
-pub(crate) fn take_structured(c: &Ctx, llm_name: &str) -> Option<Value> {
-    c.0.tools.structured.lock().unwrap_or_else(PoisonError::into_inner).remove(llm_name)
+/// The structured result of the view call `call_id`, taken out (once).
+fn take_structured(c: &Ctx, call_id: &str) -> Option<Value> {
+    c.0.tools.structured.lock().unwrap_or_else(PoisonError::into_inner).remove(call_id)
+}
+
+/// Tests: a structured result waiting for another view's call.
+#[cfg(test)]
+pub(crate) fn plant_structured(c: &Ctx, call_id: &str, v: Value) -> bool {
+    let mut s = c.0.tools.structured.lock().unwrap_or_else(PoisonError::into_inner);
+    s.insert(call_id.to_string(), v);
+    s.contains_key(call_id)
+}
+
+/// Tests: whether a structured result still waits for `call_id`.
+#[cfg(test)]
+pub(crate) fn structured_waits(c: &Ctx, call_id: &str) -> bool {
+    c.0.tools.structured.lock().unwrap_or_else(PoisonError::into_inner).contains_key(call_id)
 }
 
 const VIEW_CALL: &str = "view-";
 
 /// A call from a view (#74): the same rules as a call of the model with no request of the
-/// person behind it, so a read runs and everything else asks.
-pub(crate) async fn run_from_view(c: &Ctx, conv: &str, llm_name: &str, arguments: Value) -> Outcome {
+/// person behind it, so a read runs and everything else asks. Also gives the call's structured
+/// result, found by this call's own id, so a view never gets the result of another view's call
+/// of the same tool.
+pub(crate) async fn run_from_view(c: &Ctx, conv: &str, llm_name: &str, arguments: Value) -> (Outcome, Option<Value>) {
     let call = ToolCall { id: format!("{VIEW_CALL}{}", new_id()), name: llm_name.to_string(), arguments, outcome: None };
     let ev = crate::trust::Evidence { from_view: true, ..Default::default() };
-    run(c, conv, &call, &ev, true).await
+    let out = run(c, conv, &call, &ev, true).await;
+    (out, take_structured(c, &call.id))
 }
 
 /// The text of a tool result without the marks for the model.

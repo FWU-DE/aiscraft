@@ -115,36 +115,58 @@ pub fn html_title(html: &str) -> Option<String> {
     (!t.is_empty()).then_some(t)
 }
 
-/// The HTML with our Content-Security-Policy as the first thing the browser reads in the
-/// document, and meta refreshes (navigation without a click) disarmed. A policy the app
-/// brings itself stays, but cannot widen ours: browsers enforce every policy.
+/// The HTML with our Content-Security-Policy as the very first element of the document: right
+/// after a leading doctype, else at the very start, before anything the app wrote (a comment,
+/// an `<html>` tag with odd attributes, a script). The parser puts it into the head it opens
+/// for it; the app's own `<html>` and `<head>` tags join those. A policy the app brings itself
+/// stays, but cannot widen ours: browsers enforce every policy.
+///
+/// Every other `http-equiv` in the text is renamed (`data-equiv`, same length), so no meta
+/// refresh (navigation without a click) and no other pragma of the app takes effect, however it
+/// is spelled or quoted; the charset the app may have declared that way comes back as
+/// `<meta charset="utf-8">` (the file is always UTF-8).
 pub fn with_csp(html: &str) -> String {
-    let meta = format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{CSP}\">");
-    let lower = html.to_ascii_lowercase();
-    // Meta refresh would leave the page; neutralise the attribute value (same length, so the
-    // offsets in `lower` stay valid).
-    let mut body = html.to_string();
-    let mut from = 0;
-    while let Some(i) = lower.get(from..).and_then(|r| r.find("http-equiv")).map(|i| i + from) {
-        let rest = lower.get(i..i + 40).unwrap_or("");
-        if rest.contains("refresh")
-            && let Some(j) = rest.find("refresh")
-        {
-            body.replace_range(i + j..i + j + 7, "nothing");
-        }
-        from = i + 10;
-    }
-    // After the <html …> tag, else after the doctype, else at the very start.
-    let insert_at = match lower.find("<html") {
-        Some(i) => lower.get(i..).and_then(|r| r.find('>')).map(|j| i + j + 1),
-        None => lower.find("<!doctype").and_then(|i| lower.get(i..).and_then(|r| r.find('>')).map(|j| i + j + 1)),
-    }
-    .unwrap_or(0);
+    let meta = format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{CSP}\"><meta charset=\"utf-8\">");
+    let body = disarm_http_equiv(html);
+    let insert_at = doctype_end(&body);
     let mut out = String::with_capacity(body.len() + meta.len());
     out.push_str(body.get(..insert_at).unwrap_or(""));
     out.push_str(&meta);
     out.push_str(body.get(insert_at..).unwrap_or(""));
     out
+}
+
+/// Where a doctype at the very start ends (after a byte order mark and white space); 0 without
+/// one. A doctype ends at its first `>`, quotes or not (HTML parsing rules).
+fn doctype_end(html: &str) -> usize {
+    let start = html.strip_prefix('\u{feff}').map_or(0, |_| '\u{feff}'.len_utf8());
+    let lead = html.get(start..).unwrap_or("");
+    let ws = lead.len() - lead.trim_start_matches(['\t', '\n', '\x0c', '\r', ' ']).len();
+    let at = start + ws;
+    let rest = html.get(at..).unwrap_or("");
+    if !rest.get(..9).is_some_and(|p| p.eq_ignore_ascii_case("<!doctype")) {
+        return 0;
+    }
+    rest.find('>').map_or(0, |j| at + j + 1)
+}
+
+/// `http-equiv` (any case) renamed to `data-equiv` everywhere in the text.
+fn disarm_http_equiv(html: &str) -> String {
+    const NAME: &[u8] = b"http-equiv";
+    let mut bytes = html.as_bytes().to_vec();
+    let mut i = 0;
+    while let Some(window) = bytes.get(i..i + NAME.len()) {
+        if window.eq_ignore_ascii_case(NAME) {
+            if let Some(w) = bytes.get_mut(i..i + 4) {
+                w.copy_from_slice(b"data");
+            }
+            i += NAME.len();
+        } else {
+            i += 1;
+        }
+    }
+    // Only ASCII bytes were replaced by ASCII bytes, so the text stays UTF-8.
+    String::from_utf8(bytes).unwrap_or_default()
 }
 
 // ---- prompts ---------------------------------------------------------------------------------
@@ -536,14 +558,24 @@ pub(crate) fn preview_program(c: &Ctx) -> Option<PathBuf> {
     c.0.preview.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone().filter(|b| b.is_file())
 }
 
+/// The preview's arguments: `args`, then `--title` with the title as its value. The title is
+/// the model's text: the preview reads its arguments positionally (a flag takes the next
+/// argument as its value, whatever it looks like), so `--bridge` in a title stays a title.
+/// Control characters are dropped, at most 80 characters.
+pub(crate) fn preview_args(args: &[&std::ffi::OsStr], title: &str) -> Vec<std::ffi::OsString> {
+    let title: String = title.chars().filter(|ch| !ch.is_control()).take(80).collect();
+    let mut out: Vec<std::ffi::OsString> = args.iter().map(|a| a.to_os_string()).collect();
+    out.push("--title".into());
+    out.push(title.into());
+    out
+}
+
 /// Starts the preview program with `args` and a window title; false when it is not installed
 /// or did not start.
 pub(crate) fn spawn_preview(c: &Ctx, args: &[&std::ffi::OsStr], title: &str) -> bool {
     if let Some(bin) = preview_program(c) {
         let child = std::process::Command::new(&bin)
-            .args(args)
-            .arg("--title")
-            .arg(title.chars().take(80).collect::<String>())
+            .args(preview_args(args, title))
             .arg("--watch-stdin")
             // The preview exits when this pipe closes, i.e. when AIS.ChatCraft exits.
             .stdin(std::process::Stdio::piped())
@@ -999,14 +1031,63 @@ mod tests {
         let csp_at = out.find("Content-Security-Policy").unwrap();
         assert!(csp_at < out.find("<head>").unwrap() && csp_at < out.find("<script>").unwrap());
         assert!(out.contains(CSP));
-        assert!(!out.to_lowercase().contains("\"refresh\""), "{out}");
+        assert_eq!(out.to_ascii_lowercase().matches("http-equiv").count(), 1, "{out}");
         assert!(out.contains("default-src 'none'"));
-        // Without <html>, after the doctype; without both, at the start.
-        assert!(with_csp("<!doctype html><p>x").starts_with("<!doctype html><meta http-equiv"));
-        assert!(with_csp("<p>x").starts_with("<meta http-equiv"));
-        for s in ["", "<html", "<!doctype", "ä<html ä>ö", "http-equiv", "http-equiv=refresh"] {
-            let _ = with_csp(s);
+        // After a leading doctype; without one, at the very start.
+        assert!(with_csp("<!doctype html><p>x").starts_with("<!doctype html><meta http-equiv=\"Content-Security-Policy\""));
+        assert!(with_csp("\u{feff}\n <!DOCTYPE html>x").starts_with("\u{feff}\n <!DOCTYPE html><meta http-equiv=\"Content-Security-Policy\""));
+        assert!(with_csp("<p>x").starts_with("<meta http-equiv=\"Content-Security-Policy\""));
+        for s in ["", "<html", "<!doctype", "ä<html ä>ö", "http-equiv", "http-equiv=refresh", "ääHTTP-EQUIVöö", "<!doctypeä"] {
+            let out = with_csp(s);
+            assert_eq!(out.matches("http-equiv").count(), 1, "{s}");
         }
+    }
+
+    /// Inputs that slipped past the old insertion after the first `<html …>`: quotes, comments,
+    /// scripts before the tag. The policy is first, before any script, every time.
+    #[test]
+    fn csp_cannot_be_pushed_behind_a_script() {
+        for evil in [
+            "<html lang=\">\"><script>alert(1)</script>",
+            "<!-- <html> --><script>alert(1)</script><html>",
+            "<script>alert(1)</script><html>",
+            "<!doctype html><!-- <html> --><script>alert(1)</script>",
+            "<!--><script>alert(1)</script>--><html>",
+            "<svg><script>alert(1)</script></svg><html>",
+            "  <!doctype html foo=\">\"><script>alert(1)</script>",
+        ] {
+            let out = with_csp(evil);
+            let csp = out.find("Content-Security-Policy").unwrap();
+            let script = out.find("<script>").unwrap();
+            assert!(csp < script, "{evil} -> {out}");
+            // Nothing but a doctype (and white space) comes before the policy.
+            let before = out.get(..out.find("<meta http-equiv=\"Content-Security-Policy\"").unwrap()).unwrap().trim();
+            assert!(before.is_empty() || (before.to_ascii_lowercase().starts_with("<!doctype") && before.matches('<').count() == 1), "{evil} -> {out}");
+        }
+        // Every meta refresh, however it is written, is disarmed.
+        for refresh in [
+            "<meta http-equiv=refresh content=\"0;url=https://evil.example\">",
+            "<meta HTTP-EQUIV='Refresh' content='0; url=https://evil.example'>",
+            "<meta content=\"0;url=https://evil.example\"                                                  http-equiv=\"refresh\">",
+            "<meta http-equiv                                                    =   \"refresh\" content=\"0;url=x\">",
+            "<META Http-Equiv=\"REFRESH\" content=0;url=x>",
+        ] {
+            let out = with_csp(&format!("<!doctype html><html><head>{refresh}</head></html>"));
+            assert_eq!(out.to_ascii_lowercase().matches("http-equiv").count(), 1, "{out}");
+            assert!(out.to_ascii_lowercase().contains("data-equiv"), "{out}");
+        }
+    }
+
+    #[test]
+    fn a_title_is_one_argument_after_title() {
+        let path = std::ffi::OsStr::new("a.html");
+        let out = preview_args(&[std::ffi::OsStr::new("--file"), path], "--bridge --connect https://evil.example\n");
+        assert_eq!(out.len(), 4);
+        assert_eq!(out.get(2).and_then(|a| a.to_str()), Some("--title"));
+        assert_eq!(out.get(3).and_then(|a| a.to_str()), Some("--bridge --connect https://evil.example"));
+        let out = preview_args(&[], "--bridge");
+        assert_eq!(out, vec![std::ffi::OsString::from("--title"), "--bridge".into()]);
+        assert_eq!(preview_args(&[], &"x".repeat(500)).get(1).map(|a| a.len()), Some(80));
     }
 
     #[test]

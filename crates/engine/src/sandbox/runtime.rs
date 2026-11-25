@@ -183,6 +183,8 @@ pub(crate) struct Fake {
     pub(crate) calls: Mutex<Vec<FakeCall>>,
     /// The probe's answer (`Err`: WSL missing).
     pub(crate) missing: Mutex<Option<String>>,
+    /// The working folders are over their limit (the prepare script says so).
+    pub(crate) full: Mutex<bool>,
     exists: Mutex<bool>,
     /// Files by machine path (`/work/<chat>/<path>`).
     files: Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
@@ -227,6 +229,9 @@ impl Fake {
     fn answer(&self, argv: &[String], stdin: &[u8]) -> Output {
         use super::container as k;
         let ok = |out: &[u8]| Output { code: Some(0), stdout: out.to_vec(), ..Default::default() };
+        if argv.get(2).map(String::as_str) == Some(k::PREPARE_SCRIPT) && *self.full.lock().unwrap_or_else(PoisonError::into_inner) {
+            return Output { code: Some(4), stderr: "Der Arbeitsordner dieses Chats ist voll (über 2048 MB).".as_bytes().to_vec(), ..Default::default() };
+        }
         if argv.get(2).map(String::as_str) == Some(k::CLEAR_SCRIPT) {
             let prefix = format!("/work/{}/", argv.get(4).map(String::as_str).unwrap_or("?"));
             self.files.lock().unwrap_or_else(PoisonError::into_inner).retain(|p, _| !p.starts_with(&prefix));
@@ -260,6 +265,7 @@ impl Fake {
                 files.insert(format!("{mount}/{}", arg(0)), stdin.to_vec());
                 ok(b"")
             }
+            k::READ_SCRIPT if arg(0).contains("riesig") => Output { code: Some(0), stdout: b"QUJD".to_vec(), truncated: true, ..Default::default() },
             k::READ_SCRIPT => match files.get(&format!("{mount}/{}", arg(0))) {
                 Some(b) => {
                     use base64::Engine as _;
@@ -267,6 +273,7 @@ impl Fake {
                 }
                 None => Output { code: Some(2), stderr: format!("Datei fehlt: {}", arg(0)).into_bytes(), ..Default::default() },
             },
+            k::CONVERT_SCRIPT if arg(0).contains("langsam") => Output { code: None, timed_out: true, ..Default::default() },
             k::CONVERT_SCRIPT => {
                 let (src, to) = (arg(0), arg(1));
                 match files.get(&format!("{mount}/{src}")).cloned() {

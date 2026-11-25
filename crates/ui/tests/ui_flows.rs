@@ -45,6 +45,23 @@ fn sources_popup_stays_open_until_closed() {
     assert!(h.query_by_label("Gedächtnis (deine Notizen)").is_none(), "Schließen closes it");
 }
 
+/// „Erstellen“ with nothing typed: the choice waits in the composer for its topic; „Abbrechen“
+/// returns to a normal message. Every entry can be chosen, there is no extra topic field.
+#[test]
+fn create_menu_asks_for_the_topic_in_the_composer() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let mut h = harness(&engine);
+    h.get_by_label_contains("Erstellen").click();
+    settled(&mut h, "📝 Arbeitsblatt");
+    assert!(h.query_by_label("Thema").is_none(), "no second topic field in the menu");
+    let entry = h.get_by_label("📝 Arbeitsblatt");
+    assert!(!entry.accesskit_node().is_disabled(), "choosable with an empty composer");
+    entry.click();
+    step_until(&mut h, "the composer asks for the topic", |h| h.query_by_label_contains("Arbeitsblatt erstellen: Thema eingeben").is_some());
+    click_until(&mut h, "Abbrechen", "back to a normal message", |h| h.query_by_label_contains("Thema eingeben").is_none());
+    assert!(engine.state().messages.is_empty(), "nothing was sent");
+}
+
 /// Project instructions are a source only inside a project.
 #[test]
 fn project_instructions_are_a_source_only_in_a_project() {
@@ -809,4 +826,56 @@ fn joining_is_reachable_from_the_start_page_and_the_palette() {
     h.run_steps(4);
     h.key_press(egui::Key::Enter);
     step_until(&mut h, "the join dialog opens from the palette", dialog);
+}
+
+/// A click at `pos` (press and release), as a person does it.
+fn click_at(h: &mut egui_kittest::Harness<'static, AisCraftApp>, pos: egui::Pos2) {
+    h.event(egui::Event::PointerMoved(pos));
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(4);
+}
+
+/// Windows that open close with an X and with a click beside them: every dialog has a „Schließen“
+/// X in its corner and closes on a click on the darkened backdrop; the handbook (a window of its
+/// own) closes on a click beside it and on Esc, and a click inside keeps it open.
+#[test]
+fn windows_close_with_an_x_and_a_click_beside_them() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let mut h = harness(&engine);
+    // An empty spot right of the content, outside every dialog and the handbook.
+    let beside = egui::pos2(1272.0, 300.0);
+    let open_import = |h: &mut egui_kittest::Harness<'static, AisCraftApp>| {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::K);
+        h.run_steps(4);
+        h.event(egui::Event::Text("chatgpt".into()));
+        h.run_steps(4);
+        h.get_by_label("Chats aus claude.ai oder ChatGPT übernehmen").click();
+        step_until(h, "the import dialog", |h| h.query_by_label("Exportdatei wählen …").is_some());
+    };
+    // A dialog: the X in its corner.
+    open_import(&mut h);
+    let x = h.get_by_label("Schließen").rect();
+    let dialog = h.get_by_label("Exportdatei wählen …").rect();
+    assert!(x.min.y < dialog.min.y, "the X sits at the top: {x:?}");
+    click_until(&mut h, "Schließen", "the X closes the dialog", |h| h.query_by_label("Exportdatei wählen …").is_none());
+    // A dialog: a click beside it.
+    open_import(&mut h);
+    click_at(&mut h, beside);
+    step_until(&mut h, "a click beside the dialog closes it", |h| h.query_by_label("Exportdatei wählen …").is_none());
+    // The handbook: a click inside keeps it open, a click beside it closes it.
+    h.key_press(egui::Key::F1);
+    step_until(&mut h, "the handbook", |h| h.query_all_by_label("Erste Schritte").next().is_some());
+    let inside = h.query_all_by_label("Erste Schritte").next().map(|n| n.rect().center()).unwrap();
+    click_at(&mut h, egui::pos2(inside.x, inside.y));
+    assert!(h.query_all_by_label("Erste Schritte").next().is_some(), "a click inside keeps the handbook open");
+    click_at(&mut h, beside);
+    step_until(&mut h, "a click beside the handbook closes it", |h| h.query_all_by_label("Erste Schritte").next().is_none());
+    // Esc closes it too.
+    h.key_press(egui::Key::F1);
+    step_until(&mut h, "the handbook again", |h| h.query_all_by_label("Erste Schritte").next().is_some());
+    h.key_press(egui::Key::Escape);
+    step_until(&mut h, "Esc closes the handbook", |h| h.query_all_by_label("Erste Schritte").next().is_none());
 }

@@ -91,6 +91,22 @@ pub fn task_card(state: &State, m: &Message) -> Option<TaskCard> {
     Some(TaskCard { task_id, title, line, ok: !step.failed })
 }
 
+/// Text from a task's chat for the chat it came from (#55): the task chat's placeholders are its
+/// own (`[S1]` there may be another pupil than `[S1]` here), so they become names first and are
+/// protected again with the origin chat's mapping when protection is on there.
+fn into_origin(c: &Ctx, task: &str, origin: &str, text: &str) -> String {
+    let named = crate::privacy::reveal(c, task, text);
+    let Some(conv) = c.state().conversation(origin).cloned() else { return named };
+    match crate::privacy::Guard::for_conversation(c, &conv) {
+        Some(mut g) => {
+            let out = g.text(&named);
+            g.finish(c);
+            out
+        }
+        None => named,
+    }
+}
+
 /// Start a task. Returns at once; the task reports back when it is done.
 pub(crate) async fn start(c: Ctx, p: Value) -> Result<Value> {
     let title = req_str(&p, "title")?.trim().chars().take(100).collect::<String>();
@@ -142,15 +158,17 @@ pub(crate) async fn start(c: Ctx, p: Value) -> Result<Value> {
         };
         let summary: String = text.chars().take(3000).collect();
         if let Some(origin) = origin {
+            let content = if ok {
+                format!("**Aufgabe „{title}“ ist fertig.**\n\n{summary}")
+            } else {
+                format!("**Aufgabe „{title}“ ist gescheitert:** {summary}")
+            };
+            let (content, summary) = (into_origin(&ctx, &tid, &origin, &content), into_origin(&ctx, &tid, &origin, &summary));
             let mut m = aiscraft_core::Message {
                 id: new_id(),
                 conversation_id: origin.clone(),
                 role: Role::Assistant,
-                content: if ok {
-                    format!("**Aufgabe „{title}“ ist fertig.**\n\n{summary}")
-                } else {
-                    format!("**Aufgabe „{title}“ ist gescheitert:** {summary}")
-                },
+                content,
                 created_at: now_ms(),
                 model: Some("Aufgabe".into()),
                 attachments: vec![],

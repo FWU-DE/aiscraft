@@ -25,10 +25,17 @@ pub(crate) const RUN_SCRIPT: &str = r#"mkdir -p -- "$1" && cd -- "$1" && exec ti
 /// `$1` file; the bytes come on stdin.
 pub(crate) const WRITE_SCRIPT: &str = r#"mkdir -p -- "$(dirname -- "$1")" && cat > "$1""#;
 /// `$1` file, `$2` most bytes: the file as base64 (binary-safe through every pipe).
-pub(crate) const READ_SCRIPT: &str = r#"[ -f "$1" ] || { echo "Datei fehlt: $1" >&2; exit 2; }; s=$(stat -c %s -- "$1"); [ "$s" -le "$2" ] || { echo "Die Datei ist größer als $2 Bytes ($s)." >&2; exit 3; }; base64 -w0 -- "$1""#;
-/// `$1` file, `$2` target format: LibreOffice writes the result next to the file.
+pub(crate) const READ_SCRIPT: &str = r#"[ -f "$1" ] || { echo "Datei fehlt: $1" >&2; exit 2; }; s=$(stat -L -c %s -- "$1"); [ "$s" -le "$2" ] || { echo "Die Datei ist größer als $2 Bytes ($s)." >&2; exit 3; }; base64 -w0 -- "$1""#;
+/// `$1` file, `$2` target format, `$3` the time limit in seconds: LibreOffice writes the result
+/// next to the file and is ended by its own `timeout` (exit code 124).
 pub(crate) const CONVERT_SCRIPT: &str =
-    r#"cd -- "$(dirname -- "$1")" && exec soffice --headless --norestore --nolockcheck --convert-to "$2" --outdir . "$(basename -- "$1")""#;
+    r#"cd -- "$(dirname -- "$1")" && exec timeout -k 5 "$3" soffice --headless --norestore --nolockcheck --convert-to "$2" --outdir . "$(basename -- "$1")""#;
+/// How long one conversion may take.
+pub(crate) const CONVERT_SECS: u64 = 240;
+/// Most a chat's working folder, and all of them together, may hold (MB); one file at most (bytes).
+pub(crate) const CHAT_FOLDER_MB: u64 = 2048;
+pub(crate) const ALL_FOLDERS_MB: u64 = 10240;
+pub(crate) const FSIZE: &str = "fsize=2147483648";
 /// `$1` folder: type, size and path of up to 500 entries.
 pub(crate) const LIST_SCRIPT: &str = r#"cd -- "$1" && find . -mindepth 1 -maxdepth 4 -printf '%y %s %P\n' | head -n 500"#;
 
@@ -38,8 +45,22 @@ pub(crate) const LIST_SCRIPT: &str = r#"cd -- "$1" && find . -mindepth 1 -maxdep
 /// use removed, the chat's folder there and owned by the container's user. When setting up
 /// (no chat): leftovers of runs with network (relays, their networks) and the open network of
 /// v0.3.0 (`aiscraft-net`) go. `$1` image id (`Workspace::image`), `$2` chat (may be empty), `$3`
-/// the image tar, `$4` its SHA-256.
+/// the image tar, `$4` its SHA-256, `$5` and `$6` the most a chat's folder and all folders may
+/// hold (MB): beyond that nothing runs until the person makes room.
 pub(crate) const PREPARE_SCRIPT: &str = r#"set -e
+# Docker maps every container user to an unprivileged range (userns-remap): even root that broke
+# out of a container is nobody in this computer and cannot mount a Windows drive. Switched on
+# once, with a restart of Docker, for computers set up before.
+if ! grep -q '"userns-remap"' /etc/docker/daemon.json 2>/dev/null; then
+  mkdir -p /etc/docker
+  [ -s /etc/docker/daemon.json ] || echo '{}' > /etc/docker/daemon.json
+  sed -i 's/^{/{"userns-remap":"default",/; s/,}$/}/' /etc/docker/daemon.json
+  if docker info >/dev/null 2>&1; then
+    pkill -x dockerd || true
+    i=0
+    while docker info >/dev/null 2>&1; do i=$((i+1)); [ $i -gt 40 ] && break; sleep 0.5; done
+  fi
+fi
 if ! docker info >/dev/null 2>&1; then
   (setsid dockerd </dev/null >/var/log/aiscraft-dockerd.log 2>&1 &)
   i=0
@@ -61,7 +82,17 @@ if [ -z "$2" ]; then
   docker network ls -q --filter label=aiscraft.net | xargs -r docker network rm >/dev/null 2>&1 || true
   docker network rm aiscraft-net >/dev/null 2>&1 || true
 fi
-if [ -n "$2" ]; then install -d -o 1000 -g 1000 -m 0700 "/work/$2"; fi"#;
+if [ -n "$2" ]; then
+  # With userns-remap the container's user 1000 is dockremap's first id + 1000 here.
+  base=$(sed -n 's/^dockremap:\([0-9]*\):.*/\1/p' /etc/subuid 2>/dev/null | head -n 1)
+  owner=$(( ${base:-0} + 1000 ))
+  install -d -m 0700 "/work/$2"
+  [ "$(stat -c %u "/work/$2")" = "$owner" ] || chown -R "$owner:$owner" "/work/$2"
+  used=$(du -sm "/work/$2" | cut -f1)
+  [ "$used" -le "$5" ] || { echo "Der Arbeitsordner dieses Chats ist voll (über $5 MB). Bitte Dateien darin löschen oder in den Einstellungen den Arbeitsordner leeren." >&2; exit 4; }
+  all=$(du -sm /work | cut -f1)
+  [ "$all" -le "$6" ] || { echo "Die Arbeitsordner aller Chats sind zusammen über $6 MB groß. Bitte alte Arbeitsordner leeren." >&2; exit 4; }
+fi"#;
 /// Remove a chat's working folder. `$1` chat.
 pub(crate) const CLEAR_SCRIPT: &str = r#"[ -n "$1" ] && rm -rf -- "/work/$1""#;
 
@@ -206,6 +237,8 @@ pub(crate) fn docker_run(chat: &str, name: &str, net: Net, image: &str, script: 
             CPUS,
             "--pids-limit",
             PIDS,
+            "--ulimit",
+            FSIZE,
             "--read-only",
             "--tmpfs",
             "/tmp:rw,nosuid,nodev,size=512m",
@@ -248,6 +281,10 @@ mod tests {
 
     #[test]
     fn a_start_is_locked_down() {
+        assert!(
+            PREPARE_SCRIPT.contains("\"userns-remap\":\"default\"") && PREPARE_SCRIPT.contains("pkill -x dockerd"),
+            "every computer maps container users to an unprivileged range"
+        );
         let argv = docker_run("c1", "aiscraft-x", Net::None, "sha256:abc", RUN_SCRIPT, &[".", "ls"]);
         let joined = argv.join(" ");
         for need in [

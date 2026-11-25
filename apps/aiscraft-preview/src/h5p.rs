@@ -18,15 +18,11 @@
 
 use std::path::{Path, PathBuf};
 
-/// The protocol's name.
+/// The start of the protocol's name; each launch adds its own label (`aiscraft-h5p-<label>`), so
+/// no two windows share an origin (see `launch_scheme` in `main.rs`).
 pub const SCHEME: &str = "aiscraft-h5p";
 /// Largest file served (videos in content).
 const MAX_FILE: u64 = 200 * 1024 * 1024;
-
-/// Where the protocol lives: WebView2 maps custom schemes to `http://<name>.localhost`.
-pub fn origin() -> &'static str {
-    if cfg!(target_os = "windows") { "http://aiscraft-h5p.localhost" } else { "aiscraft-h5p://localhost" }
-}
 
 /// The policy: nothing but this protocol (and inline code, which the player writes into its
 /// frame). No network: no `https:`, no `*`.
