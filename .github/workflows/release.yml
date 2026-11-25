@@ -14,7 +14,9 @@ name: Release
 #
 # A pushed tag `v<version>` builds and publishes the release; the tag must match
 # `[workspace.package] version` in Cargo.toml. "Run workflow" builds the packages; with dry-run
-# off it also leaves a draft release, unpublished.
+# off it also leaves a draft release, unpublished. nightly.yml calls this workflow with a
+# `version` (e.g. 0.1.1-nightly.20261126): the shared jobs set it with `cargo xtask version set`,
+# and publishing the pre-release creates its tag at the built commit.
 on:
   push:
     tags: ["v*"]
@@ -24,6 +26,20 @@ on:
         description: "Build and check only, no draft release"
         type: boolean
         default: true
+      version:
+        description: "Build this version instead of Cargo.toml's (e.g. 0.1.1-rc.1); without dry-run it is published"
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to build and publish instead of Cargo.toml's (a pre-release such as 0.1.1-nightly.20261126)"
+        type: string
+        required: true
+    outputs:
+      version:
+        description: "The version that was built"
+        value: ${{ jobs.release.outputs.version }}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -66,6 +82,8 @@ jobs:
     with:
       app-name: aiscraft
       app-title: AIS.ChatCraft
+      # Empty except when nightly.yml calls: then Cargo.toml's version is replaced for the build.
+      version: ${{ inputs.version || '' }}
       # Always: skips macOS and signing (see above); `publish` makes the release.
       dry-run: true
       # Desktop only: no WebAssembly build, no FreeBSD and RISC-V builds (WebKitGTK, cross deps).
@@ -91,12 +109,13 @@ jobs:
           app-title: AIS.ChatCraft
           prerelease: ${{ needs.release.outputs.prerelease }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish on a tag
-        if: github.ref_type == 'tag'
+      - name: Publish on a tag or a nightly
+        if: github.ref_type == 'tag' || inputs.version != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: v${{ needs.release.outputs.version }}
+          PRERELEASE: ${{ needs.release.outputs.prerelease }}
         run: |
           count="$(gh release view "$TAG" --json assets --jq '.assets | length')"
           # Linux x86_64/aarch64 (AppImage, zsync, deb, rpm, tar.gz), Flatpak, Windows x64/arm64
@@ -105,5 +124,8 @@ jobs:
             echo "::error::$TAG has only $count files; it stays a draft."
             exit 1
           fi
-          gh release edit "$TAG" --draft=false --latest
+          # A pre-release (nightly) never becomes "latest": the update check and the AppImage's
+          # zsync link read the latest release only.
+          if [ "$PRERELEASE" = "true" ]; then latest=false; else latest=true; fi
+          gh release edit "$TAG" --draft=false --latest="$latest"
           echo "Published $TAG with $count files." >>"$GITHUB_STEP_SUMMARY"

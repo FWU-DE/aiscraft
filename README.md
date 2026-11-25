@@ -76,6 +76,8 @@ Fertige Pakete stehen unter [Releases](https://github.com/FWU-DE/aiscraft/releas
 
 `SHA256SUMS.txt` im Release enthält die Prüfsummen. Die Pakete sind noch nicht signiert; Windows warnt deshalb beim ersten Start (SmartScreen: „Weitere Informationen“ › „Trotzdem ausführen“). Für macOS gibt es noch kein Paket.
 
+Wer den neuesten Stand will: Jede Nacht, in der sich auf `main` etwas geändert hat und alle Tests grün sind, entsteht eine Vorabversion (`…-nightly.<Datum>`) unter [Releases](https://github.com/FWU-DE/aiscraft/releases). Die Update-Prüfung der App bietet nur fertige Versionen an.
+
 Aus dem Quellcode (auch macOS):
 
 ```sh

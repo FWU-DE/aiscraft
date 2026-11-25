@@ -211,3 +211,11 @@ paid for, no signing, no draft), and its own job `publish` drafts the release wi
 `draft-release` action and publishes it on a tag. Once the runner is allowed and the certificates
 are in the `release` environment, go back to the shared workflow's own draft (see the comment in
 `release.yml`).
+
+Nightlies: `.github/workflows/nightly.yml` runs daily (and on "Run workflow"). When main has a
+commit without a `v*` tag and CI passed on it, it calls `release.yml` with the version
+`<next>-nightly.<YYYYMMDD>` (next = Cargo.toml's version, or its next patch once that is
+released), which `cargo xtask version set` writes into Cargo.toml and Cargo.lock for the build
+only. The pre-release's tag is created when it is published; it is never "latest", so the update
+check and the AppImage's zsync link keep pointing at the last stable release. The newest 7
+nightlies are kept.
