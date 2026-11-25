@@ -19,13 +19,13 @@ env_logger.workspace = true
 uuid.workspace = true
 
 [features]
-default = ["preview"]
+default = ["preview", "ner"]
 # Learning apps open in the separate `aiscraft-preview` program (wry webview) when it is
 # installed next to `aiscraft`; without this feature, or without the program, in the browser.
 preview = []
-# Name recognition with a downloaded model (#73). Off by default: it adds about 2 MB to the
+# Name recognition with a downloaded model (#73). On by default (owner decision 2026-11-25): it adds about 2 MB to the
 # program (gline-rs, tokenizers, ort glue; ONNX Runtime itself is never bundled). Build with
-# `--features ner` to offer „Namenserkennung laden“ in the settings.
+# `--no-default-features --features preview` for a build without it.
 ner = ["aiscraft-engine/ner"]
 
 [lints]
