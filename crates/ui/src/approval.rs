@@ -35,6 +35,9 @@ pub(crate) fn card(ui: &mut Ui, t: &Tokens, a: &Approval) -> Option<bool> {
             ui.label(RichText::new("Darf ich das ausführen?").strong());
             let job = sentence(ui, t, a);
             ui.add(egui::Label::new(job).wrap());
+            if let Some(n) = &a.note {
+                ui.label(RichText::new(n).color(t.warning).small());
+            }
             if a.destructive {
                 ui.label(RichText::new("Der Konnektor kennzeichnet das als verändernd oder löschend.").color(t.danger).small());
             }
@@ -85,6 +88,7 @@ mod tests {
             arguments: args,
             destructive: false,
             trust: None,
+            note: None,
         }
     }
 

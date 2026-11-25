@@ -273,6 +273,9 @@ fn wrap_untrusted(tool: &str, text: &str) -> String {
 pub(crate) type Outcome = (String, bool, &'static str);
 
 /// The note for a call that needs a yes while another call of the same step already waits.
+/// What the model hears when a connector call may or may not have run (#24).
+pub(crate) const UNCERTAIN: &str = "Unsicher – bitte prüfen";
+
 pub(crate) const NOT_ASKED: &str = "Nicht ausgeführt: Für diesen Aufruf wurde nicht gefragt, weil ein anderer Aufruf dieses Schritts auf die Freigabe der Person wartet. Bei Bedarf danach erneut aufrufen.";
 
 /// A connector call that may run.
@@ -285,10 +288,22 @@ struct Ready {
     secrets: Vec<String>,
 }
 
+/// A call of the step that waits for the owner: index, the call, the verdict, a card warning.
+type Pending = (usize, Box<Ready>, Option<TrustVerdict>, Option<String>);
+
 enum Prep {
     Done(Outcome),
-    Run(Box<Ready>),
-    Ask(Box<Ready>, Option<TrustVerdict>),
+    /// Run it; with a claim key when it changes something (#24).
+    Run(Box<Ready>, Option<String>),
+    /// Ask first; with a warning for the card.
+    Ask(Box<Ready>, Option<TrustVerdict>, Option<String>),
+}
+
+/// The arguments' fingerprint for claims: the same chat, tool and arguments are the same action.
+fn args_hash(args: &Value) -> String {
+    use sha1::Digest;
+    let digest = sha1::Sha1::digest(args.to_string().as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Whether a call needs the owner (a connector tool that is not read-only, or a vault value).
@@ -314,7 +329,7 @@ pub(crate) async fn run_step(c: &Ctx, conv: &str, calls: &[ToolCall], ev: &crate
             *slot = Some(r);
         }
     };
-    let mut pending: Option<(usize, Box<Ready>, Option<TrustVerdict>)> = None;
+    let mut pending: Option<Pending> = None;
     let mut reads = Vec::new();
     for (i, call) in calls.iter().enumerate() {
         if pending.is_some() {
@@ -327,14 +342,15 @@ pub(crate) async fn run_step(c: &Ctx, conv: &str, calls: &[ToolCall], ev: &crate
         }
         match prepare(c, conv, call, ev, interactive).await {
             Prep::Done(r) => set(&mut out, i, r),
-            Prep::Run(r) => set(&mut out, i, execute(c, *r).await),
-            Prep::Ask(r, trust) => pending = Some((i, r, trust)),
+            Prep::Run(r, claim) => set(&mut out, i, execute(c, conv, *r, claim).await),
+            Prep::Ask(r, trust, note) => pending = Some((i, r, trust, note)),
         }
     }
-    if let Some((i, ready, trust)) = pending {
+    if let Some((i, ready, trust, note)) = pending {
         let asked = async {
-            if ask(c, conv, &ready.conn, &ready.tool, &ready.call.arguments, trust).await {
-                execute(c, *ready).await
+            // One approval, one result: the yes is claimed before the call runs.
+            if let Some(id) = ask(c, conv, &ready.conn, &ready.tool, &ready.call.arguments, trust, note).await {
+                execute(c, conv, *ready, Some(format!("approval:{id}"))).await
             } else {
                 ("Die Person hat diese Aktion abgelehnt. Nicht erneut versuchen, sondern nachfragen.".to_string(), true, "denied")
             }
@@ -345,7 +361,7 @@ pub(crate) async fn run_step(c: &Ctx, conv: &str, calls: &[ToolCall], ev: &crate
                 let Some(call) = calls.get(j) else { continue };
                 let r = match prepare(c, conv, call, ev, interactive).await {
                     Prep::Done(r) => r,
-                    Prep::Run(r) => execute(c, *r).await,
+                    Prep::Run(r, claim) => execute(c, conv, *r, claim).await,
                     Prep::Ask(..) => (NOT_ASKED.into(), true, "skipped"),
                 };
                 done.push((j, r));
@@ -398,7 +414,7 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     };
     let ready = Box::new(Ready { conn, tool, call: call.clone(), arguments, secrets });
     if ready.tool.read_only && ready.secrets.is_empty() {
-        return Prep::Run(ready);
+        return Prep::Run(ready, None);
     }
     // Work without a person present never runs what needs a yes, whatever a check or a rule
     // says: the words in a task or a schedule are not the owner's (#22: rules do not open it).
@@ -427,23 +443,83 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     // Deleting tools and vault values always ask.
     let covered = trust.as_ref().is_some_and(|t| t.covered && (t.rule.is_some() || settings.auto_allow_covered));
     let auto = covered && !ready.tool.destructive && ready.secrets.is_empty();
-    if auto { Prep::Run(ready) } else { Prep::Ask(ready, trust) }
+    // The same action ended uncertain before: the person checks first, nothing reruns on its own.
+    let hash = args_hash(&call.arguments);
+    if c.store(|st| st.uncertain_claim(conv, &call.name, &hash)).unwrap_or(true) {
+        return Prep::Ask(
+            ready,
+            trust,
+            Some(format!("{UNCERTAIN}: Die gleiche Aktion lief schon einmal, ohne dass klar ist, ob sie geklappt hat. Prüfe das, bevor du erlaubst.")),
+        );
+    }
+    // A covered action runs at most once per request with the same arguments.
+    if auto { Prep::Run(ready, Some(format!("auto:{conv}:{}:{}:{hash}", ev.turn, call.name))) } else { Prep::Ask(ready, trust, None) }
 }
 
-/// Call the connector.
-async fn execute(c: &Ctx, r: Ready) -> Outcome {
+/// Call the connector. A call that changes something is claimed first (#24): a claim taken
+/// before (double click, second window, an earlier run) means it does not run again. A call that
+/// may have reached the connector without an answer is uncertain and is never retried.
+async fn execute(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> Outcome {
+    let hash = args_hash(&r.call.arguments);
+    if let Some(key) = &claim {
+        match c.store(|st| st.claim(key, conv, &r.call.name, &hash, crate::now_ms())) {
+            Ok(true) => {}
+            Ok(false) => return ("Nicht ausgeführt: Diese Aktion lief schon (eine Freigabe, ein Ergebnis). Nicht wiederholen.".into(), true, "denied"),
+            Err(e) => return (format!("Nicht ausgeführt: Der Aufruf ließ sich nicht vormerken ({}).", e.message), true, "error"),
+        }
+    }
+    let finish = |state: &str| {
+        if let Some(key) = &claim {
+            let _ = c.store(|st| st.finish_claim(key, state, crate::now_ms()));
+        }
+    };
     let client = match client_for(c, &r.conn.id).await {
         Ok(cl) => cl,
-        Err(e) => return (format!("Konnektor {} nicht erreichbar: {}", r.conn.name, e.message), true, "error"),
+        Err(e) => {
+            finish("failed");
+            return (format!("Konnektor {} nicht erreichbar: {}", r.conn.name, e.message), true, "error");
+        }
     };
     match client.call_tool(&r.tool.name, r.arguments).await {
-        Ok(res) => (wrap_untrusted(&r.call.name, &crate::vault::scrub(&res.text(), &r.secrets)), res.is_error, if res.is_error { "error" } else { "ok" }),
-        Err(e) => (format!("Fehler: {}", crate::vault::scrub(&e.message, &r.secrets)), true, "error"),
+        Ok(res) => {
+            finish("done");
+            (wrap_untrusted(&r.call.name, &crate::vault::scrub(&res.text(), &r.secrets)), res.is_error, if res.is_error { "error" } else { "ok" })
+        }
+        // The request may have reached the connector: say so, never try again.
+        Err(e)
+            if claim.is_some()
+                && matches!(e.kind, aiscraft_core::ErrorKind::Network | aiscraft_core::ErrorKind::Protocol | aiscraft_core::ErrorKind::Cancelled) =>
+        {
+            finish("uncertain");
+            let label = format!("{} · {}", r.conn.name, if r.tool.title.is_empty() { &r.tool.name } else { &r.tool.title });
+            c.notice(NoticeLevel::Warning, format!("{UNCERTAIN}: {label}. Ob die Aktion ausgeführt wurde, ist nicht klar."));
+            (
+                format!(
+                    "{UNCERTAIN}: Es ist nicht klar, ob die Aktion ausgeführt wurde ({}). Nicht erneut versuchen; sag der Person, dass sie das Ergebnis prüfen soll.",
+                    crate::vault::scrub(&e.message, &r.secrets)
+                ),
+                true,
+                "uncertain",
+            )
+        }
+        Err(e) => {
+            finish("failed");
+            (format!("Fehler: {}", crate::vault::scrub(&e.message, &r.secrets)), true, "error")
+        }
     }
 }
 
 /// Ask the owner and wait for the answer (or the timeout, which counts as no).
-async fn ask(c: &Ctx, conv: &str, conn: &ConnectorView, tool: &ConnectorTool, args: &Value, trust: Option<TrustVerdict>) -> bool {
+/// Returns the approval's id on a yes.
+async fn ask(
+    c: &Ctx,
+    conv: &str,
+    conn: &ConnectorView,
+    tool: &ConnectorTool,
+    args: &Value,
+    trust: Option<TrustVerdict>,
+    note: Option<String>,
+) -> Option<String> {
     let id = new_id();
     let (tx, rx) = tokio::sync::oneshot::channel();
     c.0.tools.waiters.lock().unwrap_or_else(PoisonError::into_inner).insert(id.clone(), tx);
@@ -456,12 +532,37 @@ async fn ask(c: &Ctx, conv: &str, conn: &ConnectorView, tool: &ConnectorTool, ar
         destructive: tool.destructive,
         trust,
         highlights: crate::highlights::highlights(&crate::privacy::reveal_value(c, conv, args), &tool.input_schema),
+        note,
     };
     c.update(|s| s.approvals.push(approval));
     let answer = tokio::time::timeout(APPROVAL_TIMEOUT, rx).await.ok().and_then(Result::ok).unwrap_or(false);
     c.0.tools.waiters.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
     c.update(|s| s.approvals.retain(|a| a.id != id));
-    answer
+    answer.then_some(id)
+}
+
+/// After a restart, actions that were still running may have run: they become uncertain, the
+/// person hears about it, and nothing runs again (#24).
+pub(crate) fn settle_claims(c: &Ctx) {
+    let Ok(open) = c.store(|st| st.settle_running_claims(crate::now_ms())) else { return };
+    if open.is_empty() {
+        return;
+    }
+    let names: Vec<String> = open
+        .iter()
+        .take(5)
+        .map(|(_, tool)| {
+            c.state().connectors.iter().flat_map(|k| k.tools.iter()).find(|t| &t.llm_name == tool).map(|t| t.name.clone()).unwrap_or_else(|| tool.clone())
+        })
+        .collect();
+    c.notice(
+        NoticeLevel::Warning,
+        format!(
+            "{UNCERTAIN}: {} Aktion(en) liefen beim letzten Beenden noch ({}). Ob sie ausgeführt wurden, ist nicht klar; sie laufen nicht noch einmal.",
+            open.len(),
+            names.join(", ")
+        ),
+    );
 }
 
 /// Refuse every open question of a conversation (when the answer is stopped).

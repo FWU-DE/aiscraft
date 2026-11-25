@@ -157,6 +157,8 @@ Werkzeuge, die nur lesen, laufen direkt. Alles andere läuft nur, wenn du darum 
 
 **Eigene Regeln** (Einstellungen › Konnektoren) sind die zweite Quelle der Vertrauensprüfung neben deinen Worten. „Erlauben“ lässt Passendes ohne Nachfrage laufen, etwa „Termine im Kalender immer eintragen“ (nie Löschendes oder Tresor-Einträge). „Verbieten“ lehnt Passendes ab, ohne zu fragen, etwa „nie Mails an Eltern senden“, auch wenn du im Chat darum bittest. Verbote gewinnen immer. Eine Regel gilt für alle Konnektoren oder nur für einen. Regeln gelten für Aktionen, die etwas ändern oder verschicken, und auch bei ausgeschalteter Vertrauensprüfung; Aufgaben und Zeitpläne öffnen sie nicht.
 
+**Eine Freigabe, ein Ergebnis.** Eine freigegebene Aktion oder ein Tresor-Eintrag läuft nie zweimal: nicht bei einem Doppelklick, nicht aus einem zweiten Fenster und nicht nach einem Neustart. Bricht die Verbindung mitten im Aufruf ab, versucht AIS.ChatCraft es nicht erneut, sondern meldet „unsicher – bitte prüfen“; prüfe dann im Zielprogramm, ob es geklappt hat. Dieselbe Aktion fragt danach wieder, mit diesem Hinweis auf der Karte. Was beim Beenden noch lief, meldet AIS.ChatCraft beim nächsten Start ebenso.
+
 Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
 
 ## Zeitpläne und Aufgaben

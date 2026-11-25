@@ -276,6 +276,7 @@ impl Engine {
             });
             schedules::start(&engine.ctx);
             vault::refresh(&engine.ctx);
+            tools::settle_claims(&engine.ctx);
             privacy::refresh(&engine.ctx);
             update::start(&engine.ctx);
             #[cfg(feature = "collab")]

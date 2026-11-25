@@ -246,7 +246,10 @@ fn background_work_never_runs_a_change() {
         return;
     };
     let call = aiscraft_core::ToolCall { id: "c".into(), name: notify, arguments: json!({"x": 1}), outcome: None };
-    let ev = crate::trust::Evidence { messages: vec![crate::trust::OwnerMessage { n: 1, text: "Schick es".into(), answered: Some("Soll ich?".into()) }] };
+    let ev = crate::trust::Evidence {
+        messages: vec![crate::trust::OwnerMessage { n: 1, text: "Schick es".into(), answered: Some("Soll ich?".into()) }],
+        turn: "t1".into(),
+    };
     let (_, err, outcome) = engine.block_on(crate::tools::run(engine.ctx(), "conv", &call, &ev, false));
     assert!(err && outcome == "denied");
     assert!(!seen.lock().unwrap().iter().any(|b| is_trust_check(b)), "no check, no question");
@@ -287,7 +290,10 @@ fn own_rules_allow_forbid_and_prohibitions_win() {
     engine.call("trust.rule_add", json!({"kind": "forbid", "text": "nie Mails an Eltern senden"})).unwrap();
     assert_eq!(engine.state().settings.trust_rules.len(), 2);
 
-    let ev = crate::trust::Evidence { messages: vec![crate::trust::OwnerMessage { n: 1, text: "Schreib allen".into(), answered: Some("Soll ich?".into()) }] };
+    let ev = crate::trust::Evidence {
+        messages: vec![crate::trust::OwnerMessage { n: 1, text: "Schreib allen".into(), answered: Some("Soll ich?".into()) }],
+        turn: "t1".into(),
+    };
     let call = |args: Value| aiscraft_core::ToolCall { id: "c".into(), name: notify.clone(), arguments: args, outcome: None };
     // Allow: runs without a question.
     let (_, err, outcome) = engine.block_on(crate::tools::run(engine.ctx(), "conv", &call(json!({"termin": "Elternabend"})), &ev, true));
@@ -313,4 +319,113 @@ fn own_rules_allow_forbid_and_prohibitions_win() {
     engine.call("trust.rule_remove", json!({"id": allow})).unwrap();
     assert!(engine.call("trust.rule_remove", json!({"id": allow})).is_err());
     assert_eq!(engine.state().settings.trust_rules.len(), 1);
+}
+
+/// #24: one approval, one result. A second answer finds no open question; a claim another window
+/// took first means the call does not run again.
+#[test]
+fn one_approval_one_result() {
+    let Some((engine, _, notify, _)) = setup(|_| text("x")) else { return };
+    engine.call("settings.set", json!({"key": "trust_check", "value": false})).unwrap();
+    let ev = crate::trust::Evidence::default();
+    let call = aiscraft_core::ToolCall { id: "c".into(), name: notify.clone(), arguments: json!({"an": "kollegium@schule.de"}), outcome: None };
+    for other_window in [false, true] {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (e2, c2, ev2) = (engine.clone(), call.clone(), ev.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(e2.block_on(crate::tools::run(e2.ctx(), "conv", &c2, &ev2, true)));
+        });
+        assert!(engine.wait_for(Duration::from_secs(30), |s| !s.approvals.is_empty()));
+        let id = engine.state().approvals[0].id.clone();
+        if other_window {
+            // Another window (or a run before a crash) claimed this yes already.
+            assert!(engine.ctx().store(|st| st.claim(&format!("approval:{id}"), "conv", &notify, "x", 1)).unwrap());
+        }
+        engine.call("tool.answer", json!({"id": id, "allow": true})).unwrap();
+        assert!(engine.call("tool.answer", json!({"id": id, "allow": true})).is_err(), "a double click finds no open question");
+        let (text, _, outcome) = rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        if other_window {
+            assert_eq!(outcome, "denied", "{text}");
+            assert!(text.contains("lief schon"));
+        } else {
+            assert_eq!(outcome, "ok", "{text}");
+            assert_eq!(engine.ctx().store(|st| st.claim_state(&format!("approval:{id}"))).unwrap().as_deref(), Some("done"));
+        }
+    }
+}
+
+/// #24: a call cut off in the middle (the connector dies) is uncertain: the model is told not to
+/// retry, the person is told to check, and the same call later asks instead of running again.
+#[test]
+fn a_call_cut_off_midway_is_uncertain_and_never_retried() {
+    let Some((engine, _, _, _)) = setup(|body| {
+        if is_trust_check(body) {
+            return text(r#"{"covered": true, "source": "message:1", "terms": [], "reason": "gebeten"}"#);
+        }
+        text("x")
+    }) else {
+        return;
+    };
+    let crash = engine.state().connectors[0].tools.iter().find(|t| t.name == "crash").unwrap().clone();
+    assert!(!crash.read_only);
+    let ev = crate::trust::Evidence {
+        messages: vec![crate::trust::OwnerMessage { n: 1, text: "ja, mach das".into(), answered: Some("Soll ich den Server neu starten?".into()) }],
+        turn: "t1".into(),
+    };
+    let call = aiscraft_core::ToolCall { id: "c".into(), name: crash.llm_name.clone(), arguments: json!({"neu": true}), outcome: None };
+    let (text, err, outcome) = engine.block_on(crate::tools::run(engine.ctx(), "conv", &call, &ev, true));
+    assert!(err && outcome == "uncertain", "{outcome}: {text}");
+    assert!(text.contains(crate::tools::UNCERTAIN) && text.contains("Nicht erneut versuchen"));
+    assert!(engine.state().notices.iter().any(|n| n.text.contains(crate::tools::UNCERTAIN)));
+    // The same call again, even in a new request: the person is asked, with the warning.
+    let ev2 = crate::trust::Evidence { turn: "t2".into(), ..ev.clone() };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (e2, c2) = (engine.clone(), call.clone());
+    std::thread::spawn(move || {
+        let _ = tx.send(e2.block_on(crate::tools::run(e2.ctx(), "conv", &c2, &ev2, true)));
+    });
+    assert!(engine.wait_for(Duration::from_secs(30), |s| !s.approvals.is_empty()), "an uncertain action never reruns on its own");
+    let a = engine.state().approvals[0].clone();
+    assert!(a.note.as_deref().unwrap_or("").contains(crate::tools::UNCERTAIN));
+    engine.call("tool.answer", json!({"id": a.id, "allow": false})).unwrap();
+    assert_eq!(rx.recv_timeout(Duration::from_secs(30)).unwrap().2, "denied");
+}
+
+/// #24: a covered action runs once per request with the same arguments: a repeated identical
+/// call in the same request does not run twice.
+#[test]
+fn a_covered_action_runs_once_per_request() {
+    let Some((engine, _, notify, _)) = setup(|body| {
+        if is_trust_check(body) {
+            return text(r#"{"covered": true, "source": "message:1", "terms": [], "reason": "gebeten"}"#);
+        }
+        text("x")
+    }) else {
+        return;
+    };
+    let ev = crate::trust::Evidence {
+        messages: vec![crate::trust::OwnerMessage { n: 1, text: "ja".into(), answered: Some("Soll ich?".into()) }],
+        turn: "t1".into(),
+    };
+    let call = aiscraft_core::ToolCall { id: "c".into(), name: notify, arguments: json!({"x": 1}), outcome: None };
+    let first = engine.block_on(crate::tools::run(engine.ctx(), "conv", &call, &ev, true));
+    assert_eq!(first.2, "ok", "{first:?}");
+    let again = engine.block_on(crate::tools::run(engine.ctx(), "conv", &call, &ev, true));
+    assert_eq!(again.2, "denied", "{again:?}");
+}
+
+/// #24: after a restart, what was still running is uncertain and named; nothing runs again.
+#[test]
+fn running_actions_become_uncertain_after_a_restart() {
+    let dir = std::env::temp_dir().join(format!("aiscraft-claims-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let open = || Engine::open(Options { data_dir: Some(dir.clone()), secrets: Some(crate::Secrets::memory()) }).unwrap();
+    let engine = open();
+    assert!(engine.ctx().store(|st| st.claim("approval:x", "conv", "k__send", "h", crate::now_ms())).unwrap());
+    drop(engine);
+    let engine = open();
+    assert_eq!(engine.ctx().store(|st| st.claim_state("approval:x")).unwrap().as_deref(), Some("uncertain"));
+    assert!(engine.state().notices.iter().any(|n| n.text.contains(crate::tools::UNCERTAIN) && n.text.contains("k__send")), "{:?}", engine.state().notices);
+    drop(engine);
+    let _ = std::fs::remove_dir_all(&dir);
 }

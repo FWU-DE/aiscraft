@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS artifacts (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, conversation_id TEXT, project_id TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, state BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tool_claims (
+    id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, tool TEXT NOT NULL, args_hash TEXT NOT NULL,
+    state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tool_claims_args ON tool_claims(conversation_id, tool, args_hash);
 CREATE TABLE IF NOT EXISTS artifact_versions (
     artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, version INTEGER NOT NULL,
     created_at INTEGER NOT NULL, note TEXT NOT NULL, state BLOB NOT NULL, PRIMARY KEY (artifact_id, version)
@@ -739,6 +744,51 @@ impl Store {
         Ok(out)
     }
 
+    // ---- claims (#24: one approval, one result) -------------------------------------------
+
+    /// Claim an action before it runs. `false` when it was claimed before (by a double click,
+    /// another window or an earlier run): then it must not run again.
+    pub fn claim(&self, id: &str, conversation_id: &str, tool: &str, args_hash: &str, at: i64) -> Result<bool> {
+        let n = self
+            .db
+            .execute(
+                "INSERT OR IGNORE INTO tool_claims (id, conversation_id, tool, args_hash, state, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?5)",
+                params![id, conversation_id, tool, args_hash, at],
+            )
+            .map_err(db_err)?;
+        Ok(n == 1)
+    }
+
+    /// The end of a claimed action: `done`, `failed` (it never reached the connector) or
+    /// `uncertain` (it may have run).
+    pub fn finish_claim(&self, id: &str, state: &str, at: i64) -> Result<()> {
+        self.db.execute("UPDATE tool_claims SET state = ?2, updated_at = ?3 WHERE id = ?1", params![id, state, at]).map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Whether the same action (chat, tool, arguments) ended uncertain before.
+    pub fn uncertain_claim(&self, conversation_id: &str, tool: &str, args_hash: &str) -> Result<bool> {
+        self.db
+            .prepare("SELECT 1 FROM tool_claims WHERE conversation_id = ?1 AND tool = ?2 AND args_hash = ?3 AND state = 'uncertain'")
+            .and_then(|mut st| st.exists(params![conversation_id, tool, args_hash]))
+            .map_err(db_err)
+    }
+
+    pub fn claim_state(&self, id: &str) -> Result<Option<String>> {
+        self.db.query_row("SELECT state FROM tool_claims WHERE id = ?1", [id], |r| r.get(0)).optional().map_err(db_err)
+    }
+
+    /// After a restart: everything still running may have run. It becomes uncertain and is
+    /// returned (conversation, tool) so the person can check; nothing runs again.
+    pub fn settle_running_claims(&self, at: i64) -> Result<Vec<(String, String)>> {
+        let mut st = self.db.prepare("SELECT conversation_id, tool FROM tool_claims WHERE state = 'running'").map_err(db_err)?;
+        let rows: Vec<(String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map_err(db_err)?.collect::<rusqlite::Result<_>>().map_err(db_err)?;
+        self.db.execute("UPDATE tool_claims SET state = 'uncertain', updated_at = ?1 WHERE state = 'running'", [at]).map_err(db_err)?;
+        // Keep the table small: claims older than 90 days have done their job.
+        self.db.execute("DELETE FROM tool_claims WHERE updated_at < ?1", [at - 90 * 24 * 3600 * 1000]).map_err(db_err)?;
+        Ok(rows)
+    }
+
     // ---- settings -------------------------------------------------------------------------
 
     pub fn setting(&self, key: &str) -> Result<Option<Value>> {
@@ -1145,5 +1195,21 @@ mod tests {
         s.set_setting("theme", &serde_json::json!("dark")).unwrap();
         assert_eq!(s.setting("theme").unwrap(), Some(serde_json::json!("dark")));
         assert_eq!(s.setting("nope").unwrap(), None);
+    }
+
+    #[test]
+    fn a_claim_is_taken_once_and_running_claims_become_uncertain() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.claim("approval:1", "c", "k__send", "h", 1).unwrap());
+        assert!(!s.claim("approval:1", "c", "k__send", "h", 2).unwrap(), "a second claim fails");
+        assert!(s.claim("approval:2", "c", "k__send", "h2", 3).unwrap());
+        s.finish_claim("approval:2", "done", 4).unwrap();
+        assert!(!s.uncertain_claim("c", "k__send", "h").unwrap());
+        let settled = s.settle_running_claims(5).unwrap();
+        assert_eq!(settled, [("c".to_string(), "k__send".to_string())]);
+        assert_eq!(s.claim_state("approval:1").unwrap().as_deref(), Some("uncertain"));
+        assert_eq!(s.claim_state("approval:2").unwrap().as_deref(), Some("done"));
+        assert!(s.uncertain_claim("c", "k__send", "h").unwrap());
+        assert!(s.settle_running_claims(6).unwrap().is_empty());
     }
 }

@@ -181,6 +181,9 @@ pub struct Approval {
     /// `arguments`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub highlights: Vec<Highlight>,
+    /// A warning for the card, e.g. that the same action may have run already (#24).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// One value worth checking before a yes: „An“ kollegium@schule.de.

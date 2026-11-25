@@ -635,6 +635,8 @@ impl AisCraftApp {
                         Some("denied") => ("×", t.warning),
                         // Not asked while another call of the step waited for a yes (#63).
                         Some("skipped") => ("–", t.muted),
+                        // It may or may not have run (#24).
+                        Some("uncertain") => ("?", t.warning),
                         Some(_) => ("×", t.danger),
                         None => ("…", t.muted),
                     };

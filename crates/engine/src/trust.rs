@@ -57,6 +57,9 @@ pub(crate) fn rules_for(rules: &[crate::TrustRule], connector: &str) -> Vec<Rule
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct Evidence {
     pub messages: Vec<OwnerMessage>,
+    /// The id of the request being answered: a covered action runs at most once per request
+    /// with the same arguments (#24).
+    pub turn: String,
 }
 
 fn cap(s: &str, n: usize) -> String {
@@ -104,7 +107,8 @@ pub(crate) fn evidence(messages: &[Message]) -> Evidence {
         };
     }
     let skip = out.len().saturating_sub(MAX_MESSAGES);
-    Evidence { messages: out.into_iter().skip(skip).collect() }
+    let turn = messages.iter().rev().find(|m| m.role == Role::User).map(|m| m.id.clone()).unwrap_or_default();
+    Evidence { messages: out.into_iter().skip(skip).collect(), turn }
 }
 
 /// Text inside the prompt's tags cannot open or close a tag.
@@ -344,6 +348,7 @@ mod tests {
                 OwnerMessage { n: 2, text: "ja, mach das".into(), answered: Some("Soll ich die Einladung an kollegium@schule.de schicken?".into()) },
                 OwnerMessage { n: 3, text: "ja".into(), answered: None },
             ],
+            turn: String::new(),
         }
     }
 
