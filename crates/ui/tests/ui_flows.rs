@@ -649,3 +649,23 @@ fn expired_ais_session_offers_sign_in_again() {
     h.get_by_label("Neu anmelden").click();
     step_until(&mut h, "the sign-in dialog", |h| h.query_by_label_contains("Im Browser anmelden").is_some());
 }
+
+/// Chats from claude.ai or ChatGPT (#42): the palette opens the dialog, which says how to get
+/// the export and that names protection does not apply after the fact. (The file picker itself
+/// is a system window; tests never open it, `chat.import` is tested in the engine.)
+#[test]
+fn import_chats_dialog_explains_the_export_and_names_protection() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let mut h = harness(&engine);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::K);
+    h.run_steps(4);
+    h.event(egui::Event::Text("chatgpt".into()));
+    h.run_steps(4);
+    h.get_by_label("Chats aus claude.ai oder ChatGPT übernehmen").click();
+    step_until(&mut h, "the import dialog", |h| h.query_by_label("Exportdatei wählen …").is_some());
+    assert!(h.query_by_label_contains("wirkt nicht rückwirkend").is_some());
+    click_until(&mut h, "Abbrechen", "the dialog closes", |h| h.query_by_label("Exportdatei wählen …").is_none());
+    // Also in the settings, under Dienste.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
+    step_until(&mut h, "the Dienste tab", |h| h.query_by_label("Chats aus claude.ai oder ChatGPT übernehmen …").is_some());
+}

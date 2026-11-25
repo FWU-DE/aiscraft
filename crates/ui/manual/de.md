@@ -269,6 +269,8 @@ Für Zeugnisbemerkungen, Elternbriefe und Förderpläne: Vor dem Senden ersetzt 
 
 **Alle Chats:** Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats: zuerst die Titel (alle Wörter müssen darin vorkommen), dann die Nachrichten. Rechtsklick auf einen Chat: umbenennen, anheften, in ein Projekt verschieben, exportieren, löschen.
 
+**Chats aus claude.ai und ChatGPT übernehmen:** Bei claude.ai (Einstellungen › Datenschutz › Daten exportieren) oder ChatGPT (Einstellungen › Datenkontrollen › Daten exportieren) den Datenexport anfordern und die ZIP-Datei aus der E-Mail speichern. Dann **Einstellungen › Dienste › Chats aus claude.ai oder ChatGPT übernehmen** (oder Befehlspalette) und die ZIP-Datei wählen. Die Chats stehen danach in der Seitenleiste, werden durchsucht und lassen sich mit dem gewählten Dienst weiterführen; bei ChatGPT zählt der zuletzt sichtbare Zweig, Bilder erscheinen als „(Bild)“. Ein zweites Einlesen derselben Datei legt nichts doppelt an. „Namen schützen“ wirkt nicht rückwirkend: Übernommene Chats enthalten Namen so, wie sie dort standen; wer einen davon weiterführt, schickt den Verlauf an den gewählten Dienst.
+
 ## Nutzung
 
 Unter **Einstellungen › Nutzung** stehen die Tokens pro Monat, Dienst und Modell, bei Claude über API auch die Kosten. Mit einer **Monatsgrenze** fragt AIS.ChatCraft vor dem Senden nach, sobald sie erreicht ist.

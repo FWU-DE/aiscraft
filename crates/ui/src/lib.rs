@@ -8,6 +8,7 @@ mod app;
 mod approval;
 mod artifact_panel;
 mod backdrop;
+mod chat_import;
 mod citations;
 mod conversation;
 mod dialogs;

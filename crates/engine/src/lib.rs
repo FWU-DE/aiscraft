@@ -9,6 +9,7 @@ mod artifacts;
 mod attach;
 mod bridge;
 mod chat;
+mod chat_import;
 pub mod citations;
 #[cfg(feature = "collab")]
 mod collab;
