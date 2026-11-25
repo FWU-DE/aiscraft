@@ -1,0 +1,3 @@
+[alias]
+# Repository chores (xtask/src/main.rs), e.g. `cargo xtask version set 0.2.0`.
+xtask = "run --quiet --package xtask --"
