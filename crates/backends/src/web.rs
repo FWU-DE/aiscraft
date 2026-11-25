@@ -109,7 +109,13 @@ async fn client_for(url: &reqwest::Url, allow_private: bool, timeout: Duration) 
     if literal.is_none() {
         builder = builder.resolve_to_addrs(&host, &addrs);
     }
-    let client = builder.build().map_err(|e| Error::network(format!("HTTP-Client: {e}")))?;
+    // Building a client reads the system's certificate store, which can take a while (macOS).
+    // Off the async task, so the other links checked at the same time keep being answered and
+    // their time limits are not spent waiting for this one.
+    let client = tokio::task::spawn_blocking(move || builder.build())
+        .await
+        .map_err(|e| Error::network(format!("HTTP-Client: {e}")))?
+        .map_err(|e| Error::network(format!("HTTP-Client: {e}")))?;
     Ok((client, host))
 }
 
