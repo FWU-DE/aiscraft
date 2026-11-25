@@ -48,6 +48,9 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 - **Diktieren:** Mikrofon im Eingabefeld. Der Text landet im Eingabefeld, du schickst ihn selbst ab. Braucht einen OpenAI-kompatiblen Dienst mit Transkription.
 - **Vorlesen:** „Vorlesen“ unter einer Antwort. Nutzt AIS.chat, wenn du dort angemeldet bist.
 - **Links prüfen:** „Links prüfen“ unter einer Antwort fragt jede Adresse darin einmal an (höchstens 20). Tote Links stehen durchgestrichen unter der Antwort. Adressen im lokalen Netz fragt AIS.ChatCraft nie an. Automatisch für jede Antwort: Einstellungen › Fähigkeiten & Hinweise (standardmäßig aus, weil dabei fremde Seiten kontaktiert werden).
+- **Nachdenken:** Modelle, die vor der Antwort nachdenken (Claude, Denkmodelle bei Ollama, LM Studio oder DeepSeek), zeigen eine Zusammenfassung davon zugeklappt als „Nachgedacht“ über der Antwort; ein Klick klappt sie auf. Bei AIS.chat stehen dort die Analyseschritte. Wie gründlich Claude nachdenkt, stellst du pro Chat unter **Quellen** › „Nachdenken vor der Antwort“ ein: Standard, Wenig, Mittel, Gründlich oder Sehr gründlich. Gründlicher dauert länger und kostet mehr.
+- **Antwortstil:** „Stil“ im Eingabefeld legt fest, wie dieser Chat antwortet: Normal, Knapp, Erklärend, Formell oder „Eigener Stil …“ nach einem Beispieltext, den du einfügst (etwa einem eigenen Elternbrief; übernommen wird nur der Stil, nicht der Inhalt). Der Stil gilt für diesen Chat; ein neuer Chat beginnt wieder normal. Bei AIS.chat geht er als Hinweis in deiner nächsten Nachricht mit, danach erst wieder, wenn du ihn änderst.
+- **Vorübergehender Chat:** „Vorübergehender Chat“ oben auf der Startseite (vor der ersten Nachricht) beginnt einen Chat, der nur im Arbeitsspeicher liegt: Er steht nicht in der Seitenleiste, wird nicht durchsucht oder erinnert, legt keine Notizen an (auch nicht mit „Merk dir“) und lernt keine Fähigkeiten. Notizen aus dem Gedächtnis gehen zuerst nicht mit (unter „Quellen“ zuschaltbar). Sobald du ihn schließt oder einen anderen Chat öffnest, ist er samt Kopien seiner Anhänge weg. Was du an den Dienst schickst, verarbeitet dieser trotzdem nach seinen Regeln; bei AIS.chat steht der Chat dort im Verlauf. Dokumente, die du daraus anlegst, bleiben.
 - **Kontextfenster:** oben rechts im Chat, wie viel vom Kontext des Modells belegt ist. „≈“ heißt geschätzt. Die Tokens einer einzelnen Antwort stehen im Tooltip am Modellnamen über ihr.
 - **Bilder erzeugen:** „🖼 Bild erzeugen“ in der Seitenleiste (oder ein Bildmodell im Modellmenü) startet einen Bild-Chat bei AIS.chat: beschreibe, was das Bild zeigen soll, und wähle das Format. Fehlt der Eintrag, hat dein Land die Bilderzeugung in AIS.chat ausgeschaltet.
 - **AIS.chat-Kontingent:** unten links, wie viele Token-Punkte noch übrig sind.
@@ -198,7 +201,9 @@ Für Zeugnisbemerkungen, Elternbriefe und Förderpläne: Vor dem Senden ersetzt 
 
 ## Suche und Verlauf
 
-Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats: zuerst die Titel (alle Wörter müssen darin vorkommen), dann die Nachrichten. Rechtsklick auf einen Chat: umbenennen, anheften, in ein Projekt verschieben, exportieren, löschen.
+**Im offenen Chat:** Strg+F öffnet ein Suchfeld über den Nachrichten. Es zeigt „2 von 5“, Enter (oder ›) springt zum nächsten Treffer, Umschalt+Enter (oder ‹) zum vorigen; die Nachricht mit dem Treffer ist umrandet. Groß- und Kleinschreibung spielt keine Rolle. Esc schließt die Suche.
+
+**Alle Chats:** Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats: zuerst die Titel (alle Wörter müssen darin vorkommen), dann die Nachrichten. Rechtsklick auf einen Chat: umbenennen, anheften, in ein Projekt verschieben, exportieren, löschen.
 
 ## Nutzung
 
@@ -236,7 +241,7 @@ Die Akzentfarbe ist überall das AIS-Blau.
 | Strg+N | Neuer Chat |
 | Strg+B | Seitenleiste ein und aus (in einem schmalen Fenster unter 1000 Pixeln ist sie zuerst eingeklappt) |
 | Strg+Umschalt+F | Alle Chats durchsuchen |
-| Strg+F | Auf der Seite „Entdecken“: suchen |
+| Strg+F | Im offenen Chat suchen (Enter: nächster Treffer, Umschalt+Enter: voriger, Esc: schließen); auf der Seite „Entdecken“: suchen |
 | Strg+R | Antwort neu erzeugen |
 | Esc | Antwort anhalten; bei leerem Eingabefeld: Chat schließen |
 | Strg+, | Einstellungen |

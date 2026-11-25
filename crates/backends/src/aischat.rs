@@ -970,6 +970,7 @@ mod tests {
             usage: None,
             tool_calls: vec![],
             tool_result: None,
+            thinking: String::new(),
         };
         let a = Message { id: "a0".into(), role: Role::Assistant, content: String::new(), attachments: vec![], ..u.clone() };
         u.id = "u1".into();
@@ -982,6 +983,7 @@ mod tests {
             tool_bridge: None,
             persona: None,
             web: false,
+            effort: None,
         };
         let body = encode_action_args(&[action_payload(&req)]);
         assert_eq!(body, r#"[{"conversationId":"c1","fileIds":["f1"],"messages":[{"content":"$$5?","id":"u1","role":"user"}],"modelId":"uuid-m"}]"#);
@@ -1070,6 +1072,7 @@ mod tests {
             usage: None,
             tool_calls: vec![],
             tool_result: None,
+            thinking: String::new(),
         };
         let mut s = backend
             .chat(ChatRequest {
@@ -1081,6 +1084,7 @@ mod tests {
                 tool_bridge: None,
                 persona: None,
                 web: false,
+                effort: None,
             })
             .await
             .unwrap();
@@ -1159,6 +1163,7 @@ mod tests {
             usage: None,
             tool_calls: vec![],
             tool_result: None,
+            thinking: String::new(),
         };
         for (kind, key) in
             [(PersonaKind::Assistant, "assistantId"), (PersonaKind::Character, "characterId"), (PersonaKind::LearningScenario, "learningScenarioId")]
@@ -1172,6 +1177,7 @@ mod tests {
                 tool_bridge: None,
                 persona: Some(Persona { kind, id: "p-1".into(), name: "X".into() }),
                 web: false,
+                effort: None,
             };
             let p = action_payload(&req);
             assert_eq!(p[key], "p-1");
@@ -1352,6 +1358,7 @@ mod tests {
                 usage: None,
                 tool_calls: vec![],
                 tool_result: None,
+                thinking: String::new(),
             },
             Message {
                 id: "u".into(),
@@ -1366,6 +1373,7 @@ mod tests {
                 usage: None,
                 tool_calls: vec![],
                 tool_result: None,
+                thinking: String::new(),
             },
         ];
         let req = ChatRequest {
@@ -1377,6 +1385,7 @@ mod tests {
             tool_bridge: None,
             persona: Some(goethe.persona()),
             web: false,
+            effort: None,
         };
         let mut s = backend.chat(req).await.unwrap();
         let mut text = String::new();

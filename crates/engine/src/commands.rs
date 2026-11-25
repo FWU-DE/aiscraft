@@ -59,6 +59,24 @@ static COMMANDS: &[CommandSpec] = &[
         chat_new(c, p)
     )),
     cmd!("chat.open", "Chat öffnen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_open(c, p))),
+    cmd!(
+        "chat.find",
+        "Im Chat suchen",
+        "Chat",
+        Some("Ctrl+F"),
+        "query?: string, step?: next|prev, close?: bool. Antwort: total, current (ab 1), message_id",
+        false,
+        |c, p| Box::pin(async move { crate::find::run(&c, &p) })
+    ),
+    cmd!(
+        "chat.temporary",
+        "Vorübergehender Chat",
+        "Chat",
+        None,
+        "on?: bool (Standard: an). An: ein neuer Chat, der nicht gespeichert wird; aus: zurück zu einem normalen neuen Chat",
+        true,
+        |c, p| Box::pin(chat_temporary(c, p))
+    ),
     cmd!("chat.close", "Chat schließen", "Chat", Some("Escape"), "", true, |c, _| Box::pin(chat_close(c))),
     cmd!(
         "chat.send",
@@ -107,9 +125,18 @@ static COMMANDS: &[CommandSpec] = &[
         "Quellen des Chats",
         "Chat",
         None,
-        "tools?: bool, memory?: bool, project?: bool, history?: bool, web?: bool (web search or the page reader), inline?: bool (memory and project at the top of a message, for backends without a system prompt), other_services?: bool (recall may send excerpts from chats with other services to this one), connectors?: [id] | null (alle), protect?: bool | null (Namen schützen; null = automatisch, an sobald es eine Klassenliste gibt)",
+        "tools?: bool, memory?: bool, project?: bool, history?: bool, web?: bool (web search or the page reader), inline?: bool (memory and project at the top of a message, for backends without a system prompt), other_services?: bool (recall may send excerpts from chats with other services to this one), connectors?: [id] | null (alle), protect?: bool | null (Namen schützen; null = automatisch, an sobald es eine Klassenliste gibt), effort?: low|medium|high|max | null (wie gründlich das Modell nachdenkt; null = Standard des Modells)",
         false,
         |c, p| Box::pin(set_sources(c, p))
+    ),
+    cmd!(
+        "chat.set_style",
+        "Antwortstil wählen",
+        "Chat",
+        None,
+        "style: normal|concise|explanatory|formal|custom, sample?: string (Beispieltext für custom, bis 4000 Zeichen)",
+        false,
+        |c, p| Box::pin(set_style(c, p))
     ),
     cmd!("chat.rename", "Chat umbenennen", "Chat", Some("F2"), "id: string, title: string", false, |c, p| Box::pin(async move {
         let title = req_str(&p, "title")?.trim().chars().take(200).collect::<String>();
@@ -712,12 +739,32 @@ async fn chat_new(c: Ctx, p: Value) -> Result<Value> {
     let aspect_ratio = state.selection.aspect_ratio.clone();
     c.update(|s| {
         s.current = None;
+        s.find = None;
         s.messages.clear();
         s.variants.clear();
-        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: None, kind, aspect_ratio };
+        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: None, kind, aspect_ratio, temporary: false };
     });
+    crate::temporary::discard_closed(&c);
     persist_selection(&c);
     Ok(json!({}))
+}
+
+/// Start a temporary chat (#34), or go back to a normal new chat.
+async fn chat_temporary(c: Ctx, p: Value) -> Result<Value> {
+    let on = match p.get("on") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(Error::invalid("on muss true oder false sein")),
+    };
+    chat_new(c.clone(), json!({})).await?;
+    if on {
+        c.update(|s| {
+            s.selection.temporary = true;
+            // Nothing from the notes goes along either; it can be switched on under „Quellen“.
+            s.selection.sources.memory = false;
+        });
+    }
+    Ok(json!({"temporary": on}))
 }
 
 /// Close the open chat: back to the start page. A running answer keeps going in the background.
@@ -732,6 +779,7 @@ async fn chat_close(c: Ctx) -> Result<Value> {
             s.selection.persona = None;
             s.selection.kind = ConversationKind::Chat;
         });
+        crate::temporary::discard_closed(&c);
     }
     Ok(json!({"closed": closed}))
 }
@@ -744,6 +792,7 @@ async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
     let n = messages.len();
     c.update(|s| {
         s.current = Some(id.clone());
+        s.find = None;
         s.messages = messages;
         s.variants = variants;
         s.selection = Selection {
@@ -754,8 +803,10 @@ async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
             persona: conv.persona.clone(),
             kind: conv.kind,
             aspect_ratio: s.selection.aspect_ratio.clone(),
+            temporary: conv.temporary,
         };
     });
+    crate::temporary::discard_closed(&c);
     Ok(json!({"messages": n}))
 }
 
@@ -814,6 +865,13 @@ async fn set_sources(c: Ctx, p: Value) -> Result<Value> {
         Some(_) => return Err(Error::invalid("protect muss true, false oder null sein")),
         None => {}
     }
+    match p.get("effort") {
+        Some(Value::Null) => src.effort = None,
+        Some(Value::String(e)) if aiscraft_core::EFFORTS.iter().any(|(id, _)| id == e) => src.effort = Some(e.clone()),
+        Some(Value::String(e)) if e == "default" || e.is_empty() => src.effort = None,
+        Some(_) => return Err(Error::invalid("effort muss low, medium, high, max oder null sein")),
+        None => {}
+    }
     match p.get("connectors") {
         Some(Value::Null) => src.connectors = None,
         Some(Value::Array(a)) => src.connectors = Some(a.iter().filter_map(|v| v.as_str().map(str::to_string)).take(200).collect()),
@@ -829,9 +887,35 @@ async fn set_sources(c: Ctx, p: Value) -> Result<Value> {
     Ok(serde_json::to_value(src)?)
 }
 
+/// The answer style of the open chat (or of the next new one), #31.
+async fn set_style(c: Ctx, p: Value) -> Result<Value> {
+    let style = req_str(&p, "style")?;
+    let mut src = c.state().selection.sources.clone();
+    if let Some(sample) = p.get("sample") {
+        let sample = sample.as_str().ok_or_else(|| Error::invalid("sample muss ein Text sein"))?.trim();
+        src.style_sample = (!sample.is_empty()).then(|| sample.chars().take(aiscraft_core::MAX_STYLE_SAMPLE).collect());
+    }
+    match style.as_str() {
+        "normal" | "" => src.style = None,
+        "custom" if src.style_sample.is_none() => return Err(Error::invalid("Für einen eigenen Stil fehlt ein Beispieltext")),
+        s if aiscraft_core::STYLES.iter().any(|(id, _)| *id == s) => src.style = Some(s.to_string()),
+        other => return Err(Error::invalid(format!("Unbekannter Stil {other} (normal, concise, explanatory, formal, custom)"))),
+    }
+    let current = c.state().current.clone();
+    c.update(|s| s.selection.sources = src.clone());
+    if let Some(id) = current {
+        let s2 = src.clone();
+        edit_conversation(&c, &id, |conv| conv.sources = s2)?;
+    }
+    Ok(json!({"style": src.style, "sample": src.style_sample}))
+}
+
 async fn chat_delete(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     chat::stop(&c, &id);
+    if c.state().conversation(&id).is_some_and(|x| x.temporary) {
+        crate::temporary::discard(&c, &id);
+    }
     c.store(|st| st.delete_conversation(&id))?;
     crate::privacy::forget(&c, &id);
     c.update(|s| {
@@ -970,6 +1054,7 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
         persona,
         kind,
         remote_id: None,
+        temporary: false,
     };
     c.store(|st| {
         st.save_conversation(&conv)?;
@@ -987,6 +1072,7 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
                 usage: None,
                 tool_calls: vec![],
                 tool_result: None,
+                thinking: String::new(),
             })?;
         }
         Ok(())
@@ -1006,7 +1092,8 @@ fn search_chats(c: &Ctx, query: &str) -> Result<Vec<aiscraft_store::SearchHit>> 
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).filter(|w| !w.is_empty()).take(12).collect();
     let mut hits = Vec::new();
     if !words.is_empty() {
-        let mut convs = c.state().conversations.clone();
+        // A temporary chat (#34) is never found.
+        let mut convs: Vec<Conversation> = c.state().conversations.iter().filter(|x| !x.temporary).cloned().collect();
         convs.sort_by_key(|x| std::cmp::Reverse(x.updated_at));
         for conv in convs {
             let title = crate::privacy::reveal(c, &conv.id, &conv.title);
@@ -1141,8 +1228,10 @@ async fn persona_start(c: Ctx, p: Value) -> Result<Value> {
             persona: Some(info.persona()),
             kind: ConversationKind::Chat,
             aspect_ratio: s.selection.aspect_ratio.clone(),
+            temporary: false,
         };
     });
+    crate::temporary::discard_closed(&c);
     persist_selection(&c);
     let out = serde_json::to_value(&info)?;
     if let Some(text) = opt_str(&p, "text").filter(|t| !t.trim().is_empty()) {

@@ -12,6 +12,7 @@ mod collab;
 mod commands;
 mod disk;
 mod files;
+pub mod find;
 pub mod highlights;
 mod inbox;
 pub mod learn;
@@ -25,6 +26,7 @@ mod secrets;
 mod skills;
 mod state;
 mod tasks;
+mod temporary;
 pub mod tools;
 mod trust;
 mod update;
@@ -259,6 +261,10 @@ impl Engine {
                 .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-attachments-{}", std::process::id()))),
         }));
         ctx.load()?;
+        // Leftovers of a run that ended without closing (engines in memory share a folder, skip).
+        if opts.data_dir.is_some() {
+            temporary::clean_up(&ctx);
+        }
         if let Some(n) = secret_notice {
             ctx.notice(NoticeLevel::Warning, n);
         }
@@ -648,6 +654,9 @@ impl Ctx {
 mod tests;
 #[cfg(test)]
 mod trust_tests;
+
+#[cfg(test)]
+mod chatux_tests;
 
 #[cfg(test)]
 pub(crate) fn chat_system_prompt_for_test(c: &Ctx, conv: &aiscraft_core::Conversation, send: bool, takes: bool) -> Option<String> {

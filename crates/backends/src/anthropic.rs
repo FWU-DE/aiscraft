@@ -68,6 +68,30 @@ fn dynamic_web_tools(model: &str) -> bool {
         .any(|p| model.starts_with(p))
 }
 
+/// Models that think by default (adaptive thinking cannot be switched off): asking for the
+/// summarised thinking changes only what comes back, not how the model works.
+fn thinks_by_default(model: &str) -> bool {
+    ["claude-fable", "claude-mythos", "claude-opus-5", "claude-sonnet-5", "claude-haiku-5"].iter().any(|p| model.starts_with(p))
+}
+
+/// The effort a model takes (`output_config.effort`), or `None` for models without it. Opus 4.5
+/// knows no `max`; it gets `high` instead.
+fn effort_for(model: &str, effort: Option<&str>) -> Option<&'static str> {
+    let level = match effort? {
+        "low" => "low",
+        "medium" => "medium",
+        "high" => "high",
+        "max" => "max",
+        _ => return None,
+    };
+    let takes = thinks_by_default(model)
+        || ["claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-4-6"].iter().any(|p| model.starts_with(p));
+    if !takes {
+        return None;
+    }
+    Some(if level == "max" && model.starts_with("claude-opus-4-5") { "high" } else { level })
+}
+
 /// Claude's own web search and page reader (server tools: they run at Anthropic).
 fn web_tools(model: &str) -> [Value; 2] {
     let (search, fetch) = if dynamic_web_tools(model) { ("web_search_20260209", "web_fetch_20260209") } else { ("web_search_20250305", "web_fetch_20250910") };
@@ -137,6 +161,13 @@ pub fn body(req: &ChatRequest) -> Value {
         }
         if takes_fallback(&req.model) {
             o.insert("fallbacks".into(), json!("default"));
+        }
+        // The thinking comes back summarised, to show folded above the answer (#30).
+        if thinks_by_default(&req.model) {
+            o.insert("thinking".into(), json!({"type": "adaptive", "display": "summarized"}));
+        }
+        if let Some(e) = effort_for(&req.model, req.effort.as_deref()) {
+            o.insert("output_config".into(), json!({"effort": e}));
         }
         let mut tools: Vec<Value> = req
             .tools
@@ -445,9 +476,18 @@ pub fn sse_events(event: Option<&str>, data: &str) -> Result<Vec<StreamEvent>> {
     let n = |p: &str| v.pointer(p).and_then(Value::as_u64).unwrap_or(0);
     Ok(match ty {
         "message_start" => vec![StreamEvent::Usage { usage: Usage { input_tokens: n("/message/usage/input_tokens"), output_tokens: 0 } }],
-        "content_block_delta" => match v.pointer("/delta/text").and_then(Value::as_str) {
-            Some(t) if v.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta") => vec![StreamEvent::Delta { text: t.to_string() }],
-            _ => vec![], // thinking and signature deltas are not shown
+        "content_block_delta" => match v.pointer("/delta/type").and_then(Value::as_str) {
+            Some("text_delta") => {
+                v.pointer("/delta/text").and_then(Value::as_str).map(|t| vec![StreamEvent::Delta { text: t.to_string() }]).unwrap_or_default()
+            }
+            // The summarised thinking is shown folded above the answer; signatures are not shown.
+            Some("thinking_delta") => v
+                .pointer("/delta/thinking")
+                .and_then(Value::as_str)
+                .filter(|t| !t.is_empty())
+                .map(|t| vec![StreamEvent::Thinking { text: t.to_string() }])
+                .unwrap_or_default(),
+            _ => vec![],
         },
         "message_delta" => {
             let mut out = vec![StreamEvent::Usage { usage: Usage { input_tokens: 0, output_tokens: n("/usage/output_tokens") } }];
@@ -622,7 +662,11 @@ mod tests {
     fn stream_events() {
         let d = sse_events(None, r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hallo"}}"#).unwrap();
         assert_eq!(d, vec![StreamEvent::Delta { text: "Hallo".into() }]);
-        assert!(sse_events(None, r#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"…"}}"#).unwrap().is_empty());
+        assert_eq!(
+            sse_events(None, r#"{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Zuerst die Frage klären"}}"#).unwrap(),
+            vec![StreamEvent::Thinking { text: "Zuerst die Frage klären".into() }]
+        );
+        assert!(sse_events(None, r#"{"type":"content_block_delta","delta":{"type":"signature_delta","signature":"abc"}}"#).unwrap().is_empty());
         assert_eq!(sse_events(None, r#"{"type":"message_stop"}"#).unwrap(), vec![StreamEvent::Done]);
         assert!(sse_events(None, r#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#).is_err());
     }
@@ -668,6 +712,7 @@ mod tests {
             usage: None,
             tool_calls: vec![],
             tool_result: None,
+            thinking: String::new(),
         };
         let req = ChatRequest {
             conversation_id: "c".into(),
@@ -678,11 +723,23 @@ mod tests {
             tool_bridge: None,
             persona: None,
             web: false,
+            effort: None,
         };
         let b = body(&req);
         assert_eq!(b["messages"].as_array().unwrap().len(), 1);
         assert_eq!(b["fallbacks"], "default");
         assert!(b.get("temperature").is_none());
+        // Thinking comes back summarised; the effort goes along only when chosen (#30).
+        assert_eq!(b["thinking"], json!({"type": "adaptive", "display": "summarized"}));
+        assert!(b.get("output_config").is_none());
+        let b = body(&ChatRequest { effort: Some("high".into()), ..req.clone() });
+        assert_eq!(b["output_config"]["effort"], "high");
+        // Older models: no thinking switch they would refuse; Opus 4.5 knows no "max".
+        let old = ChatRequest { model: "claude-haiku-4-5".into(), effort: Some("low".into()), ..req.clone() };
+        assert!(body(&old).get("thinking").is_none() && body(&old).get("output_config").is_none());
+        let opus45 = ChatRequest { model: "claude-opus-4-5".into(), effort: Some("max".into()), ..req.clone() };
+        assert_eq!(body(&opus45)["output_config"]["effort"], "high");
+        assert!(body(&ChatRequest { effort: Some("viel".into()), ..req }).get("output_config").is_none(), "unknown levels are dropped");
     }
 
     fn sse(events: &[Value]) -> String {
@@ -785,6 +842,7 @@ mod tests {
             usage: None,
             tool_calls: vec![],
             tool_result: None,
+            thinking: String::new(),
         };
         let req = ChatRequest {
             conversation_id: "c".into(),
@@ -795,6 +853,7 @@ mod tests {
             tool_bridge: None,
             persona: None,
             web: true,
+            effort: None,
         };
         let events: Vec<StreamEvent> = b.chat(req).await.unwrap().map(|e| e.unwrap()).collect().await;
         let text: String = events.iter().filter_map(|e| if let StreamEvent::Delta { text } = e { Some(text.as_str()) } else { None }).collect();
@@ -825,6 +884,7 @@ mod tests {
             tool_bridge: None,
             persona: None,
             web,
+            effort: None,
         };
         assert!(body(&req(false)).get("tools").is_none());
         let b = body(&req(true));

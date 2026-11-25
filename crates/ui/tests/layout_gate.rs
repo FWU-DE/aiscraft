@@ -272,6 +272,15 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
     settle(&mut h, &at("Chat"), |h| label(h, "Kopieren"));
     check(&mut h, &at("Chat"));
 
+    // The same chat with the search open (Strg+F, #41) and a hit marked.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    settle(&mut h, &at("Chat, Suche"), |h| label(h, "Im Chat suchen"));
+    call(&engine, "chat.find", json!({"query": "Photosynthese"}));
+    settle(&mut h, &at("Chat, Suche"), |h| h.query_by_label_contains(" von ").is_some());
+    check(&mut h, &at("Chat, Suche"));
+    h.key_press(egui::Key::Escape);
+    settle(&mut h, &at("Chat, Suche geschlossen"), |h| !label(h, "Im Chat suchen"));
+
     // Chat next to each kind of panel.
     let panels: [(&str, &str, Value); 6] = [
         ("Dokument", "artifact.create", json!({"kind": "document", "content": LONG_ANSWER})),

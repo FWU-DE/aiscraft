@@ -118,6 +118,13 @@ pub fn chunk_events_with(data: &str, acc: &mut ToolAcc) -> Result<Vec<StreamEven
     }
     let mut out = Vec::new();
     if let Some(choice) = v.get("choices").and_then(Value::as_array).and_then(|a| a.first()) {
+        // Reasoning models on DeepSeek, Ollama, LM Studio, vLLM and OpenRouter stream their
+        // thinking beside the answer (`reasoning_content` or `reasoning`).
+        if let Some(t) =
+            ["/delta/reasoning_content", "/delta/reasoning"].iter().find_map(|p| choice.pointer(p).and_then(Value::as_str).filter(|t| !t.is_empty()))
+        {
+            out.push(StreamEvent::Thinking { text: t.to_string() });
+        }
         if let Some(t) = choice.pointer("/delta/content").and_then(Value::as_str).filter(|t| !t.is_empty()) {
             out.push(StreamEvent::Delta { text: t.to_string() });
         }
@@ -225,6 +232,7 @@ mod tests {
             usage: None,
             tool_calls: vec![],
             tool_result: None,
+            thinking: String::new(),
         }
     }
 
@@ -241,6 +249,7 @@ mod tests {
             tool_bridge: None,
             persona: None,
             web: false,
+            effort: None,
         };
         let b = body(&req);
         assert_eq!(b["messages"][0]["role"], "system");
@@ -270,6 +279,20 @@ mod tests {
         assert_eq!(chunk_events("[DONE]").unwrap(), vec![StreamEvent::Done]);
         assert!(chunk_events(r#"{"error":{"message":"quota"}}"#).is_err());
         assert!(matches!(chunk_events(r#"{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":4}}"#).unwrap()[0], StreamEvent::Usage { .. }));
+    }
+
+    /// Reasoning models stream their thinking beside the answer (#30).
+    #[test]
+    fn reasoning_becomes_thinking() {
+        assert_eq!(
+            chunk_events(r#"{"choices":[{"delta":{"reasoning_content":"Erst rechnen"}}]}"#).unwrap(),
+            vec![StreamEvent::Thinking { text: "Erst rechnen".into() }]
+        );
+        assert_eq!(
+            chunk_events(r#"{"choices":[{"delta":{"reasoning":"Hm","content":"Ja"}}]}"#).unwrap(),
+            vec![StreamEvent::Thinking { text: "Hm".into() }, StreamEvent::Delta { text: "Ja".into() }]
+        );
+        assert!(chunk_events(r#"{"choices":[{"delta":{"reasoning_content":""}}]}"#).unwrap().is_empty());
     }
 
     /// A local OpenAI-compatible server (Ollama, LM Studio) that is not running: the message names
@@ -307,6 +330,7 @@ mod tests {
             tool_bridge: None,
             persona: None,
             web: false,
+            effort: None,
         };
         let e = b.chat(req).await.err().expect("no server");
         assert!(e.message.contains(&format!("lokale Dienst unter 127.0.0.1:{port} antwortet nicht")), "{}", e.message);
@@ -381,6 +405,7 @@ mod tests {
                 tool_bridge: None,
                 persona: None,
                 web: false,
+                effort: None,
             };
             let mut stream = b.chat(req).await.unwrap();
             use futures::StreamExt;

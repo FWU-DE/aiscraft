@@ -311,6 +311,7 @@ mod tests {
             usage: None,
             tool_calls: vec![],
             tool_result: None,
+            thinking: String::new(),
         }
     }
 

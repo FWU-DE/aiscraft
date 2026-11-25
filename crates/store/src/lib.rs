@@ -68,6 +68,8 @@ struct Extra {
     tool_calls: Vec<aiscraft_core::ToolCall>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_result: Option<aiscraft_core::ToolResultInfo>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    thinking: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -127,6 +129,10 @@ struct ConvExtra {
 
 pub struct Store {
     db: Connection,
+    /// Temporary chats (#34): their conversation, messages and search entries live in this
+    /// database in memory, never in the file, and are not searched or recalled.
+    temp: Option<Box<Store>>,
+    temp_ids: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 fn db_err(e: rusqlite::Error) -> Error {
@@ -143,11 +149,21 @@ impl Store {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| Error::io(format_args!("Ordner {}", dir.display()), &e))?;
         }
-        Self::init(Connection::open(path).map_err(db_err)?)
+        Self::with_temp(Self::init(Connection::open(path).map_err(db_err)?)?)
     }
 
     pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory().map_err(db_err)?)
+        Self::with_temp(Self::init(Connection::open_in_memory().map_err(db_err)?)?)
+    }
+
+    fn with_temp(mut st: Self) -> Result<Self> {
+        st.temp = Some(Box::new(Self::init(Connection::open_in_memory().map_err(db_err)?)?));
+        Ok(st)
+    }
+
+    /// Whether this conversation is a temporary one (kept in memory only).
+    pub fn is_temporary(&self, conversation_id: &str) -> bool {
+        self.temp_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(conversation_id)
     }
 
     fn init(db: Connection) -> Result<Self> {
@@ -187,7 +203,7 @@ impl Store {
         }
         db.execute_batch("CREATE INDEX IF NOT EXISTS messages_parent ON messages(conversation_id, parent_id)").map_err(db_err)?;
         db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}")).map_err(db_err)?;
-        Ok(Self { db })
+        Ok(Self { db, temp: None, temp_ids: Default::default() })
     }
 
     // ---- backends -------------------------------------------------------------------------
@@ -238,6 +254,7 @@ impl Store {
             persona: extra.persona,
             kind: extra.kind,
             remote_id: extra.remote_id,
+            temporary: false,
         })
     }
 
@@ -252,11 +269,22 @@ impl Store {
     }
 
     pub fn conversation(&self, id: &str) -> Result<Option<Conversation>> {
+        if self.is_temporary(id)
+            && let Some(t) = &self.temp
+        {
+            return Ok(t.conversation(id)?.map(|c| Conversation { temporary: true, ..c }));
+        }
         let sql = format!("SELECT {} FROM conversations WHERE id = ?1", Self::CONV_COLS);
         self.db.query_row(&sql, [id], Self::conv_row).optional().map_err(db_err)
     }
 
     pub fn save_conversation(&self, c: &Conversation) -> Result<()> {
+        if c.temporary
+            && let Some(t) = &self.temp
+        {
+            self.temp_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(c.id.clone());
+            return t.save_conversation(&Conversation { temporary: false, ..c.clone() });
+        }
         self.db
             .execute(
                 "INSERT INTO conversations (id, title, backend_id, model_id, project_id, created_at, updated_at, pinned, sources, extra)
@@ -282,6 +310,13 @@ impl Store {
     }
 
     pub fn delete_conversation(&self, id: &str) -> Result<()> {
+        if self.is_temporary(id)
+            && let Some(t) = &self.temp
+        {
+            t.delete_conversation(id)?;
+            self.temp_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(id);
+            return Ok(());
+        }
         let tx = self.db.unchecked_transaction().map_err(db_err)?;
         tx.execute("DELETE FROM messages_fts WHERE conversation_id = ?1", [id]).map_err(db_err)?;
         tx.execute("DELETE FROM messages WHERE conversation_id = ?1", [id]).map_err(db_err)?;
@@ -338,6 +373,7 @@ impl Store {
                     usage: extra.usage,
                     tool_calls: extra.tool_calls,
                     tool_result: extra.tool_result,
+                    thinking: extra.thinking,
                 },
             ));
         }
@@ -368,6 +404,11 @@ impl Store {
 
     /// The shown branch of a conversation, oldest first.
     pub fn messages(&self, conversation_id: &str) -> Result<Vec<Message>> {
+        if self.is_temporary(conversation_id)
+            && let Some(t) = &self.temp
+        {
+            return t.messages(conversation_id);
+        }
         let rows = self.rows(conversation_id)?;
         let head = self.stored_head(conversation_id)?;
         let nodes: Vec<&Node> = rows.iter().map(|(n, _)| n).collect();
@@ -379,6 +420,11 @@ impl Store {
     /// For each message of the shown branch that has other versions: which one it is (from 1)
     /// and how many there are.
     pub fn variants(&self, conversation_id: &str) -> Result<BTreeMap<String, Variant>> {
+        if self.is_temporary(conversation_id)
+            && let Some(t) = &self.temp
+        {
+            return t.variants(conversation_id);
+        }
         let nodes = self.nodes(conversation_id)?;
         let refs: Vec<&Node> = nodes.iter().collect();
         let head = self.stored_head(conversation_id)?;
@@ -421,6 +467,11 @@ impl Store {
     /// Insert or replace a message (keeps its place) and its search entry. A new message goes
     /// after the head and becomes the head.
     pub fn save_message(&self, m: &Message) -> Result<()> {
+        if self.is_temporary(&m.conversation_id)
+            && let Some(t) = &self.temp
+        {
+            return t.save_message(m);
+        }
         let extra = Extra {
             model: m.model.clone(),
             attachments: m.attachments.iter().map(|a| aiscraft_core::Attachment { data_base64: None, ..a.clone() }).collect(),
@@ -429,6 +480,7 @@ impl Store {
             usage: m.usage,
             tool_calls: m.tool_calls.clone(),
             tool_result: m.tool_result.clone(),
+            thinking: m.thinking.clone(),
         };
         let exists: Option<bool> =
             self.db.query_row("SELECT active FROM messages WHERE id = ?1", [&m.id], |r| r.get::<_, i64>(0).map(|a| a != 0)).optional().map_err(db_err)?;
@@ -482,6 +534,9 @@ impl Store {
         if old == new {
             return Ok(());
         }
+        if let Some(t) = &self.temp {
+            t.rename_message(old, new)?;
+        }
         let tx = self.db.unchecked_transaction().map_err(db_err)?;
         tx.execute("UPDATE messages SET id = ?2 WHERE id = ?1", params![old, new]).map_err(db_err)?;
         tx.execute("UPDATE messages SET parent_id = ?2 WHERE parent_id = ?1", params![old, new]).map_err(db_err)?;
@@ -493,6 +548,11 @@ impl Store {
     /// The next message saved becomes a new version of `message_id` (for edit and regenerate):
     /// the shown branch ends just before it. The old version and what followed it stay.
     pub fn fork_at(&self, conversation_id: &str, message_id: &str) -> Result<()> {
+        if self.is_temporary(conversation_id)
+            && let Some(t) = &self.temp
+        {
+            return t.fork_at(conversation_id, message_id);
+        }
         let parent: Option<String> = self
             .db
             .query_row("SELECT parent_id FROM messages WHERE id = ?1 AND conversation_id = ?2", params![message_id, conversation_id], |r| r.get(0))
@@ -506,6 +566,11 @@ impl Store {
     /// Undo [`Store::fork_at`] when nothing new was saved since (the edit or regeneration
     /// failed before it began): `message_id`'s branch is shown again.
     pub fn unfork(&self, conversation_id: &str, message_id: &str) -> Result<()> {
+        if self.is_temporary(conversation_id)
+            && let Some(t) = &self.temp
+        {
+            return t.unfork(conversation_id, message_id);
+        }
         let parent: Option<String> = self
             .db
             .query_row("SELECT parent_id FROM messages WHERE id = ?1 AND conversation_id = ?2", params![message_id, conversation_id], |r| r.get(0))
@@ -520,6 +585,11 @@ impl Store {
     /// Show the version `index` (from 1) among `message_id` and its siblings, with the branch
     /// that was last shown below it. Returns how many versions there are.
     pub fn select_variant(&self, conversation_id: &str, message_id: &str, index: usize) -> Result<usize> {
+        if self.is_temporary(conversation_id)
+            && let Some(t) = &self.temp
+        {
+            return t.select_variant(conversation_id, message_id, index);
+        }
         let nodes = self.nodes(conversation_id)?;
         let Some(me) = nodes.iter().find(|n| n.id == message_id) else { return Err(Error::not_found("Nachricht nicht gefunden")) };
         let siblings: Vec<&Node> = nodes.iter().filter(|n| n.parent == me.parent).collect();
@@ -548,6 +618,11 @@ impl Store {
 
     /// Delete a message and everything that follows it on any branch (a schedule run without news).
     pub fn truncate_from(&self, conversation_id: &str, message_id: &str) -> Result<()> {
+        if self.is_temporary(conversation_id)
+            && let Some(t) = &self.temp
+        {
+            return t.truncate_from(conversation_id, message_id);
+        }
         let nodes = self.nodes(conversation_id)?;
         let Some(me) = nodes.iter().find(|n| n.id == message_id) else { return Ok(()) };
         let parent = me.parent.clone();
@@ -1026,6 +1101,7 @@ mod tests {
             persona: None,
             kind: Default::default(),
             remote_id: None,
+            temporary: false,
         }
     }
 
@@ -1043,6 +1119,7 @@ mod tests {
             usage: None,
             tool_calls: vec![],
             tool_result: None,
+            thinking: String::new(),
         }
     }
 
@@ -1307,5 +1384,33 @@ mod tests {
         let a = s.action_log(10, Some("a")).unwrap();
         assert_eq!(a.len(), 10);
         assert!(a.iter().all(|x| x.conversation_id == "a"));
+    }
+
+    /// #34: a temporary chat lives only in the database in memory: never listed, never in the
+    /// file, never found; deleting it leaves nothing.
+    #[test]
+    fn temporary_chats_stay_out_of_the_file_and_the_search() {
+        let dir = std::env::temp_dir().join(format!("aiscraft-store-temp-{}", std::process::id()));
+        let path = dir.join("t.db");
+        let s = Store::open(&path).unwrap();
+        let t = Conversation { temporary: true, ..conv("t", 5) };
+        s.save_conversation(&t).unwrap();
+        s.save_message(&msg("t", "m1", Role::User, "Vertraulicher Elternbrief")).unwrap();
+        s.save_message(&msg("t", "m2", Role::Assistant, "Entwurf")).unwrap();
+        assert!(s.is_temporary("t"));
+        assert_eq!(s.messages("t").unwrap().len(), 2, "readable while it is open");
+        assert!(s.conversation("t").unwrap().unwrap().temporary);
+        assert!(s.conversations(10).unwrap().is_empty(), "never listed");
+        assert!(s.search("Elternbrief", 10).unwrap().is_empty() && s.search_any(&["elternbrief".into()], None, 10).unwrap().is_empty(), "never found");
+        assert!(s.user_messages_since(0, 10).unwrap().is_empty(), "never tidied into notes");
+        let on_disk: i64 = s.db.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0)).unwrap();
+        assert_eq!(on_disk, 0, "nothing in the file");
+        s.fork_at("t", "m2").unwrap();
+        s.save_message(&msg("t", "m3", Role::Assistant, "Zweiter Entwurf")).unwrap();
+        assert_eq!(s.variants("t").unwrap().len(), 1, "versions work as in any chat");
+        s.delete_conversation("t").unwrap();
+        assert!(!s.is_temporary("t") && s.messages("t").unwrap().is_empty() && s.conversation("t").unwrap().is_none());
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
