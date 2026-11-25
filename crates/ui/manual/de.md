@@ -184,7 +184,7 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 „Teilen“ oben in Dokument, Whiteboard, Arbeitsblatt oder Lern-App fragt zuerst, was du vorhast. **Gemeinsam bearbeiten** heißt: Es gibt ein Original, und alle mit dem Code schreiben live daran mit. **Bereitstellen** heißt: Du gibst eine Kopie als Datei weiter (zum Ansehen, Ausdrucken oder für die Lernplattform), das Original bleibt bei dir, und spätere Änderungen gehen nicht mit.
 
-**Bereitstellen:** Je nach Art gibt es die passenden Dateien: Dokument als Word, PDF oder Markdown; Arbeitsblatt als Arbeitsblatt- und Lösungsblatt, jeweils als PDF oder Word; Lern-App als HTML-Datei, die in jedem Browser läuft; Whiteboard als PDF (die Inhalte als Gliederung); H5P-Inhalt als `.h5p`-Datei.
+**Bereitstellen:** Je nach Art gibt es die passenden Dateien: Dokument als Word, PDF oder Markdown; Arbeitsblatt als Arbeitsblatt- und Lösungsblatt, jeweils als PDF oder Word; Lern-App als HTML-Datei, die in jedem Browser läuft; Whiteboard als Bild (PNG, so wie es aussieht, mit weißem Hintergrund; große Whiteboards werden auf höchstens 4096 Pixel verkleinert) oder als PDF (die Inhalte als Gliederung); H5P-Inhalt als `.h5p`-Datei.
 
 Für gemeinsames Bearbeiten braucht es einen Server für die Zusammenarbeit (`aiscraft-collab-server`, z. B. von der Schule oder dem Träger betrieben). Die Adresse (und den Schlüssel, falls er einen verlangt) trägst du einmal unter **Einstellungen › Dienste › Zusammenarbeit** ein. Ohne Server bleibt alles auf deinem Rechner. Der Inhalt geteilter Dokumente liegt auf diesem Server; Räume, die lange niemand öffnet, löscht er.
 

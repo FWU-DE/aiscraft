@@ -599,7 +599,7 @@ impl<'a> BoardView<'a> {
 }
 
 /// Refresh the element cache and apply the growing height of the note being edited.
-fn refresh(st: &mut ViewState, board: &Board) {
+pub(crate) fn refresh(st: &mut ViewState, board: &Board) {
     st.cache.refresh(board);
     if let Some(ed) = &st.editing
         && let Some(h) = ed.grow_h
@@ -1603,7 +1603,23 @@ fn arrow_head(painter: &Painter, from: Pos2, tip: Pos2, size: f32, color: Color3
     painter.add(Shape::convex_polygon(vec![tip, base + n * size * 0.5, base - n * size * 0.5], color, Stroke::NONE));
 }
 
-fn paint_elements(painter: &Painter, ui: &Ui, rect: Rect, st: &ViewState, style: &BoardStyle) {
+/// World bounds of everything drawn, frame labels and note shadows included; `None` when empty.
+pub(crate) fn drawn_bounds(st: &ViewState) -> Option<Rect> {
+    let mut b = Rect::NOTHING;
+    for e in &st.cache.els {
+        let r = st.cache.bounds(e);
+        b = b.union(r);
+        if e.kind == Kind::Frame {
+            b = b.union(Rect::from_min_size(r.min - vec2(0.0, 24.0), vec2(r.width(), 24.0)));
+        }
+        if e.kind == Kind::Note {
+            b = b.union(r.translate(vec2(0.0, 3.0)));
+        }
+    }
+    (b.min.x.is_finite() && b.min.y.is_finite() && b.max.x.is_finite() && b.max.y.is_finite()).then_some(b)
+}
+
+pub(crate) fn paint_elements(painter: &Painter, ui: &Ui, rect: Rect, st: &ViewState, style: &BoardStyle) {
     let cam = st.camera;
     let z = cam.zoom;
     let vis = cam.visible(rect).expand(40.0 / z);

@@ -552,7 +552,7 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("artifact.revise", "Mit KI überarbeiten", "Artefakte", None, "id: string, instruction: string", false, |c, p| Box::pin(crate::artifacts::revise(
         c, p
     ))),
-    cmd!("artifact.export", "Artefakt exportieren", "Artefakte", None, "id: string, format?: markdown|html|docx|pdf|json, path?: string", false, |c, p| {
+    cmd!("artifact.export", "Artefakt exportieren", "Artefakte", None, "id: string, format?: markdown|html|docx|pdf|json|png (png: nur Whiteboards), path?: string", false, |c, p| {
         Box::pin(crate::artifacts::export(c, p))
     }),
     cmd!("artifact.export_paths", "Dateien zum Bereitstellen", "Artefakte", None, "id: string (je Eintrag: label, hint, format, variant, ext, suffix für artifact.export)", false, |c, p| {

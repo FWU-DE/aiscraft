@@ -329,7 +329,10 @@ pub(crate) fn export_paths(kind: ArtifactKind) -> Vec<Value> {
             path("Lösungsblatt als Word", "Die Lösungen zum Weiterbearbeiten", "docx", Some("loesung"), "docx", " Lösungen"),
         ],
         ArtifactKind::App => vec![path("HTML-Datei", "Läuft in jedem Browser, ohne Internet; auch für die Lernplattform", "html", None, "html", "")],
-        ArtifactKind::Board => vec![path("PDF", "Die Inhalte des Whiteboards als Gliederung, zum Ausdrucken", "pdf", None, "pdf", "")],
+        ArtifactKind::Board => vec![
+            path("Bild (PNG)", "Das Whiteboard so, wie es aussieht, z. B. für die Lernplattform oder eine Präsentation", "png", None, "png", ""),
+            path("PDF", "Die Inhalte des Whiteboards als Gliederung, zum Ausdrucken", "pdf", None, "pdf", ""),
+        ],
         ArtifactKind::H5p => vec![path("H5P-Datei (.h5p)", "Zum Hochladen in Moodle, mebis oder eine andere Lernplattform", "h5p", None, "h5p", "")],
     }
 }
@@ -347,6 +350,15 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
     }
     let state = state_of(&c, &id)?;
     let format = opt_str(&p, "format").unwrap_or_else(|| "markdown".into());
+    if format == "png" {
+        let bytes = board_png(&a, &state)?;
+        if let Some(path) = opt_str(&p, "path") {
+            crate::disk::write(std::path::Path::new(&path), &bytes)?;
+            c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
+            return Ok(json!({"path": path}));
+        }
+        return Ok(json!({"base64": base64::engine::general_purpose::STANDARD.encode(&bytes), "bytes": bytes.len()}));
+    }
     let mut text = artifact_text(a.kind, &state)?;
     // „Erstellt mit KI“ (#57) at the end of a handout; not in the board's own JSON.
     if format != "json"
@@ -371,7 +383,7 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
         (_, other) => {
             return Err(Error::invalid(format!(
                 "Format {other} gibt es hier nicht (markdown, html, docx, pdf{})",
-                if a.kind == ArtifactKind::Board { ", json" } else { "" }
+                if a.kind == ArtifactKind::Board { ", json, png" } else { "" }
             )));
         }
     };
@@ -381,6 +393,21 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
         return Ok(json!({"path": path}));
     }
     Ok(json!({"text": out}))
+}
+
+/// „Bild (PNG)“ (#60): the whiteboard as it looks, white background, at most
+/// [`aiscraft_board::MAX_IMAGE_EDGE`] pixels on either side.
+fn board_png(a: &Artifact, state: &[u8]) -> Result<Vec<u8>> {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Format, Image};
+    if a.kind != ArtifactKind::Board {
+        return Err(Error::invalid("Als Bild (PNG) lässt sich bisher nur ein Whiteboard speichern"));
+    }
+    let board = Board::from_state(state).map_err(|e| Error::invalid(format!("Whiteboard beschädigt: {e}")))?;
+    let r = board
+        .render_image(aiscraft_board::MAX_IMAGE_EDGE)
+        .ok_or_else(|| Error::invalid("Das Whiteboard ist leer. Füge erst Notizen, Formen oder Zeichnungen hinzu, dann lässt es sich als Bild speichern."))?;
+    let img = Image::from_u8(r.width, r.height, ChannelLayout::Rgb, r.rgb).map_err(|e| Error::invalid(format!("Das Bild ließ sich nicht anlegen: {e}")))?;
+    craft_image_codecs::encode(&img, Format::Png, &EncodeOptions::default()).map_err(|e| Error::invalid(format!("Das Bild ließ sich nicht als PNG speichern: {e}")))
 }
 
 pub(crate) async fn versions(c: Ctx, p: Value) -> Result<Value> {

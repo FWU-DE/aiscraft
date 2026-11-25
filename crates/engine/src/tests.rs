@@ -1653,7 +1653,7 @@ fn provide_offers_the_files_of_each_kind_and_each_one_exports() {
             ("pdf", None),
             ("markdown", None),
         ]),
-        ("Whiteboard", id_of(engine.call("artifact.create", json!({"kind": "board"})).unwrap()), vec![("pdf", None)]),
+        ("Whiteboard", id_of(engine.call("artifact.create", json!({"kind": "board", "content": "# Wald\n- Bäume"})).unwrap()), vec![("png", None), ("pdf", None)]),
         (
             "Lern-App",
             id_of(engine.call("learning_app.create", json!({"html": "<!doctype html><html><head><title>Brüche</title></head><body>1/2</body></html>"})).unwrap()),
@@ -1698,6 +1698,48 @@ fn provide_offers_the_files_of_each_kind_and_each_one_exports() {
         }
     }
     assert_eq!(engine.call("artifact.export_paths", json!({"id": "gibt-es-nicht"})).unwrap_err().kind, aiscraft_core::ErrorKind::NotFound);
+}
+
+/// „Bild (PNG)“ (#60): a whiteboard is saved as the picture it is, a real PNG with something on
+/// it; a crowded board stays within the size cap; an empty board and other kinds say why not.
+#[test]
+fn a_whiteboard_exports_as_a_png_picture() {
+    use base64::Engine as _;
+    use craft_image_codecs::{ChannelLayout, DecodeOptions, SampleType};
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let decode = |out: &Value| {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(out["base64"].as_str().unwrap()).unwrap();
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "a PNG file");
+        let img = craft_image_codecs::decode_with(&bytes, &DecodeOptions::default()).unwrap().convert(ChannelLayout::Rgb, SampleType::U8);
+        (img.width(), img.height(), img.data().to_vec())
+    };
+    let id = engine.call("artifact.create", json!({"kind": "board", "content": "# Wald\n- Bäume\n- Tiere\n- Pilze"})).unwrap()["id"].as_str().unwrap().to_string();
+    let (w, h, rgb) = decode(&engine.call("artifact.export", json!({"id": id, "format": "png"})).unwrap());
+    assert!(w > 100 && h > 100 && w <= aiscraft_board::MAX_IMAGE_EDGE && h <= aiscraft_board::MAX_IMAGE_EDGE, "{w}x{h}");
+    assert_eq!(rgb.len(), (w * h * 3) as usize);
+    assert!(rgb.as_chunks::<3>().0.iter().any(|p| p.iter().any(|&v| v < 200)), "not all white");
+    assert_eq!(rgb.get(..3), Some(&[255, 255, 255][..]), "white background in the corner");
+
+    // Written to a file, like the share dialog does.
+    let dir = std::env::temp_dir().join(format!("aiscraft-png-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Wald.png");
+    engine.call("artifact.export", json!({"id": id, "format": "png", "path": path.display().to_string()})).unwrap();
+    assert!(std::fs::read(&path).unwrap().starts_with(b"\x89PNG"));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Many cards: still within the cap.
+    let outline: String = std::iter::once("# Viele".to_string()).chain((0..1500).map(|i| format!("- Punkt {i}"))).collect::<Vec<_>>().join("\n");
+    engine.call("artifact.board_add", json!({"id": id, "outline": outline})).unwrap();
+    let (w, h, _) = decode(&engine.call("artifact.export", json!({"id": id, "format": "png"})).unwrap());
+    assert!(w <= aiscraft_board::MAX_IMAGE_EDGE && h <= aiscraft_board::MAX_IMAGE_EDGE, "{w}x{h}");
+
+    let empty = engine.call("artifact.create", json!({"kind": "board"})).unwrap()["id"].as_str().unwrap().to_string();
+    let e = engine.call("artifact.export", json!({"id": empty, "format": "png"})).unwrap_err();
+    assert!(e.message.contains("Whiteboard ist leer"), "{}", e.message);
+    let doc = engine.call("artifact.create", json!({"kind": "document", "content": "# Brief"})).unwrap()["id"].as_str().unwrap().to_string();
+    let e = engine.call("artifact.export", json!({"id": doc, "format": "png"})).unwrap_err();
+    assert!(e.message.contains("nur ein Whiteboard"), "{}", e.message);
 }
 
 /// The collab plug-in without a relay: present, but nothing is shared and nothing connects.
