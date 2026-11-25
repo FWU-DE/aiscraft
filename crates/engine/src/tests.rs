@@ -1084,6 +1084,13 @@ fn ais_chat_image_generation() {
         assert_eq!(read(None), (true, (400, 300), 0, 200, true), "badge dark, corner unchanged, note kept");
         assert_eq!(read(Some(true)).2, 0);
         assert_eq!(read(Some(false)), (false, (400, 300), 200, 200, true), "the original");
+        // Above 40 megapixels the badge is refused with a German hint; the original still saves.
+        let huge = crate::ai_badge::tests::png_header(8000, 6000);
+        std::fs::write(img.local_path.as_ref().unwrap(), &huge).unwrap();
+        let err = engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string()})).unwrap_err();
+        assert!(err.message.contains("40 Megapixel"), "{}", err.message);
+        engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string(), "badge": false})).unwrap();
+        assert!(std::fs::read(&target).unwrap().starts_with(&huge), "the original, with the note after the header");
     }
     let _ = std::fs::remove_file(&target);
 

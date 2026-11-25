@@ -16,7 +16,10 @@ pub const MARGIN: f32 = 28.0;
 /// Larger files are refused before decoding.
 const MAX_BYTES: usize = 25 * 1024 * 1024;
 /// Larger pictures are refused before decoding (width × height).
-const MAX_PIXELS: u64 = 64_000_000;
+const MAX_PIXELS: u64 = 40_000_000;
+/// What decoding may allocate: a 40 MP picture as 8-bit RGBA is 160 MB; with the converted
+/// copy and the encoder this stays well under half a gigabyte, also on school laptops.
+const MAX_ALLOC: u64 = 256 * 1024 * 1024;
 /// Samples per pixel and axis.
 const SS: usize = 4;
 
@@ -126,18 +129,25 @@ pub fn bake(bytes: &[u8]) -> Result<Badged> {
     if let Ok((w, h)) = craft_image_codecs::probe_size(bytes)
         && u64::from(w) * u64::from(h) > MAX_PIXELS
     {
-        return Err(Error::invalid("Das Bild ist zu groß für die KI-Kennzeichnung (mehr als 64 Megapixel)"));
+        return Err(too_large());
     }
-    let limits = Limits { max_width: 1 << 15, max_height: 1 << 15, max_pixels: MAX_PIXELS, max_alloc: 1 << 30 };
-    let img = craft_image_codecs::decode_with(bytes, &DecodeOptions { limits, ..DecodeOptions::default() }).map_err(|e| unreadable(&e))?;
+    let limits = Limits { max_width: 1 << 15, max_height: 1 << 15, max_pixels: MAX_PIXELS, max_alloc: MAX_ALLOC };
+    let img = craft_image_codecs::decode_with(bytes, &DecodeOptions { limits, ..DecodeOptions::default() }).map_err(|e| match e {
+        craft_image_codecs::CodecError::LimitExceeded(_) => too_large(),
+        e => unreadable(&e),
+    })?;
     let alpha = matches!(img.layout(), ChannelLayout::GrayA | ChannelLayout::Rgba | ChannelLayout::CmykA);
     let (layout, channels) = if alpha { (ChannelLayout::Rgba, 4) } else { (ChannelLayout::Rgb, 3) };
+    let icc = img.icc.clone();
     let flat = img.convert(layout, SampleType::U8);
+    // Hold at most two copies of the pixels at a time.
+    drop(img);
     let (w, h) = (flat.width(), flat.height());
     let mut pixels = flat.data().to_vec();
+    drop(flat);
     draw(&mut pixels, w, h, channels);
     let mut out = Image::from_u8(w, h, layout, pixels).map_err(|e| unreadable(&e))?;
-    out.icc = img.icc.clone();
+    out.icc = icc;
     let jpeg = format == Format::Jpeg && !alpha;
     let (fmt, ext) = if jpeg { (Format::Jpeg, "jpg") } else { (Format::Png, "png") };
     let opts = EncodeOptions { jpeg_quality: 92, ..EncodeOptions::default() };
@@ -145,9 +155,38 @@ pub fn bake(bytes: &[u8]) -> Result<Badged> {
     Ok(Badged { bytes, ext })
 }
 
+/// Very large pictures are not baked (memory); the original stays usable.
+fn too_large() -> Error {
+    Error::invalid(
+        "Das Bild ist zu groß für die KI-Kennzeichnung (höchstens 40 Megapixel). Schalte die KI-Kennzeichnung aus, um es unverändert zu speichern oder zu kopieren.",
+    )
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// A PNG header that claims `w`×`h` and has no pixel data.
+    pub(crate) fn png_header(w: u32, h: u32) -> Vec<u8> {
+        let mut v = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        v.extend_from_slice(&w.to_be_bytes());
+        v.extend_from_slice(&h.to_be_bytes());
+        v.extend_from_slice(&[8, 2, 0, 0, 0]);
+        let crc = crate::ai_label::crc32(v.get(12..).unwrap_or_default());
+        v.extend_from_slice(&crc.to_be_bytes());
+        v
+    }
+
+    #[test]
+    fn pictures_above_forty_megapixels_are_refused_before_decoding() {
+        // 8000 × 6000 = 48 MP: refused by its header, with a hint how to get the original.
+        let err = bake(&png_header(8000, 6000)).err().unwrap();
+        assert!(err.message.contains("40 Megapixel") && err.message.contains("Schalte die KI-Kennzeichnung aus"), "{}", err.message);
+        // 7000 × 5800 = 40.6 MP, also refused; so is a header that promises more than its data can hold.
+        assert!(bake(&png_header(7000, 5800)).err().unwrap().message.contains("40 Megapixel"));
+        assert!(bake(&png_header(6000, 6000)).is_err());
+        const { assert!(MAX_ALLOC <= 256 * 1024 * 1024 && MAX_PIXELS == 40_000_000) };
+    }
 
     fn decode(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
         let img = craft_image_codecs::decode_with(bytes, &DecodeOptions::default()).unwrap().convert(ChannelLayout::Rgb, SampleType::U8);
