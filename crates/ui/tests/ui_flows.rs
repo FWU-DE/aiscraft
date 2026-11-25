@@ -669,3 +669,19 @@ fn import_chats_dialog_explains_the_export_and_names_protection() {
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
     step_until(&mut h, "the Dienste tab", |h| h.query_by_label("Chats aus claude.ai oder ChatGPT übernehmen …").is_some());
 }
+
+/// A quick entry (#35) opens a new chat but keeps a draft typed before.
+#[test]
+fn quick_entry_keeps_the_draft() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let mut h = harness(&engine);
+    h.get_by_label("Stundenentwurf").click();
+    let has_draft = |h: &egui_kittest::Harness<'static, AisCraftApp>| {
+        h.query_all(egui_kittest::kittest::By::new().predicate(|n| n.value().is_some_and(|v| v.contains("Stundenentwurf für Klasse 7")))).next().is_some()
+    };
+    step_until(&mut h, "the starter fills the composer", has_draft);
+    engine.call("chat.quick_ask", serde_json::json!({})).unwrap();
+    step_until(&mut h, "the quick entry is taken", |_| engine.state().quick.is_some());
+    h.run_steps(6);
+    assert!(has_draft(&h), "the draft is still in the composer");
+}

@@ -429,7 +429,7 @@ impl AisCraftApp {
     }
 
     /// A quick entry (#35, `aiscraft --quick`): the window to the front, a new chat, the composer
-    /// focused, a screenshot waiting in it.
+    /// focused, a screenshot waiting in it, a draft typed before kept.
     fn quick_entry(&mut self, ctx: &egui::Context) {
         let Some(q) = self.state.quick.clone() else { return };
         if q.seq == self.quick_seen {
@@ -438,9 +438,7 @@ impl AisCraftApp {
         self.quick_seen = q.seq;
         self.explore = None;
         self.manual = None;
-        self.composer.clear();
-        self.pending_files.clear();
-        self.pending_links.clear();
+        // A draft typed before stays: the quick entry only adds the screenshot.
         self.take_files(q.files.iter().map(PathBuf::from).collect());
         self.focus_composer = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
