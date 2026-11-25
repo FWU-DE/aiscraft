@@ -1102,8 +1102,14 @@ impl AisCraftApp {
                     set("own_style", own);
                 }
             }
-            let mut project = src.project_for(takes);
-            if ui.checkbox(&mut project, "Projektanweisungen").changed() {
+            // Instructions belong to a project: outside one there are none to send.
+            let in_project = self.state.selection.project_id.is_some();
+            let mut project = in_project && src.project_for(takes);
+            if ui
+                .add_enabled(in_project, egui::Checkbox::new(&mut project, "Projektanweisungen"))
+                .on_disabled_hover_text("Nur in einem Projekt: Verschiebe den Chat in ein Projekt oder starte ihn dort.")
+                .changed()
+            {
                 switch_inline("project", project);
             }
             if !takes {

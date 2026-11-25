@@ -8,7 +8,7 @@ use aiscraft_engine::{Engine, Options};
 use aiscraft_ui::AisCraftApp;
 use aiscraft_ui::theme::OmarchyTheme;
 use common::{chosen, click_until, settled, step_until};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 fn harness(engine: &Engine) -> egui_kittest::Harness<'static, AisCraftApp> {
     let e = engine.clone();
@@ -43,6 +43,24 @@ fn sources_popup_stays_open_until_closed() {
     h.get_by_label("Schließen").click();
     h.run_steps(6);
     assert!(h.query_by_label("Gedächtnis (deine Notizen)").is_none(), "Schließen closes it");
+}
+
+/// Project instructions are a source only inside a project.
+#[test]
+fn project_instructions_are_a_source_only_in_a_project() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let mut h = harness(&engine);
+    h.get_by_label_contains("Quellen").click();
+    settled(&mut h, "Projektanweisungen");
+    assert!(h.get_by_label("Projektanweisungen").accesskit_node().is_disabled(), "no project, nothing to choose");
+    let pid = engine.call("project.create", serde_json::json!({"name": "Mathe", "instructions": "Klasse 7"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("chat.new", serde_json::json!({"project": pid})).unwrap();
+    h.run_steps(6);
+    if h.query_by_label("Projektanweisungen").is_none() {
+        h.get_by_label_contains("Quellen").click();
+        settled(&mut h, "Projektanweisungen");
+    }
+    assert!(!h.get_by_label("Projektanweisungen").accesskit_node().is_disabled(), "in a project it can be chosen");
 }
 
 #[test]
