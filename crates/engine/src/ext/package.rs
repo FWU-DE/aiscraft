@@ -182,7 +182,7 @@ mod tests {
         std::fs::write(root.join("bin/server"), "x").unwrap();
         assert_eq!(resolve_command(&root, "node").unwrap(), "node");
         assert!(resolve_command(&root, "node; rm -rf ~").is_err());
-        assert!(resolve_command(&root, "./bin/server").unwrap().ends_with("bin/server"));
+        assert!(Path::new(&resolve_command(&root, "./bin/server").unwrap()).ends_with("bin/server"));
         assert!(resolve_command(&root, "/bin/sh").is_err());
         assert!(resolve_command(&root, "../../bin/sh").is_err());
         assert!(resolve_command(&root, "./bin/fehlt").is_err());
