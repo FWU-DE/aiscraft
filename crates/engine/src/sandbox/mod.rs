@@ -7,8 +7,8 @@
 //!   (`sandbox.install` with `yes: true`). Engines in memory (tests, scripts) never download or
 //!   start anything; tests hand them a fake machine.
 //! - The machine is private to AIS.ChatCraft: on Windows an own WSL2 distribution (`wsl.rs`); on
-//!   macOS and Linux it is not available yet (Lima, later). The image is built and published by
-//!   this repository (`image.rs`).
+//!   macOS and Linux it is not available yet (Lima, later). The image is n8n Nod's own Windows
+//!   runtime, pinned and updated as Nod does it (`image.rs`).
 //! - Work runs in a locked-down container in that machine (`container.rs`): no capabilities, no
 //!   network unless switched on, 2 GB RAM, 2 CPUs, 1024 processes, one folder per chat.
 //! - The tools follow Nod's rule like connector tools (`tools.rs`): listing and reading run;
@@ -56,7 +56,7 @@ const MAX_WRITE: usize = 5 * 1024 * 1024;
 const MAX_READ_TEXT: usize = 256 * 1024;
 
 /// What people say before they switch it on.
-pub const CAN: &str = "Führt Befehle in einem abgeschotteten Linux aus (Python 3, LibreOffice, qpdf, Ghostscript, Noto-Schriften): Dateien umwandeln (DOCX, ODT und PPTX in PDF), Tabellen neu berechnen, PDFs reparieren oder zusammenfügen, Daten auswerten.";
+pub const CAN: &str = "Führt Befehle in einem abgeschotteten Linux aus (Python 3, LibreOffice, Texterkennung, qpdf, Ghostscript, Noto-Schriften): Dateien umwandeln (DOCX, ODT und PPTX in PDF), Tabellen neu berechnen, PDFs reparieren oder zusammenfügen, Daten auswerten.";
 pub const CANNOT: &str = "Er sieht weder deine Dateien und Laufwerke noch Schlüsselbund, Passwörter oder die Daten von AIS.ChatCraft, und er erreicht ohne deine Erlaubnis kein Netz. Dateien kommen nur hinein, wenn das Modell sie anlegt, und nur als Anhang im Chat heraus. Befehle, Schreiben und Umwandeln brauchen deine Freigabe.";
 pub const NOT_WITH_AIS: &str = "Mit AIS.chat nicht verfügbar: AIS.chat gibt dem Modell keine Werkzeuge.";
 
@@ -81,6 +81,13 @@ pub struct SandboxState {
     pub progress: Option<(u64, u64)>,
     /// The step of the installation running now.
     pub step: Option<String>,
+    /// The Nod runtime installed („nod-v0.9.7“).
+    pub version: String,
+    /// A newer pinned Nod runtime than the installed one (`sandbox.update`), as people read it.
+    pub update: Option<String>,
+    /// Set up by v0.2.2 with AIS.ChatCraft's own image: it must be switched to Nod's runtime
+    /// (`sandbox.update`) before it runs anything.
+    pub legacy: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -95,6 +102,8 @@ struct Marker {
     layout: u32,
     machine: String,
     sha256: String,
+    #[serde(default)]
+    version: String,
 }
 
 /// What the engine holds for the workspace.
@@ -148,8 +157,14 @@ impl Runtime {
     /// Test hook: the image comes from a local server.
     #[cfg(test)]
     pub(crate) fn set_source(&self, base: &str, asset: &str, pinned: Option<&str>) {
-        *self.source.lock().unwrap_or_else(PoisonError::into_inner) =
-            Some(image::Source { base: base.into(), asset: asset.into(), pinned: pinned.map(str::to_string) });
+        *self.source.lock().unwrap_or_else(PoisonError::into_inner) = Some(image::Source {
+            base: base.into(),
+            asset: asset.into(),
+            sums: "SHA256SUMS.txt".into(),
+            pinned: pinned.map(str::to_string),
+            bytes: None,
+            version: format!("test-{}", pinned.unwrap_or("").chars().take(6).collect::<String>()),
+        });
     }
 
     #[cfg(test)]
@@ -184,20 +199,36 @@ fn save(c: &Ctx, st: &Saved) -> Result<()> {
 pub(crate) fn refresh(c: &Ctx) {
     let saved = saved(c);
     let machine = c.0.sandbox.machine();
-    let installed = read_marker(c).is_some();
+    let marker = read_marker(c);
+    let installed = marker.is_some();
+    // As Nod compares its guest: the installed runtime against the pinned one.
+    let update = match (&marker, c.0.sandbox.source()) {
+        (Some(m), Some(src)) if m.version.is_empty() || src.pinned.as_deref().is_some_and(|p| p != m.sha256) => Some(src.version.clone()),
+        _ => None,
+    };
     c.update(|s| {
         let st = &mut s.sandbox;
         st.installed = installed;
-        st.enabled = saved.enabled && installed;
+        // A computer from v0.2.2 (own image, no Nod version) runs nothing until it is switched.
+        st.legacy = marker.as_ref().is_some_and(|m| m.version.is_empty());
+        st.enabled = saved.enabled && installed && !st.legacy;
         st.network = saved.network;
         st.supported = machine.as_ref().is_some_and(|m| m.supported());
         st.kind = machine.as_ref().map(|m| m.kind().to_string()).unwrap_or_default();
         st.machine = machine.as_ref().map(|m| m.machine()).unwrap_or_default();
+        st.version = marker.as_ref().map(|m| m.version.clone()).unwrap_or_default();
+        st.update = update;
     });
 }
 
 pub(crate) fn load(c: &Ctx) {
     refresh(c);
+    let s = c.state().sandbox.clone();
+    if s.legacy {
+        c.notice(NoticeLevel::Warning, LEGACY);
+    } else if let Some(v) = s.update {
+        c.notice(NoticeLevel::Info, format!("Für den eigenen Rechner gibt es eine neue Version ({v}). Einstellungen › Fähigkeiten › Aktualisieren."));
+    }
 }
 
 fn set_problem(c: &Ctx, p: Option<String>) {
@@ -228,6 +259,9 @@ pub(crate) fn offer(c: &Ctx) -> Value {
         "enabled": s.enabled,
         "network": s.network,
         "problem": s.problem,
+        "version": s.version,
+        "update": s.update,
+        "legacy": s.legacy,
     })
 }
 
@@ -251,6 +285,15 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         params: "yes: bool (die Antwort der Person auf die Frage mit Größe, Quelle und Lizenz; ohne yes nur die Frage). Lädt das Abbild, legt den Rechner an und schaltet ihn ein",
         palette: false,
         run: |c, p| Box::pin(install(c, p)),
+    },
+    CommandSpec {
+        id: "sandbox.update",
+        label: "Eigenen Rechner aktualisieren",
+        group: "Fähigkeiten",
+        shortcut: None,
+        params: "yes: bool (die Antwort der Person; ohne yes nur die Frage). Lädt die neuere Nod-Laufzeit, wenn ihre Prüfsumme von der eingerichteten abweicht, und legt den Rechner neu an (Arbeitsordner werden geleert)",
+        palette: false,
+        run: |c, p| Box::pin(update(c, p)),
     },
     CommandSpec {
         id: "sandbox.set",
@@ -315,12 +358,41 @@ fn step(c: &Ctx, what: Option<&str>) {
     c.update(|s| s.sandbox.step = what.map(str::to_string));
 }
 
+/// A computer set up by v0.2.2 (AIS.ChatCraft's own image) before the switch to Nod's runtime.
+pub const LEGACY: &str = "Der eigene Rechner läuft noch mit dem früheren Abbild von AIS.ChatCraft und muss auf die Laufzeit von n8n Nod umgestellt werden: Einstellungen › Fähigkeiten › Aktualisieren. Bis dahin führt er nichts aus.";
+
+/// Why a call with a vault placeholder is refused.
+pub const VAULT_REFUSED: &str = "Abgelehnt: Einträge aus dem Tresor gehen nicht in den eigenen Rechner. Dort könnte ein späterer Befehl sie lesen, umformen oder weiterschicken. Ohne Tresor-Eintrag erneut versuchen oder die Person fragen.";
+
+/// What an update does to the working folders.
+pub const UPDATE_NOTE: &str = "Der eigene Rechner wird dabei neu angelegt; die Arbeitsordner der Chats werden geleert (Anhänge im Chat bleiben).";
+
 /// `sandbox.install`: only with `yes: true`; without it, the question's content.
 async fn install(c: Ctx, p: Value) -> Result<Value> {
+    set_up(c, p, false).await
+}
+
+/// `sandbox.update`: a newer pinned Nod runtime replaces the installed one, as in Nod only when
+/// its checksum differs, and only with `yes: true`.
+async fn update(c: Ctx, p: Value) -> Result<Value> {
+    refresh(&c);
+    if !c.state().sandbox.installed {
+        return Err(Error::invalid("Der eigene Rechner ist nicht eingerichtet; „Einrichten …“ lädt die aktuelle Version."));
+    }
+    if c.state().sandbox.update.is_none() {
+        return Ok(json!({"updated": false, "version": c.state().sandbox.version}));
+    }
+    set_up(c, p, true).await
+}
+
+async fn set_up(c: Ctx, p: Value, updating: bool) -> Result<Value> {
     if p.get("yes").and_then(Value::as_bool) != Some(true) {
         let mut o = offer(&c);
         if let Some(m) = o.as_object_mut() {
             m.insert("needs_yes".into(), json!(true));
+            if updating {
+                m.insert("note".into(), json!(UPDATE_NOTE));
+            }
         }
         return Ok(o);
     }
@@ -352,8 +424,8 @@ async fn install(c: Ctx, p: Value) -> Result<Value> {
         let _ = std::fs::remove_file(&file);
         created?;
         step(&c, Some("Arbeitsumgebung wird vorbereitet"));
-        prepare(&machine, None).await?;
-        let marker = Marker { layout: LAYOUT, machine: machine.machine(), sha256 };
+        prepare(&machine, None, saved(&c).network).await?;
+        let marker = Marker { layout: LAYOUT, machine: machine.machine(), sha256, version: src.version.clone() };
         crate::disk::write(&rt.dir.join(MARKER), &serde_json::to_vec_pretty(&marker)?)?;
         let mut st = saved(&c);
         st.enabled = true;
@@ -370,7 +442,14 @@ async fn install(c: Ctx, p: Value) -> Result<Value> {
         set_problem(&c, Some(e.message.clone()));
     }
     r?;
-    c.notice(NoticeLevel::Success, "Eigener Rechner eingerichtet und an. Befehle darin laufen erst nach deiner Freigabe.");
+    c.notice(
+        NoticeLevel::Success,
+        if updating {
+            format!("Eigener Rechner auf {} aktualisiert.", src.version)
+        } else {
+            "Eigener Rechner eingerichtet und an. Befehle darin laufen erst nach deiner Freigabe.".to_string()
+        },
+    );
     Ok(offer(&c))
 }
 
@@ -460,11 +539,16 @@ pub(crate) fn forget(c: &Ctx, conv: &str) {
 // ---- the machine ----------------------------------------------------------------------------
 
 /// Docker running, the image loaded, the chat's folder there (idempotent, cheap when ready).
-async fn prepare(m: &runtime::Shared, chat: Option<&str>) -> Result<()> {
-    let out =
-        m.exec(k::machine_script(k::PREPARE_SCRIPT, &[k::IMAGE, chat.unwrap_or(""), k::IMAGE_TAR]), Vec::new(), Duration::from_secs(240), 16 * 1024).await?;
+async fn prepare(m: &runtime::Shared, chat: Option<&str>, network: bool) -> Result<()> {
+    let (chat_mb, all_mb) = (k::CHAT_FOLDER_MB.to_string(), k::ALL_FOLDERS_MB.to_string());
+    let args = [k::IMAGE, chat.unwrap_or(""), k::IMAGE_TAR, image::WORKSPACE_TAR_SHA256, if network { "1" } else { "0" }, &chat_mb, &all_mb];
+    // Loading the 2 GB workspace image the first time takes a while.
+    let out = m.exec(k::machine_script(k::PREPARE_SCRIPT, &args), Vec::new(), Duration::from_secs(900), 16 * 1024).await?;
     if out.ok() {
         Ok(())
+    } else if out.code == Some(4) {
+        // A working folder over its limit: the person makes room, nothing is wrong with the computer.
+        Err(Error::storage(out.why()))
     } else if out.timed_out {
         Err(Error::unsupported(format!("Der eigene Rechner ({}) antwortet nicht. „Anhalten“ in den Einstellungen und noch einmal versuchen.", m.machine())))
     } else {
@@ -475,6 +559,9 @@ async fn prepare(m: &runtime::Shared, chat: Option<&str>) -> Result<()> {
 /// The machine when it is on and installed, and whether the network is allowed.
 fn usable(c: &Ctx) -> Result<(runtime::Shared, bool)> {
     let s = c.state().sandbox.clone();
+    if s.legacy {
+        return Err(Error::refused(LEGACY));
+    }
     if !s.enabled {
         return Err(Error::refused("Der eigene Rechner ist aus. Die Person schaltet ihn in den Einstellungen › Fähigkeiten ein."));
     }
@@ -534,11 +621,17 @@ pub(crate) fn specs() -> Vec<ToolSpec> {
     ]
 }
 
-/// The arguments as they run: folder and time limit filled in, so the trust check, the approval
-/// card and the action log name exactly what will run.
-pub(crate) fn normalize(name: &str, args: &Value) -> Value {
+/// The arguments as they run: folder, time limit and whether the network is on filled in, so the
+/// trust check, the approval card, the claim and the action log name exactly what will run. The
+/// run itself never gets more network than these arguments say ([`execute`]).
+pub(crate) fn normalize(name: &str, args: &Value, network: bool) -> Value {
     let mut a = args.clone();
     if let Some(o) = a.as_object_mut() {
+        if matches!(name, RUN | CONVERT) {
+            o.insert("network".into(), json!(network));
+        } else {
+            o.remove("network");
+        }
         match name {
             RUN => {
                 let folder = o.get("folder").and_then(Value::as_str).unwrap_or(".").to_string();
@@ -608,6 +701,11 @@ pub(crate) fn prepare_call(c: &Ctx, name: &str, args: &Value, interactive: bool)
         return Err("Abgelehnt: Arbeit im Hintergrund nutzt den eigenen Rechner nicht.".into());
     }
     usable(c).map_err(|e| e.message)?;
+    // Vault values never enter the computer: once there, a later read, a transformed echo or the
+    // network would carry them past every scrub. Refused before anything is filled in.
+    if args.to_string().contains("{{vault:") {
+        return Err(VAULT_REFUSED.into());
+    }
     let check = |r: Result<String>| r.map(|_| ()).map_err(|e| e.message);
     match name {
         RUN => {
@@ -645,24 +743,59 @@ fn container_name() -> String {
     format!("aiscraft-{}", crate::new_id().replace('-', "").chars().take(16).collect::<String>())
 }
 
+/// One chat's containers: every start is named, and a time limit that ends the call also kills
+/// its container (ending `wsl.exe`/`limactl` alone would leave `docker run` going).
+struct Containers {
+    m: runtime::Shared,
+    chat: String,
+    network: bool,
+}
+
+impl Containers {
+    async fn run(&self, script: &str, args: &[&str], stdin: Vec<u8>, timeout: Duration, max: usize) -> Result<runtime::Output> {
+        let name = container_name();
+        let argv = k::docker_run(&self.chat, &name, self.network, script, args);
+        let out = self.m.exec(argv, stdin, timeout, max).await?;
+        if out.timed_out {
+            let _ = self.m.exec(vec!["docker".into(), "kill".into(), name], Vec::new(), Duration::from_secs(30), 4096).await;
+        }
+        Ok(out)
+    }
+
+    /// A file of the working folder, whole or not at all (never cut off).
+    async fn read_file(&self, path: &str) -> Result<Vec<u8>> {
+        use base64::Engine as _;
+        let max = crate::files::MAX_FILE_BYTES;
+        let out = self.run(k::READ_SCRIPT, &[path, &max.to_string()], Vec::new(), Duration::from_secs(120), (max as usize).saturating_mul(2)).await?;
+        if out.timed_out {
+            return Err(Error::busy(format!("/work/{path} ließ sich nicht rechtzeitig lesen.")));
+        }
+        if !out.ok() {
+            return Err(Error::not_found(format!("/work/{path}: {}", out.why())));
+        }
+        if out.truncated {
+            return Err(Error::invalid(format!("/work/{path} ist größer als 25 MB.")));
+        }
+        let text: String = String::from_utf8_lossy(&out.stdout).split_whitespace().collect();
+        base64::engine::general_purpose::STANDARD.decode(text.as_bytes()).map_err(|e| Error::protocol(format!("/work/{path}: unlesbare Antwort ({e})")))
+    }
+}
+
 /// Run one call that may run. Files that come out become attachments of the answer.
 pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value) -> Result<(String, Vec<Attachment>)> {
-    let (m, network) = usable(c)?;
+    let (m, network_on) = usable(c)?;
+    // Never more network than the approved arguments say, and never more than is switched on now.
+    let network = network_on && matches!(name, RUN | CONVERT) && args.get("network").and_then(Value::as_bool) == Some(true);
     let chat = k::chat_folder(conv)?;
-    prepare(&m, Some(&chat)).await?;
-    let start = |script: &str, a: &[&str]| k::docker_run(&chat, &container_name(), network, script, a);
+    prepare(&m, Some(&chat), network).await?;
+    let boxes = Containers { m, chat, network };
     match name {
         RUN => {
             let folder = k::rel_path(args.get("folder").and_then(Value::as_str).unwrap_or("."))?;
             let secs = args.get("timeout_s").and_then(Value::as_u64).unwrap_or(DEFAULT_TIMEOUT).clamp(1, MAX_TIMEOUT);
             let cmd = arg(args, "command");
-            let argv = start(k::RUN_SCRIPT, &[&folder, cmd, &secs.to_string()]);
-            let cname = argv.get(5).cloned().unwrap_or_default();
             // The container's own `timeout` ends the command; this is the backstop.
-            let out = m.exec(argv, Vec::new(), Duration::from_secs(secs + 30), MAX_OUTPUT).await?;
-            if out.timed_out {
-                let _ = m.exec(vec!["docker".into(), "kill".into(), cname], Vec::new(), Duration::from_secs(30), 4096).await;
-            }
+            let out = boxes.run(k::RUN_SCRIPT, &[&folder, cmd, &secs.to_string()], Vec::new(), Duration::from_secs(secs + 30), MAX_OUTPUT).await?;
             Ok((run_report(cmd, &folder, secs, &out), Vec::new()))
         }
         WRITE => {
@@ -671,7 +804,7 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value) -> Re
             if text.len() > MAX_WRITE {
                 return Err(Error::invalid("Der Text ist zu groß"));
             }
-            let out = m.exec(start(k::WRITE_SCRIPT, &[&path]), text.as_bytes().to_vec(), Duration::from_secs(60), 16 * 1024).await?;
+            let out = boxes.run(k::WRITE_SCRIPT, &[&path], text.as_bytes().to_vec(), Duration::from_secs(60), 16 * 1024).await?;
             if !out.ok() {
                 return Err(Error::storage(format!("/work/{path} nicht gespeichert: {}", out.why())));
             }
@@ -679,7 +812,7 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value) -> Re
         }
         READ => {
             let path = k::rel_path(arg(args, "path"))?;
-            let bytes = read_file(&m, &start, &path).await?;
+            let bytes = boxes.read_file(&path).await?;
             let attach = args.get("attach").and_then(Value::as_bool).unwrap_or(false);
             let text = (!attach && !bytes.contains(&0)).then(|| String::from_utf8(bytes.clone()).ok()).flatten().filter(|_| !binary_name(&path));
             match text {
@@ -700,19 +833,24 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value) -> Re
             if !k::FORMATS.contains(&to) {
                 return Err(Error::invalid(format!("Format {to} gibt es nicht")));
             }
-            let out = m.exec(start(k::CONVERT_SCRIPT, &[&path, to]), Vec::new(), Duration::from_secs(300), MAX_OUTPUT).await?;
+            let out = boxes
+                .run(k::CONVERT_SCRIPT, &[&path, to, &k::CONVERT_SECS.to_string()], Vec::new(), Duration::from_secs(k::CONVERT_SECS + 30), MAX_OUTPUT)
+                .await?;
+            if out.timed_out || out.code == Some(124) {
+                return Err(Error::busy(format!("/work/{path} ließ sich nicht in {} s umwandeln.", k::CONVERT_SECS)));
+            }
             if !out.ok() {
                 return Err(Error::unsupported(format!("/work/{path} ließ sich nicht umwandeln: {}", out.why())));
             }
             let stem = path.rsplit_once('.').map(|(s, _)| s).unwrap_or(&path);
             let result = format!("{stem}.{to}");
-            let bytes = read_file(&m, &start, &result).await?;
+            let bytes = boxes.read_file(&result).await?;
             let a = attachment(c, &result, &bytes)?;
             Ok((format!("Umgewandelt: /work/{result} liegt als Anhang „{}“ im Chat.", a.name), vec![a]))
         }
         LIST => {
             let folder = k::rel_path(args.get("folder").and_then(Value::as_str).unwrap_or("."))?;
-            let out = m.exec(start(k::LIST_SCRIPT, &[&folder]), Vec::new(), Duration::from_secs(60), MAX_OUTPUT).await?;
+            let out = boxes.run(k::LIST_SCRIPT, &[&folder], Vec::new(), Duration::from_secs(60), MAX_OUTPUT).await?;
             if !out.ok() {
                 return Err(Error::not_found(format!("/work/{folder}: {}", out.why())));
             }
@@ -735,7 +873,12 @@ fn run_report(cmd: &str, folder: &str, secs: u64, out: &runtime::Output) -> Stri
     };
     let mut s = format!("Befehl: {cmd}\nOrdner: /work/{folder}\nErgebnis: {status}\n");
     let so = String::from_utf8_lossy(&out.stdout);
-    let se = String::from_utf8_lossy(&out.stderr);
+    // Docker under WSL2 warns on every start that swap is not accounted (the memory limit holds).
+    let se: String = String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .filter(|l| !l.starts_with("WARNING: Your kernel does not support swap limit"))
+        .collect::<Vec<_>>()
+        .join("\n");
     if !so.trim().is_empty() {
         s.push_str(&format!("--- Ausgabe ---\n{}\n", so.trim_end()));
     }
@@ -746,17 +889,6 @@ fn run_report(cmd: &str, folder: &str, secs: u64, out: &runtime::Output) -> Stri
         s.push_str(&format!("(Ausgabe nach {} KB gekürzt)\n", MAX_OUTPUT / 1024));
     }
     s
-}
-
-async fn read_file(m: &runtime::Shared, start: &impl Fn(&str, &[&str]) -> Vec<String>, path: &str) -> Result<Vec<u8>> {
-    use base64::Engine as _;
-    let max = crate::files::MAX_FILE_BYTES;
-    let out = m.exec(start(k::READ_SCRIPT, &[path, &max.to_string()]), Vec::new(), Duration::from_secs(120), (max as usize).saturating_mul(2)).await?;
-    if !out.ok() {
-        return Err(Error::not_found(format!("/work/{path}: {}", out.why())));
-    }
-    let text: String = String::from_utf8_lossy(&out.stdout).split_whitespace().collect();
-    base64::engine::general_purpose::STANDARD.decode(text.as_bytes()).map_err(|e| Error::protocol(format!("/work/{path}: unlesbare Antwort ({e})")))
 }
 
 /// Files that are never shown as text.

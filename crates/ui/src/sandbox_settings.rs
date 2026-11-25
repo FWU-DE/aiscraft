@@ -38,8 +38,11 @@ impl AisCraftApp {
                 }
             }
         } else if s.installed {
+            if s.legacy {
+                ui.label(RichText::new(aiscraft_engine::sandbox::LEGACY).small().color(t.danger));
+            }
             let mut on = s.enabled;
-            if ui.checkbox(&mut on, format!("Eigenen Rechner nutzen ({})", s.machine)).changed() {
+            if ui.add_enabled(!s.legacy, egui::Checkbox::new(&mut on, format!("Eigenen Rechner nutzen ({})", s.machine))).changed() {
                 self.run("sandbox.set", json!({"enabled": on}));
             }
             let mut net = s.network;
@@ -55,6 +58,30 @@ impl AisCraftApp {
                 },
             ));
             ui.label(small_muted(&t, CANNOT));
+            if !s.version.is_empty() {
+                ui.label(small_muted(&t, format!("Laufzeit: n8n Nod {}", s.version.trim_start_matches("nod-"))));
+            }
+            // A newer pinned Nod runtime (as Nod's own updater offers it): only after a yes.
+            if let Some(v) = &s.update {
+                let ask_update = egui::Id::unique("sandbox-update-ask");
+                ui.label(RichText::new(format!("Neue Version verfügbar: n8n Nod {} ({} MB)", v.trim_start_matches("nod-"), image::APPROX_MB)).strong());
+                ui.label(small_muted(&t, aiscraft_engine::sandbox::UPDATE_NOTE));
+                if !ui.data(|d| d.get_temp::<bool>(ask_update)).unwrap_or(false) {
+                    if ui.button("Aktualisieren …").clicked() {
+                        ui.data_mut(|d| d.insert_temp(ask_update, true));
+                    }
+                } else {
+                    ui.horizontal(|ui| {
+                        if ui.add(egui::Button::new(RichText::new("Ja, laden und aktualisieren").color(t.on_accent)).fill(t.accent)).clicked() {
+                            ui.data_mut(|d| d.insert_temp(ask_update, false));
+                            self.run("sandbox.update", json!({"yes": true}));
+                        }
+                        if ui.button("Abbrechen").clicked() {
+                            ui.data_mut(|d| d.insert_temp(ask_update, false));
+                        }
+                    });
+                }
+            }
             ui.horizontal_wrapped(|ui| {
                 if ui.small_button("Anhalten").on_hover_text("Beendet alles, was darin läuft; die Dateien bleiben").clicked() {
                     self.run("sandbox.stop", json!({}));
@@ -82,7 +109,13 @@ impl AisCraftApp {
                     ui.data_mut(|d| d.insert_temp(ask_id, true));
                 }
             } else {
-                ui.label(RichText::new(format!("{} MB von github.com laden und den eigenen Rechner einrichten?", image::APPROX_MB)).strong());
+                ui.label(
+                    RichText::new(format!(
+                        "{} MB (die Windows-Laufzeit von n8n Nod) von github.com laden und den eigenen Rechner einrichten?",
+                        image::APPROX_MB
+                    ))
+                    .strong(),
+                );
                 ui.horizontal(|ui| {
                     if ui.add(egui::Button::new(RichText::new("Ja, laden und einrichten").color(t.on_accent)).fill(t.accent)).clicked() {
                         ui.data_mut(|d| d.insert_temp(ask_id, false));

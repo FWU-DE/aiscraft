@@ -121,7 +121,7 @@ async fn web_fetch(c: &Ctx, a: &Value) -> Result<String> {
             page.title.replace('\n', " "),
             page.url,
             // A page cannot close the data block it is shown in.
-            page.text.replace("untrusted_tool_result", "untrusted-tool-result")
+            defang(&page.text)
         ),
     ))
 }
@@ -318,8 +318,20 @@ pub(crate) fn specs_for(c: &Ctx, sources: &aiscraft_core::Sources) -> Vec<ToolSp
     out
 }
 
+/// Tool output cannot close or open the data block it is shown in: every spelling of the tag's
+/// name (any case, `_`, `-`, space or nothing between the words) becomes a harmless one.
+pub(crate) fn defang(text: &str) -> String {
+    static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+    match RE.get_or_init(|| regex::Regex::new(r"(?i)untrusted[\s_\-]*tool[\s_\-]*result").ok()) {
+        Some(re) => re.replace_all(text, "untrusted-tool-result").into_owned(),
+        None => text.replace("untrusted_tool_result", "untrusted-tool-result"),
+    }
+}
+
 /// Marks tool output as data for the model.
 fn wrap_untrusted(tool: &str, text: &str) -> String {
+    let text = defang(text);
+    let text = text.as_str();
     let mut t: String = text.chars().take(MAX_RESULT_CHARS).collect();
     if text.chars().count() > MAX_RESULT_CHARS {
         t.push_str("\n… (gekürzt)");
@@ -454,7 +466,7 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     // question and the action log name exactly what will run.
     let normalized;
     let call = if crate::sandbox::is_tool(&call.name) {
-        normalized = ToolCall { arguments: crate::sandbox::normalize(&call.name, &call.arguments), ..call.clone() };
+        normalized = ToolCall { arguments: crate::sandbox::normalize(&call.name, &call.arguments, c.state().sandbox.network), ..call.clone() };
         &normalized
     } else {
         call
@@ -679,7 +691,7 @@ async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> O
                     c.0.tools.files.lock().unwrap_or_else(PoisonError::into_inner).entry(conv.to_string()).or_default().extend(files);
                 }
                 // A command's output cannot close the data block it is shown in.
-                let text = crate::vault::scrub(&text, &r.secrets).replace("untrusted_tool_result", "untrusted-tool-result");
+                let text = crate::vault::scrub(&text, &r.secrets);
                 (wrap_untrusted(&r.call.name, &text), false, "ok")
             }
             Err(e) => {
