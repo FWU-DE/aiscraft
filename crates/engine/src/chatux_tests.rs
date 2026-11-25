@@ -8,11 +8,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{Engine, Options};
 
-type Seen = Arc<Mutex<Vec<String>>>;
+pub(crate) type Seen = Arc<Mutex<Vec<String>>>;
 
 /// An OpenAI-compatible server that records every request and streams the chunks `answer`
 /// makes from the request body.
-fn scripted(engine: &Engine, answer: fn(&str) -> Vec<Value>) -> (String, Seen) {
+pub(crate) fn scripted(engine: &Engine, answer: fn(&str) -> Vec<Value>) -> (String, Seen) {
     let seen: Seen = Arc::new(Mutex::new(Vec::new()));
     let seen2 = seen.clone();
     let url = engine.block_on(async move {
@@ -63,7 +63,7 @@ fn scripted(engine: &Engine, answer: fn(&str) -> Vec<Value>) -> (String, Seen) {
     (url, seen)
 }
 
-fn engine_with(answer: fn(&str) -> Vec<Value>) -> (Engine, Seen) {
+pub(crate) fn engine_with(answer: fn(&str) -> Vec<Value>) -> (Engine, Seen) {
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
     let (url, seen) = scripted(&engine, answer);
     let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"})).unwrap()["id"].as_str().unwrap().to_string();
@@ -73,11 +73,11 @@ fn engine_with(answer: fn(&str) -> Vec<Value>) -> (Engine, Seen) {
     (engine, seen)
 }
 
-fn plain(_: &str) -> Vec<Value> {
+pub(crate) fn plain(_: &str) -> Vec<Value> {
     vec![json!({"choices":[{"delta":{"content":"Antwort"}}]})]
 }
 
-fn last_chat_request(seen: &Seen, marker: &str) -> String {
+pub(crate) fn last_chat_request(seen: &Seen, marker: &str) -> String {
     seen.lock().unwrap().iter().rev().find(|r| r.contains(marker)).cloned().unwrap_or_default()
 }
 
@@ -161,6 +161,8 @@ fn answer_style_goes_inline_once_without_system_prompt() {
         kind: Default::default(),
         remote_id: None,
         temporary: false,
+        archived: false,
+        deleted_at: None,
     };
     let sent = crate::chat::inline_context(ctx, &conv, false, "").expect("the style goes along");
     assert!(sent.block.contains("Antwortstil: formell") && sent.labels.contains(&"Antwortstil".to_string()));
@@ -203,7 +205,7 @@ fn temporary_chat_leaves_nothing_behind() {
             assert!(st.conversation(&conv)?.is_none());
             assert!(st.messages(&conv)?.is_empty());
             assert!(st.search("Kastanienfest", 10)?.is_empty());
-            assert!(st.search_any(&["Kastanienfest".to_string()], None, 10)?.is_empty());
+            assert!(st.search_any(&["Kastanienfest".to_string()], None, true, 10)?.is_empty());
             assert!(st.conversations(500)?.iter().all(|c| c.id != conv));
             Ok(())
         })
@@ -333,8 +335,13 @@ fn claude_engine() -> (Engine, Seen) {
             json!({"type": "message_stop"}),
         ]
     }
+    claude_engine_with(cites)
+}
+
+/// A Claude API server that streams the events `answer` makes from the request body.
+fn claude_engine_with(answer: fn(&str) -> Vec<Value>) -> (Engine, Seen) {
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
-    let (url, seen) = scripted(&engine, cites);
+    let (url, seen) = scripted(&engine, answer);
     let base = url.trim_end_matches("/v1").to_string();
     let id = engine.call("backend.add", json!({"kind": "anthropic", "base_url": base, "name": "Claude", "secret": "sk-ant-test"})).unwrap()["id"]
         .as_str()
@@ -375,6 +382,13 @@ fn citations_are_kept_and_open_at_the_passage() {
     assert_eq!(v["after"], " Sie sind nachtaktiv.");
     assert!(v["path"].as_str().is_some_and(|p| p.ends_with(".txt")), "the kept copy: {v}");
     assert_eq!(engine.state().citation.as_ref().map(|c| c.index), Some(0));
+    // The original: a text file opens with its program, no page; tests never open anything.
+    let f = engine.call("message.citation_file", json!({"dry_run": true})).unwrap();
+    assert_eq!((f["path"].as_str(), f["page"].as_u64(), f["url"].as_str()), (v["path"].as_str(), None, None), "{f}");
+    let e = engine.call("message.citation_file", json!({})).unwrap_err();
+    assert!(e.message.contains("öffnet AIS.ChatCraft keine Dateien"), "{}", e.message);
+    let e = engine.call("message.citation_file", json!({"message_id": answer.id, "index": 1, "dry_run": true})).unwrap_err();
+    assert!(e.message.contains("keine Datei"), "a web page has no file: {}", e.message);
     // A web page: the quoted words and the address, no file.
     let web = engine.call("message.citation", json!({"message_id": answer.id, "index": 1})).unwrap();
     assert_eq!((web["found"].as_bool(), web["passage"].as_str()), (Some(false), Some("Igel schlafen von November bis März.")));
@@ -390,4 +404,93 @@ fn citations_are_kept_and_open_at_the_passage() {
     engine.call("chat.new", json!({})).unwrap();
     assert!(engine.state().citation.is_none(), "a citation belongs to its chat");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Claude answers with one sentence backed by `citation`.
+fn cited_answer(citation: Value) -> Vec<Value> {
+    vec![
+        json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0, "delta": {"type": "citations_delta", "citation": citation}}),
+        json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Am Freitag."}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "message_stop"}),
+    ]
+}
+
+/// #39: a cited PDF page opens in the original at that page (a `file://…#page=N` address for the
+/// browser's PDF viewer); tests only ask what would open.
+#[test]
+fn a_cited_pdf_opens_at_its_page() {
+    fn pdf_page(req: &str) -> Vec<Value> {
+        if !req.contains("application/pdf") {
+            return vec![json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Kein PDF."}})];
+        }
+        cited_answer(json!({"type": "page_location", "cited_text": "Wandertag", "document_index": 0, "document_title": "plan.pdf",
+            "start_page_number": 2, "end_page_number": 4}))
+    }
+    use base64::Engine as _;
+    let (engine, _) = claude_engine_with(pdf_page);
+    let doc = engine.call("artifact.create", json!({"kind": "document", "title": "Plan", "content": "# Plan\n\nWandertag"})).unwrap();
+    let pdf = engine.call("artifact.export", json!({"id": doc["id"], "format": "pdf"})).unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD.decode(pdf["base64"].as_str().unwrap()).unwrap();
+    let dir = std::env::temp_dir().join(format!("aiscraft-cite-pdf-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("plan.pdf");
+    std::fs::write(&file, bytes).unwrap();
+    engine.call("chat.send", json!({"text": "Wann ist der Wandertag?", "files": [file.display().to_string()]})).unwrap();
+    let answer = engine.state().messages.last().cloned().unwrap();
+    assert_eq!(answer.citations.len(), 1, "{answer:?}");
+    assert_eq!(answer.citations[0].pages, Some((2, 3)));
+    let f = engine.call("message.citation_file", json!({"message_id": answer.id, "index": 0, "dry_run": true})).unwrap();
+    assert_eq!(f["page"], 2, "{f}");
+    let url = f["url"].as_str().unwrap();
+    assert!(url.starts_with("file:///") && url.ends_with(".pdf#page=2"), "{url}");
+    assert!(engine.call("message.citation_file", json!({"message_id": answer.id, "index": 0})).is_err(), "never opens in tests");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// #39: the open document goes to Claude (API) as a document of its own, so the answer can cite
+/// it; the citation opens at the passage in the document.
+#[test]
+fn the_open_document_goes_as_a_citable_document() {
+    fn doc_cite(req: &str) -> Vec<Value> {
+        if !req.contains("\"title\":\"Elternbrief\"") {
+            return vec![json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Kein Dokument."}})];
+        }
+        cited_answer(json!({"type": "char_location", "cited_text": "Der Wandertag ist am Freitag.", "document_index": 0,
+            "document_title": "Elternbrief", "start_char_index": 0, "end_char_index": 0}))
+    }
+    let (engine, seen) = claude_engine_with(doc_cite);
+    let text = "Liebe Eltern, der Wandertag ist bald. Der Wandertag ist am Freitag. Bitte Trinkflasche mitgeben.";
+    let id = engine.call("artifact.create", json!({"kind": "document", "title": "Elternbrief", "content": text})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("chat.send", json!({"text": "Wann genau?", "artifact": id})).unwrap();
+    let req = last_chat_request(&seen, "Wann genau?");
+    assert!(req.contains("\"type\":\"document\"") && req.contains("\"citations\":{\"enabled\":true}"), "{req}");
+    assert!(!req.contains("<dokument titel="), "the text goes once, as the document: {req}");
+    assert!(req.contains("liegt als Dokument bei"), "the message names it: {req}");
+    let answer = engine.state().messages.last().cloned().unwrap();
+    assert_eq!(answer.content, "Am Freitag.");
+    let v = engine.call("message.citation", json!({"message_id": answer.id, "index": 0})).unwrap();
+    assert_eq!((v["found"].as_bool(), v["passage"].as_str()), (Some(true), Some("Der Wandertag ist am Freitag.")), "{v}");
+    assert!(v["before"].as_str().unwrap().ends_with("ist bald. "), "{v}");
+}
+
+/// #39: OpenAI-compatible servers with web search give `url_citation` annotations; they become
+/// the answer's sources like Claude's citations.
+#[test]
+fn openai_url_citations_become_sources() {
+    fn searched(_: &str) -> Vec<Value> {
+        vec![
+            json!({"choices":[{"delta":{"content":"Die Ferien beginnen am 1. Juli ([ferien.de](https://ferien.de/nrw))."}}]}),
+            json!({"choices":[{"delta":{"annotations":[{"type":"url_citation","url_citation":{"start_index":31,"end_index":67,"title":"Ferien NRW","url":"https://ferien.de/nrw"}}]}}]}),
+        ]
+    }
+    let (engine, _) = engine_with(searched);
+    engine.call("chat.send", json!({"text": "Wann sind Ferien?"})).unwrap();
+    let answer = engine.state().messages.last().cloned().unwrap();
+    assert_eq!(answer.citations.len(), 1, "{answer:?}");
+    assert_eq!(answer.citations[0].claim, "Die Ferien beginnen am 1. Juli");
+    assert_eq!(answer.citations[0].url.as_deref(), Some("https://ferien.de/nrw"));
+    let v = engine.call("message.citation", json!({"message_id": answer.id, "index": 0})).unwrap();
+    assert_eq!(v["citation"]["title"], "Ferien NRW");
 }

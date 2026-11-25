@@ -1,7 +1,8 @@
 //! H5P content in the artifact panel (#59): the tasks as a list to edit (the worksheet editor,
 //! limited to what H5P has), "Ausprobieren" with the worksheet's checking, and "Als H5P
 //! speichern". Imported packages AIS.ChatCraft cannot edit show what is in them and are saved
-//! back unchanged. No H5P player here: the main app has no webview.
+//! back unchanged. The main app has no webview: "Im Player ansehen" (#62) shows the content in
+//! the real H5P player in the preview process, once the optional player is downloaded.
 
 use std::time::Instant;
 
@@ -10,10 +11,85 @@ use egui::{CornerRadius, Frame, Margin, RichText, ScrollArea, Stroke, Ui};
 use serde_json::json;
 
 use crate::app::AisCraftApp;
-use crate::widgets::{accent_button, muted, small_muted};
+use crate::dialogs::Dialog;
+use crate::widgets::{accent_button, card, link_button, muted, small_muted};
 use crate::worksheet::{Mode, edit_sheet, page, work_sheet};
 
 impl AisCraftApp {
+    /// The H5P player dialog (#62): what the player is, and loading it only on an explicit yes
+    /// that names size, source and licence. Returns whether the dialog stays open.
+    pub(crate) fn h5p_player_body(&mut self, ui: &mut Ui, artifact: &str) -> bool {
+        let t = self.tokens.clone();
+        let p = self.state.h5p_player.clone();
+        let mut keep = true;
+        ui.heading("H5P-Player");
+        ui.add_space(4.0);
+        ui.label(muted(
+            &t,
+            "„Im Player ansehen“ zeigt H5P-Inhalte mit dem echten H5P-Player, so wie in Moodle, Mebis oder ByCS: in einem eigenen Vorschaufenster, ohne Internetzugriff.",
+        ));
+        ui.add_space(10.0);
+        if !p.preview {
+            ui.label(
+                RichText::new(
+                    "Zu dieser Installation gehört keine Vorschau (aiscraft-preview), die den Player zeigen kann. „Ausprobieren“ zeigt die Aufgaben trotzdem.",
+                )
+                .color(t.warning),
+            );
+            ui.add_space(8.0);
+        }
+        if p.installed {
+            ui.label(format!("Der H5P-Player ist installiert ({} Bibliotheken, {} KB).", p.libraries, p.bytes.div_ceil(1024)));
+            ui.add_space(10.0);
+            ui.horizontal_wrapped(|ui| {
+                if p.preview && accent_button(ui, &t, "Im Player ansehen").clicked() {
+                    self.save_if_dirty();
+                    self.run("h5p.play", json!({"id": artifact}));
+                    keep = false;
+                }
+                if ui.button("H5P-Player entfernen").clicked() {
+                    self.run("h5p.player_remove", json!({}));
+                }
+            });
+        } else {
+            card(&t).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(RichText::new("Der Player gehört nicht zu AIS.ChatCraft und wird nur auf deinen Wunsch geladen.").strong());
+                ui.add_space(4.0);
+                ui.label(muted(&t, format!("Größe: ca. {} MB", p.approx_mb)));
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(muted(&t, "Quelle:"));
+                    ui.hyperlink_to(RichText::new("Veröffentlichung auf GitHub").color(t.link), &p.source).on_hover_text(&p.source);
+                });
+                ui.label(muted(&t, format!("Lizenz: {}", p.license)));
+                ui.label(small_muted(
+                    &t,
+                    "Der H5P-Kern steht unter der GPL-3.0, deshalb liegt er nicht im App-Paket. Der Download wird mit seiner SHA-256-Prüfsumme geprüft.",
+                ));
+            });
+            ui.add_space(10.0);
+            if p.installing {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(muted(&t, "H5P-Player wird geladen …"));
+                });
+            } else if !p.can_download {
+                ui.label(small_muted(&t, "In dieser Umgebung lädt AIS.ChatCraft nichts herunter."));
+            } else if accent_button(ui, &t, &format!("H5P-Player laden (GPL-3.0, ca. {} MB)", p.approx_mb)).clicked() {
+                self.run("h5p.player_install", json!({"yes": true}));
+            }
+        }
+        if let Some(m) = &p.message {
+            ui.add_space(6.0);
+            ui.label(small_muted(&t, m));
+        }
+        ui.add_space(12.0);
+        if link_button(ui, &t, "Schließen").clicked() {
+            keep = false;
+        }
+        keep
+    }
+
     pub(crate) fn h5p_body(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let Some(v) = self.artifact.as_mut() else { return };
@@ -27,6 +103,8 @@ impl AisCraftApp {
         let built = content.as_ref().filter(|_| editable).map(h5p::build);
         let mut mode = v.sheet.mode;
         let (mut check, mut reset, mut save) = (false, false, false);
+        // Some(true): show in the player; Some(false): manage the player.
+        let mut play: Option<bool> = None;
         Frame::new().inner_margin(Margin::symmetric(12, 4)).show(ui, |ui| {
             // Wraps in a narrow panel: one long row made the panel wider than its default.
             ui.horizontal_wrapped(|ui| {
@@ -42,6 +120,14 @@ impl AisCraftApp {
                 save = accent_button(ui, &t, "Als H5P speichern …")
                     .on_hover_text("Als .h5p-Datei speichern, zum Hochladen in Moodle, Mebis, ByCS oder eine andere Lernplattform mit H5P")
                     .clicked();
+                let r = ui
+                    .button("Im Player ansehen")
+                    .on_hover_text("Mit dem echten H5P-Player ansehen, so wie in der Lernplattform (optionaler Download). Rechtsklick: H5P-Player verwalten");
+                if r.clicked() {
+                    play = Some(true);
+                } else if r.secondary_clicked() {
+                    play = Some(false);
+                }
                 let what = match &built {
                     Some(Ok(b)) => format!("{} · {} Aufgaben", b.main.machine, content.as_ref().map(|h| h.tasks.len()).unwrap_or(0)),
                     _ => content.as_ref().and_then(|h| h.package.as_ref()).map(|p| p.main_library.clone()).unwrap_or_default(),
@@ -56,6 +142,15 @@ impl AisCraftApp {
             }
             if check {
                 v.sheet.check();
+            }
+        }
+        if let Some(show) = play {
+            let p = &self.state.h5p_player;
+            if show && p.installed && p.preview {
+                self.save_if_dirty();
+                self.run("h5p.play", json!({"id": id}));
+            } else {
+                self.dialog = Some(Dialog::H5pPlayer { artifact: id.clone() });
             }
         }
         if save {

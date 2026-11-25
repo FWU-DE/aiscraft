@@ -177,6 +177,8 @@ pub(crate) fn start(c: &Ctx) {
             // Hourly: tidy up the notes (duplicates are archived, never deleted).
             if ticks.is_multiple_of(180) {
                 let _ = crate::skills::lint_memory(&ctx);
+                // And empty the trash of chats deleted more than 30 days ago (#77).
+                crate::archive::purge_expired(&ctx);
             }
             // A minute after the start and hourly: schedule ideas from recurring requests (#68),
             // found on the device; announced only with the hints below.
@@ -237,6 +239,8 @@ async fn run(c: &Ctx, mut s: Schedule) -> Result<Value> {
                 kind: Default::default(),
                 remote_id: None,
                 temporary: false,
+                archived: false,
+                deleted_at: None,
             };
             c.store(|st| st.save_conversation(&conv))?;
             let id = conv.id.clone();

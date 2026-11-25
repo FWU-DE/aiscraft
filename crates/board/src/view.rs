@@ -32,8 +32,19 @@ pub fn color_label(name: &str) -> &'static str {
     }
 }
 
-const MIN_ZOOM: f32 = 0.05;
-const MAX_ZOOM: f32 = 8.0;
+pub const MIN_ZOOM: f32 = 0.05;
+pub const MAX_ZOOM: f32 = 8.0;
+/// The levels „+“ and „−“ (Strg++, Strg+−) step through.
+pub const ZOOM_STEPS: [f32; 13] = [0.05, 0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
+/// „Auswahl zeigen“ never zooms in beyond 200 %.
+const SELECTION_MAX_ZOOM: f32 = 2.0;
+/// Size of the zoom bar's buttons: big enough for a finger.
+const ZOOM_BTN: f32 = 32.0;
+/// Width of the zoom bar's percentage button.
+const ZOOM_LABEL_W: f32 = 60.0;
+/// Width of one colour swatch in the bottom bar, and of that bar.
+const SWATCH: f32 = 26.0;
+const COLOR_BAR_W: f32 = SWATCH * 9.0 + 12.0;
 const NOTE_FONT: f32 = 16.0;
 const TEXT_FONT: f32 = 20.0;
 const SHAPE_FONT: f32 = 16.0;
@@ -285,6 +296,25 @@ impl Camera {
         self.center += before - after;
     }
 
+    /// Zoom to `level` (clamped to the limits), keeping the centre of the view in place.
+    pub fn set_zoom(&mut self, level: f32) {
+        if level.is_finite() {
+            self.zoom = level.clamp(MIN_ZOOM, MAX_ZOOM);
+        }
+    }
+
+    /// One step up the [`ZOOM_STEPS`], around the centre of the view.
+    pub fn zoom_in(&mut self) {
+        let next = ZOOM_STEPS.iter().copied().find(|&s| s > self.zoom * 1.001).unwrap_or(MAX_ZOOM);
+        self.set_zoom(next);
+    }
+
+    /// One step down the [`ZOOM_STEPS`], around the centre of the view.
+    pub fn zoom_out(&mut self) {
+        let prev = ZOOM_STEPS.iter().rev().copied().find(|&s| s < self.zoom / 1.001).unwrap_or(MIN_ZOOM);
+        self.set_zoom(prev);
+    }
+
     fn sanitize(&mut self) {
         if !self.zoom.is_finite() {
             self.zoom = 1.0;
@@ -418,6 +448,8 @@ pub struct ViewState {
     pub snap: bool,
     /// Show the shortcut overlay (F1 or „?“).
     pub help: bool,
+    /// The zoom menu (a click on the percentage, bottom right) is open.
+    pub zoom_menu: bool,
     /// "Mindmap aus Chat" on the empty board was clicked; the app takes it from here.
     pub wants_mindmap: bool,
     fit_pending: bool,
@@ -443,6 +475,7 @@ impl Default for ViewState {
             toolbar: true,
             snap: true,
             help: false,
+            zoom_menu: false,
             wants_mindmap: false,
             fit_pending: true,
             fitted: None,
@@ -527,7 +560,10 @@ impl<'a> BoardView<'a> {
 
         navigate(ui, &resp, rect, st);
         if st.help {
+            st.zoom_menu = false;
             help_input(ui, &resp, st);
+        } else if st.zoom_menu {
+            zoom_menu_input(ui, &resp, st);
         } else {
             pointer(ui, &resp, rect, board, st);
             keyboard(ui, &resp, rect, board, st);
@@ -552,6 +588,7 @@ impl<'a> BoardView<'a> {
             toolbar(ui, &painter, rect, resp.id, board, st, style);
             if !st.help {
                 context_bar(ui, &painter, rect, resp.id, board, st, style);
+                zoom_bar(ui, &painter, rect, resp.id, st, style);
             }
         }
         if st.help {
@@ -562,7 +599,7 @@ impl<'a> BoardView<'a> {
 }
 
 /// Refresh the element cache and apply the growing height of the note being edited.
-fn refresh(st: &mut ViewState, board: &Board) {
+pub(crate) fn refresh(st: &mut ViewState, board: &Board) {
     st.cache.refresh(board);
     if let Some(ed) = &st.editing
         && let Some(h) = ed.grow_h
@@ -585,12 +622,25 @@ fn fit(st: &mut ViewState, rect: Rect, min_zoom: f32) {
         st.camera = Camera::default();
         return;
     }
+    fit_bounds(st, rect, b, min_zoom, FIT_MAX_ZOOM);
+}
+
+/// „Auswahl zeigen“ (Umschalt+2): the selection fills the view, at most at 200 %.
+fn fit_selection(st: &mut ViewState, rect: Rect) {
+    if let Some(b) = selection_bounds(st).filter(|b| b.max.x.is_finite() && b.max.y.is_finite()) {
+        fit_bounds(st, rect, b, MIN_ZOOM, SELECTION_MAX_ZOOM);
+    }
+}
+
+/// Centre `b` (world units) and zoom so it fits between the bars, within `min_zoom..=max_zoom`.
+fn fit_bounds(st: &mut ViewState, rect: Rect, b: Rect, min_zoom: f32, max_zoom: f32) {
     // Room for the „+“ handles around the content.
     let margin = 44.0;
     // Room for the tool bar on top and the colour bar at the bottom.
     let bars = if st.toolbar { 56.0 } else { 0.0 };
     let avail = vec2((rect.width() - 2.0 * margin).max(32.0), (rect.height() - 2.0 * margin - 2.0 * bars).max(32.0));
-    let zoom = (avail.x / b.width().max(1.0)).min(avail.y / b.height().max(1.0)).clamp(min_zoom.clamp(MIN_ZOOM, FIT_MAX_ZOOM), FIT_MAX_ZOOM);
+    let max_zoom = max_zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+    let zoom = (avail.x / b.width().max(1.0)).min(avail.y / b.height().max(1.0)).clamp(min_zoom.clamp(MIN_ZOOM, max_zoom), max_zoom);
     // The centre stays in view even when not everything fits (a mind map's root is there).
     st.camera = Camera { center: b.center(), zoom };
 }
@@ -1293,7 +1343,7 @@ fn keyboard(ui: &mut Ui, resp: &Response, rect: Rect, board: &mut Board, st: &mu
         return;
     }
     let cmd_shift = Modifiers::COMMAND | Modifiers::SHIFT;
-    let (redo, undo, dup, all, del, esc, enter, fit_key, reset_zoom) = ui.input_mut(|i| {
+    let (redo, undo, dup, all, del, esc, enter, fit_key, reset_zoom, zoom_keys) = ui.input_mut(|i| {
         let redo = i.consume_key(cmd_shift, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y);
         let undo = i.consume_key(Modifiers::COMMAND, Key::Z);
         let dup = i.consume_key(Modifiers::COMMAND, Key::D);
@@ -1306,7 +1356,11 @@ fn keyboard(ui: &mut Ui, resp: &Response, rect: Rect, board: &mut Board, st: &mu
             st.help = true;
         }
         let reset = i.consume_key(Modifiers::COMMAND, Key::Num0);
-        (redo, undo, dup, all, del, esc, enter, fit, reset)
+        // Strg++ (also Strg+= where „+“ needs Umschalt), Strg+−, Umschalt+2.
+        let zoom_in = i.consume_key(Modifiers::COMMAND, Key::Plus) || i.consume_key(Modifiers::COMMAND, Key::Equals);
+        let zoom_out = i.consume_key(Modifiers::COMMAND, Key::Minus);
+        let selection = i.consume_key(Modifiers::SHIFT, Key::Num2);
+        (redo, undo, dup, all, del, esc, enter, fit, reset, (zoom_in, zoom_out, selection))
     });
     if redo {
         board.redo();
@@ -1340,7 +1394,13 @@ fn keyboard(ui: &mut Ui, resp: &Response, rect: Rect, board: &mut Board, st: &mu
         fit(st, rect, MIN_ZOOM);
     }
     if reset_zoom {
-        st.camera.zoom = 1.0;
+        st.camera.set_zoom(1.0);
+    }
+    match zoom_keys {
+        (true, _, _) => st.camera.zoom_in(),
+        (_, true, _) => st.camera.zoom_out(),
+        (_, _, true) => fit_selection(st, rect),
+        _ => {}
     }
     // Nudge with the arrow keys.
     let nudge = ui.input_mut(|i| {
@@ -1543,7 +1603,23 @@ fn arrow_head(painter: &Painter, from: Pos2, tip: Pos2, size: f32, color: Color3
     painter.add(Shape::convex_polygon(vec![tip, base + n * size * 0.5, base - n * size * 0.5], color, Stroke::NONE));
 }
 
-fn paint_elements(painter: &Painter, ui: &Ui, rect: Rect, st: &ViewState, style: &BoardStyle) {
+/// World bounds of everything drawn, frame labels and note shadows included; `None` when empty.
+pub(crate) fn drawn_bounds(st: &ViewState) -> Option<Rect> {
+    let mut b = Rect::NOTHING;
+    for e in &st.cache.els {
+        let r = st.cache.bounds(e);
+        b = b.union(r);
+        if e.kind == Kind::Frame {
+            b = b.union(Rect::from_min_size(r.min - vec2(0.0, 24.0), vec2(r.width(), 24.0)));
+        }
+        if e.kind == Kind::Note {
+            b = b.union(r.translate(vec2(0.0, 3.0)));
+        }
+    }
+    (b.min.x.is_finite() && b.min.y.is_finite() && b.max.x.is_finite() && b.max.y.is_finite()).then_some(b)
+}
+
+pub(crate) fn paint_elements(painter: &Painter, ui: &Ui, rect: Rect, st: &ViewState, style: &BoardStyle) {
     let cam = st.camera;
     let z = cam.zoom;
     let vis = cam.visible(rect).expand(40.0 / z);
@@ -2052,8 +2128,7 @@ fn icon_button(ui: &Ui, painter: &Painter, r: Rect, id: Id, icon: Icon, tip: &st
 fn toolbar(ui: &mut Ui, painter: &Painter, rect: Rect, base: Id, board: &mut Board, st: &mut ViewState, style: &BoardStyle) {
     let gap = 10.0;
     let n_buttons = Tool::ALL.len() as f32 + 5.0;
-    // Shrink the buttons in narrow panels so the bar always fits.
-    let btn = ((rect.width() - 16.0 - 12.0 - 3.0 * gap) / n_buttons).clamp(24.0, 34.0);
+    let btn = toolbar_button(rect);
     let width = btn * n_buttons + gap * 3.0 + 12.0;
     let x0 = (rect.center().x - width / 2.0).max(rect.min.x + 8.0);
     let bar = Rect::from_min_size(pos2(x0, rect.min.y + 10.0), vec2(width, btn + 8.0));
@@ -2110,18 +2185,14 @@ fn toolbar(ui: &mut Ui, painter: &Painter, rect: Rect, base: Id, board: &mut Boa
         painter.galley(chip.center() - galley.size() / 2.0, galley, style.text);
     }
 
-    // Bottom bar: colour for new elements (and the selection), zoom.
-    let sw = 26.0;
-    let zoom_w = 58.0;
-    let width = sw * 9.0 + 12.0 + gap + zoom_w;
-    let x0 = (rect.center().x - width / 2.0).max(rect.min.x + 8.0);
-    let bar = Rect::from_min_size(pos2(x0, rect.max.y - 10.0 - (btn + 8.0)), vec2(width, btn + 8.0));
+    // Bottom bar: colour for new elements (and the selection).
+    let bar = bottom_bars(rect).0;
     bar_background(painter, bar, style);
     let current = st.selection.first().and_then(|id| st.cache.get(id)).map(|e| e.color.clone()).or_else(|| st.color.clone());
     let mut x = bar.min.x + 6.0;
     let cy = bar.center().y;
     for name in std::iter::once("ink").chain(PALETTE) {
-        let r = Rect::from_center_size(pos2(x + sw / 2.0, cy), Vec2::splat(sw));
+        let r = Rect::from_center_size(pos2(x + SWATCH / 2.0, cy), Vec2::splat(SWATCH));
         if swatch(ui, painter, r, base.with(("color", name)), name, current.as_deref() == Some(name), style) {
             st.color = Some(name.to_string());
             if !st.selection.is_empty() {
@@ -2129,21 +2200,167 @@ fn toolbar(ui: &mut Ui, painter: &Painter, rect: Rect, base: Id, board: &mut Boa
                 board.set_color(&ids, name);
             }
         }
-        x += sw;
+        x += SWATCH;
     }
-    x += 6.0;
-    let sep = |painter: &Painter, x: f32| painter.line_segment([pos2(x, bar.min.y + 11.0), pos2(x, bar.max.y - 11.0)], Stroke::new(1.0, style.border));
-    sep(painter, x + gap / 2.0);
-    x += gap;
-    let r = Rect::from_min_size(pos2(x, bar.min.y + 4.0), vec2(zoom_w - 6.0, btn));
-    let resp = ui.interact(r, base.with("zoom"), Sense::click()).on_hover_text("Auf 100 % zurücksetzen (Strg+0)");
-    if resp.hovered() {
+}
+
+/// Size of the tool bar's buttons: they shrink in narrow panels so the bar always fits.
+fn toolbar_button(rect: Rect) -> f32 {
+    let n_buttons = Tool::ALL.len() as f32 + 5.0;
+    ((rect.width() - 16.0 - 12.0 - 3.0 * 10.0) / n_buttons).clamp(24.0, 34.0)
+}
+
+/// The colour bar (centred) and the zoom bar (bottom right) at the bottom of the canvas. The
+/// colour bar moves left to make room; where both do not fit in one row, the zoom bar sits
+/// above the colour bar.
+pub(crate) fn bottom_bars(rect: Rect) -> (Rect, Rect) {
+    let color_h = toolbar_button(rect) + 8.0;
+    let zoom_size = vec2(2.0 * ZOOM_BTN + ZOOM_LABEL_W + 12.0, ZOOM_BTN + 8.0);
+    let bottom = rect.max.y - 10.0;
+    let zoom_x = (rect.max.x - 10.0 - zoom_size.x).max(rect.min.x + 8.0);
+    let beside = zoom_x - 8.0 - COLOR_BAR_W >= rect.min.x + 8.0;
+    let centred = rect.center().x - COLOR_BAR_W / 2.0;
+    let color_x = if beside { centred.min(zoom_x - 8.0 - COLOR_BAR_W) } else { centred.max(rect.min.x + 8.0) };
+    // Both bars share their vertical centre when they sit in one row.
+    let row_h = color_h.max(zoom_size.y);
+    let color = Rect::from_min_size(pos2(color_x, bottom - (row_h + color_h) / 2.0), vec2(COLOR_BAR_W, color_h));
+    let zoom_y = if beside { bottom - (row_h + zoom_size.y) / 2.0 } else { bottom - row_h - 8.0 - zoom_size.y };
+    (color, Rect::from_min_size(pos2(zoom_x, zoom_y), zoom_size))
+}
+
+/// What an entry of the zoom menu does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ZoomAction {
+    All,
+    Selection,
+    Level(f32),
+    In,
+    Out,
+}
+
+/// The zoom menu: label, shortcut, action; `None` is a separator.
+const ZOOM_MENU: [Option<(&str, &str, ZoomAction)>; 9] = [
+    Some(("Alles zeigen", "Umschalt+1", ZoomAction::All)),
+    Some(("Auswahl zeigen", "Umschalt+2", ZoomAction::Selection)),
+    None,
+    Some(("50 %", "", ZoomAction::Level(0.5))),
+    Some(("100 %", "Strg+0", ZoomAction::Level(1.0))),
+    Some(("200 %", "", ZoomAction::Level(2.0))),
+    None,
+    Some(("Hineinzoomen", "Strg++", ZoomAction::In)),
+    Some(("Herauszoomen", "Strg+−", ZoomAction::Out)),
+];
+
+fn zoom_action(st: &mut ViewState, rect: Rect, action: ZoomAction) {
+    match action {
+        ZoomAction::All => fit(st, rect, MIN_ZOOM),
+        ZoomAction::Selection => fit_selection(st, rect),
+        ZoomAction::Level(z) => st.camera.set_zoom(z),
+        ZoomAction::In => st.camera.zoom_in(),
+        ZoomAction::Out => st.camera.zoom_out(),
+    }
+}
+
+/// While the zoom menu is open: Esc or a click on the canvas closes it (and does nothing else).
+fn zoom_menu_input(ui: &mut Ui, resp: &Response, st: &mut ViewState) {
+    let esc = ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+    if esc || resp.clicked() || resp.drag_started() || resp.secondary_clicked() {
+        st.zoom_menu = false;
+        st.interaction = Interaction::None;
+    }
+}
+
+/// A minus (and with `plus` a plus) drawn as lines: no glyph needed.
+fn paint_plus_minus(painter: &Painter, c: Pos2, plus: bool, color: Color32) {
+    let s = Stroke::new(1.8, color);
+    painter.line_segment([c + vec2(-6.0, 0.0), c + vec2(6.0, 0.0)], s);
+    if plus {
+        painter.line_segment([c + vec2(0.0, -6.0), c + vec2(0.0, 6.0)], s);
+    }
+}
+
+/// Floating zoom bar bottom right: „−“, the zoom level (opens the zoom menu), „+“.
+fn zoom_bar(ui: &mut Ui, painter: &Painter, rect: Rect, base: Id, st: &mut ViewState, style: &BoardStyle) {
+    let bar = bottom_bars(rect).1;
+    bar_background(painter, bar, style);
+    let y = bar.min.y + 4.0;
+    let rad = if style.rounded { ZOOM_BTN / 2.0 - 1.0 } else { 8.0 };
+    let mut x = bar.min.x + 6.0;
+    for (plus, label) in [(false, "Herauszoomen (Strg+−)"), (true, "Hineinzoomen (Strg++)")] {
+        let can = if plus { st.camera.zoom < MAX_ZOOM - 1e-4 } else { st.camera.zoom > MIN_ZOOM + 1e-4 };
+        let r = Rect::from_min_size(pos2(x, y), Vec2::splat(ZOOM_BTN));
+        let resp = ui.interact(r, base.with(("zoom-step", plus)), if can { Sense::click() } else { Sense::hover() }).on_hover_text(label);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, can, label));
+        if resp.hovered() && can {
+            painter.rect_filled(r.shrink(2.0), rad, style.border.gamma_multiply(0.6));
+        }
+        let color = if can { style.text } else { style.muted.gamma_multiply(0.45) };
+        paint_plus_minus(painter, r.center(), plus, color);
+        if can && resp.clicked() {
+            if plus {
+                st.camera.zoom_in();
+            } else {
+                st.camera.zoom_out();
+            }
+        }
+        x += ZOOM_BTN + ZOOM_LABEL_W;
+    }
+    let r = Rect::from_min_size(pos2(bar.min.x + 6.0 + ZOOM_BTN, y), vec2(ZOOM_LABEL_W, ZOOM_BTN));
+    let resp = ui.interact(r, base.with("zoom"), Sense::click()).on_hover_text("Zoomstufe: Menü öffnen");
+    if resp.clicked() {
+        st.zoom_menu = !st.zoom_menu;
+    }
+    let open = st.zoom_menu;
+    // The menu first, so the level shown is the one its entry just chose.
+    if open {
+        zoom_menu(ui, painter, rect, bar, base, st, style);
+    }
+    let level = format!("{:.0} %", st.camera.zoom * 100.0);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Zoomstufe {level}")));
+    if resp.hovered() || open {
         painter.rect_filled(r.shrink(2.0), 8.0, style.border.gamma_multiply(0.6));
     }
-    painter.text(r.center(), Align2::CENTER_CENTER, format!("{:.0} %", st.camera.zoom * 100.0), FontId::proportional(13.0), style.muted);
-    if resp.clicked() {
-        let c = st.camera.center;
-        st.camera = Camera { center: c, zoom: 1.0 };
+    painter.text(r.center(), Align2::CENTER_CENTER, level, FontId::proportional(13.0), style.text);
+}
+
+/// The menu above the zoom bar, right-aligned with it; the shortcut stands next to each entry.
+fn zoom_menu(ui: &mut Ui, painter: &Painter, rect: Rect, bar: Rect, base: Id, st: &mut ViewState, style: &BoardStyle) {
+    let (row_h, sep_h, pad) = (32.0, 9.0, 6.0);
+    let w = 240.0_f32.min(rect.width() - 16.0).max(120.0);
+    let h = ZOOM_MENU.iter().map(|e| if e.is_some() { row_h } else { sep_h }).sum::<f32>() + 2.0 * pad;
+    let x = (bar.max.x - w).max(rect.min.x + 8.0);
+    let y = (bar.min.y - 8.0 - h).max(rect.min.y + 8.0);
+    let menu = Rect::from_min_size(pos2(x, y), vec2(w, h));
+    painter.rect_filled(menu.translate(vec2(0.0, 3.0)), 12.0, Color32::from_black_alpha(30));
+    painter.rect_filled(menu, 12.0, style.surface);
+    painter.rect_stroke(menu, 12.0, Stroke::new(1.0, style.border), StrokeKind::Inside);
+    let has_selection = !st.selection.is_empty();
+    let mut y = menu.min.y + pad;
+    let mut chosen = None;
+    for entry in ZOOM_MENU {
+        let Some((label, keys, action)) = entry else {
+            painter.line_segment([pos2(menu.min.x + 10.0, y + sep_h / 2.0), pos2(menu.max.x - 10.0, y + sep_h / 2.0)], Stroke::new(1.0, style.border));
+            y += sep_h;
+            continue;
+        };
+        let enabled = action != ZoomAction::Selection || has_selection;
+        let r = Rect::from_min_size(pos2(menu.min.x + pad, y), vec2(menu.width() - 2.0 * pad, row_h));
+        let resp = ui.interact(r, base.with(("zoom-menu", label)), if enabled { Sense::click() } else { Sense::hover() });
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::MenuItem, enabled, label));
+        if resp.hovered() && enabled {
+            painter.rect_filled(r, 8.0, style.selection);
+        }
+        let color = if enabled { style.text } else { style.muted.gamma_multiply(0.6) };
+        painter.text(pos2(r.min.x + 10.0, r.center().y), Align2::LEFT_CENTER, label, FontId::proportional(13.5), color);
+        painter.text(pos2(r.max.x - 10.0, r.center().y), Align2::RIGHT_CENTER, keys, FontId::proportional(12.5), style.muted);
+        if enabled && resp.clicked() {
+            chosen = Some(action);
+        }
+        y += row_h;
+    }
+    if let Some(action) = chosen {
+        zoom_action(st, rect, action);
+        st.zoom_menu = false;
     }
 }
 
@@ -2325,7 +2542,7 @@ fn empty_hint(painter: &Painter, ui: &Ui, rect: Rect, style: &BoardStyle) {
     }
 }
 
-const SHORTCUTS: [(&str, &str); 18] = [
+const SHORTCUTS: [(&str, &str); 19] = [
     ("V · H · N · R · O", "Auswählen · Hand · Notiz · Rechteck · Ellipse"),
     ("A · L · T · P · E · F", "Pfeil · Linie · Text · Stift · Radierer · Rahmen"),
     ("Doppelklick", "Notiz anlegen oder Text bearbeiten"),
@@ -2342,7 +2559,8 @@ const SHORTCUTS: [(&str, &str); 18] = [
     ("Pfeiltasten", "Auswahl verschieben (Umschalt: 10er-Schritte)"),
     ("Alt beim Ziehen", "Ohne Einrasten verschieben"),
     ("Leertaste + Ziehen", "Ansicht verschieben"),
-    ("Strg+Mausrad · Umschalt+1 · Strg+0", "Zoomen · Alles zeigen · 100 %"),
+    ("Strg+Mausrad · Strg++ · Strg+−", "Zoomen · Hineinzoomen · Herauszoomen"),
+    ("Umschalt+1 · Umschalt+2 · Strg+0", "Alles zeigen · Auswahl zeigen · 100 %"),
     ("Esc · F1 · ?", "Hilfe schließen"),
 ];
 

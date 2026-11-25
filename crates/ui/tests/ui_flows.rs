@@ -8,7 +8,7 @@ use aiscraft_engine::{Engine, Options};
 use aiscraft_ui::AisCraftApp;
 use aiscraft_ui::theme::OmarchyTheme;
 use common::{chosen, click_until, settled, step_until};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 fn harness(engine: &Engine) -> egui_kittest::Harness<'static, AisCraftApp> {
     let e = engine.clone();
@@ -43,6 +43,24 @@ fn sources_popup_stays_open_until_closed() {
     h.get_by_label("Schließen").click();
     h.run_steps(6);
     assert!(h.query_by_label("Gedächtnis (deine Notizen)").is_none(), "Schließen closes it");
+}
+
+/// Project instructions are a source only inside a project.
+#[test]
+fn project_instructions_are_a_source_only_in_a_project() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let mut h = harness(&engine);
+    h.get_by_label_contains("Quellen").click();
+    settled(&mut h, "Projektanweisungen");
+    assert!(h.get_by_label("Projektanweisungen").accesskit_node().is_disabled(), "no project, nothing to choose");
+    let pid = engine.call("project.create", serde_json::json!({"name": "Mathe", "instructions": "Klasse 7"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("chat.new", serde_json::json!({"project": pid})).unwrap();
+    h.run_steps(6);
+    if h.query_by_label("Projektanweisungen").is_none() {
+        h.get_by_label_contains("Quellen").click();
+        settled(&mut h, "Projektanweisungen");
+    }
+    assert!(!h.get_by_label("Projektanweisungen").accesskit_node().is_disabled(), "in a project it can be chosen");
 }
 
 #[test]
@@ -716,4 +734,79 @@ fn quick_entry_keeps_the_draft() {
     step_until(&mut h, "the quick entry is taken", |_| engine.state().quick.is_some());
     h.run_steps(6);
     assert!(has_draft(&h), "the draft is still in the composer");
+}
+
+/// „Teilen“ (#60) opens a dialog with the two ways. „Gemeinsam bearbeiten“ without a server points
+/// to the settings instead of asking for an address; „Bereitstellen“ lists exactly the files of
+/// the artifact's kind.
+#[test]
+fn share_dialog_has_two_ways_and_the_files_of_the_kind() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let sheet = serde_json::json!({"title": "Brüche", "tasks": [{"type": "true_false", "prompt": "Zwei Viertel sind ein Halb.", "answer": true}]});
+    engine.call("worksheet.create", serde_json::json!({"worksheet": sheet})).unwrap();
+    let mut h = harness(&engine);
+    click_until(&mut h, "Teilen", "the share dialog opens", |h| h.query_by_label("Bereitstellen").is_some());
+    assert!(h.query_by_label("Gemeinsam bearbeiten").is_some(), "both ways as cards");
+    assert!(h.query_by_label("Beitreten").is_none(), "joining is not part of sharing");
+    click_until(&mut h, "Gemeinsam bearbeiten", "the way is chosen", |h| chosen(h, "Gemeinsam bearbeiten"));
+    assert!(h.query_by_label("Server in den Einstellungen eintragen").is_some(), "no server: a link to the settings");
+    assert!(h.query_by_label("Teilen starten").is_none());
+    click_until(&mut h, "Bereitstellen", "the files show", |h| h.query_by_label("Arbeitsblatt als PDF").is_some());
+    for f in ["Arbeitsblatt als PDF", "Lösungsblatt als PDF", "Arbeitsblatt als Word", "Lösungsblatt als Word"] {
+        assert!(h.query_by_label(f).is_some(), "worksheet: {f}");
+    }
+    for other in ["HTML-Datei", "Word (DOCX)", "Markdown", "H5P-Datei (.h5p)"] {
+        assert!(h.query_by_label(other).is_none(), "worksheet: no {other}");
+    }
+    click_until(&mut h, "Fertig", "the dialog closes", |h| h.query_by_label("Bereitstellen").is_none());
+
+    // A whiteboard: a picture (PNG) and the outline as PDF.
+    let board = engine.call("artifact.create", serde_json::json!({"kind": "board", "content": "# Wald\n- Bäume"})).unwrap()["id"].as_str().unwrap().to_string();
+    step_until(&mut h, "the whiteboard opens", |_| engine.state().open_artifact.as_deref() == Some(board.as_str()));
+    h.run_steps(6);
+    click_until(&mut h, "Teilen", "the share dialog opens", |h| h.query_by_label("Bereitstellen").is_some());
+    click_until(&mut h, "Bereitstellen", "the files show", |h| h.query_by_label("Bild (PNG)").is_some());
+    assert!(h.query_by_label("PDF").is_some(), "whiteboard: the outline as PDF");
+    for other in ["Arbeitsblatt als PDF", "Word (DOCX)", "Markdown", "HTML-Datei"] {
+        assert!(h.query_by_label(other).is_none(), "whiteboard: no {other}");
+    }
+    click_until(&mut h, "Fertig", "the dialog closes", |h| h.query_by_label("Bereitstellen").is_none());
+
+    // A document: Word, PDF and Markdown; the settings link leads to the server fields.
+    let doc = engine.call("artifact.create", serde_json::json!({"kind": "document", "content": "# Elternbrief"})).unwrap()["id"].as_str().unwrap().to_string();
+    step_until(&mut h, "the document opens", |_| engine.state().open_artifact.as_deref() == Some(doc.as_str()));
+    h.run_steps(6);
+    click_until(&mut h, "Teilen", "the share dialog opens", |h| h.query_by_label("Bereitstellen").is_some());
+    click_until(&mut h, "Bereitstellen", "the files show", |h| h.query_by_label("Word (DOCX)").is_some());
+    assert!(h.query_by_label("PDF").is_some() && h.query_by_label("Markdown").is_some());
+    assert!(h.query_by_label("Arbeitsblatt als PDF").is_none() && h.query_by_label("HTML-Datei").is_none());
+    click_until(&mut h, "Gemeinsam bearbeiten", "the way is chosen", |h| h.query_by_label("Server in den Einstellungen eintragen").is_some());
+    click_until(&mut h, "Server in den Einstellungen eintragen", "the settings open", |h| h.query_by_label("Server speichern").is_some());
+    assert!(h.query_by_label("Bereitstellen").is_none(), "the share dialog made way for the settings");
+}
+
+/// Joining with a code (#60) is reachable without one's own artifact: from the start page and
+/// from the command palette; the code goes to `collab.join`.
+#[test]
+fn joining_is_reachable_from_the_start_page_and_the_palette() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let mut h = harness(&engine);
+    let dialog = |h: &egui_kittest::Harness<'static, AisCraftApp>| h.query_by_label_contains("Hier einfügen").is_some();
+    h.get_by_label("Mit Code beitreten").scroll_to_me();
+    h.run_steps(4);
+    click_until(&mut h, "Mit Code beitreten", "the join dialog opens from the start page", dialog);
+    h.event(egui::Event::Text("ABCDE-FGHJK".into()));
+    h.run_steps(4);
+    assert!(h.query_by_label_contains("Ein ganzer Link geht auch ohne").is_some(), "no server: says what a code needs");
+    click_until(&mut h, "Beitreten", "the code goes to the engine", |_| {
+        engine.state().notices.iter().any(|n| n.text.contains("Kein Server für die Zusammenarbeit"))
+    });
+    step_until(&mut h, "the dialog closes", |h| !dialog(h));
+
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::K);
+    h.run_steps(4);
+    h.event(egui::Event::Text("mit code beitreten".into()));
+    h.run_steps(4);
+    h.key_press(egui::Key::Enter);
+    step_until(&mut h, "the join dialog opens from the palette", dialog);
 }

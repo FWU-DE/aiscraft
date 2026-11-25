@@ -127,7 +127,9 @@ pub(crate) fn recall(c: &Ctx, conv: &Conversation, request: &str) -> Recall {
     if conv.sources.history {
         let req = words(request);
         // Ask for more than fit, so chats with other services left out do not crowd out fitting ones.
-        let hits = c.store(|st| st.search_any(&req, Some(&conv.id), MAX_EXCERPTS * 4)).unwrap_or_default();
+        // Archived chats only with the switch (#77); the trash never.
+        let with_archived = c.state().settings.recall_archived;
+        let hits = c.store(|st| st.search_any(&req, Some(&conv.id), with_archived, MAX_EXCERPTS * 4)).unwrap_or_default();
         let mut taken = 0;
         for (rank, h) in hits.into_iter().enumerate() {
             if taken == MAX_EXCERPTS {

@@ -75,7 +75,7 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 
 Bis zu fünf Favoriten stehen als Abkürzung in der Seitenleiste. Bilder speichert AIS.ChatCraft im Datenordner (`personas`) und lädt sie nach einem halben Tag neu.
 
-Chats von AIS.chat tragen in der Seitenleiste das AIS.chat-Zeichen. Über „AIS.CHAT – VERLAUF“ holst du ältere AIS.chat-Chats herüber und schreibst darin weiter.
+Chats von AIS.chat tragen in der Seitenleiste das AIS.chat-Zeichen. Über „AIS.CHAT – VERLAUF“ holst du einzelne ältere AIS.chat-Chats herüber und schreibst darin weiter. **Abgleichen** dort (oder **Mit AIS.chat abgleichen** in der Befehlspalette, Strg+K, und im Hinweis nach der Anmeldung) lädt den Verlauf neu und übernimmt alle Chats, die hier noch fehlen, höchstens 200 auf einmal; das geht jederzeit, nicht nur beim Start. Chats, die hier schon stehen, auch im Archiv oder Papierkorb, bleiben, wie sie sind. Einen hier endgültig gelöschten Chat holt der nächste Abgleich wieder, solange er im AIS.chat-Verlauf steht.
 
 ## Schnelleingabe
 
@@ -112,9 +112,9 @@ Bei AIS.chat sind Gedächtnis, Projektanweisungen und Projektdateien zuerst aus.
 
 ## Belege in Antworten
 
-Mit Claude (API) gehen angehängte Dateien als Dokumente mit. Die Antwort nennt dann, welche Stelle einer Datei eine Aussage belegt; unter ihr steht etwa „Belege: [1] igel.txt“ oder „[2] plan.pdf, S. 3“. Fährst du über einen Beleg, siehst du die Aussage und das Zitat.
+Mit Claude (API) gehen angehängte Dateien, Dateien im Projekt und das offene Dokument als Dokumente mit. Die Antwort nennt dann, welche Stelle eine Aussage belegt: hinter der Aussage steht eine Marke wie [1], unter der Antwort etwa „Belege: [1] igel.txt“ oder „[2] plan.pdf, S. 3“. Fährst du über einen Beleg, siehst du die Aussage und das Zitat.
 
-Ein Klick zeigt die Stelle: im Text der Datei markiert, mit dem Text davor und danach. Bei PDFs steht die Seite dabei, bei Webseiten aus der Websuche das Zitat und der Link. AIS.chat, OpenAI-kompatible Server und das Claude-Abo liefern keine Belege.
+Ein Klick auf die Marke oder den Beleg zeigt die Stelle: im Text der Datei markiert, mit dem Text davor und danach. Mit **Datei öffnen** öffnest du das Original; ein PDF öffnet sich im Browser auf der belegten Seite („PDF auf Seite 3 öffnen“). Bei Webseiten aus der Websuche siehst du das Zitat und den Link. OpenAI-kompatible Server mit Websuche (etwa OpenAI, OpenRouter) liefern Webseiten als Belege. AIS.chat und das Claude-Abo liefern keine Belege.
 
 ## Projekte
 
@@ -130,9 +130,15 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 **Whiteboards:** Doppelklick legt eine Notiz an. Eine ausgewählte Notiz zeigt „+“ an ihren Seiten für verbundene Notizen. Tab legt eine Unternotiz an. F1 oder „?“ auf dem Whiteboard zeigt alle Kürzel.
 
+**Zoomen auf dem Whiteboard:** Unten rechts auf der Zeichenfläche liegt eine kleine Leiste: „−“ und „+“ zoomen in festen Stufen um die Mitte der Ansicht (von 5 % bis 800 %), dazwischen steht die Zoomstufe. Ein Klick auf die Prozentzahl öffnet ein Menü mit **Alles zeigen** (Umschalt+1), **Auswahl zeigen** (Umschalt+2), 50 %, 100 % (Strg+0), 200 %, **Hineinzoomen** (Strg++) und **Herauszoomen** (Strg+−). Außerdem zoomen Strg+Mausrad und zwei Finger auf dem Touchpad oder Touchscreen.
+
 **Dateien vom Modell:** Modelle mit Werkzeugen erstellen auf Wunsch Excel-Tabellen (mit Kopfzeile und Formeln), PowerPoint-Folien (Titel, Stichpunkte, Tabellen, Sprechernotizen) sowie Word-Dateien und PDFs, z. B. „Mach mir eine Notenliste als Excel-Datei“. Die Datei erscheint als Karte unter der Antwort; „Speichern …“ fragt, wohin sie soll. AIS.ChatCraft führt dafür keinen Code des Modells aus. PDFs nutzen die Standardschriften; Emojis und seltene Zeichen erscheinen dort als ?.
 
 **Im Chat:** Der Schalter „Im Chat“ schickt das geöffnete Dokument oder Whiteboard mit der nächsten Nachricht als Kontext mit. Modelle mit Werkzeugen ändern es dann direkt. AIS.chat schlägt Änderungen in einem Block vor; unter der Antwort übernimmst du sie mit „Ins Dokument übernehmen“ oder „Aufs Whiteboard“.
+
+**In eigenem Fenster:** Das Fenster-Symbol oben im Panel löst ein Dokument, Whiteboard, Arbeitsblatt oder einen H5P-Inhalt aus dem Panel; ebenso der Rechtsklick auf den Eintrag in der Seitenleiste oder „In eigenem Fenster öffnen“ in den Befehlen (Strg+K). Das Panel schließt sich, der Chat hat wieder die ganze Breite, und das Fenster lässt sich auf den zweiten Bildschirm oder den Beamer ziehen. Es zeigt denselben Inhalt mit derselben Werkzeugleiste: Bearbeiten, Versionen, Exportieren, Teilen, „Mit KI überarbeiten“ und „Im Chat“. Was du im Fenster änderst, geht mit „Im Chat“ sofort als Kontext mit; was das Modell ändert, erscheint sofort im Fenster. Mehrere Fenster gehen gleichzeitig, aber nur eines pro Inhalt: ein zweiter Klick holt das vorhandene nach vorn. Schließen des Fensters oder „Zurück ins Panel“ legt den Inhalt zurück ins Panel, wenn sein Chat offen ist; sonst bleibt er einfach gespeichert. Größe und Position merkt sich AIS.ChatCraft pro Inhalt; ist der Bildschirm von damals nicht mehr da, öffnet das Fenster auf dem Hauptbildschirm. Look, Farbschema und Zoom sind wie im Hauptfenster. Lern-Apps öffnen weiter nur im Vorschaufenster („▶ Öffnen“).
+
+**Präsentieren:** Im eigenen Fenster eines Whiteboards zeigt das Bildschirm-Symbol das Whiteboard als Vollbild ohne Werkzeugleiste. Esc beendet die Präsentation.
 
 ## Lern-Apps und Arbeitsblätter
 
@@ -166,7 +172,9 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 **Welche Aufgaben:** Multiple Choice (H5P.MultiChoice), Richtig oder falsch (H5P.TrueFalse), Lückentext zum Eintippen (H5P.Blanks) und Wörter in Lücken ziehen (H5P.DragText). Mehrere Aufgaben oder eine Einleitung werden ein Quiz (H5P.QuestionSet). Kurze Antworten und Zahlen aus Arbeitsblättern werden Lückentexte mit einer Lücke; Zahlen prüft H5P ohne Toleranz. Zuordnen, Reihenfolge, In Gruppen sortieren, freie Texte und Info-Texte hat H5P so nicht: AIS.ChatCraft nennt sie und lässt sie weg. Lösungen mit `/`, `:` oder `*` kann H5P nicht prüfen. Was beim Speichern verloren geht (Tipps, Toleranzen), steht unter den Aufgaben.
 
-**Bearbeiten und Ausprobieren:** Unter **Bearbeiten** änderst du Titel, Einleitung und Aufgaben wie beim Arbeitsblatt, ohne Punkte. **Ausprobieren** löst die Aufgaben in AIS.ChatCraft. Das sieht anders aus als in der Lernplattform: einen H5P-Player hat AIS.ChatCraft nicht.
+**Bearbeiten und Ausprobieren:** Unter **Bearbeiten** änderst du Titel, Einleitung und Aufgaben wie beim Arbeitsblatt, ohne Punkte. **Ausprobieren** löst die Aufgaben in AIS.ChatCraft. Das sieht anders aus als in der Lernplattform; so wie dort zeigt es **Im Player ansehen**.
+
+**Im Player ansehen:** zeigt den Inhalt mit dem echten H5P-Player (h5p-standalone mit den Inhaltstypen) im Vorschaufenster, so wie in Moodle, Mebis oder ByCS, ohne Internetzugriff. Der Player gehört nicht zu AIS.ChatCraft: Der H5P-Kern steht unter der GPL-3.0 und liegt deshalb nicht im App-Paket. Beim ersten Klick nennt AIS.ChatCraft Größe (ca. 3 MB), Quelle (die Veröffentlichung `h5p-player-v1` auf GitHub) und Lizenz; erst **H5P-Player laden** lädt ihn. Der Download wird mit seiner SHA-256-Prüfsumme geprüft und in den Daten-Ordner entpackt (`h5p-player`). Danach öffnet der Knopf den Inhalt gleich; ein Rechtsklick darauf zeigt den Stand und **H5P-Player entfernen**. Ohne Vorschaufenster (Installationen ohne `aiscraft-preview`) bleibt es bei **Ausprobieren**. Inhaltstypen, die der Player nicht kennt (z. B. Interactive Video), spielt er nur, wenn die geöffnete `.h5p`-Datei ihre Bibliotheken mitbringt.
 
 **H5P-Dateien öffnen:** Zieh eine `.h5p`-Datei ins Fenster oder wähle sie mit 📎. Sie wird geprüft (Größe bis 25 MB, Pfade, nur erlaubte Dateitypen) und im Daten-Ordner abgelegt. Quizze aus den vier Typen oben kannst du bearbeiten; Bilder und Bibliotheken im Paket bleiben beim Speichern erhalten, Bilder zeigt AIS.ChatCraft aber nicht. Andere Inhaltstypen (z. B. Interactive Video, Course Presentation) zeigt AIS.ChatCraft mit Namen und Bibliotheken an und speichert sie unverändert.
 
@@ -174,11 +182,15 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 ## Gemeinsam bearbeiten
 
-Dokumente und Whiteboards lassen sich live mit anderen bearbeiten. Dafür braucht es einen Server für die Zusammenarbeit (`aiscraft-collab-server`, z. B. von der Schule oder dem Träger betrieben). Ohne Server bleibt alles auf deinem Rechner.
+„Teilen“ oben in Dokument, Whiteboard, Arbeitsblatt oder Lern-App fragt zuerst, was du vorhast. **Gemeinsam bearbeiten** heißt: Es gibt ein Original, und alle mit dem Code schreiben live daran mit. **Bereitstellen** heißt: Du gibst eine Kopie als Datei weiter (zum Ansehen, Ausdrucken oder für die Lernplattform), das Original bleibt bei dir, und spätere Änderungen gehen nicht mit.
 
-**Teilen:** „Teilen“ oben im Dokument oder Whiteboard. Beim ersten Mal die Adresse des Servers eintragen (und den Schlüssel, falls er einen verlangt). „Teilen starten“ zeigt einen Code wie `K7M2Q-X9TDA` und einen Link; beides weitergeben.
+**Bereitstellen:** Je nach Art gibt es die passenden Dateien: Dokument als Word, PDF oder Markdown; Arbeitsblatt als Arbeitsblatt- und Lösungsblatt, jeweils als PDF oder Word; Lern-App als HTML-Datei, die in jedem Browser läuft; Whiteboard als Bild (PNG, so wie es aussieht, mit weißem Hintergrund; große Whiteboards werden auf höchstens 4096 Pixel verkleinert) oder als PDF (die Inhalte als Gliederung); H5P-Inhalt als `.h5p`-Datei.
 
-**Beitreten:** „Teilen“ › Code oder Link einfügen › „Beitreten“, oder in der Seitenleiste „+“ bei Dokumente & Boards. Mit dem Link geht es auch ohne eingetragenen Server.
+Für gemeinsames Bearbeiten braucht es einen Server für die Zusammenarbeit (`aiscraft-collab-server`, z. B. von der Schule oder dem Träger betrieben). Die Adresse (und den Schlüssel, falls er einen verlangt) trägst du einmal unter **Einstellungen › Dienste › Zusammenarbeit** ein. Ohne Server bleibt alles auf deinem Rechner. Der Inhalt geteilter Dokumente liegt auf diesem Server; Räume, die lange niemand öffnet, löscht er.
+
+**Teilen:** „Teilen“ › „Gemeinsam bearbeiten“ › „Teilen starten“ zeigt einen Code wie `K7M2Q-X9TDA` und einen Link; beides weitergeben. Ist etwas schon geteilt, zeigt „Geteilt“ gleich Code, Link, wer im Raum ist und „Nicht mehr teilen“.
+
+**Beitreten:** „Mit Code beitreten“ auf der Startseite (bei „Zuletzt bearbeitet“), in der Seitenleiste unter „+“ bei Dokumente & Whiteboards oder in der Befehlspalette (Strg+K). Code oder Link einfügen › „Beitreten“. Mit dem Link geht es auch ohne eingetragenen Server.
 
 Änderungen erscheinen bei allen sofort. Ohne Verbindung arbeitest du weiter; beim nächsten Verbinden gleicht AIS.ChatCraft alles ab. „Nicht mehr teilen“ hört auf abzugleichen, deine Kopie bleibt. „Raum für alle beenden“ (nur wer geteilt hat) löscht den Raum auf dem Server. Wer den Code hat, kann mitbearbeiten.
 
@@ -204,6 +216,16 @@ Werkzeuge, die nur lesen, laufen direkt. Alles andere läuft nur, wenn du darum 
 
 Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
 
+### Apps verbinden (Mail, Kalender, Dateien)
+
+Unter **Einstellungen › Konnektoren › Apps verbinden** steht ein Katalog: Outlook-Mail, Outlook-Kalender und OneDrive (Microsoft 365), Gmail, Google Kalender und Google Drive, CalDAV-Kalender (Nextcloud, iCloud, mailbox.org, Posteo) sowie zwei bekannte MCP-Server für Microsoft 365 und Google Workspace. Oben wählst du eine Kategorie (Mail, Kalender, Dateien) oder suchst nach einem Namen; **Verbinden** öffnet die Einrichtung.
+
+- **Microsoft 365 und Google** melden sich im Browser an (OAuth mit PKCE, Rückkehr über eine Adresse auf deinem eigenen Rechner). AIS.ChatCraft hat noch keine eigene registrierte App; du trägst die Client-ID einer App-Registrierung ein, bei Microsoft dazu den Mandanten (für Schulkonten meist `organizations` oder die ID der Schule), bei Google auch den Clientschlüssel. Wo du die App registrierst, steht im Fenster; oft richtet das die Schul-IT ein. Die Anmeldung wartet höchstens fünf Minuten auf den Browser.
+- **CalDAV** braucht die Adresse des Kalenders (https), den Benutzernamen und ein App-Passwort. Stimmen die Angaben nicht, wird nichts gespeichert.
+- **MCP-Server** (`@softeria/ms-365-mcp-server` über npx, `workspace-mcp` über uvx) starten im Nur-Lesen-Modus als gewöhnliche Konnektoren und melden sich selbst an; ihre Anmeldung speichern sie selbst.
+
+Verbundene Apps **lesen nur**: Mails auflisten und lesen, Kalender und Termine eines Zeitraums, Dateien suchen und als Text lesen. Kreuzt du beim Verbinden **Auch schreiben** an, kommen Mail-Entwürfe (es wird nie etwas gesendet) oder neue Termine dazu; sie fragen wie jede Aktion vorher. Client-Schlüssel, Anmeldung und Passwörter liegen im Schlüsselbund, abgelaufene Anmeldungen erneuert AIS.ChatCraft selbst. Ist eine Anmeldung nicht mehr gültig, zeigt die Liste **Neu anmelden**. Entfernen löscht auch die gespeicherte Anmeldung.
+
 ### Pakete mit einem Klick
 
 MCP-Pakete (`.mcpb`, wie die Erweiterungen von Claude Desktop) installierst du unter **Einstellungen › Konnektoren › Paket installieren …**. Vorher zeigt AIS.ChatCraft, was das Paket darf: welches Programm es startet (mit deinen Rechten, ohne Abschottung), welche Ordner, Dateien und Zugangsdaten es bekommt, und seine Einstellungen. Erst „Installieren und starten“ legt es unter `plugins/` im Datenordner ab und startet es. Zugangsdaten liegen im Schlüsselbund. Versteckte Ordner wie `.ssh` gibt AIS.ChatCraft keinem Paket.
@@ -227,7 +249,9 @@ Manche Konnektoren liefern zu einem Ergebnis eine kleine Oberfläche, etwa einen
 - Netz gibt es dort nur zu den Adressen, die der Konnektor ausdrücklich nennt, sonst keins. Ansichten, die beliebiges Netz (`*`), unverschlüsseltes `http`, fremde eingebettete Seiten, den falschen Typ oder mehr als 2 MB verlangen, öffnet AIS.ChatCraft nicht. Kamera, Mikrofon und Standort gibt es nie.
 - Aktionen aus der Ansicht laufen wie Aufrufe des Modells: Lesendes direkt, alles andere fragt mit genau den Angaben. Eine Ansicht erreicht nur Werkzeuge ihres eigenen Konnektors. Links aus der Ansicht öffnen erst, wenn du auf „Im Browser öffnen“ klickst.
 - Ohne Vorschaufenster (eine Fassung ohne `aiscraft-preview`) bleibt der Text des Ergebnisses im Chat; die Ansicht öffnet dann nicht, auch nicht im Browser.
-- Noch nicht: Nachrichten der Ansicht an den Chat (`ui/message`).
+- Was die Ansicht in den Chat schreibt (eine Nachricht oder Hinweise für das Modell), steht dort als eigener Eintrag „Nachricht der Ansicht …“. Er kommt nicht von dir: Das Modell sieht ihn als fremden Inhalt, und er erlaubt nie eine Aktion, auch wenn er darum bittet. Er löst keine Antwort aus; die nächste Antwort auf deine Nachricht sieht ihn. Eine Ansicht kann höchstens 20 Nachrichten schicken.
+- Das Fenster richtet sich nach der Größe, die die Ansicht wünscht (in Grenzen), und folgt deinem Look, auch wenn du ihn änderst. Eine Ansicht kann statt des großen Fensters ein kleines verlangen, das über anderen Fenstern bleibt. Höchstens acht Ansichten sind gleichzeitig offen.
+- Wurde der Aufruf abgelehnt oder abgebrochen, öffnet die Ansicht trotzdem und zeigt das.
 
 ### Lokale Dateien
 
@@ -263,6 +287,8 @@ Im Tresor (Einstellungen › Tresor) liegen Zugangsdaten und Einmalcodes, die AI
 
 Für Zeugnisbemerkungen, Elternbriefe und Förderpläne: Vor dem Senden ersetzt AIS.ChatCraft Namen von Schülerinnen und Schülern und andere persönliche Angaben durch Platzhalter. Aus „Lea Müller“ wird `[S1] [N1]`, aus einer E-Mail-Adresse `[E-Mail 1]`. Der Dienst (AIS.chat, Claude, ein anderer Server) sieht nur die Platzhalter; in der Antwort stehen bei dir wieder die Namen, auch beim Kopieren und beim Speichern als Markdown, Word oder PDF.
 
+**Einrichtung:** Wenn du „Namen schützen“ zum ersten Mal einschaltest (mit dem Schalter neben „Quellen“ oder mit der ersten Klassenliste in den Einstellungen), führt AIS.ChatCraft dich in fünf Schritten durch: was ersetzt wird und was auf diesem Gerät bleibt, Klassenlisten (einlesen oder Namen einfügen), die Namenserkennung (Größe, Quelle und Lizenz; geladen wird nur nach **Ja, laden**, und während sie lädt, kannst du weitergehen), der Schalter für den Chat (**An**, **Automatisch** oder **Aus**) und was immer gilt (Vorschau, unsichere Treffer, Prüfsummen), zuletzt eine Zusammenfassung. Jeden Schritt kannst du **überspringen**; **Einrichtung abbrechen** lässt den Schalter und die Klassenlisten, wie sie vorher waren (ein begonnener Download der Namenserkennung läuft weiter, **Entfernen** löscht ihn). Nach **Fertig** kommt die Einrichtung nicht wieder; unter **Einstellungen › Namen schützen** startet **Einrichtung erneut durchlaufen** sie noch einmal.
+
 **Klassenliste:** Unter **Einstellungen › Namen schützen** eine Liste einlesen (CSV, Excel, OpenDocument oder Kontakte als vcf) oder Namen einfügen, eine Person pro Zeile. Eine Liste gilt für alle Chats oder nur für ein Projekt. Sobald es eine Liste gibt, ist der Schutz in passenden Chats an; der Schalter **Namen schützen** neben „Quellen“ schaltet ihn pro Chat aus oder ein.
 
 **Was erkannt wird:**
@@ -270,10 +296,13 @@ Für Zeugnisbemerkungen, Elternbriefe und Förderpläne: Vor dem Senden ersetzt 
 - Vornamen allein, Nachnamen allein und ganze Namen aus der Liste, auch „Leas“, „Jonas'“, in Großbuchstaben oder „Müller, Lea“. Dieselbe Person behält im ganzen Chat denselben Platzhalter.
 - E-Mail-Adressen, Telefonnummern (deutsche Schreibweisen), IBAN (mit Prüfsumme), Geburtsdaten (mit „geb.“ oder im Schulalter) und Adressen mit Straße und Hausnummer.
 - Namen, die in keiner Liste stehen: eine eingebaute Liste mit rund 3000 häufigen Vornamen (deutsche und die häufigsten Herkunftssprachen an Schulen, auch ukrainische, arabische und türkische) und Anreden wie „Frau Özdemir“, „Herr Dr. Weber“, „die Schülerin Aylin“ oder „mit Klaus Meier gesprochen“. Aus „Gestern war Klaus wieder unruhig“ wird „Gestern war [Name 1] wieder unruhig“. Vornamen, die auch Wörter sind („Mark“, „Rose“, „Mai“), zählen nur mit Anrede oder einem Verb daneben („Mark hat gefehlt“), nicht in „Das Mark der Knochen“. Diese Treffer sind unsicher. Die Liste läuft auf dem Gerät, ohne Internet.
+- Mit geladener Namenserkennung (siehe unten) auch Namen, die das Modell erkennt.
 
 **Vorschau:** Über dem Eingabefeld steht, was genau rausgeht; Ersetzungen sind markiert. Ein Klick auf einen Treffer lässt ihn stehen oder ersetzt ihn doch. **Unsichere Treffer** (Namen, die auch Wörter sind, wie „Mark“ oder „Koch“, Namen in Kleinbuchstaben, Daten ohne „geb.“) werden ebenfalls ersetzt, damit im Zweifel nichts rausgeht; antippen lässt einen stehen. Auch Zeitpläne und Hintergrund-Aufgaben ersetzen sie. Mit **+ Begriff ersetzen** ergänzt du einen Namen, der in keiner Liste steht; er wird in diesem Chat immer ersetzt.
 
-**Grenzen:** Spitznamen, Tippfehler, seltene Vornamen, Nachnamen ohne Anrede oder Vornamen davor und Namen in Bildern oder PDF-Dateien, die als Datei hochgeladen werden, erkennt AIS.ChatCraft nicht. Text aus Dokumenten (Word, Text, Tabellen als CSV) wird mitgeprüft. Die Suche findet geschützte Namen nicht, denn gespeichert ist, was rausging. Von AIS.chat erzeugte Word- oder PDF-Dateien enthalten die Platzhalter. Die Vorschau ist eine Hilfe, keine Garantie: Lies den Text vor dem Senden.
+**Namenserkennung laden (Modell):** Unter **Einstellungen › Namen schützen** lädt **Namenserkennung laden …** ein Modell, das auch Namen erkennt, die in keiner Liste stehen, etwa Nachnamen ohne Anrede („Gestern hat Weber gefehlt“) oder seltene Vornamen. Vorher stehen dort Größe (knapp 400 MB), Quelle und Lizenz; geladen wird erst nach **Ja, laden**. Das Modell ist „GLiNER multi PII v1“ (Lizenz Apache-2.0, von huggingface.co), dazu ONNX Runtime von Microsoft (Lizenz MIT, von pypi.org), das es auf deinem Rechner ausführt. Jede Datei hat eine feste SHA-256-Prüfsumme; stimmt sie nicht, bleibt nichts davon. Die Dateien liegen im Datenordner unter `ner`; das Modell läuft auf dem Gerät, ohne Internet, und startet erst beim ersten geschützten Senden. Seine Treffer sind unsicher und werden wie die der Vornamenliste ersetzt; antippen lässt einen stehen. **Entfernen** löscht die Dateien wieder. Ohne Klassenliste bleibt „Namen schützen“ auch mit Modell aus, bis du es im Chat einschaltest.
+
+**Grenzen:** Spitznamen, Tippfehler, seltene Vornamen, Nachnamen ohne Anrede oder Vornamen davor (ohne das Modell) und Namen in Bildern oder PDF-Dateien, die als Datei hochgeladen werden, erkennt AIS.ChatCraft nicht. Auch das Modell übersieht Namen; in sehr langen Texten prüft es die ersten 200 000 Zeichen. Text aus Dokumenten (Word, Text, Tabellen als CSV) wird mitgeprüft. Die Suche findet geschützte Namen nicht, denn gespeichert ist, was rausging. Von AIS.chat erzeugte Word- oder PDF-Dateien enthalten die Platzhalter. Die Vorschau ist eine Hilfe, keine Garantie: Lies den Text vor dem Senden.
 
 **Quelle der Vornamenliste:** Vornamen der in Berlin 2012–2021 geborenen Kinder, BerlinOnline GmbH auf Basis von Daten des Landesamts für Bürger- und Ordnungsangelegenheiten (LABO), [github.com/berlin/haeufige-vornamen-berlin](https://github.com/berlin/haeufige-vornamen-berlin), Lizenz [CC BY 3.0 DE](https://creativecommons.org/licenses/by/3.0/de/); zusammengeführt und ergänzt.
 
@@ -283,7 +312,15 @@ Für Zeugnisbemerkungen, Elternbriefe und Förderpläne: Vor dem Senden ersetzt 
 
 **Im offenen Chat:** Strg+F öffnet ein Suchfeld über den Nachrichten. Es zeigt „2 von 5“, Enter (oder ›) springt zum nächsten Treffer, Umschalt+Enter (oder ‹) zum vorigen; die Nachricht mit dem Treffer ist umrandet. Groß- und Kleinschreibung spielt keine Rolle. Esc schließt die Suche.
 
-**Alle Chats:** Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats: zuerst die Titel (alle Wörter müssen darin vorkommen), dann die Nachrichten. Rechtsklick auf einen Chat: umbenennen, anheften, in ein Projekt verschieben, exportieren, löschen.
+**Alle Chats:** Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats: zuerst die Titel (alle Wörter müssen darin vorkommen), dann die Nachrichten. Archivierte Chats findet die Suche auch, mit dem Vermerk „archiviert“; Chats im Papierkorb nicht. Rechtsklick auf einen Chat: umbenennen, anheften, in ein Projekt verschieben, archivieren, löschen.
+
+**Archivieren:** Rechtsklick › **Archivieren** nimmt einen Chat aus der Seitenleiste und aus „Zuletzt bearbeitet“. Er bleibt ganz erhalten. **Archiv** unten in der Seitenleiste (oder „Archiv öffnen“ in der Befehlspalette, Strg+K) listet die archivierten Chats mit einem Suchfeld; **Öffnen** zeigt einen, **Wiederherstellen** holt ihn zurück in die Seitenleiste. Ein ganzes Projekt archivierst du per Rechtsklick auf das Projekt › **Chats archivieren**. Beim „Erinnern“ gehen archivierte Chats nur mit, wenn du das unter **Einstellungen › Fähigkeiten › Auch archivierte Chats beim Erinnern einbeziehen** einschaltest (Standard: aus). Archivieren ist immer nur lokal, AIS.chat merkt davon nichts.
+
+**Löschen und Papierkorb:** Rechtsklick › **Löschen** legt einen Chat in den **Papierkorb**. Unten rechts steht kurz „Gelöscht“ mit **Rückgängig**. Im Papierkorb (unten in der Seitenleiste) bleibt ein Chat 30 Tage und lässt sich **wiederherstellen**; danach löscht AIS.ChatCraft ihn beim Start oder beim stündlichen Aufräumen endgültig. **Endgültig löschen** und **Papierkorb leeren** fragen vorher nach. Endgültig gelöscht werden die Nachrichten (auch frühere Fassungen), die Suchtreffer, die Ausschnitte fürs „Erinnern“, die Kopien der Anhänge im Datenordner und die Zuordnung von „Namen schützen“. Notizen im Gedächtnis, die aus dem Chat stammen, bleiben, außer du hakst **Auch Notizen aus diesem Chat vergessen** an. Dokumente, Whiteboards und Arbeitsblätter aus dem Chat bleiben immer.
+
+**Chats mit AIS.chat:** AIS.chat speichert jeden Chat in seinem eigenen Verlauf. Löschen in AIS.ChatCraft löscht den Chat nur hier; im Verlauf von AIS.chat bleibt er stehen. Der Löschen-Dialog sagt das. Für einen einzelnen Chat bietet er **Auch in AIS.chat löschen** an: Nur wenn du das anhakst, löscht AIS.ChatCraft den Chat auch dort, und das lässt sich in AIS.chat nicht rückgängig machen. Lehnt AIS.chat ab, bleibt der Chat auch hier. Bei mehreren Chats auf einmal wird in AIS.chat nie gelöscht.
+
+**Mehrere Chats auf einmal:** Strg+Klick auf Chats in der Seitenleiste wählt sie einzeln aus (der offene Chat zählt mit), Umschalt+Klick wählt alle bis dorthin. Über der Liste steht dann „3 ausgewählt“ mit **Archivieren**, **Löschen**, **In Projekt** und **Exportieren** (als Markdown-Dateien in einen Ordner) für alle. Ein einfacher Klick öffnet wieder einen Chat und hebt die Auswahl auf.
 
 **Chats aus claude.ai und ChatGPT übernehmen:** Bei claude.ai (Einstellungen › Datenschutz › Daten exportieren) oder ChatGPT (Einstellungen › Datenkontrollen › Daten exportieren) den Datenexport anfordern und die ZIP-Datei aus der E-Mail speichern. Dann **Einstellungen › Dienste › Chats aus claude.ai oder ChatGPT übernehmen** (oder Befehlspalette) und die ZIP-Datei wählen. Die Chats stehen danach in der Seitenleiste, werden durchsucht und lassen sich mit dem gewählten Dienst weiterführen; bei ChatGPT zählt der zuletzt sichtbare Zweig, Bilder erscheinen als „(Bild)“. Ein zweites Einlesen derselben Datei legt nichts doppelt an. „Namen schützen“ wirkt nicht rückwirkend: Übernommene Chats enthalten Namen so, wie sie dort standen; wer einen davon weiterführt, schickt den Verlauf an den gewählten Dienst.
 

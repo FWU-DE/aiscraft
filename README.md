@@ -43,7 +43,7 @@ Linux, macOS und Windows, geschrieben in Rust mit [egui](https://github.com/emil
 - Standortdaten aus Fotos entfernen.
 
 **Schützen und kontrollieren**
-- „Namen schützen“: Namen aus der Klassenliste, E-Mail-Adressen, Telefonnummern, IBAN und Adressen gehen als Platzhalter raus und kommen in der Antwort lokal zurück. Über dem Eingabefeld steht, was das Gerät verlässt.
+- „Namen schützen“: Namen aus der Klassenliste, E-Mail-Adressen, Telefonnummern, IBAN und Adressen gehen als Platzhalter raus und kommen in der Antwort lokal zurück. Über dem Eingabefeld steht, was das Gerät verlässt. Auf Wunsch erkennt ein lokal geladenes Modell (GLiNER, Download nach Rückfrage) auch Namen außerhalb der Listen.
 - Zugangsdaten im Schlüsselbund des Systems, nie in der Datenbank.
 - Verbrauch und Token-Punkte, Monatsgrenze.
 

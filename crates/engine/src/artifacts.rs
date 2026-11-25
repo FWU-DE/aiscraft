@@ -309,6 +309,37 @@ fn strip_fence(s: &str) -> String {
     t.to_string()
 }
 
+/// „Bereitstellen“ (#60): the files a copy of this kind of artifact is handed on as, each one an
+/// `artifact.export` with `format` (and `variant` for worksheets). The file is named after the
+/// title plus `suffix` and `ext`.
+pub(crate) fn export_paths(kind: ArtifactKind) -> Vec<Value> {
+    let path = |label: &str, hint: &str, format: &str, variant: Option<&str>, ext: &str, suffix: &str| json!({"label": label, "hint": hint, "format": format, "variant": variant, "ext": ext, "suffix": suffix});
+    match kind {
+        ArtifactKind::Document => vec![
+            path("Word (DOCX)", "Zum Weiterbearbeiten in Word oder LibreOffice", "docx", None, "docx", ""),
+            path("PDF", "Zum Ansehen und Ausdrucken", "pdf", None, "pdf", ""),
+            path("Markdown", "Als Text, z. B. für ein Wiki oder die Lernplattform", "markdown", None, "md", ""),
+        ],
+        ArtifactKind::Worksheet => vec![
+            path("Arbeitsblatt als PDF", "Zum Ausdrucken für die Klasse", "pdf", Some("arbeitsblatt"), "pdf", ""),
+            path("Lösungsblatt als PDF", "Mit den Lösungen, für dich oder zur Selbstkontrolle", "pdf", Some("loesung"), "pdf", " Lösungen"),
+            path("Arbeitsblatt als Word", "Zum Weiterbearbeiten in Word oder LibreOffice", "docx", Some("arbeitsblatt"), "docx", ""),
+            path("Lösungsblatt als Word", "Die Lösungen zum Weiterbearbeiten", "docx", Some("loesung"), "docx", " Lösungen"),
+        ],
+        ArtifactKind::App => vec![path("HTML-Datei", "Läuft in jedem Browser, ohne Internet; auch für die Lernplattform", "html", None, "html", "")],
+        ArtifactKind::Board => vec![
+            path("Bild (PNG)", "Das Whiteboard so, wie es aussieht, z. B. für die Lernplattform oder eine Präsentation", "png", None, "png", ""),
+            path("PDF", "Die Inhalte des Whiteboards als Gliederung, zum Ausdrucken", "pdf", None, "pdf", ""),
+        ],
+        ArtifactKind::H5p => vec![path("H5P-Datei (.h5p)", "Zum Hochladen in Moodle, mebis oder eine andere Lernplattform", "h5p", None, "h5p", "")],
+    }
+}
+
+pub(crate) async fn export_paths_cmd(c: Ctx, p: Value) -> Result<Value> {
+    let a = get_artifact(&c, &req_str(&p, "id")?)?;
+    Ok(Value::Array(export_paths(a.kind)))
+}
+
 pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let a = get_artifact(&c, &id)?;
@@ -317,6 +348,15 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
     }
     let state = state_of(&c, &id)?;
     let format = opt_str(&p, "format").unwrap_or_else(|| "markdown".into());
+    if format == "png" {
+        let bytes = board_png(&a, &state)?;
+        if let Some(path) = opt_str(&p, "path") {
+            crate::disk::write(std::path::Path::new(&path), &bytes)?;
+            c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
+            return Ok(json!({"path": path}));
+        }
+        return Ok(json!({"base64": base64::engine::general_purpose::STANDARD.encode(&bytes), "bytes": bytes.len()}));
+    }
     let mut text = artifact_text(a.kind, &state)?;
     // „Erstellt mit KI“ (#57) at the end of a handout; not in the board's own JSON.
     if format != "json"
@@ -341,7 +381,7 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
         (_, other) => {
             return Err(Error::invalid(format!(
                 "Format {other} gibt es hier nicht (markdown, html, docx, pdf{})",
-                if a.kind == ArtifactKind::Board { ", json" } else { "" }
+                if a.kind == ArtifactKind::Board { ", json, png" } else { "" }
             )));
         }
     };
@@ -351,6 +391,22 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
         return Ok(json!({"path": path}));
     }
     Ok(json!({"text": out}))
+}
+
+/// „Bild (PNG)“ (#60): the whiteboard as it looks, white background, at most
+/// [`aiscraft_board::MAX_IMAGE_EDGE`] pixels on either side.
+fn board_png(a: &Artifact, state: &[u8]) -> Result<Vec<u8>> {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Format, Image};
+    if a.kind != ArtifactKind::Board {
+        return Err(Error::invalid("Als Bild (PNG) lässt sich bisher nur ein Whiteboard speichern"));
+    }
+    let board = Board::from_state(state).map_err(|e| Error::invalid(format!("Whiteboard beschädigt: {e}")))?;
+    let r = board
+        .render_image(aiscraft_board::MAX_IMAGE_EDGE)
+        .ok_or_else(|| Error::invalid("Das Whiteboard ist leer. Füge erst Notizen, Formen oder Zeichnungen hinzu, dann lässt es sich als Bild speichern."))?;
+    let img = Image::from_u8(r.width, r.height, ChannelLayout::Rgb, r.rgb).map_err(|e| Error::invalid(format!("Das Bild ließ sich nicht anlegen: {e}")))?;
+    craft_image_codecs::encode(&img, Format::Png, &EncodeOptions::default())
+        .map_err(|e| Error::invalid(format!("Das Bild ließ sich nicht als PNG speichern: {e}")))
 }
 
 pub(crate) async fn versions(c: Ctx, p: Value) -> Result<Value> {
@@ -392,6 +448,7 @@ pub(crate) async fn delete(c: Ctx, p: Value) -> Result<Value> {
     #[cfg(feature = "collab")]
     crate::collab::forget(&c, &id);
     c.store(|st| st.delete_artifact(&id))?;
+    crate::windows::forget(&c, &id);
     c.update(|s| {
         s.artifacts.retain(|a| a.id != id);
         if s.open_artifact.as_deref() == Some(&id) {
@@ -436,6 +493,39 @@ pub(crate) fn context_block(c: &Ctx, id: &str, without_tools: bool) -> Result<St
         });
     }
     Ok(block)
+}
+
+/// The open document for a chat message, for Claude (API) (#39): a document or whiteboard goes
+/// as a document of its own (title, text), so the answer can cite it; the message keeps a short
+/// note naming it (and how to propose changes without tools). Other kinds go as `context_block`.
+pub(crate) fn context_document(c: &Ctx, id: &str, without_tools: bool) -> Result<(String, Option<(String, String)>)> {
+    let a = get_artifact(c, id)?;
+    if !matches!(a.kind, ArtifactKind::Document | ArtifactKind::Board) {
+        return Ok((context_block(c, id, without_tools)?, None));
+    }
+    let text = artifact_text(a.kind, &state_of(c, id)?)?;
+    let title = if a.title.trim().is_empty() { a.kind.label().to_string() } else { a.title.clone() };
+    let mut note = format!("(Das offene {} „{title}“ liegt als Dokument bei.)", a.kind.label());
+    if without_tools {
+        note.push_str(match a.kind {
+            ArtifactKind::Document => "\n\n(Wenn du dieses Dokument ändern sollst, gib die vollständige neue Fassung in einem Codeblock mit der Sprache `aiscraft-dokument` aus.)",
+            _ => "\n\n(Wenn du dieses Whiteboard ergänzen sollst, gib nur die neuen Punkte als eingerückte Markdown-Liste in einem Codeblock mit der Sprache `aiscraft-whiteboard` aus.)",
+        });
+    }
+    Ok((note, Some((title, text))))
+}
+
+/// The text of the document or whiteboard named `title` (for citations, #39): the chat's own
+/// first, else the newest one with that title.
+pub(crate) fn text_by_title(c: &Ctx, conv: &str, title: &str) -> Option<String> {
+    let state = c.state();
+    let a = state
+        .artifacts
+        .iter()
+        .filter(|a| matches!(a.kind, ArtifactKind::Document | ArtifactKind::Board))
+        .filter(|a| a.title == title || (a.title.trim().is_empty() && a.kind.label() == title))
+        .max_by_key(|a| (a.conversation_id.as_deref() == Some(conv), a.updated_at))?;
+    artifact_text(a.kind, &state_of(c, &a.id).ok()?).ok()
 }
 
 /// Marked change blocks in an answer: (kind, content), for "Ins Dokument übernehmen".

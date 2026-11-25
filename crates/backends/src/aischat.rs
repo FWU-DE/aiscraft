@@ -117,6 +117,7 @@ fn action_label(name: &str) -> &'static str {
         "getLearningScenariosByFilterAction" => "Die Liste der Lernszenarien",
         "generateImageAction" => "Die Bilderzeugung",
         FAVORITE_ACTION => "Das Markieren von Favoriten",
+        DELETE_ACTION => "Das Löschen von Chats",
         INGEST_ACTION => "Das Einlesen von Webseiten",
         _ => "Diese Funktion",
     }
@@ -124,6 +125,9 @@ fn action_label(name: &str) -> &'static str {
 
 const INGEST_ACTION: &str = "ingestWebContentAction";
 const FAVORITE_ACTION: &str = "setFavoriteAction";
+/// `deleteConversationAction({conversationId})` in `(chat-bot)/actions.ts`, shipped with the
+/// sidebar's chat history on every page (#77).
+const DELETE_ACTION: &str = "deleteConversationAction";
 const IMAGE_CAP: usize = 25 * 1024 * 1024;
 
 impl AisChat {
@@ -853,6 +857,17 @@ impl Backend for AisChat {
         })
     }
 
+    fn delete_conversation(&self, id: String) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move {
+            // AIS.chat wants its UUID; refuse anything that could not be one before asking it.
+            if id.is_empty() || id.len() > 64 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                return Err(Error::invalid("Ungültige Chat-ID"));
+            }
+            let arg = json!({"conversationId": id});
+            server_result(self.call_action(DELETE_ACTION, &self.pages_for(DELETE_ACTION), &[arg]).await?).map(|_| ())
+        })
+    }
+
     fn image_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>>> {
         Box::pin(async move {
             // The page redirects to "/" when the state has image generation switched off.
@@ -1255,7 +1270,7 @@ mod tests {
                     } else if req.starts_with("GET / ") {
                         ("text/html", chunk("app"))
                     } else if req.starts_with("GET /_next/static/chunks/app.js") {
-                        ("application/javascript", reference(0x7f, "sendChatMessageAction"))
+                        ("application/javascript", reference(0x7f, "sendChatMessageAction") + &reference(0x5d, "deleteConversationAction"))
                     } else if req.starts_with("GET /image-generation ") {
                         // Shape of 2026-11-24: `defaultImageModel` repeats the model with
                         // back-references and sorts before `models`.
@@ -1284,6 +1299,9 @@ mod tests {
                         } else if action == id(0x33) {
                             assert!(req.ends_with(r#"[{"entityId":"0a1b-2c","entityType":"learningScenario","isFavorite":true}]"#), "{req}");
                             ("text/x-component", flight(r#"{"success":true}"#))
+                        } else if action == id(0x5d) {
+                            assert!(req.ends_with(r#"[{"conversationId":"conv-9"}]"#), "{req}");
+                            ("text/x-component", flight(r#"{"success":true,"value":null}"#))
                         } else if action == id(0x7f) {
                             (
                                 "text/x-component",
@@ -1419,6 +1437,11 @@ mod tests {
         assert_eq!(posted.lock().unwrap().len(), 1);
         assert!(backend.set_favorite(PersonaKind::Assistant, "../x".into(), true).await.is_err());
         assert_eq!(posted.lock().unwrap().len(), 1, "bad ids are refused before asking the server");
+        // #77: deleting a chat in AIS.chat's history (the action ships with the start page).
+        backend.delete_conversation("conv-9".into()).await.unwrap();
+        assert_eq!(posted.lock().unwrap().len(), 2);
+        assert!(backend.delete_conversation("../x".into()).await.is_err());
+        assert_eq!(posted.lock().unwrap().len(), 2, "bad ids are refused before asking the server");
     }
 
     #[tokio::test]

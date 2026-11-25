@@ -17,7 +17,7 @@ pub struct Palette {
 #[derive(Debug, Clone)]
 enum Item {
     Command { id: &'static str, label: &'static str, group: &'static str, shortcut: Option<&'static str> },
-    Chat { id: String, title: String },
+    Chat { id: String, title: String, archived: bool },
     Project { id: String, name: String },
     Model { backend: String, model: String, label: String },
     Ui { label: &'static str, group: &'static str, action: UiAction },
@@ -39,6 +39,9 @@ enum UiAction {
     ConnectorInsert,
     NewTemplate,
     ImportChats,
+    Join,
+    Archive,
+    Trash,
 }
 
 impl Item {
@@ -56,6 +59,7 @@ impl Item {
         match self {
             Item::Command { group, .. } => group_label(group),
             Item::Ui { group, .. } => group,
+            Item::Chat { archived: true, .. } => "Chat, archiviert",
             Item::Chat { .. } => "Chat",
             Item::Project { .. } => "Projekt",
             Item::Model { .. } => "Modell",
@@ -102,7 +106,12 @@ impl AisCraftApp {
             Item::Ui { label: "Konnektor-Ergebnis einfügen", group: "Konnektoren", action: UiAction::ConnectorInsert },
             Item::Ui { label: "Neue Vorlage", group: "Vorlage", action: UiAction::NewTemplate },
             Item::Ui { label: "Chats aus claude.ai oder ChatGPT übernehmen", group: "Chat", action: UiAction::ImportChats },
+            Item::Ui { label: "Archiv öffnen", group: "Chat", action: UiAction::Archive },
+            Item::Ui { label: "Papierkorb öffnen", group: "Chat", action: UiAction::Trash },
         ]);
+        if self.state.collab.available {
+            items.push(Item::Ui { label: "Mit Code beitreten", group: "Zusammenarbeit", action: UiAction::Join });
+        }
         items.extend(self.state.templates.iter().map(|t| Item::Template { id: t.id.clone(), title: t.title.clone() }));
         for b in &self.state.backends {
             if matches!(b.status, BackendStatus::Ready { .. }) {
@@ -112,7 +121,9 @@ impl AisCraftApp {
             }
         }
         items.extend(self.state.projects.iter().map(|p| Item::Project { id: p.id.clone(), name: p.name.clone() }));
-        items.extend(self.state.conversations.iter().map(|c| Item::Chat { id: c.id.clone(), title: c.title.clone() }));
+        // Chats in use first, then the archived ones, marked (#77).
+        items.extend(self.state.listed_conversations().map(|c| Item::Chat { id: c.id.clone(), title: c.title.clone(), archived: false }));
+        items.extend(self.state.archived_conversations().into_iter().map(|c| Item::Chat { id: c.id.clone(), title: c.title.clone(), archived: true }));
         items
     }
 
@@ -189,6 +200,18 @@ impl AisCraftApp {
     fn palette_run(&mut self, it: Item) {
         match it {
             Item::Command { id: "chat.new", .. } => self.new_chat(),
+            // The panel's content into its own window, with what is typed in it (#75).
+            Item::Command { id: "artifact.detach", .. } if self.panel_artifact().is_some() => {
+                if let Some(id) = self.panel_artifact() {
+                    self.detach_artifact(&id);
+                }
+            }
+            Item::Command { id: "artifact.attach", .. } => {
+                if let Some(id) = self.state.detached.last().map(|d| d.id.clone()) {
+                    self.save_window_if_dirty(&id);
+                }
+                self.run("artifact.attach", json!({}));
+            }
             Item::Command { id, .. } => self.run(id, json!({})),
             Item::Chat { id, .. } => self.run("chat.open", json!({"id": id})),
             Item::Project { id, .. } => {
@@ -217,6 +240,9 @@ impl AisCraftApp {
                 UiAction::ConnectorInsert => self.dialog = Some(Dialog::Know(crate::know::KnowDialog::Connector { tool: None, args: Vec::new() })),
                 UiAction::NewTemplate => self.dialog = Some(Dialog::Know(crate::know::KnowDialog::edit_template(None))),
                 UiAction::ImportChats => self.dialog = Some(Dialog::ImportChats),
+                UiAction::Join => self.dialog = Some(Dialog::Join { code: String::new() }),
+                UiAction::Archive => self.open_archive(false),
+                UiAction::Trash => self.open_archive(true),
                 UiAction::Search => {
                     self.sidebar_open = true;
                     self.focus_search = true;

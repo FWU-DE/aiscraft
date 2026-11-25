@@ -622,13 +622,18 @@ impl AisCraftApp {
     /// The three things worked on last: chats, documents and whiteboards by their last change.
     fn recent_section(&mut self, ui: &mut Ui, w: f32) {
         let t = self.tokens.clone();
-        self.section_title(ui, Icon::History, t.text2, "Zuletzt bearbeitet", None);
+        // Joining someone else's document (#60) starts here, not in one's own share dialog.
+        let join = self.state.collab.available.then_some("Mit Code beitreten");
+        if self.section_title(ui, Icon::History, t.text2, "Zuletzt bearbeitet", join) {
+            self.dialog = Some(Dialog::Join { code: String::new() });
+        }
         enum Item {
             Chat(String),
             Artifact(String),
         }
         let mut items: Vec<(i64, Icon, String, String, Item)> = Vec::new();
-        for c in self.state.conversations.iter().filter(|c| !c.temporary) {
+        // Archived chats (#77) are not „recent“; temporary ones (#34) are gone once closed.
+        for c in self.state.listed_conversations() {
             let title = if c.title.trim().is_empty() { "Ohne Titel".to_string() } else { c.title.clone() };
             items.push((c.updated_at, Icon::Chat, title, "Chat".into(), Item::Chat(c.id.clone())));
         }

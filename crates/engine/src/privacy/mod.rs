@@ -3,8 +3,9 @@
 //! locally when the answer is shown, copied or exported. The pattern is LLM Guard's
 //! Anonymize/Vault/Deanonymize, like the vault's placeholders (`vault.rs`), in Rust.
 //!
-//! - Finding: class lists (per project or for all chats), rules with checksums and common first
-//!   names with context rules (stage c without a model), see [`detect`] and [`common`].
+//! - Finding: class lists (per project or for all chats), rules with checksums, common first
+//!   names with context rules (stage c without a model) and, once downloaded on the person's
+//!   yes, a local GLiNER model (stage c with a model), see [`detect`], [`common`] and [`ner`].
 //! - The mapping placeholder → original lives per chat in the local database (settings key
 //!   `privacy.map.<chat>`), never in logs, never in the state agents read (`#[serde(skip)]`),
 //!   never in a request.
@@ -19,6 +20,9 @@
 
 pub mod common;
 pub mod detect;
+pub mod ner;
+#[cfg(feature = "ner")]
+mod ner_model;
 #[cfg(test)]
 mod tests;
 
@@ -256,6 +260,9 @@ pub struct PrivacyState {
     /// The last preview, for the composer. Holds names, so agents reading the state never see it.
     #[serde(skip)]
     pub preview: Option<Preview>,
+    /// The downloadable name recognition (#73).
+    #[serde(default)]
+    pub ner: ner::NerState,
 }
 
 // ---- storage --------------------------------------------------------------------------------
@@ -278,6 +285,7 @@ fn save_lists(c: &Ctx, lists: &[ClassList]) -> Result<()> {
 pub(crate) fn refresh(c: &Ctx) {
     let infos: Vec<ClassListInfo> = load_lists(c).iter().map(info).collect();
     c.update(|s| s.privacy.lists = infos);
+    ner::refresh(c);
 }
 
 fn map_key(conv: &str) -> String {
@@ -342,7 +350,7 @@ fn year() -> i32 {
 
 fn detector(c: &Ctx, project: Option<&str>, m: &Mapping, extra: &[String]) -> Detector {
     let manual: Vec<String> = m.manual.iter().chain(extra).cloned().collect();
-    Detector::new(&people_for(c, project), &m.known(), &manual, year()).with_common_names()
+    Detector::new(&people_for(c, project), &m.known(), &manual, year()).with_common_names().with_model(ner::model(c))
 }
 
 /// Takes out what protection would find, with every class list (all projects), whether
@@ -776,7 +784,31 @@ pub(crate) async fn reveal_cmd(c: Ctx, p: Value) -> Result<Value> {
     Ok(json!({"text": reveal(&c, &conv, text.get(..text.len().min(MAX_TEXT)).unwrap_or(""))}))
 }
 
+/// The setup of „Namen schützen“ (#73) was gone through: switching protection on no longer
+/// opens it. `done: false` brings it back.
+pub(crate) async fn onboarding_done(c: Ctx, p: Value) -> Result<Value> {
+    let done = match p.get("done") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(Error::invalid("done muss true oder false sein")),
+    };
+    let mut settings = c.state().settings.clone();
+    settings.privacy_onboarded = done;
+    c.store(|st| st.set_setting("settings", &serde_json::to_value(&settings)?))?;
+    c.update(|s| s.settings.privacy_onboarded = done);
+    Ok(json!({"done": done}))
+}
+
 impl crate::State {
+    /// The switch of the open chat (or the next new one) as set: `None` is automatic (on once a
+    /// class list fits).
+    pub fn protect_choice(&self) -> Option<bool> {
+        match self.current.as_ref().and_then(|id| self.conversation(id)) {
+            Some(c) => c.sources.protect,
+            None => self.selection.sources.protect,
+        }
+    }
+
     /// „Namen schützen“ is on for the open chat (or the next new one).
     pub fn protection_on(&self) -> bool {
         let (sources, project) = match self.current.as_ref().and_then(|id| self.conversation(id)) {

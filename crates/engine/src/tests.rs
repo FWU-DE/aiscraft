@@ -510,6 +510,25 @@ fn document_flow_end_to_end() {
     assert!(engine.call("artifact.get", json!({"id": b})).is_err());
 }
 
+/// An outline indented without bullets keeps its three levels on the board (#78).
+#[test]
+fn board_from_an_indented_outline_without_bullets() {
+    let (engine, _) = engine_with_recording("Antwort");
+    let outline = "Quadratische Gleichungen\n  Formen\n    Normalform\n    Scheitelpunktform\n  Lösen\n    Mitternachtsformel\n";
+    let b = engine.call("artifact.create", json!({"kind": "board", "content": outline})).unwrap()["id"].as_str().unwrap().to_string();
+    let text = engine.call("artifact.get", json!({"id": b})).unwrap()["text"].as_str().unwrap().to_string();
+    for link in [
+        "Quadratische Gleichungen → Formen",
+        "Quadratische Gleichungen → Lösen",
+        "Formen → Normalform",
+        "Formen → Scheitelpunktform",
+        "Lösen → Mitternachtsformel",
+    ] {
+        assert!(text.contains(link), "{link} fehlt in\n{text}");
+    }
+    assert!(!text.contains("Quadratische Gleichungen → Normalform"), "{text}");
+}
+
 /// Everything around chats, projects, memory and artifacts that is not sending.
 #[test]
 fn management_commands() {
@@ -635,9 +654,9 @@ fn ais_chat_login_history_and_import() {
                     } else if req.starts_with("GET /api/auth/session") {
                         ("200 OK", "application/json", r#"{"user":{"firstName":"Ada","lastName":"Lehrerin","school":{"name":"Gesamtschule"}},"expires":"2030-01-01"}"#.to_string())
                     } else if req.starts_with("GET /api/conversations") {
-                        ("200 OK", "application/json", r#"{"conversations":[{"id":"r1","name":"Alter Chat","updatedAt":"2026-11-01"}]}"#.to_string())
-                    } else if req.starts_with("GET /d/r1") {
-                        let row = r#"5:{"messages":[{"id":"u1","role":"user","content":"Hallo AIS"},{"id":"a1","role":"assistant","content":"Hallo zurück"}]}"#;
+                        ("200 OK", "application/json", r#"{"conversations":[{"id":"r1","name":"Alter Chat","updatedAt":"2026-11-01"},{"id":"r2","name":"Zweiter Chat","updatedAt":"2026-11-02"}]}"#.to_string())
+                    } else if req.starts_with("GET /d/r1") || req.starts_with("GET /d/r2") {
+                        let row = if req.starts_with("GET /d/r2") { r#"5:{"messages":[{"id":"u2","role":"user","content":"Zweite Frage"},{"id":"a2","role":"assistant","content":"Zweite Antwort"}]}"# } else { r#"5:{"messages":[{"id":"u1","role":"user","content":"Hallo AIS"},{"id":"a1","role":"assistant","content":"Hallo zurück"}]}"# };
                         ("200 OK", "text/html", format!("<script>self.__next_f.push([1,{}])</script>", serde_json::to_string(&format!("{row}\n")).unwrap()))
                     } else if req.starts_with("GET / ") {
                         let row = r#"3:{"usedBudget":250,"maxBudget":1000,"models":[{"id":"m-uuid","name":"gpt","displayName":"GPT","priceMetadata":{"type":"text"}}]}"#;
@@ -672,6 +691,29 @@ fn ais_chat_login_history_and_import() {
     assert_eq!(s.current.as_deref(), Some("r1"), "the local id is the server's id");
     assert_eq!(s.conversation("r1").unwrap().title, "Alter Chat");
     assert_eq!(s.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>(), ["Hallo AIS", "Hallo zurück"]);
+
+    // „Mit AIS.chat abgleichen“: loads the list afresh and takes over what is missing, without
+    // opening it; a chat in the trash here is not taken over again.
+    let out = engine.call("remote.sync", json!({})).unwrap();
+    assert_eq!((out["on_server"].as_u64(), out["imported"].as_u64(), out["left"].as_u64()), (Some(2), Some(1), Some(0)), "{out}");
+    let s = engine.state();
+    assert_eq!(s.current.as_deref(), Some("r1"), "the open chat stays open");
+    assert_eq!(s.conversation("r2").unwrap().title, "Zweiter Chat");
+    let r2: Vec<String> = engine.ctx().store(|st| st.messages("r2")).unwrap().into_iter().map(|m| m.content).collect();
+    assert_eq!(r2, ["Zweite Frage", "Zweite Antwort"]);
+    let r1: Vec<String> = engine.ctx().store(|st| st.messages("r1")).unwrap().into_iter().map(|m| m.content).collect();
+    assert_eq!(r1, ["Hallo AIS", "Hallo zurück"], "the first chat keeps its messages");
+    engine.call("chat.delete", json!({"id": "r2"})).unwrap();
+    assert_eq!(engine.call("remote.sync", json!({"backend": "ais-chat"})).unwrap()["imported"], 0, "the trash counts as here");
+    assert!(engine.call("remote.sync", json!({"backend": "nope"})).is_err());
+}
+
+/// Without an AIS.chat service there is nothing to sync with, and other services have no history.
+#[test]
+fn remote_sync_needs_a_service_with_history() {
+    let (engine, _) = engine_with_recording("Antwort");
+    let err = engine.call("remote.sync", json!({"backend": engine.state().selection.backend_id})).unwrap_err();
+    assert!(err.message.contains("keinen Verlauf"), "{}", err.message);
 }
 
 /// Read one HTTP request, head and body (by content-length).
@@ -759,7 +801,7 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                     } else if req.starts_with("GET / ") {
                         ("200 OK", "text/html", page("app", r#"3:{"usedBudget":10,"maxBudget":100,"models":[{"id":"m-uuid","name":"gpt","displayName":"GPT","priceMetadata":{"type":"text"}},{"id":"m-other","name":"other","displayName":"Anderes","priceMetadata":{"type":"text"}}]}"#))
                     } else if req.starts_with("GET /_next/static/chunks/app.js") {
-                        ("200 OK", "application/javascript", reference(0x7f, "sendChatMessageAction"))
+                        ("200 OK", "application/javascript", reference(0x7f, "sendChatMessageAction") + &reference(0x5d, "deleteConversationAction"))
                     } else if req.starts_with("GET /_next/static/chunks/assistants.js") {
                         ("200 OK", "application/javascript", reference(0x11, "getAssistantsByFilterAction") + &reference(0x66, "setFavoriteAction"))
                     } else if req.starts_with("GET /_next/static/chunks/characters.js") {
@@ -794,6 +836,13 @@ fn scripted_ais(engine: &Engine) -> (String, std::sync::Arc<std::sync::Mutex<Vec
                                 flight(r#"{"success":false,"error":{"name":"ForbiddenError","message":"Kein Zugriff"}}"#)
                             } else {
                                 flight(r#"{"success":true}"#)
+                            }
+                        } else if action == id(0x5d) {
+                            // deleteConversationAction({conversationId}) (#77).
+                            if req.contains("geschuetzt") {
+                                flight(r#"{"success":false,"error":{"name":"ForbiddenError","message":"Kein Zugriff"}}"#)
+                            } else {
+                                flight(r#"{"success":true,"value":null}"#)
                             }
                         } else if action == id(0x7f) {
                             static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -1085,11 +1134,15 @@ fn every_command_has_a_functional_test() {
         include_str!("nod_tests.rs"),
         include_str!("know_tests.rs"),
         include_str!("local_files_tests.rs"),
+        include_str!("accounts_tests.rs"),
         include_str!("ext/tests.rs"),
         include_str!("ext/plugin_tests.rs"),
         include_str!("apps_tests.rs"),
+        include_str!("archive_tests.rs"),
         include_str!("chat_import.rs")
-    );
+    )
+    // A Windows checkout may mix CRLF and LF files; the end of the hunt is found by "\n}\n".
+    .replace("\r\n", "\n");
     // The panic hunt touches every command; count only calls outside it.
     let hunt_start = src.find("fn panic_hunt_every_command_with_hostile_params").unwrap_or(0);
     let hunt_end = src[hunt_start..].find("\n}\n").map(|e| hunt_start + e).unwrap_or(hunt_start);
@@ -1610,6 +1663,104 @@ fn links_in_answers_are_checked() {
     assert!(engine.wait_for(Duration::from_secs(15), |s| {
         s.messages.iter().any(|x| x.id == id && x.activity.iter().any(|a| a.label == crate::LINK_CHECK && a.links.iter().any(|l| l.failed)))
     }));
+}
+
+/// „Bereitstellen“ (#60): each kind of artifact offers exactly its files, and every one of them is
+/// an `artifact.export` that works.
+#[test]
+fn provide_offers_the_files_of_each_kind_and_each_one_exports() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let id_of = |v: Value| v["id"].as_str().unwrap().to_string();
+    let kinds = [
+        ("Dokument", id_of(engine.call("artifact.create", json!({"kind": "document", "content": "# Elternbrief\n\nWandertag"})).unwrap()), vec![
+            ("docx", None),
+            ("pdf", None),
+            ("markdown", None),
+        ]),
+        ("Whiteboard", id_of(engine.call("artifact.create", json!({"kind": "board", "content": "# Wald\n- Bäume"})).unwrap()), vec![("png", None), ("pdf", None)]),
+        (
+            "Lern-App",
+            id_of(engine.call("learning_app.create", json!({"html": "<!doctype html><html><head><title>Brüche</title></head><body>1/2</body></html>"})).unwrap()),
+            vec![("html", None)],
+        ),
+        (
+            "Arbeitsblatt",
+            id_of(
+                engine
+                    .call(
+                        "worksheet.create",
+                        json!({"worksheet": {"title": "Photosynthese", "tasks": [{"type": "true_false", "prompt": "Pflanzen geben Sauerstoff ab.", "answer": true}]}}),
+                    )
+                    .unwrap(),
+            ),
+            vec![("pdf", Some("arbeitsblatt")), ("pdf", Some("loesung")), ("docx", Some("arbeitsblatt")), ("docx", Some("loesung"))],
+        ),
+        (
+            "H5P",
+            id_of(
+                engine
+                    .call("h5p.create", json!({"h5p": {"format": "aiscraft-h5p", "version": 1, "title": "Igel", "tasks": [{"type": "true_false", "prompt": "Igel schlafen im Winter.", "answer": true}]}}))
+                    .unwrap(),
+            ),
+            vec![("h5p", None)],
+        ),
+    ];
+    for (kind, id, want) in kinds {
+        let paths = engine.call("artifact.export_paths", json!({"id": id})).unwrap();
+        let got: Vec<(String, Option<String>)> =
+            paths.as_array().unwrap().iter().map(|p| (p["format"].as_str().unwrap().to_string(), p["variant"].as_str().map(str::to_string))).collect();
+        let want: Vec<(String, Option<String>)> = want.into_iter().map(|(f, v)| (f.to_string(), v.map(str::to_string))).collect();
+        assert_eq!(got, want, "{kind}: the files to provide");
+        for p in paths.as_array().unwrap() {
+            assert!(!p["label"].as_str().unwrap().is_empty() && !p["hint"].as_str().unwrap().is_empty(), "{kind}: {p}");
+            let out = engine.call("artifact.export", json!({"id": id, "format": p["format"], "variant": p["variant"]})).unwrap();
+            assert!(out.get("text").or(out.get("base64")).is_some(), "{kind} {p}: exported {out}");
+        }
+    }
+    assert_eq!(engine.call("artifact.export_paths", json!({"id": "gibt-es-nicht"})).unwrap_err().kind, aiscraft_core::ErrorKind::NotFound);
+}
+
+/// „Bild (PNG)“ (#60): a whiteboard is saved as the picture it is, a real PNG with something on
+/// it; a crowded board stays within the size cap; an empty board and other kinds say why not.
+#[test]
+fn a_whiteboard_exports_as_a_png_picture() {
+    use base64::Engine as _;
+    use craft_image_codecs::{ChannelLayout, DecodeOptions, SampleType};
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let decode = |out: &Value| {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(out["base64"].as_str().unwrap()).unwrap();
+        assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "a PNG file");
+        let img = craft_image_codecs::decode_with(&bytes, &DecodeOptions::default()).unwrap().convert(ChannelLayout::Rgb, SampleType::U8);
+        (img.width(), img.height(), img.data().to_vec())
+    };
+    let id =
+        engine.call("artifact.create", json!({"kind": "board", "content": "# Wald\n- Bäume\n- Tiere\n- Pilze"})).unwrap()["id"].as_str().unwrap().to_string();
+    let (w, h, rgb) = decode(&engine.call("artifact.export", json!({"id": id, "format": "png"})).unwrap());
+    assert!(w > 100 && h > 100 && w <= aiscraft_board::MAX_IMAGE_EDGE && h <= aiscraft_board::MAX_IMAGE_EDGE, "{w}x{h}");
+    assert_eq!(rgb.len(), (w * h * 3) as usize);
+    assert!(rgb.as_chunks::<3>().0.iter().any(|p| p.iter().any(|&v| v < 200)), "not all white");
+    assert_eq!(rgb.get(..3), Some(&[255, 255, 255][..]), "white background in the corner");
+
+    // Written to a file, like the share dialog does.
+    let dir = std::env::temp_dir().join(format!("aiscraft-png-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Wald.png");
+    engine.call("artifact.export", json!({"id": id, "format": "png", "path": path.display().to_string()})).unwrap();
+    assert!(std::fs::read(&path).unwrap().starts_with(b"\x89PNG"));
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Many cards: still within the cap.
+    let outline: String = std::iter::once("# Viele".to_string()).chain((0..1500).map(|i| format!("- Punkt {i}"))).collect::<Vec<_>>().join("\n");
+    engine.call("artifact.board_add", json!({"id": id, "outline": outline})).unwrap();
+    let (w, h, _) = decode(&engine.call("artifact.export", json!({"id": id, "format": "png"})).unwrap());
+    assert!(w <= aiscraft_board::MAX_IMAGE_EDGE && h <= aiscraft_board::MAX_IMAGE_EDGE, "{w}x{h}");
+
+    let empty = engine.call("artifact.create", json!({"kind": "board"})).unwrap()["id"].as_str().unwrap().to_string();
+    let e = engine.call("artifact.export", json!({"id": empty, "format": "png"})).unwrap_err();
+    assert!(e.message.contains("Whiteboard ist leer"), "{}", e.message);
+    let doc = engine.call("artifact.create", json!({"kind": "document", "content": "# Brief"})).unwrap()["id"].as_str().unwrap().to_string();
+    let e = engine.call("artifact.export", json!({"id": doc, "format": "png"})).unwrap_err();
+    assert!(e.message.contains("nur ein Whiteboard"), "{}", e.message);
 }
 
 /// The collab plug-in without a relay: present, but nothing is shared and nothing connects.
@@ -2363,5 +2514,96 @@ fn vertex_signs_in_with_a_key_file_and_finds_its_models() {
     first.call("backend.login", json!({"id": id, "key_file": key})).unwrap();
     assert!(matches!(first.state().backend(&id).unwrap().status, crate::BackendStatus::Ready { .. }));
     drop((first, second));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Contents in their own window (#75): `artifact.detach` lifts a document out of the panel, a
+/// second call only brings its one window to the front, learning apps stay in the preview window,
+/// `artifact.attach` puts it back into the panel while its chat is open and leaves it saved
+/// otherwise, and `artifact.window` remembers the place across a restart.
+#[test]
+fn detached_windows_one_per_content_and_back_into_the_panel() {
+    let dir = std::env::temp_dir().join(format!("aiscraft-windows-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let open = || Engine::open(Options { data_dir: Some(dir.clone()), secrets: Some(crate::Secrets::memory()) }).unwrap();
+    let engine = open();
+    let chat = "chat-a".to_string();
+    engine.ctx().update(|s| s.current = Some(chat.clone()));
+    let doc = engine.call("artifact.create", json!({"kind": "document", "content": "# Plan\n\nText", "conversation": chat})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(engine.state().open_artifact.as_deref(), Some(doc.as_str()), "opens in the panel");
+
+    // Lifted out: the panel closes, one window.
+    let out = engine.call("artifact.detach", json!({"id": doc})).unwrap();
+    assert_eq!(out["already"], false);
+    let s = engine.state();
+    assert_eq!(s.open_artifact, None, "the panel closes");
+    assert_eq!(s.detached.len(), 1);
+    assert_eq!((s.detached[0].id.as_str(), s.detached[0].focus, s.detached[0].place), (doc.as_str(), 0, None));
+    // A second click (detach again, or open from the sidebar) brings the same window forward.
+    assert_eq!(engine.call("artifact.detach", json!({"id": doc})).unwrap()["already"], true);
+    engine.call("artifact.open", json!({"id": doc})).unwrap();
+    let s = engine.state();
+    assert_eq!(s.detached.len(), 1, "one window per content");
+    assert_eq!(s.detached[0].focus, 2, "each call asks the window to the front");
+    assert_eq!(s.open_artifact, None, "not also in the panel");
+
+    // A whiteboard from the palette: no id, the one in the panel; then presented and back.
+    let board = engine.call("artifact.create", json!({"kind": "board", "conversation": chat})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("artifact.detach", json!({})).unwrap();
+    assert_eq!(engine.state().detached.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), [doc.as_str(), board.as_str()], "several windows");
+    engine.call("artifact.detach", json!({"id": board, "present": true})).unwrap();
+    assert!(engine.state().detached[1].presenting, "presentation on");
+    engine.call("artifact.detach", json!({"id": board, "present": false})).unwrap();
+    assert!(!engine.state().detached[1].presenting, "Esc ends it");
+    assert!(engine.call("artifact.detach", json!({"id": doc, "present": true})).is_err(), "only whiteboards are presented");
+
+    // Learning apps stay in the preview window; unknown ids and nothing open are refused.
+    let app =
+        engine.call("learning_app.create", json!({"html": "<!doctype html><html><head><title>Quiz</title></head><body>Hallo</body></html>"})).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    let err = engine.call("artifact.detach", json!({"id": app})).unwrap_err();
+    assert!(err.message.contains("Vorschaufenster"), "{}", err.message);
+    assert!(engine.call("artifact.detach", json!({"id": "nope"})).is_err());
+    engine.call("artifact.close", json!({})).unwrap();
+    assert!(engine.call("artifact.detach", json!({})).is_err(), "nothing open, nothing to lift out");
+
+    // The place of the window, kept for the next time.
+    engine.call("artifact.window", json!({"id": doc, "x": 1990.0, "y": 40.0, "width": 900.0, "height": 700.0})).unwrap();
+    assert_eq!(engine.state().detached[0].place.map(|p| (p.x, p.width)), Some((1990.0, 900.0)));
+    assert!(engine.call("artifact.window", json!({"id": doc, "x": "links"})).is_err());
+    assert!(engine.call("artifact.window", json!({"id": "nope", "x": 0, "y": 0, "width": 1, "height": 1})).is_err());
+
+    // Back: the chat is open, so the document returns to the panel.
+    let back = engine.call("artifact.attach", json!({"id": doc})).unwrap();
+    assert_eq!(back["in_panel"], true);
+    let s = engine.state();
+    assert_eq!(s.open_artifact.as_deref(), Some(doc.as_str()));
+    assert_eq!(s.detached.len(), 1, "the whiteboard's window stays");
+    assert!(engine.call("artifact.attach", json!({"id": doc})).is_err(), "not in a window any more");
+    // The chat is closed: the whiteboard is simply kept.
+    engine.ctx().update(|s| s.current = None);
+    engine.call("artifact.close", json!({})).unwrap();
+    assert_eq!(engine.call("artifact.attach", json!({})).unwrap()["in_panel"], false, "without an id: the newest window");
+    assert_eq!(engine.state().open_artifact, None);
+    assert!(engine.state().detached.is_empty());
+    assert!(engine.call("artifact.get", json!({"id": board})).is_ok(), "still saved");
+
+    // Deleting closes the window.
+    engine.call("artifact.detach", json!({"id": board})).unwrap();
+    engine.call("artifact.delete", json!({"id": board})).unwrap();
+    assert!(engine.state().detached.is_empty());
+
+    // After a restart the window opens where it stood.
+    drop(engine);
+    let engine = open();
+    engine.call("artifact.detach", json!({"id": doc})).unwrap();
+    let place = engine.state().detached[0].place.unwrap();
+    assert_eq!((place.x, place.y, place.width, place.height), (1990.0, 40.0, 900.0, 700.0));
+    drop(engine);
     let _ = std::fs::remove_dir_all(dir);
 }

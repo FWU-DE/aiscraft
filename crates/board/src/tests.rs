@@ -328,6 +328,87 @@ fn outline_parsing() {
     assert!(parse_outline(&wide).count() <= 301);
 }
 
+/// Texts of the children of `node`.
+fn kids(node: &crate::OutlineNode) -> Vec<&str> {
+    node.children.iter().map(|c| c.text.as_str()).collect()
+}
+
+const QUADRATIC: &str = "Quadratische Gleichungen\n  Formen\n    Normalform\n    Scheitelpunktform\n  Lösen\n    Mitternachtsformel\n";
+
+#[test]
+fn indented_outline_without_bullets_keeps_its_levels() {
+    // Spaces (#78).
+    let root = parse_outline(QUADRATIC);
+    assert_eq!(root.text, "Quadratische Gleichungen");
+    assert_eq!(kids(&root), ["Formen", "Lösen"]);
+    assert_eq!(kids(&root.children[0]), ["Normalform", "Scheitelpunktform"]);
+    assert_eq!(kids(&root.children[1]), ["Mitternachtsformel"]);
+
+    // Tabs.
+    let tabs = parse_outline("Wetter\n\tRegen\n\t\tNiesel\n\tSonne");
+    assert_eq!(tabs.text, "Wetter");
+    assert_eq!(kids(&tabs), ["Regen", "Sonne"]);
+    assert_eq!(kids(&tabs.children[0]), ["Niesel"]);
+
+    // Uneven depths: 3 and 5 spaces, then back to 2.
+    let uneven = parse_outline("Tiere\n   Säuger\n        Hund\n     Katze\n  Vögel\n      Amsel");
+    assert_eq!(uneven.text, "Tiere");
+    assert_eq!(kids(&uneven), ["Säuger", "Vögel"]);
+    assert_eq!(kids(&uneven.children[0]), ["Hund", "Katze"]);
+    assert_eq!(kids(&uneven.children[1]), ["Amsel"]);
+
+    // Several top lines without a centre of their own: „Übersicht“ holds them.
+    let two = parse_outline("A\n  A1\nB\n  B1");
+    assert_eq!(two.text, "Übersicht");
+    assert_eq!(kids(&two), ["A", "B"]);
+    assert_eq!(kids(&two.children[1]), ["B1"]);
+}
+
+#[test]
+fn outline_mixed_with_bullets_and_mermaid_mind_maps() {
+    // Some lines with a bullet, some without: everything by indentation.
+    let mixed = parse_outline("Bruchrechnung\n  - Kürzen\n      Teiler suchen\n  Erweitern\n    - gleicher Faktor");
+    assert_eq!(mixed.text, "Bruchrechnung");
+    assert_eq!(kids(&mixed), ["Kürzen", "Erweitern"]);
+    assert_eq!(kids(&mixed.children[0]), ["Teiler suchen"]);
+    assert_eq!(kids(&mixed.children[1]), ["gleicher Faktor"]);
+
+    // A title line, then a list on the same indentation.
+    let titled = parse_outline("Thema Wasser\n- Kreislauf\n  - Verdunstung\n- Nutzung");
+    assert_eq!(titled.text, "Thema Wasser");
+    assert_eq!(kids(&titled), ["Kreislauf", "Nutzung"]);
+    assert_eq!(kids(&titled.children[0]), ["Verdunstung"]);
+
+    // Mermaid mindmap, with and without its header line, shapes and icons removed.
+    let body = "  root((Quadratische Gleichungen))\n    Formen\n      [Normalform]\n      id(Scheitelpunktform)\n      ::icon(fa fa-book)\n    Lösen\n      Mitternachtsformel";
+    for text in [body.to_string(), format!("mindmap\n{body}")] {
+        let root = parse_outline(&text);
+        assert_eq!(root.text, "Quadratische Gleichungen");
+        assert_eq!(kids(&root), ["Formen", "Lösen"]);
+        assert_eq!(kids(&root.children[0]), ["Normalform", "Scheitelpunktform"]);
+    }
+    // Brackets in ordinary text stay.
+    assert_eq!(parse_outline("Lösen (quadratisch)\n  x").text, "Lösen (quadratisch)");
+
+    // Flat text and prose under headings stay as before.
+    assert_eq!(kids(&parse_outline("Erste Zeile\nZweite Zeile\nDritte")), ["Zweite Zeile", "Dritte"]);
+    let prose = parse_outline("# Titel\nEin Satz.\n  noch einer\n## Teil\n- Punkt");
+    assert_eq!(prose.text, "Titel");
+    assert_eq!(kids(&prose), ["Teil"]);
+
+    // Limits hold.
+    let deep: String = (0..60).map(|i| format!("{}x{i}\n", "  ".repeat(i))).collect();
+    let mut depth = 0;
+    let mut node = parse_outline(&deep);
+    while let Some(child) = node.children.first().cloned() {
+        node = child;
+        depth += 1;
+    }
+    assert!(depth <= 6, "{depth}");
+    let wide: String = (0..5000).map(|i| format!("{}{i}\n", if i % 2 == 0 { "" } else { "  " })).collect();
+    assert!(parse_outline(&wide).count() <= 301);
+}
+
 fn overlaps(a: &Element, b: &Element) -> bool {
     a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 }
@@ -906,4 +987,218 @@ fn help_overlay_opens_with_f1_and_closes_with_escape() {
     assert!(h.state().view.help);
     key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
     assert!(!h.state().view.help);
+}
+
+// ----- zoom controls (#76) -------------------------------------------------------------------
+
+#[test]
+fn zoom_steps_keep_the_centre_and_hold_the_limits() {
+    use crate::view::{MAX_ZOOM, MIN_ZOOM};
+    let c = egui::pos2(120.0, -40.0);
+    let mut cam = crate::Camera { center: c, zoom: 1.0 };
+    cam.zoom_in();
+    assert_eq!((cam.zoom, cam.center), (1.25, c));
+    cam.zoom_out();
+    cam.zoom_out();
+    assert_eq!((cam.zoom, cam.center), (0.75, c));
+    // Between two steps: to the next one in each direction.
+    cam.zoom = 0.6;
+    cam.zoom_in();
+    assert_eq!(cam.zoom, 0.75);
+    cam.zoom = 0.6;
+    cam.zoom_out();
+    assert_eq!(cam.zoom, 0.5);
+    // The limits hold.
+    for _ in 0..40 {
+        cam.zoom_in();
+    }
+    assert_eq!((cam.zoom, cam.center), (MAX_ZOOM, c));
+    for _ in 0..40 {
+        cam.zoom_out();
+    }
+    assert_eq!((cam.zoom, cam.center), (MIN_ZOOM, c));
+    cam.set_zoom(f32::NAN);
+    assert_eq!(cam.zoom, MIN_ZOOM);
+    cam.set_zoom(100.0);
+    assert_eq!(cam.zoom, MAX_ZOOM);
+    cam.set_zoom(-3.0);
+    assert_eq!(cam.zoom, MIN_ZOOM);
+}
+
+use egui_kittest::kittest::{NodeT, Queryable};
+
+fn click_label(h: &mut H, label: &str) {
+    let at = h.get_by_label(label).rect().center();
+    click(h, at);
+}
+
+fn has_label(h: &H, label: &str) -> bool {
+    h.query_by_label(label).is_some()
+}
+
+#[test]
+fn zoom_bar_steps_shows_the_level_and_opens_its_menu() {
+    let mut b = Board::new();
+    b.add(note(0.0, 0.0, "A"));
+    let mut h = harness(b);
+    h.run_steps(2);
+    let c = egui::pos2(40.0, 30.0);
+    h.state_mut().view.camera = crate::Camera { center: c, zoom: 1.0 };
+    h.run_steps(1);
+    assert!(has_label(&h, "Zoomstufe 100 %"));
+    // „+“ and „−“: fixed steps around the centre of the view.
+    click_label(&mut h, "Hineinzoomen (Strg++)");
+    assert_eq!(h.state().view.camera, crate::Camera { center: c, zoom: 1.25 });
+    assert!(has_label(&h, "Zoomstufe 125 %"), "the display follows the click");
+    click_label(&mut h, "Herauszoomen (Strg+−)");
+    click_label(&mut h, "Herauszoomen (Strg+−)");
+    assert_eq!(h.state().view.camera, crate::Camera { center: c, zoom: 0.75 });
+    assert!(has_label(&h, "Zoomstufe 75 %"));
+    // The menu opens on the percentage and closes with Esc, a second click or a click on the canvas.
+    assert!(!has_label(&h, "Alles zeigen"));
+    click_label(&mut h, "Zoomstufe 75 %");
+    assert!(h.state().view.zoom_menu);
+    assert!(has_label(&h, "Alles zeigen") && has_label(&h, "Herauszoomen"));
+    key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(!h.state().view.zoom_menu);
+    assert!(!has_label(&h, "Alles zeigen"));
+    click_label(&mut h, "Zoomstufe 75 %");
+    assert!(h.state().view.zoom_menu);
+    click_label(&mut h, "Zoomstufe 75 %");
+    assert!(!h.state().view.zoom_menu);
+    // A click on the canvas only closes the menu: the note tool creates nothing.
+    h.state_mut().view.tool = crate::Tool::Note;
+    click_label(&mut h, "Zoomstufe 75 %");
+    click(&mut h, egui::pos2(300.0, 300.0));
+    assert!(!h.state().view.zoom_menu);
+    assert_eq!(h.state().board.elements().len(), 1);
+    h.state_mut().view.tool = crate::Tool::Select;
+    // Entries: fixed levels and steps, then the menu closes.
+    for (entry, zoom) in [("200 %", 2.0), ("50 %", 0.5), ("100 %", 1.0), ("Hineinzoomen", 1.25), ("Herauszoomen", 1.0)] {
+        let label = format!("Zoomstufe {:.0} %", h.state().view.camera.zoom * 100.0);
+        click_label(&mut h, &label);
+        click_label(&mut h, entry);
+        assert_eq!(h.state().view.camera, crate::Camera { center: c, zoom }, "{entry}");
+        assert!(!h.state().view.zoom_menu, "{entry}");
+    }
+}
+
+#[test]
+fn zoom_limits_hold_at_the_buttons_and_keys() {
+    let mut b = Board::new();
+    b.add(note(0.0, 0.0, "A"));
+    let mut h = harness(b);
+    h.run_steps(2);
+    h.event(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
+    h.step();
+    let c = h.state().view.camera.center;
+    for _ in 0..20 {
+        key(&mut h, egui::Key::Plus, egui::Modifiers::COMMAND);
+    }
+    assert_eq!(h.state().view.camera, crate::Camera { center: c, zoom: 8.0 });
+    assert!(has_label(&h, "Zoomstufe 800 %"));
+    // „+“ is disabled at the limit: a click changes nothing.
+    click_label(&mut h, "Hineinzoomen (Strg++)");
+    assert_eq!(h.state().view.camera.zoom, 8.0);
+    h.event(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
+    h.step();
+    key(&mut h, egui::Key::Minus, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().view.camera.zoom, 6.0);
+    // Strg+= (US keyboards) zooms in as well.
+    key(&mut h, egui::Key::Equals, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().view.camera.zoom, 8.0);
+    for _ in 0..20 {
+        click_label(&mut h, "Herauszoomen (Strg+−)");
+    }
+    assert_eq!(h.state().view.camera, crate::Camera { center: c, zoom: 0.05 });
+    assert!(has_label(&h, "Zoomstufe 5 %"));
+    h.event(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
+    h.step();
+    key(&mut h, egui::Key::Num0, egui::Modifiers::COMMAND);
+    assert_eq!(h.state().view.camera, crate::Camera { center: c, zoom: 1.0 });
+}
+
+#[test]
+fn show_all_equals_zoom_to_fit() {
+    // Large enough that the automatic fit is not held at the readable minimum.
+    let size = egui::vec2(1400.0, 1000.0);
+    let fitted = {
+        let mut view = crate::ViewState::default();
+        view.zoom_to_fit();
+        let mut h = harness_sized(Board::from_outline(OUTLINE_3X3), view, size);
+        h.run_steps(3);
+        h.state().view.camera
+    };
+    assert!(fitted.zoom > crate::view::READABLE_ZOOM, "{fitted:?}");
+    let mut h = harness_sized(Board::from_outline(OUTLINE_3X3), crate::ViewState::default(), size);
+    h.run_steps(3);
+    h.state_mut().view.camera = crate::Camera { center: egui::pos2(3000.0, -900.0), zoom: 3.0 };
+    h.run_steps(1);
+    click_label(&mut h, "Zoomstufe 300 %");
+    click_label(&mut h, "Alles zeigen");
+    let cam = h.state().view.camera;
+    assert!((cam.zoom - fitted.zoom).abs() < 1e-4 && (cam.center - fitted.center).length() < 1e-2, "{cam:?} vs {fitted:?}");
+    // Umschalt+1 does the same.
+    h.state_mut().view.camera = crate::Camera { center: egui::pos2(3000.0, -900.0), zoom: 3.0 };
+    h.event(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
+    h.step();
+    key(&mut h, egui::Key::Num1, egui::Modifiers::SHIFT);
+    assert_eq!(h.state().view.camera, cam);
+}
+
+#[test]
+fn show_selection_shows_the_selection_fully() {
+    let mut b = Board::new();
+    b.add(note(0.0, 0.0, "hier"));
+    let far = b.add(note(4000.0, 2500.0, "weit weg"));
+    let mut big = Element::new(Kind::Rect, 4300.0, 2400.0);
+    big.w = 900.0;
+    big.h = 600.0;
+    let wide = b.add(big);
+    let mut h = harness(b);
+    h.run_steps(3);
+    // Without a selection the entry is disabled.
+    h.state_mut().view.camera = crate::Camera { center: egui::Pos2::ZERO, zoom: 1.0 };
+    h.run_steps(1);
+    click_label(&mut h, "Zoomstufe 100 %");
+    assert!(h.get_by_label("Auswahl zeigen").accesskit_node().is_disabled());
+    key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+    let visible = |h: &H, id: &str| {
+        let st = h.state();
+        let e = st.board.element(id).unwrap();
+        let world = egui::Rect::from_min_size(egui::pos2(e.x as f32, e.y as f32), egui::vec2(e.w as f32, e.h as f32));
+        st.rect.contains_rect(st.view.camera.rect_to_screen(st.rect, world))
+    };
+    // One small note: centred, zoomed in up to 200 %.
+    h.state_mut().view.selection = vec![far.clone()];
+    h.run_steps(1);
+    assert!(!visible(&h, &far));
+    click_label(&mut h, "Zoomstufe 100 %");
+    click_label(&mut h, "Auswahl zeigen");
+    assert!(visible(&h, &far));
+    assert_eq!(h.state().view.camera.zoom, 2.0);
+    // Two elements, one larger than the view at 100 %: both fully visible (Umschalt+2).
+    h.state_mut().view.selection = vec![far.clone(), wide.clone()];
+    h.state_mut().view.camera = crate::Camera { center: egui::Pos2::ZERO, zoom: 1.0 };
+    h.event(egui::Event::PointerMoved(egui::pos2(500.0, 350.0)));
+    h.step();
+    key(&mut h, egui::Key::Num2, egui::Modifiers::SHIFT);
+    assert!(visible(&h, &far) && visible(&h, &wide), "{:?}", h.state().view.camera);
+    assert!(h.state().view.camera.zoom < 1.0);
+}
+
+#[test]
+fn zoom_bar_stays_clear_of_the_colour_bar_and_inside_the_canvas() {
+    for w in [300.0, 420.0, 640.0, 1000.0] {
+        let mut h = harness_sized(Board::new(), crate::ViewState::default(), egui::vec2(w, 600.0));
+        h.run_steps(2);
+        let rect = h.state().rect;
+        let (colors, zoom) = crate::view::bottom_bars(rect);
+        assert!(!colors.intersects(zoom), "{w}: {colors:?} {zoom:?}");
+        assert!(rect.contains_rect(zoom), "{w}: {zoom:?} in {rect:?}");
+        for label in ["Herauszoomen (Strg+−)", "Zoomstufe 100 %", "Hineinzoomen (Strg++)"] {
+            let r = h.get_by_label(label).rect();
+            assert!(zoom.contains_rect(r) && r.height() >= 32.0 && r.width() >= 32.0, "{w}: {label} {r:?}");
+        }
+    }
 }

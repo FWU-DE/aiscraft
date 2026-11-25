@@ -13,7 +13,8 @@ use crate::theme::{self, OmarchyTheme, ThemeWatcher, Tokens};
 pub enum UiRequest {
     /// Save a PNG of the window.
     Screenshot { path: PathBuf, reply: std::sync::mpsc::Sender<Result<Value, String>> },
-    /// Open a dialog by name: settings, memory, login, add_backend, palette, welcome, look.
+    /// Open a dialog by name: settings, memory, login, add_backend, palette, welcome, look, share
+    /// (the open artifact's), join, privacy_setup[:step].
     Show { what: String, reply: std::sync::mpsc::Sender<Result<Value, String>> },
 }
 
@@ -99,6 +100,12 @@ pub struct AisCraftApp {
     pub(crate) personas_requested: std::collections::HashSet<String>,
     /// The "Entdecken" page, when open (replaces the chat column).
     pub(crate) explore: Option<crate::explore::ExploreView>,
+    /// The archive or trash page, when open (replaces the chat column, #77).
+    pub(crate) archive: Option<crate::archive_view::ArchiveView>,
+    /// Chats picked in the sidebar with Strg or Umschalt (#77), in the order picked.
+    pub(crate) selected_chats: Vec<String>,
+    /// Where a range picked with Umschalt starts.
+    pub(crate) select_anchor: Option<String>,
     /// Persona pictures asked for already, by picture key.
     pub(crate) pictures_requested: std::collections::HashSet<String>,
     /// Persona pictures asked for that have not arrived yet, with egui's input time of the ask.
@@ -109,12 +116,18 @@ pub struct AisCraftApp {
     pub(crate) decode_budget: usize,
     last_current: Option<String>,
     pub(crate) artifact: Option<crate::artifact_panel::ArtifactView>,
-    /// Send the open artifact as context with the next message.
-    pub(crate) attach_artifact: bool,
-    /// Teilen: code or link to join, relay address and key being typed.
-    pub(crate) collab_join: String,
+    /// Contents in their own window (#75): their views and what the windows did.
+    pub(crate) windows: crate::windows::Windows,
+    /// The window being drawn right now (`None`: the panel next to the chat).
+    pub(crate) in_window: Option<String>,
+    /// The artifact („Im Chat“, in the panel or its own window) sent as context with the next message.
+    pub(crate) attach_artifact: Option<String>,
+    /// Settings › Dienste › Zusammenarbeit: relay address and key being typed.
     pub(crate) collab_url: String,
     pub(crate) collab_key: String,
+    /// Settings › Konnektoren › Apps verbinden (#26): the search and the category shown.
+    pub(crate) catalog_query: String,
+    pub(crate) catalog_category: String,
     /// The handbook window, when open.
     pub(crate) manual: Option<crate::manual::ManualView>,
     /// Text from a finished dictation, picked up by the composer.
@@ -202,6 +215,20 @@ impl AisCraftApp {
         self.panel_layout
     }
 
+    /// A content's own window drawn as the whole screen ([`Self::show_as_window`]): the window
+    /// is the panel, and the panel must stay as wide as the window.
+    pub(crate) fn set_window_layout(&mut self, window: egui::Rect, content: egui::Rect) {
+        self.panel_layout = PanelLayout {
+            window,
+            sidebar: None,
+            sidebar_default: 0.0,
+            artifact: Some(content),
+            artifact_default: window.width(),
+            main: content,
+            overlay: self.dialog.is_some() || self.palette.is_some(),
+        };
+    }
+
     pub fn new(cc: &eframe::CreationContext<'_>, engine: Engine, control: Option<std::sync::mpsc::Receiver<UiRequest>>) -> Self {
         theme::install_fonts(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
@@ -261,16 +288,22 @@ impl AisCraftApp {
             remote_open: false,
             personas_requested: Default::default(),
             explore: None,
+            archive: None,
+            selected_chats: Vec::new(),
+            select_anchor: None,
             pictures_requested: Default::default(),
             pictures_pending: Default::default(),
             persona_textures: Default::default(),
             decode_budget: 0,
             last_current: None,
             artifact: None,
-            attach_artifact: false,
-            collab_join: String::new(),
+            windows: Default::default(),
+            in_window: None,
+            attach_artifact: None,
             collab_url: String::new(),
             collab_key: String::new(),
+            catalog_query: String::new(),
+            catalog_category: String::new(),
             dictated: Default::default(),
             manual: None,
             images: Default::default(),
@@ -342,6 +375,9 @@ impl AisCraftApp {
             self.tokens = theme::resolve(&key.0, system_dark, key.2 == "off", &self.omarchy);
             self.register_code_theme();
             self.theme_key = key;
+            // Open connector views (#74) follow the look.
+            let (theme, styles) = crate::views::look(&self.tokens);
+            self.run("view.context", json!({"theme": theme, "styles": styles}));
         }
         self.tokens.apply(ctx, self.state.settings.zoom);
     }
@@ -367,7 +403,7 @@ impl AisCraftApp {
         if modal_open {
             return;
         }
-        if self.explore_keys(ctx) {
+        if self.archive_keys(ctx) || self.explore_keys(ctx) {
             return;
         }
         if pressed(sc(Modifiers::COMMAND, Key::N)) {
@@ -448,6 +484,7 @@ impl AisCraftApp {
 
     pub(crate) fn new_chat(&mut self) {
         self.explore = None;
+        self.archive = None;
         self.run("chat.new", json!({}));
         self.composer.clear();
         self.pending_files.clear();
@@ -460,6 +497,7 @@ impl AisCraftApp {
     /// Back to the start page.
     pub(crate) fn close_chat(&mut self) {
         self.explore = None;
+        self.archive = None;
         self.run("chat.close", json!({}));
         self.composer.clear();
         self.editing = None;
@@ -622,6 +660,12 @@ impl AisCraftApp {
                             self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Privacy, new_note: String::new() });
                             true
                         }
+                        // The setup of „Namen schützen“ (#73), "privacy_setup:<n>" at step n.
+                        w if w == "privacy_setup" || w.starts_with("privacy_setup:") => {
+                            let step = w.strip_prefix("privacy_setup:").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
+                            self.dialog = Some(self.privacy_setup(step, false));
+                            true
+                        }
                         "appearance" => {
                             self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Appearance, new_note: String::new() });
                             true
@@ -654,8 +698,24 @@ impl AisCraftApp {
                             self.palette = Some(Palette::default());
                             true
                         }
+                        // The share dialog of the open artifact (#60).
+                        "share" => match self.state.open_artifact.clone() {
+                            Some(id) => {
+                                self.dialog = Some(Dialog::Share { id, way: None });
+                                true
+                            }
+                            None => false,
+                        },
+                        "join" => {
+                            self.dialog = Some(Dialog::Join { code: String::new() });
+                            true
+                        }
                         "personas" => {
                             self.open_explore();
+                            true
+                        }
+                        "archive" | "trash" => {
+                            self.open_archive(what == "trash");
                             true
                         }
                         // "persona:<kind>:<id>": the page with one entry's details.
@@ -681,6 +741,8 @@ impl AisCraftApp {
                                 _ => false,
                             }
                         }
+                        // "app_connect:<entry>": setting up an app of the catalog (#26).
+                        w if w.starts_with("app_connect:") => self.open_connect_app(w.trim_start_matches("app_connect:")),
                         // "research", "connector_insert", "template:<id>", "template_new", "project:<id>" (#32, #37, #53, #54).
                         w if self.show_know(w) => true,
                         "none" => {
@@ -706,14 +768,23 @@ fn save_png(path: &std::path::Path, img: &egui::ColorImage) -> Result<(), String
 }
 
 impl eframe::App for AisCraftApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.state = self.engine.state();
+        if let Some(id) = self.windows.as_window.clone() {
+            // A content's own window as the whole screen (tests; see `show_as_window`).
+            self.sync_theme(&ctx);
+            self.sync_windows();
+            self.window_frame(ui, &id);
+            self.dialogs(&ctx);
+            return;
+        }
         if self.state.current != self.last_current {
             self.last_current = self.state.current.clone();
             self.editing = None;
             self.focus_composer = true;
             self.explore = None;
+            self.archive = None;
         }
         self.control_requests(&ctx);
         self.quick_entry(&ctx);
@@ -756,7 +827,8 @@ impl eframe::App for AisCraftApp {
         }
 
         self.sync_artifact();
-        if self.state.open_artifact.is_some() {
+        self.sync_windows();
+        if let Some(open) = self.panel_artifact() {
             let w = ui.available_width();
             layout.artifact_default = (w * 0.46).clamp(380.0, 760.0);
             let panel = egui::Panel::right("artifact")
@@ -779,11 +851,9 @@ impl eframe::App for AisCraftApp {
                     if let Some(g) = &t.glass {
                         crate::backdrop::glass_edge(ui.painter(), ui.max_rect(), f32::from(t.r_panel), g.edge);
                     }
-                    self.artifact_panel(ui)
+                    self.artifact_view(ui, &open)
                 });
             layout.artifact = Some(panel.response.rect);
-        } else {
-            self.attach_artifact = false;
         }
 
         layout.main = egui::CentralPanel::default()
@@ -792,7 +862,9 @@ impl eframe::App for AisCraftApp {
                 if let Some(g) = &t.glass {
                     crate::backdrop::glass_edge(ui.painter(), ui.max_rect(), f32::from(t.r_panel), g.edge);
                 }
-                if self.explore.is_some() {
+                if self.archive.is_some() {
+                    self.archive_page(ui);
+                } else if self.explore.is_some() {
                     self.explore_page(ui);
                 } else {
                     self.conversation(ui);
@@ -808,6 +880,7 @@ impl eframe::App for AisCraftApp {
         self.palette_ui(&ctx);
         layout.overlay = self.dialog.is_some() || self.manual.is_some() || self.palette.is_some() || self.state.citation.is_some();
         self.panel_layout = layout;
+        self.artifact_windows(&ctx, frame);
 
         // While an answer streams, the engine requests repaints; spinners need a steady tick too.
         if !self.state.generating.is_empty() {

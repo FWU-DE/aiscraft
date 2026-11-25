@@ -348,4 +348,20 @@ mod unit {
         assert!(german("GitHub's request limit was reached").contains("Anfragelimit"));
         assert!(german("couldn't reach GitHub (dns)").contains("nicht erreichbar"));
     }
+
+    /// The portable zip (#58): `portable.txt` beside the program keeps the data beside it too,
+    /// in the folder craft-update uses for its own files.
+    #[test]
+    fn portable_txt_keeps_the_data_next_to_the_program() {
+        let dir = std::env::temp_dir().join(format!("aiscraft-portable-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.as_path().join("aiscraft.exe");
+        assert_eq!(crate::portable_data_dir(&exe), None);
+        crate::disk::write(&dir.as_path().join("portable.txt"), b"AIS.ChatCraft portable.").unwrap();
+        assert_eq!(crate::portable_data_dir(&exe), Some(dir.as_path().join("AIS.ChatCraftData").join("aiscraft")));
+        let paths = craft_update::Paths::for_exe(&APP, &exe).unwrap();
+        assert!(paths.data.starts_with(dir.as_path().join("AIS.ChatCraftData")), "{:?}", paths.data);
+        assert_eq!(crate::portable_data_dir(std::path::Path::new("")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

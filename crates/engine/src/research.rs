@@ -316,6 +316,8 @@ async fn with_own_search(c: &Ctx, id: &str, question: &str, flag: &AtomicBool) -
         kind: Default::default(),
         remote_id: None,
         temporary: false,
+        archived: false,
+        deleted_at: None,
     };
     c.store(|st| st.save_conversation(&conv))?;
     let cid = conv.id.clone();

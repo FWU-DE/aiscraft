@@ -143,7 +143,7 @@ fn when(v: &str) -> String {
 }
 
 /// Events and to-dos as a readable list, in file order.
-fn calendar(title: &str, bytes: &[u8]) -> String {
+pub(crate) fn calendar(title: &str, bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     let mut out = format!("# {title}\n");
     let mut item: Option<Vec<(String, String)>> = None;

@@ -17,10 +17,18 @@
 //! is delivered to the view as a `message` event. AIS.ChatCraft answers on the other end and
 //! applies its approval rules there. The network stays closed except for the domains given with
 //! `--connect` (requests) and `--resource` (scripts, styles, images, fonts), each checked again
-//! here: `https://host[:port]` or `https://*.host`, never `*`.
+//! here: `https://host[:port]` or `https://*.host`, never `*`. Lines `{"aiscraft/window": …}`
+//! from the app steer the window instead (the size a view asked for, within caps; the small
+//! window on top for the `pip` display mode) and never reach the view.
+// No console window next to the preview on Windows (#58); stdin/stdout stay usable, the app
+// talks to the preview through pipes it creates itself.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod h5p;
 
 use std::borrow::Cow;
 use std::io::{BufRead as _, Read as _, Write as _};
+use std::path::PathBuf;
 
 use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
@@ -98,33 +106,60 @@ fn view_csp(connect: &[String], resources: &[String]) -> String {
     )
 }
 
-/// A line from the app, as a JavaScript expression to hand to the view (parsed and written
-/// again, so nothing but JSON reaches the page).
-fn delivery(line: &str) -> Option<String> {
+/// Lines from the app that steer the window; never delivered to the view. Only the app writes
+/// to stdin, so a view cannot send them itself.
+const WINDOW_KEY: &str = "aiscraft/window";
+/// The window of a view stays within these sizes (logical pixels); the app caps them too.
+const MIN_SIZE: (f64, f64) = (240.0, 160.0);
+const MAX_SIZE: (f64, f64) = (1600.0, 1200.0);
+/// The normal window and the small one on top (`pip`).
+const NORMAL_SIZE: (f64, f64) = (1100.0, 800.0);
+const PIP_SIZE: (f64, f64) = (420.0, 320.0);
+
+#[derive(Debug, PartialEq)]
+enum Steer {
+    /// Resize to (width, height), within the caps.
+    Size(f64, f64),
+    /// `true`: small and on top; `false`: the normal window.
+    Pip(bool),
+}
+
+#[derive(Debug, PartialEq)]
+enum Incoming {
+    /// A JavaScript expression to hand to the view.
+    Deliver(String),
+    Window(Steer),
+}
+
+/// A line from the app: a window instruction, or a message for the view as a JavaScript
+/// expression (parsed and written again, so nothing but JSON reaches the page).
+fn incoming(line: &str) -> Option<Incoming> {
     if line.len() > MAX_MESSAGE {
         return None;
     }
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
-    v.is_object().then(|| format!("window.__aiscraftDeliver({v});"))
+    if let Some(w) = v.get(WINDOW_KEY) {
+        if let Some(mode) = w.get("mode").and_then(serde_json::Value::as_str) {
+            return match mode {
+                "pip" => Some(Incoming::Window(Steer::Pip(true))),
+                "fullscreen" => Some(Incoming::Window(Steer::Pip(false))),
+                _ => None,
+            };
+        }
+        let dim = |k: &str, min: f64, max: f64| w.get(k).and_then(serde_json::Value::as_f64).filter(|x| x.is_finite() && *x > 0.0).map(|x| x.clamp(min, max));
+        return Some(Incoming::Window(Steer::Size(dim("width", MIN_SIZE.0, MAX_SIZE.0)?, dim("height", MIN_SIZE.1, MAX_SIZE.1)?)));
+    }
+    v.is_object().then(|| Incoming::Deliver(format!("window.__aiscraftDeliver({v});")))
 }
 
 enum UserEvent {
     ParentGone,
     Deliver(String),
+    Window(Steer),
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let Some(file) = arg(&args, "--file") else { fail("--file <page.html> fehlt") };
-    let title = arg(&args, "--title").unwrap_or_else(|| "Lern-App".into());
-    let bridge = args.iter().any(|a| a == "--bridge");
-    let connect = all_args(&args, "--connect");
-    let resources = all_args(&args, "--resource");
-    if !connect.iter().all(|d| domain_ok(d, true)) || !resources.iter().all(|d| domain_ok(d, false)) {
-        fail("unzulässige Netzfreigabe");
-    }
-    let csp: String = if bridge { view_csp(&connect, &resources) } else { CSP.to_string() };
-    let page = match std::fs::File::open(&file) {
+fn read_page(file: &str) -> Vec<u8> {
+    match std::fs::File::open(file) {
         Ok(f) => {
             let mut buf = Vec::new();
             if f.take(MAX_PAGE + 1).read_to_end(&mut buf).is_err() || buf.len() as u64 > MAX_PAGE {
@@ -133,7 +168,32 @@ fn main() {
             buf
         }
         Err(e) => fail(&format!("{file}: {e}")),
+    }
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    // `--h5p <content dir> --player <player dir>`: H5P content in the H5P player (#62).
+    let h5p_dirs = arg(&args, "--h5p").zip(arg(&args, "--player")).map(|(c, p)| (PathBuf::from(c), PathBuf::from(p)));
+    if let Some((content, player)) = &h5p_dirs
+        && (!content.join("h5p.json").is_file() || !player.join("player").join("main.bundle.js").is_file())
+    {
+        fail("H5P-Inhalt oder H5P-Player fehlt");
+    }
+    let file = match (&h5p_dirs, arg(&args, "--file")) {
+        (Some(_), _) => String::new(),
+        (None, Some(f)) => f,
+        (None, None) => fail("--file <page.html> fehlt"),
     };
+    let title = arg(&args, "--title").unwrap_or_else(|| if h5p_dirs.is_some() { "H5P".into() } else { "Lern-App".into() });
+    let bridge = h5p_dirs.is_none() && args.iter().any(|a| a == "--bridge");
+    let connect = all_args(&args, "--connect");
+    let resources = all_args(&args, "--resource");
+    if !connect.iter().all(|d| domain_ok(d, true)) || !resources.iter().all(|d| domain_ok(d, false)) {
+        fail("unzulässige Netzfreigabe");
+    }
+    let csp: String = if bridge { view_csp(&connect, &resources) } else { CSP.to_string() };
+    let page = if h5p_dirs.is_some() { Vec::new() } else { read_page(&file) };
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     if bridge {
@@ -142,9 +202,12 @@ fn main() {
             let stdin = std::io::stdin();
             for line in stdin.lock().lines() {
                 let Ok(line) = line else { break };
-                if let Some(js) = delivery(&line) {
-                    let _ = proxy.send_event(UserEvent::Deliver(js));
-                }
+                let ev = match incoming(&line) {
+                    Some(Incoming::Deliver(js)) => UserEvent::Deliver(js),
+                    Some(Incoming::Window(s)) => UserEvent::Window(s),
+                    None => continue,
+                };
+                let _ = proxy.send_event(ev);
             }
             let _ = proxy.send_event(UserEvent::ParentGone);
         });
@@ -166,28 +229,48 @@ fn main() {
         Err(e) => fail(&format!("Fenster: {e}")),
     };
 
-    let mut builder = WebViewBuilder::new()
-        .with_custom_protocol("aiscraft".into(), move |_id, request| {
-            // One page; anything else the page asks for does not exist.
-            let path = request.uri().path();
-            let (status, body, mime): (u16, Cow<'static, [u8]>, &str) = if path == "/" || path == "/index.html" {
-                (200, Cow::Owned(page.clone()), "text/html; charset=utf-8")
-            } else {
-                (404, Cow::Borrowed(b"".as_slice()), "text/plain")
-            };
-            Response::builder()
-                .status(status)
-                .header(CONTENT_TYPE, mime)
-                .header("Content-Security-Policy", csp.as_str())
-                .header("X-Content-Type-Options", "nosniff")
-                .body(body)
-                .unwrap_or_else(|_| Response::new(Cow::Borrowed(b"".as_slice())))
-        })
-        .with_url(START)
-        .with_navigation_handler(|url| url.starts_with(START))
+    let builder = WebViewBuilder::new()
         .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
         .with_download_started_handler(|_, _| false)
         .with_devtools(cfg!(debug_assertions));
+    let mut builder = if let Some((content, player)) = h5p_dirs {
+        let origin = h5p::origin();
+        let policy = h5p::csp(origin);
+        let page_title = title.clone();
+        builder
+            .with_custom_protocol(h5p::SCHEME.into(), move |_id, request| {
+                let (status, body, mime) = h5p::respond(request.uri().path(), &content, &player, &page_title);
+                Response::builder()
+                    .status(status)
+                    .header(CONTENT_TYPE, mime)
+                    .header("Content-Security-Policy", policy.as_str())
+                    .header("X-Content-Type-Options", "nosniff")
+                    .body(Cow::Owned(body))
+                    .unwrap_or_else(|_| Response::new(Cow::Borrowed(b"".as_slice())))
+            })
+            .with_url(format!("{origin}/"))
+            .with_navigation_handler(move |url| h5p::navigation_ok(&url, origin))
+    } else {
+        builder
+            .with_custom_protocol("aiscraft".into(), move |_id, request| {
+                // One page; anything else the page asks for does not exist.
+                let path = request.uri().path();
+                let (status, body, mime): (u16, Cow<'static, [u8]>, &str) = if path == "/" || path == "/index.html" {
+                    (200, Cow::Owned(page.clone()), "text/html; charset=utf-8")
+                } else {
+                    (404, Cow::Borrowed(b"".as_slice()), "text/plain")
+                };
+                Response::builder()
+                    .status(status)
+                    .header(CONTENT_TYPE, mime)
+                    .header("Content-Security-Policy", csp.as_str())
+                    .header("X-Content-Type-Options", "nosniff")
+                    .body(body)
+                    .unwrap_or_else(|_| Response::new(Cow::Borrowed(b"".as_slice())))
+            })
+            .with_url(START)
+            .with_navigation_handler(|url| url.starts_with(START))
+    };
     if bridge {
         builder = builder.with_initialization_script(BRIDGE_JS).with_ipc_handler(|req| {
             // One message per line; JSON.stringify never writes a raw line break.
@@ -223,6 +306,12 @@ fn main() {
             Event::UserEvent(UserEvent::Deliver(js)) => {
                 let _ = webview.evaluate_script(&js);
             }
+            Event::UserEvent(UserEvent::Window(Steer::Size(w, h))) => window.set_inner_size(LogicalSize::new(w, h)),
+            Event::UserEvent(UserEvent::Window(Steer::Pip(pip))) => {
+                window.set_always_on_top(pip);
+                let (w, h) = if pip { PIP_SIZE } else { NORMAL_SIZE };
+                window.set_inner_size(LogicalSize::new(w, h));
+            }
             _ => {}
         }
     });
@@ -244,10 +333,26 @@ mod tests {
 
     #[test]
     fn only_json_objects_reach_the_view() {
-        let js = delivery(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).unwrap();
+        let Some(Incoming::Deliver(js)) = incoming(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#) else { panic!("a message for the view") };
         assert!(js.starts_with("window.__aiscraftDeliver({") && js.ends_with("});") && js.contains(r#""jsonrpc":"2.0""#), "{js}");
-        assert!(delivery("alert(1)").is_none());
-        assert!(delivery("[1]").is_none());
-        assert!(delivery(r#"{"a":"</script>"}"#).is_some());
+        assert!(incoming("alert(1)").is_none());
+        assert!(incoming("[1]").is_none());
+        assert!(matches!(incoming(r#"{"a":"</script>"}"#), Some(Incoming::Deliver(_))));
+    }
+
+    #[test]
+    fn window_lines_steer_the_window_within_caps_and_never_reach_the_view() {
+        assert_eq!(incoming(r#"{"aiscraft/window":{"width":500,"height":400}}"#), Some(Incoming::Window(Steer::Size(500.0, 400.0))));
+        assert_eq!(incoming(r#"{"aiscraft/window":{"width":99999,"height":1}}"#), Some(Incoming::Window(Steer::Size(MAX_SIZE.0, MIN_SIZE.1))));
+        assert_eq!(incoming(r#"{"aiscraft/window":{"mode":"pip"}}"#), Some(Incoming::Window(Steer::Pip(true))));
+        assert_eq!(incoming(r#"{"aiscraft/window":{"mode":"fullscreen"}}"#), Some(Incoming::Window(Steer::Pip(false))));
+        for bad in [
+            r#"{"aiscraft/window":{"mode":"inline"}}"#,
+            r#"{"aiscraft/window":{"width":"x","height":2}}"#,
+            r#"{"aiscraft/window":{"width":-5,"height":200}}"#,
+            r#"{"aiscraft/window":1}"#,
+        ] {
+            assert!(incoming(bad).is_none(), "{bad}");
+        }
     }
 }

@@ -64,6 +64,12 @@ pub enum Dialog {
         totp: String,
         url: String,
     },
+    /// An app of the catalog being set up (#26): its fields as typed, and whether it may write.
+    ConnectApp {
+        entry: String,
+        values: std::collections::BTreeMap<String, String>,
+        write: bool,
+    },
     AddConnector {
         name: String,
         command: String,
@@ -99,6 +105,26 @@ pub enum Dialog {
     },
     /// Chats from claude.ai or ChatGPT (#42).
     ImportChats,
+    /// „Teilen“ (#60): the two ways, live together or a copy as a file.
+    Share {
+        id: String,
+        way: Option<crate::share::ShareWay>,
+    },
+    /// „Mit Code beitreten“ (#60), outside the share dialog.
+    Join {
+        code: String,
+    },
+    /// Chats into the trash (#77): what stays in AIS.chat, and its yes to delete there too.
+    DeleteChats(crate::archive_view::DeleteChats),
+    /// Chats out of the trash for good, or the whole trash (#77).
+    PurgeChats(crate::archive_view::PurgeChats),
+    /// The optional H5P player (#62): what it is, size, source and licence, load or remove it.
+    /// `artifact` is the H5P content to show once it is there.
+    H5pPlayer {
+        artifact: String,
+    },
+    /// The setup of „Namen schützen“ (#73), step by step.
+    PrivacySetup(Box<crate::privacy_setup::PrivacySetup>),
 }
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
@@ -212,14 +238,18 @@ impl AisCraftApp {
         let modal = egui::Modal::new(Id::unique("dialog")).frame(frame).backdrop_color(self.tokens.overlay).show(ctx, |ui| {
             ui.set_width(match dialog {
                 Dialog::Settings { .. } => (ctx.content_rect().width() - 48.0).clamp(600.0, 940.0),
-                Dialog::Welcome { .. } => 640.0,
+                Dialog::Welcome { .. } | Dialog::PrivacySetup(_) => 640.0,
                 Dialog::Login { .. } | Dialog::WelcomeSignIn => 520.0,
-                Dialog::Install { .. } => 600.0,
+                Dialog::Install { .. } | Dialog::Share { .. } => 600.0,
                 _ => 460.0,
             });
             keep = self.dialog_body(ui, &mut dialog);
         });
         if modal.should_close() {
+            // Esc or a click beside the setup of „Namen schützen“ is „Einrichtung abbrechen“.
+            if let (true, Dialog::PrivacySetup(s)) = (keep, &dialog) {
+                self.privacy_setup_cancel(s);
+            }
             keep = false;
         }
         // The look question shows once: picking, going on or closing all count.
@@ -448,6 +478,14 @@ impl AisCraftApp {
                 let id = id.clone();
                 self.install_body(ui, &id, values)
             }
+            Dialog::ConnectApp { entry, values, write } => {
+                let entry = entry.clone();
+                self.connect_app_body(ui, &entry, values, write)
+            }
+            Dialog::H5pPlayer { artifact } => {
+                let artifact = artifact.clone();
+                self.h5p_player_body(ui, &artifact)
+            }
             Dialog::AddConnector { name, command, env, url, headers, http } => {
                 ui.heading("Konnektor hinzufügen");
                 ui.add_space(4.0);
@@ -633,6 +671,14 @@ impl AisCraftApp {
             }
             Dialog::Know(d) => self.know_dialog(ui, d),
             Dialog::ImportChats => self.import_chats_dialog(ui),
+            Dialog::Share { id, way } => {
+                let id = id.clone();
+                self.share_body(ui, &id, way)
+            }
+            Dialog::Join { code } => self.join_body(ui, code),
+            Dialog::DeleteChats(d) => self.delete_chats_dialog(ui, d),
+            Dialog::PurgeChats(d) => self.purge_chats_dialog(ui, d),
+            Dialog::PrivacySetup(s) => self.privacy_setup_body(ui, s),
             Dialog::Confirm { text, command, params } => {
                 ui.label(RichText::new(text.as_str()).strong());
                 ui.add_space(8.0);
@@ -982,6 +1028,7 @@ impl AisCraftApp {
                 }
                 ui.add_space(10.0);
                 self.fallback_section(ui);
+                self.collab_settings(ui);
             }
             SettingsTab::Connectors => {
                 ui.label(muted(&t, "Konnektoren sind MCP-Server. Ihre Werkzeuge können Modelle aufrufen, die das unterstützen (OpenAI-kompatibel, Claude über API). AIS.chat über die Anmeldung und das Claude-Abo nutzen keine eigenen Werkzeuge."));
@@ -1003,6 +1050,8 @@ impl AisCraftApp {
                 self.trust_rules_section(ui);
                 ui.add_space(8.0);
                 self.local_files_section(ui);
+                ui.add_space(8.0);
+                self.apps_catalog_section(ui);
                 ui.add_space(8.0);
                 self.extensions_section(ui);
                 ui.add_space(8.0);
@@ -1029,6 +1078,10 @@ impl AisCraftApp {
                                 }
                                 if ui.small_button("Neu verbinden").clicked() {
                                     self.run("connector.refresh", json!({"id": k.id}));
+                                }
+                                // A connected app (#26) whose sign-in ran out signs in again.
+                                if k.id.starts_with("app-") && k.status == "error" && ui.small_button("Neu anmelden").clicked() {
+                                    self.run("connector.connect", json!({"id": k.id}));
                                 }
                                 let mut en = k.enabled;
                                 if ui.checkbox(&mut en, "aktiv").changed() {
@@ -1110,6 +1163,10 @@ impl AisCraftApp {
                 let mut recall = st.recall;
                 if ui.checkbox(&mut recall, "Erinnern: passende Vorgehen und Ausschnitte aus früheren Chats mitgeben").changed() {
                     self.run("settings.set", json!({"key": "recall", "value": recall}));
+                }
+                let mut archived = st.recall_archived;
+                if ui.add_enabled(recall, egui::Checkbox::new(&mut archived, "Auch archivierte Chats beim Erinnern einbeziehen")).changed() {
+                    self.run("settings.set", json!({"key": "recall_archived", "value": archived}));
                 }
                 ui.label(small_muted(&t, format!("Gelernte Vorgehen enthalten keine persönlichen Daten, sind nur Hinweise und nie eine Erlaubnis. Höchstens {} werden behalten; die am meisten genutzten bleiben.", 40)));
                 ui.label(small_muted(&t, "Bei AIS.chat stehen sie oben in deiner Nachricht, je Chat nur einmal; unter der Nachricht steht, was mitging."));
@@ -1400,6 +1457,16 @@ impl AisCraftApp {
             "Vor dem Senden ersetzt AIS.ChatCraft Namen aus diesen Listen sowie E-Mail-Adressen, Telefonnummern, IBAN, Geburtsdaten und Adressen durch Platzhalter wie [S1] oder [E-Mail 1]. Die Zuordnung bleibt auf diesem Gerät; in der Antwort stehen wieder die Namen. Mit einer Liste ist der Schutz in passenden Chats von selbst an.",
         ));
         ui.add_space(6.0);
+        // The setup (#73): step by step through what it does, lists, the model and the switch.
+        let onboarded = self.state.settings.privacy_onboarded;
+        let setup = if onboarded { "Einrichtung erneut durchlaufen" } else { "Einrichtung starten" };
+        if ui.button(setup).on_hover_text("Schritt für Schritt: was geschützt wird, Klassenlisten, Namenserkennung, Einstellungen").clicked() {
+            self.dialog = Some(self.privacy_setup(0, true));
+        }
+        ui.add_space(8.0);
+        // The first list switches protection on: before the setup was gone through, the setup
+        // follows, with this list on its list step (and „Einrichtung abbrechen“ takes it back).
+        let first_setup = (!onboarded && self.state.privacy.lists.is_empty()).then(|| self.privacy_setup(1, true));
         for l in self.state.privacy.lists.clone() {
             card(&t).show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1430,6 +1497,7 @@ impl AisCraftApp {
         }
         let project = self.state.selection.project_id.clone();
         let project_name = project.as_ref().and_then(|p| self.state.projects.iter().find(|x| &x.id == p)).map(|p| p.name.clone());
+        let mut added = false;
         ui.horizontal_wrapped(|ui| {
             if ui
                 .button("Klassenliste einlesen …")
@@ -1438,12 +1506,14 @@ impl AisCraftApp {
                 && let Some(path) = rfd::FileDialog::new().add_filter("Klassenliste", &["csv", "tsv", "txt", "xlsx", "xls", "ods", "vcf"]).pick_file()
             {
                 self.run("privacy.list_import", json!({"path": path.display().to_string()}));
+                added = true;
             }
             if let (Some(pid), Some(name)) = (&project, &project_name)
                 && ui.button(format!("… nur für Projekt {name}")).clicked()
                 && let Some(path) = rfd::FileDialog::new().add_filter("Klassenliste", &["csv", "tsv", "txt", "xlsx", "xls", "ods", "vcf"]).pick_file()
             {
                 self.run("privacy.list_import", json!({"path": path.display().to_string(), "project": pid}));
+                added = true;
             }
         });
         ui.add_space(8.0);
@@ -1452,9 +1522,79 @@ impl AisCraftApp {
         if ui.add_enabled(!pasted.trim().is_empty(), egui::Button::new("Als Klassenliste speichern")).clicked() {
             self.run("privacy.list_add", json!({"text": pasted.clone(), "name": "Eingefügte Namen"}));
             pasted.clear();
+            added = true;
         }
+        if let Some(setup) = first_setup.filter(|_| added) {
+            self.dialog = Some(setup);
+        }
+        ui.add_space(12.0);
+        self.ner_settings(ui, true);
         ui.add_space(8.0);
-        ui.label(small_muted(&t, "Grenzen: Spitznamen, Tippfehler, Namen außerhalb der Listen und Namen in Bildern oder PDF-Dateien erkennt AIS.ChatCraft nicht. Prüfe die Vorschau über dem Eingabefeld vor dem Senden."));
+        ui.label(small_muted(&t, "Grenzen: Spitznamen, Tippfehler, Namen außerhalb der Listen (ohne Namenserkennung) und Namen in Bildern oder PDF-Dateien erkennt AIS.ChatCraft nicht. Prüfe die Vorschau über dem Eingabefeld vor dem Senden."));
+    }
+
+    /// „Namenserkennung laden“ (#73): size, source and licence first; the download starts only
+    /// after the second click („Ja, laden“).
+    /// Also the model step of the setup (`privacy_setup.rs`), there without the heading.
+    pub(crate) fn ner_settings(&mut self, ui: &mut Ui, heading: bool) {
+        use aiscraft_engine::privacy::ner;
+        let t = self.tokens.clone();
+        let s = self.state.privacy.ner.clone();
+        if heading {
+            ui.label(RichText::new("Namenserkennung (Modell)").strong());
+            ui.label(muted(
+                &t,
+                "Erkennt auch Namen, die in keiner Liste stehen, etwa Nachnamen ohne Anrede. Läuft auf diesem Rechner, ohne Internet. Treffer sind unsicher und werden ersetzt; in der Vorschau lässt du einzelne stehen.",
+            ));
+            ui.add_space(4.0);
+        }
+        let ask_id = egui::Id::unique("ner-install-ask");
+        if !s.available {
+            ui.label(small_muted(&t, "Diese Ausgabe von AIS.ChatCraft enthält die Namenserkennung nicht."));
+        } else if !s.supported {
+            ui.label(small_muted(&t, "Für dieses System gibt es die Namenserkennung nicht."));
+        } else if let Some((done, total)) = s.progress {
+            let share = if total > 0 { done as f32 / total as f32 } else { 0.0 };
+            ui.add(egui::ProgressBar::new(share).text(format!("Wird geladen: {} von {} MB", done / 1_000_000, total.div_ceil(1_000_000))));
+        } else if s.installed {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(small_muted(&t, "Geladen und an."));
+                if ui.small_button("Entfernen").clicked() {
+                    self.dialog = Some(Dialog::Confirm {
+                        text: "Namenserkennung entfernen? Die geladenen Dateien werden gelöscht.".into(),
+                        command: "privacy.ner_remove".into(),
+                        params: json!({}),
+                    });
+                }
+            });
+            if let Some(p) = &s.problem {
+                ui.label(RichText::new(p).small().color(t.danger));
+            }
+        } else {
+            let size = format!("{} MB", s.size.div_ceil(1_000_000));
+            ui.label(small_muted(&t, format!("Größe: {size} (einmalig, im Datenordner)")));
+            ui.label(small_muted(&t, format!("Modell: {}", ner::MODEL_TEXT)));
+            ui.label(small_muted(&t, format!("Laufzeit: {}", ner::RUNTIME_TEXT)));
+            ui.label(small_muted(&t, "Jede Datei wird mit ihrer festen SHA-256-Prüfsumme geprüft; stimmt sie nicht, bleibt nichts davon."));
+            ui.add_space(4.0);
+            let asking = ui.data(|d| d.get_temp::<bool>(ask_id)).unwrap_or(false);
+            if !asking {
+                if ui.button("Namenserkennung laden …").clicked() {
+                    ui.data_mut(|d| d.insert_temp(ask_id, true));
+                }
+            } else {
+                ui.label(RichText::new(format!("{size} von huggingface.co und pypi.org laden?")).strong());
+                ui.horizontal(|ui| {
+                    if ui.add(egui::Button::new(RichText::new("Ja, laden").color(t.on_accent)).fill(t.accent)).clicked() {
+                        ui.data_mut(|d| d.insert_temp(ask_id, false));
+                        self.run("privacy.ner_install", json!({"yes": true}));
+                    }
+                    if ui.button("Abbrechen").clicked() {
+                        ui.data_mut(|d| d.insert_temp(ask_id, false));
+                    }
+                });
+            }
+        }
     }
 }
 

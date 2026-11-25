@@ -8,6 +8,7 @@
 
 mod model;
 mod outline;
+mod raster;
 pub mod spec;
 mod view;
 
@@ -15,6 +16,7 @@ pub use model::{
     Board, BoardError, BoardJson, COORD_LIMIT, Element, Kind, MAX_ELEMENTS, MAX_ID, MAX_POINTS, MAX_TEXT, MAX_UPDATE_BYTES, Result, SIZE_LIMIT, arrow_endpoints,
 };
 pub use outline::{OutlineNode, parse_outline};
+pub use raster::{MAX_IMAGE_EDGE, Raster};
 pub use spec::BoardSpec;
 pub use view::{BoardStyle, BoardView, Camera, PALETTE, Tool, ViewState, color_label};
 

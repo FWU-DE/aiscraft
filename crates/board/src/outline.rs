@@ -96,8 +96,53 @@ fn indent_width(line: &str) -> usize {
     line.chars().take_while(|c| c.is_whitespace()).map(|c| if c == '\t' { 4 } else { 1 }).sum()
 }
 
+/// Mermaid `mindmap` node shapes: `id[text]`, `id(text)`, `id((text))`, `id))text((`, `id)text(`,
+/// `id{{text}}` → `text`. Anything else comes back unchanged.
+fn mermaid_label(s: &str) -> &str {
+    const SHAPES: [(&str, &str); 6] = [("((", "))"), ("))", "(("), ("{{", "}}"), ("[", "]"), ("(", ")"), (")", "(")];
+    for (open, close) in SHAPES {
+        let Some(at) = s.find(open) else { continue };
+        let id = s.get(..at).unwrap_or_default();
+        if !id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+            continue;
+        }
+        if let Some(inner) = s.get(at + open.len()..).and_then(|r| r.strip_suffix(close))
+            && !inner.trim().is_empty()
+        {
+            return inner.trim();
+        }
+    }
+    s
+}
+
+/// A line that is neither a heading nor a list item.
+struct PlainLine {
+    indent: usize,
+    text: String,
+    /// Number of structured lines (`flat`) before it.
+    after: usize,
+}
+
+/// Indentation stack: pops deeper levels, adopts uneven ones, returns the depth (0-based).
+fn indent_depth(indents: &mut Vec<usize>, ind: usize) -> usize {
+    while indents.last().is_some_and(|&top| top > ind) {
+        indents.pop();
+    }
+    match indents.last() {
+        Some(&top) if top == ind => {}
+        Some(&top) if top > ind => {
+            indents.pop();
+            indents.push(ind);
+        }
+        _ => indents.push(ind),
+    }
+    indents.len().saturating_sub(1)
+}
+
 /// Parse headings and (nested) list items into a tree with a single root.
-/// Text without any structure becomes one child per line under „Übersicht“.
+/// Lines without a list marker count by their indentation when the text has no headings and is
+/// indented on several levels or mixes them with list items (an outline without bullets, a
+/// Mermaid `mindmap`). Text without any structure becomes one child per line under its first line.
 pub fn parse_outline(text: &str) -> OutlineNode {
     let mut text = text.to_string();
     if text.len() > MAX_INPUT {
@@ -108,11 +153,14 @@ pub fn parse_outline(text: &str) -> OutlineNode {
         text.truncate(cut);
     }
     // (depth, text) in document order.
+    // `item_indent[i]` is the indentation of flat[i] when it is a list item.
     let mut flat: Vec<(usize, String)> = Vec::new();
-    let mut plain: Vec<String> = Vec::new();
+    let mut item_indent: Vec<Option<usize>> = Vec::new();
+    let mut plain: Vec<PlainLine> = Vec::new();
     let mut heading_depth: Option<usize> = None;
     let mut indents: Vec<usize> = Vec::new();
     let mut in_code = false;
+    let mut first = true;
     for line in text.lines().take(MAX_LINES) {
         let trimmed = line.trim();
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
@@ -122,12 +170,20 @@ pub fn parse_outline(text: &str) -> OutlineNode {
         if in_code || trimmed.is_empty() || flat.len() >= MAX_NODES {
             continue;
         }
+        // A pasted Mermaid mind map: drop its header and icon/class annotations.
+        if std::mem::take(&mut first) && trimmed == "mindmap" {
+            continue;
+        }
+        if trimmed.starts_with("::") {
+            continue;
+        }
         let hashes = trimmed.chars().take_while(|c| *c == '#').count();
         if (1..=6).contains(&hashes) && trimmed.get(hashes..).is_some_and(|r| r.starts_with(' ')) {
             let t = clean(trimmed.get(hashes..).unwrap_or_default());
             if !t.is_empty() {
                 let d = (hashes - 1).min(MAX_DEPTH);
                 flat.push((d, t));
+                item_indent.push(None);
                 heading_depth = Some(d);
                 indents.clear();
             }
@@ -135,33 +191,67 @@ pub fn parse_outline(text: &str) -> OutlineNode {
         }
         if let Some(item) = list_item(trimmed) {
             let ind = indent_width(line);
-            while indents.last().is_some_and(|&top| top > ind) {
-                indents.pop();
-            }
-            match indents.last() {
-                Some(&top) if top == ind => {}
-                Some(&top) if top > ind => {
-                    indents.pop();
-                    indents.push(ind);
-                }
-                _ => indents.push(ind),
-            }
+            let depth = indent_depth(&mut indents, ind);
             let base = heading_depth.map(|d| d + 1).unwrap_or(0);
             let t = clean(item);
             if !t.is_empty() {
-                flat.push(((base + indents.len().saturating_sub(1)).min(MAX_DEPTH), t));
+                flat.push(((base + depth).min(MAX_DEPTH), t));
+                item_indent.push(Some(ind));
             }
             continue;
         }
         if plain.len() < MAX_NODES {
-            let t = clean(trimmed);
+            let t = clean(mermaid_label(trimmed));
             if !t.is_empty() && !t.starts_with('|') && !t.starts_with('>') {
-                plain.push(t);
+                plain.push(PlainLine { indent: indent_width(line), text: t, after: flat.len() });
             }
         }
     }
+    let any_heading = item_indent.iter().any(Option::is_none);
+    let plain_levels = {
+        let mut v: Vec<usize> = plain.iter().map(|p| p.indent).collect();
+        v.sort_unstable();
+        v.dedup();
+        v.len()
+    };
+    // Lines without a marker join by their indentation: an indented outline without bullets, or
+    // one mixed with bullets. Under headings plain lines stay prose and are left out.
+    if !any_heading && !plain.is_empty() && (plain_levels > 1 || !flat.is_empty()) {
+        let mut merged: Vec<(usize, String)> = Vec::new();
+        let mut indents: Vec<usize> = Vec::new();
+        let mut push = |ind: usize, t: String, merged: &mut Vec<(usize, String)>| {
+            if merged.len() < MAX_NODES {
+                merged.push((indent_depth(&mut indents, ind).min(MAX_DEPTH), t));
+            }
+        };
+        // A title line first („Thema“, then the list) becomes the centre when no other line
+        // without a marker shares its (smallest) indentation.
+        let min_indent = plain.iter().map(|p| p.indent).chain(item_indent.iter().flatten().copied()).min().unwrap_or(0);
+        let title = match plain.first() {
+            Some(p) if p.after == 0 && p.indent == min_indent && plain.iter().filter(|q| q.indent == min_indent).count() == 1 => Some(plain.remove(0).text),
+            _ => None,
+        };
+        let mut rest = std::mem::take(&mut plain).into_iter().peekable();
+        for (i, (_, t)) in std::mem::take(&mut flat).into_iter().enumerate() {
+            while let Some(p) = rest.next_if(|p| p.after <= i) {
+                push(p.indent, p.text, &mut merged);
+            }
+            push(item_indent.get(i).copied().flatten().unwrap_or(0), t, &mut merged);
+        }
+        for p in rest {
+            push(p.indent, p.text, &mut merged);
+        }
+        if let Some(title) = title {
+            merged.truncate(MAX_NODES.saturating_sub(1));
+            for (d, _) in &mut merged {
+                *d = (*d + 1).min(MAX_DEPTH);
+            }
+            merged.insert(0, (0, title));
+        }
+        flat = merged;
+    }
     if flat.is_empty() {
-        let mut it = plain.into_iter();
+        let mut it = plain.into_iter().map(|p| p.text);
         let root_text = it.next().unwrap_or_else(|| "Übersicht".into());
         return OutlineNode { text: root_text, children: it.take(MAX_NODES).map(|t| OutlineNode { text: t, children: Vec::new() }).collect() };
     }

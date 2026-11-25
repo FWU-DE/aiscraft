@@ -17,7 +17,12 @@ pub struct State {
     /// Increases with every change; surfaces redraw when it moves.
     pub revision: u64,
     pub backends: Vec<BackendView>,
+    /// The chats: in use and archived (`archived`, #77), not those in the trash.
     pub conversations: Vec<Conversation>,
+    /// Chats in the trash (#77), most recently deleted first; purged after
+    /// [`aiscraft_core::TRASH_DAYS`] days.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trash: Vec<Conversation>,
     pub projects: Vec<Project>,
     /// Files in the projects' knowledge (#32), without their text.
     #[serde(default)]
@@ -48,7 +53,13 @@ pub struct State {
     pub open_artifact: Option<String>,
     /// Increases when any artifact's content changes, so open views reload.
     pub artifact_rev: u64,
+    /// Contents in their own window (#75), in the order they were lifted out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detached: Vec<crate::windows::DetachedView>,
     pub connectors: Vec<ConnectorView>,
+    /// The connected app whose sign-in in the browser is running (#26), by catalog name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_sign_in: Option<String>,
     /// Local files (#25): on or off, folders kept out.
     #[serde(default)]
     pub local_files: crate::local_files::LocalFilesState,
@@ -86,6 +97,9 @@ pub struct State {
     /// The update check: running version, what the last check found.
     #[serde(default)]
     pub update: UpdateState,
+    /// The optional H5P player (#62): installed or not, and whether it can be shown here.
+    #[serde(default)]
+    pub h5p_player: crate::learn::h5p_player::PlayerState,
     /// Research in the background (#37).
     #[serde(default)]
     pub research: crate::research::ResearchState,
@@ -413,6 +427,9 @@ pub struct Settings {
     /// The person has picked a look (or closed the question) once; until then the welcome
     /// dialog asks on start.
     pub look_chosen: bool,
+    /// „Namen schützen“ was set up once (`privacy.onboarding_done`, #73); until then switching
+    /// protection on opens the setup.
+    pub privacy_onboarded: bool,
     /// Keep notes from "Merke dir: …" and send them to backends that allow context.
     pub memory: bool,
     /// UI zoom.
@@ -431,6 +448,8 @@ pub struct Settings {
     pub learn_skills: bool,
     /// Put fitting skills and excerpts from earlier chats into the context.
     pub recall: bool,
+    /// Recall also takes excerpts from archived chats (#77; off by default).
+    pub recall_archived: bool,
     /// Check the links in every answer once it is complete (off: only on click).
     pub check_links: bool,
     /// Hourly hints for concrete open needs (off by default).
@@ -489,6 +508,7 @@ impl Default for Settings {
             theme: "modern".into(),
             transparency: "gradient".into(),
             look_chosen: false,
+            privacy_onboarded: false,
             memory: true,
             zoom: 1.0,
             enter_sends: true,
@@ -498,6 +518,7 @@ impl Default for Settings {
             monthly_token_limit: 0,
             learn_skills: true,
             recall: true,
+            recall_archived: false,
             check_links: false,
             proactive: false,
             quiet_start: 22,
@@ -525,6 +546,16 @@ impl State {
     }
     pub fn conversation(&self, id: &str) -> Option<&Conversation> {
         self.conversations.iter().find(|c| c.id == id)
+    }
+    /// The chats in use: neither archived nor temporary (#77, #34), as the sidebar lists them.
+    pub fn listed_conversations(&self) -> impl Iterator<Item = &Conversation> {
+        self.conversations.iter().filter(|c| !c.archived && !c.temporary)
+    }
+    /// Archived chats (#77), most recently updated first.
+    pub fn archived_conversations(&self) -> Vec<&Conversation> {
+        let mut out: Vec<&Conversation> = self.conversations.iter().filter(|c| c.archived).collect();
+        out.sort_by_key(|c| std::cmp::Reverse(c.updated_at));
+        out
     }
     /// A temporary chat (#34) needs a backend that keeps no history of its own. AIS.chat stores
     /// every chat in its own history, so there is none with it.

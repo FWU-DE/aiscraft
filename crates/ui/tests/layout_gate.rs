@@ -389,6 +389,35 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
             check(&mut h, &what);
             common::click_until(&mut h, "Abbrechen", "the link field closes", |h| !label(h, "Abbrechen"));
         }
+        // „Teilen“ (#60): the dialog with both ways, then the files this kind is provided as.
+        let what = at(&format!("Teilen › {view}"));
+        show(&mut h, &tx, "share");
+        settle(&mut h, &what, |h| label(h, "Bereitstellen") && label(h, "Gemeinsam bearbeiten"));
+        check(&mut h, &what);
+        common::click_until(&mut h, "Bereitstellen", "the files show", |h| h.query_by_label_contains("Das Original bleibt bei dir;").is_some());
+        let what = at(&format!("Teilen › Bereitstellen › {view}"));
+        settle(&mut h, &what, |h| label(h, "Fertig"));
+        check(&mut h, &what);
+        common::click_until(&mut h, "Gemeinsam bearbeiten", "the way to work together shows", |h| label(h, "Server in den Einstellungen eintragen"));
+        let what = at(&format!("Teilen › Gemeinsam bearbeiten › {view}"));
+        settle(&mut h, &what, |h| label(h, "Server in den Einstellungen eintragen"));
+        check(&mut h, &what);
+        show(&mut h, &tx, "none");
+        settle(&mut h, &at("Teilen geschlossen"), |h| !h.state().panel_layout().overlay);
+        // The same content in its own window (#75), drawn as the whole screen (kittest hosts no
+        // second native window): as wide as the window, nothing sticking out. Learning apps stay
+        // in the preview window.
+        if view != "Lern-App" {
+            let id = artifact.clone().unwrap_or_default();
+            call(&engine, "artifact.detach", json!({"id": id}));
+            h.state_mut().show_as_window(Some(id.clone()));
+            let what = at(&format!("{view} im eigenen Fenster"));
+            settle(&mut h, &what, |h| label(h, "Zurück ins Panel") && h.state().panel_layout().artifact.is_some() && !h.state().panel_layout().overlay);
+            check(&mut h, &what);
+            h.state_mut().show_as_window(None);
+            call(&engine, "artifact.attach", json!({"id": id}));
+            settle(&mut h, &at("zurück im Panel"), |h| h.state().panel_layout().artifact.is_some() && label(h, "In eigenem Fenster"));
+        }
         call(&engine, "artifact.close", json!({}));
         settle(&mut h, &at("Panel geschlossen"), |h| h.state().panel_layout().artifact.is_none());
     }
@@ -434,6 +463,28 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
     }
     show(&mut h, &tx, "none");
 
+    // The setup of „Namen schützen“ (#73), every step, with a class list with a long name.
+    let list = call(
+        &engine,
+        "privacy.list_add",
+        json!({"name": "Klasse 7b der Gesamtschule am Stadtpark, Schuljahr 2026/27, Biologie", "text": "Lea Müller\nSchmidt, Jonas"}),
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for (step, title) in
+        ["So schützt AIS.ChatCraft Namen", "Klassenlisten (freiwillig)", "Namenserkennung (freiwillig)", "Weitere Einstellungen", "Zusammenfassung"]
+            .iter()
+            .enumerate()
+    {
+        let what = at(&format!("Namen schützen einrichten › {title}"));
+        show(&mut h, &tx, &format!("privacy_setup:{step}"));
+        settle(&mut h, &what, |h| label(h, title) && label(h, "Einrichtung abbrechen"));
+        check(&mut h, &what);
+    }
+    show(&mut h, &tx, "none");
+    call(&engine, "privacy.list_remove", json!({"id": list}));
+
     // Installing a connector package (#43): what it may do and its settings, before it runs.
     let pkg = std::env::temp_dir().join(format!("aiscraft-gate-paket-{}-{}", std::process::id(), theme));
     std::fs::create_dir_all(pkg.join("server")).unwrap();
@@ -476,6 +527,9 @@ Igel, Winterschlaf und Fotosynthese.",
         ("Neue Vorlage", "template_new".to_string(), "Speichern"),
         ("Recherche", "research".to_string(), "Recherche starten"),
         ("Konnektor-Ergebnis", "connector_insert".to_string(), "Konnektor-Ergebnis einfügen"),
+        // Apps verbinden (#26): the setup of a catalog entry, with the sign-in and with a password.
+        ("App verbinden (Microsoft 365)", "app_connect:outlook-calendar".to_string(), "Im Browser anmelden"),
+        ("App verbinden (CalDAV)", "app_connect:caldav".to_string(), "App-Passwort *"),
         ("Projekt mit Projektwissen", format!("project:{pid}"), "Datei hinzufügen …"),
         ("Chats übernehmen", "import_chats".to_string(), "Exportdatei wählen …"),
     ] {
@@ -485,6 +539,27 @@ Igel, Winterschlaf und Fotosynthese.",
         show(&mut h, &tx, "none");
     }
     let _ = std::fs::remove_file(&file);
+
+    // Archive and trash (#77), with long titles and the entries at the bottom of the sidebar.
+    for (text, cmd) in [
+        ("Elternbrief zur Klassenfahrt der 7b nach Berlin mit Kostenaufstellung, Packliste und Notfallnummern", "chat.archive"),
+        ("Vertretungsplan für die Projektwoche vor den Herbstferien mit allen Aufsichten und Raumänderungen", "chat.delete"),
+    ] {
+        call(&engine, "chat.new", json!({}));
+        call(&engine, "chat.send", json!({"text": text}));
+        let id = engine.state().current.clone().unwrap();
+        call(&engine, cmd, json!({"id": id}));
+    }
+    // The „Gelöscht – Rückgängig“ toast is not part of the page.
+    for n in engine.state().notices.clone() {
+        call(&engine, "notice.dismiss", json!({"id": n.id}));
+    }
+    call(&engine, "chat.open", json!({"id": chat}));
+    for (view, what, ready) in [("Archiv", "archive", "Öffnen"), ("Papierkorb", "trash", "Papierkorb leeren")] {
+        show(&mut h, &tx, what);
+        settle(&mut h, &at(view), |h| label(h, ready) && label(h, "Wiederherstellen"));
+        check(&mut h, &at(view));
+    }
 
     // Entdecken (nobody signed in to AIS.chat: the page explains it).
     show(&mut h, &tx, "personas");

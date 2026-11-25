@@ -40,6 +40,7 @@ pub fn commands() -> &'static [CommandSpec] {
         all.extend(crate::office::message::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::learn::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::learn::h5p::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::learn::h5p_player::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::learn::board::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::learn::calendar::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::ai_label::COMMANDS.iter().map(CommandSpec::copy));
@@ -51,6 +52,7 @@ pub fn commands() -> &'static [CommandSpec] {
         all.extend(crate::local_files::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::ext::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::apps::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::archive::COMMANDS.iter().map(CommandSpec::copy));
         all
     })
 }
@@ -87,6 +89,15 @@ static COMMANDS: &[CommandSpec] = &[
         "message_id: string, index: number (der Beleg der Antwort, ab 0) | close: true. Zeigt die belegte Stelle im Dokument",
         false,
         |c, p| Box::pin(async move { crate::citations::open(&c, &p) })
+    ),
+    cmd!(
+        "message.citation_file",
+        "Beleg im Original öffnen",
+        "Chat",
+        None,
+        "message_id?: string, index?: number (sonst der offene Beleg), dry_run?: bool (nur sagen, was sich öffnet). Öffnet die Datei des Belegs, ein PDF im Browser an der Seite",
+        false,
+        |c, p| Box::pin(async move { crate::citations::open_file(&c, &p) })
     ),
     cmd!(
         "chat.find",
@@ -190,7 +201,6 @@ static COMMANDS: &[CommandSpec] = &[
         edit_conversation(&c, &req_str(&p, "id")?, |conv| conv.project_id = project)?;
         Ok(json!({}))
     })),
-    cmd!("chat.delete", "Chat löschen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_delete(c, p))),
     cmd!("chat.export", "Chat exportieren", "Chat", Some("Ctrl+Shift+E"), "id?: string, format?: markdown|json, path?: string", true, |c, p| Box::pin(
         chat_export(c, p)
     )),
@@ -296,7 +306,7 @@ static COMMANDS: &[CommandSpec] = &[
         c.update(|s| {
             s.projects.retain(|x| x.id != id);
             s.project_files.retain(|f| f.project_id != id);
-            for conv in s.conversations.iter_mut().filter(|x| x.project_id.as_deref() == Some(&id)) {
+            for conv in s.conversations.iter_mut().chain(s.trash.iter_mut()).filter(|x| x.project_id.as_deref() == Some(&id)) {
                 conv.project_id = None;
             }
             if s.selection.project_id.as_deref() == Some(&id) {
@@ -444,11 +454,20 @@ static COMMANDS: &[CommandSpec] = &[
         remote_import(c, p)
     )),
     cmd!(
+        "remote.sync",
+        "Mit AIS.chat abgleichen",
+        "Backends",
+        None,
+        "backend?: string (sonst der gewählte oder erste AIS.chat-Dienst). Lädt den Verlauf neu und übernimmt alle Chats, die hier noch fehlen (höchstens 200 auf einmal)",
+        true,
+        |c, p| Box::pin(remote_sync(c, p))
+    ),
+    cmd!(
         "settings.set",
         "Einstellung ändern",
         "Einstellungen",
         None,
-        "key: theme|transparency|look_chosen|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|check_links|proactive|quiet_start|quiet_end|update_check|worksheet_points|ai_label|ai_label_prompt, value: any",
+        "key: theme|transparency|look_chosen|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|recall_archived|check_links|proactive|quiet_start|quiet_end|update_check|worksheet_points|ai_label|ai_label_prompt, value: any",
         false,
         |c, p| Box::pin(async move {
             let key = req_str(&p, "key")?;
@@ -517,13 +536,32 @@ static COMMANDS: &[CommandSpec] = &[
         if !c.state().artifacts.iter().any(|a| a.id == id) {
             return Err(Error::not_found("Artefakt nicht gefunden"));
         }
-        c.update(|s| s.open_artifact = Some(id));
+        // In its own window already (#75): that window comes to the front instead.
+        c.update(|s| match s.detached.iter_mut().find(|d| d.id == id) {
+            Some(d) => d.focus = d.focus.wrapping_add(1),
+            None => s.open_artifact = Some(id),
+        });
         Ok(json!({}))
     })),
     cmd!("artifact.close", "Artefakt schließen", "Artefakte", None, "", false, |c, _| Box::pin(async move {
         c.update(|s| s.open_artifact = None);
         Ok(json!({}))
     })),
+    cmd!(
+        "artifact.detach",
+        "In eigenem Fenster öffnen",
+        "Artefakte",
+        None,
+        "id?: string (sonst das offene), present?: bool (Whiteboard präsentieren)",
+        true,
+        |c, p| { Box::pin(crate::windows::detach(c, p)) }
+    ),
+    cmd!("artifact.attach", "Zurück ins Panel", "Artefakte", None, "id?: string (sonst das zuletzt gelöste)", true, |c, p| Box::pin(crate::windows::attach(
+        c, p
+    ))),
+    cmd!("artifact.window", "Fensterplatz merken", "Artefakte", None, "id: string, x: number, y: number, width: number, height: number", false, |c, p| {
+        Box::pin(crate::windows::place(c, p))
+    }),
     cmd!("artifact.get", "Artefakt lesen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::get(c, p))),
     cmd!("artifact.save", "Artefakt speichern", "Artefakte", None, "id: string, text?: string, state_b64?: string, version?: string", false, |c, p| Box::pin(
         crate::artifacts::save(c, p)
@@ -531,9 +569,24 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("artifact.revise", "Mit KI überarbeiten", "Artefakte", None, "id: string, instruction: string", false, |c, p| Box::pin(crate::artifacts::revise(
         c, p
     ))),
-    cmd!("artifact.export", "Artefakt exportieren", "Artefakte", None, "id: string, format?: markdown|html|docx|pdf|json, path?: string", false, |c, p| {
-        Box::pin(crate::artifacts::export(c, p))
-    }),
+    cmd!(
+        "artifact.export",
+        "Artefakt exportieren",
+        "Artefakte",
+        None,
+        "id: string, format?: markdown|html|docx|pdf|json|png (png: nur Whiteboards), path?: string",
+        false,
+        |c, p| { Box::pin(crate::artifacts::export(c, p)) }
+    ),
+    cmd!(
+        "artifact.export_paths",
+        "Dateien zum Bereitstellen",
+        "Artefakte",
+        None,
+        "id: string (je Eintrag: label, hint, format, variant, ext, suffix für artifact.export)",
+        false,
+        |c, p| { Box::pin(crate::artifacts::export_paths_cmd(c, p)) }
+    ),
     cmd!("artifact.versions", "Versionen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::versions(c, p))),
     cmd!("artifact.restore", "Version wiederherstellen", "Artefakte", None, "id: string, version: number", false, |c, p| Box::pin(crate::artifacts::restore(
         c, p
@@ -566,6 +619,24 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("connector.remove", "Konnektor entfernen", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::remove(c, p))),
     cmd!("connector.toggle", "Konnektor ein/aus", "Konnektoren", None, "id: string, enabled: bool", false, |c, p| Box::pin(crate::tools::toggle(c, p))),
     cmd!("connector.refresh", "Konnektor neu verbinden", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::refresh(c, p))),
+    cmd!(
+        "connector.catalog",
+        "Apps verbinden: Katalog",
+        "Konnektoren",
+        None,
+        "query?: string (Suchwörter), category?: Mail|Kalender|Dateien. Antwort: categories, entries [{id, name, categories, provider, description, reads, writes, auth, runs, fields, setup_hint}]",
+        false,
+        |c, p| Box::pin(crate::accounts::catalog_cmd(c, p))
+    ),
+    cmd!(
+        "connector.connect",
+        "App verbinden",
+        "Konnektoren",
+        None,
+        "entry: string (ID aus connector.catalog), dazu die Felder des Eintrags (client_id, tenant, client_secret | url, username, password), write?: bool (auch schreiben, immer mit Freigabe), name?: string. Öffnet die Anmeldung im Browser. Oder id: string einer verbundenen App, um neu anzumelden",
+        false,
+        |c, p| Box::pin(crate::accounts::connect(c, p))
+    ),
     cmd!(
         "connector.insert",
         "Konnektor-Ergebnis einfügen",
@@ -722,6 +793,28 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("privacy.reveal", "Platzhalter zurückübersetzen", "Namen schützen", None, "text: string, conversation?: string", false, |c, p| Box::pin(
         crate::privacy::reveal_cmd(c, p)
     )),
+    cmd!("privacy.ner_status", "Namenserkennung: Stand, Größe, Quelle, Lizenz", "Namen schützen", None, "", false, |c, p| Box::pin(
+        crate::privacy::ner::status_cmd(c, p)
+    )),
+    cmd!(
+        "privacy.ner_install",
+        "Namenserkennung laden",
+        "Namen schützen",
+        None,
+        "yes: bool (die Antwort der Person auf Größe, Quelle und Lizenz; ohne: nur diese Angaben, nichts wird geladen)",
+        false,
+        |c, p| Box::pin(crate::privacy::ner::install(c, p))
+    ),
+    cmd!("privacy.ner_remove", "Namenserkennung entfernen", "Namen schützen", None, "", false, |c, p| Box::pin(crate::privacy::ner::remove(c, p))),
+    cmd!(
+        "privacy.onboarding_done",
+        "Einrichtung von „Namen schützen“ abschließen",
+        "Namen schützen",
+        None,
+        "done?: bool (ohne: true; false: die Einrichtung kommt beim nächsten Einschalten wieder)",
+        false,
+        |c, p| Box::pin(crate::privacy::onboarding_done(c, p))
+    ),
     cmd!("vault.remove", "Tresor-Eintrag löschen", "Tresor", None, "id: string", false, |c, p| Box::pin(crate::vault::remove(c, p))),
     cmd!("vault.code", "Einmalcode anzeigen", "Tresor", None, "id: string", false, |c, p| Box::pin(crate::vault::code(c, p))),
     cmd!("vault.import_bitwarden", "Aus Bitwarden übernehmen", "Tresor", None, "path: string (CSV-Export)", false, |c, p| Box::pin(
@@ -953,6 +1046,9 @@ async fn chat_close(c: Ctx) -> Result<Value> {
 async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let conv = c.state().conversation(&id).cloned().or(c.store(|st| st.conversation(&id))?).ok_or_else(|| Error::not_found("Chat nicht gefunden"))?;
+    if conv.deleted_at.is_some() {
+        return Err(Error::invalid("Der Chat liegt im Papierkorb. Stelle ihn zuerst wieder her."));
+    }
     let messages = c.store(|st| st.messages(&id))?;
     let variants = c.store(|st| st.variants(&id))?;
     let n = messages.len();
@@ -1087,25 +1183,6 @@ async fn set_style(c: Ctx, p: Value) -> Result<Value> {
     Ok(json!({"style": src.style, "sample": src.style_sample}))
 }
 
-async fn chat_delete(c: Ctx, p: Value) -> Result<Value> {
-    let id = req_str(&p, "id")?;
-    chat::stop(&c, &id);
-    if c.state().conversation(&id).is_some_and(|x| x.temporary) {
-        crate::temporary::discard(&c, &id);
-    }
-    c.store(|st| st.delete_conversation(&id))?;
-    crate::privacy::forget(&c, &id);
-    c.update(|s| {
-        s.conversations.retain(|x| x.id != id);
-        if s.current.as_deref() == Some(&id) {
-            s.current = None;
-            s.messages.clear();
-            s.variants.clear();
-        }
-    });
-    Ok(json!({}))
-}
-
 pub(crate) fn markdown_export(title: &str, messages: &[Message]) -> String {
     let mut out = format!("# {title}\n\n");
     for m in messages {
@@ -1217,9 +1294,69 @@ async fn save_image(c: Ctx, p: Value) -> Result<Value> {
 async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
     let backend_id = req_str(&p, "backend")?;
     let id = req_str(&p, "id")?;
+    import_remote_chat(&c, &backend_id, &id, opt_str(&p, "title")).await?;
+    chat_open(c, json!({"id": id})).await
+}
+
+/// At most this many chats come over in one `remote.sync`; the next sync takes the rest.
+const SYNC_MAX: usize = 200;
+
+/// „Mit AIS.chat abgleichen“: load the server's list afresh and take over every chat that is not
+/// here yet. Chats that are here in any state (open, archived, in the trash) stay as they are, so
+/// a chat deleted here does not come back while it is in the trash.
+async fn remote_sync(c: Ctx, p: Value) -> Result<Value> {
+    let backend_id = match opt_str(&p, "backend") {
+        Some(id) => id,
+        None => {
+            let s = c.state();
+            let sel = &s.selection.backend_id;
+            if s.backend(sel).is_some_and(|b| b.config.kind == BackendKind::AisChat) {
+                sel.clone()
+            } else {
+                s.backends
+                    .iter()
+                    .find(|b| b.config.kind == BackendKind::AisChat)
+                    .map(|b| b.config.id.clone())
+                    .ok_or_else(|| Error::invalid("Kein AIS.chat-Dienst eingerichtet. Melde dich zuerst unter Einstellungen › Dienste bei AIS.chat an."))?
+            }
+        }
+    };
+    let backend = c.backend(&backend_id)?;
+    if !backend.capabilities().remote_history {
+        return Err(Error::invalid("Dieser Dienst hat keinen Verlauf auf dem Server zum Abgleichen."));
+    }
+    let list = backend.remote_conversations().await?;
+    c.update(|s| {
+        s.remote.insert(backend_id.clone(), list.clone());
+    });
+    let all_missing: Vec<_> = list.iter().filter(|r| !matches!(c.store(|st| st.conversation(&r.id)), Ok(Some(_)))).cloned().collect();
+    let missing = all_missing.get(..SYNC_MAX.min(all_missing.len())).unwrap_or_default();
+    let mut imported = 0usize;
+    let mut failed = Vec::new();
+    for r in missing {
+        match import_remote_chat(&c, &backend_id, &r.id, Some(r.title.clone())).await {
+            Ok(()) => imported += 1,
+            Err(e) => failed.push(format!("{}: {}", r.title, e.message)),
+        }
+    }
+    let left = all_missing.len().saturating_sub(missing.len());
+    let text = match (imported, failed.len()) {
+        (0, 0) => "Mit AIS.chat abgeglichen: alles schon hier.".to_string(),
+        (n, 0) => format!("Mit AIS.chat abgeglichen: {n} {} übernommen.", if n == 1 { "Chat" } else { "Chats" }),
+        (n, f) => format!("Mit AIS.chat abgeglichen: {n} übernommen, {f} nicht: {}", failed.join("; ").chars().take(300).collect::<String>()),
+    };
+    c.notice(if failed.is_empty() { NoticeLevel::Success } else { NoticeLevel::Warning }, text);
+    Ok(json!({"backend": backend_id, "on_server": list.len(), "imported": imported, "failed": failed, "left": left}))
+}
+
+/// Copy one chat from the server's history into the store (its id stays the server's id, so
+/// writing on continues it there), without opening it.
+async fn import_remote_chat(c: &Ctx, backend_id: &str, id: &str, title: Option<String>) -> Result<()> {
+    let (backend_id, id) = (backend_id.to_string(), id.to_string());
     let backend = c.backend(&backend_id)?;
     let msgs = backend.remote_messages(id.clone()).await?;
-    let title = opt_str(&p, "title")
+    let title = title
+        .filter(|t| !t.trim().is_empty())
         .or_else(|| c.state().remote.get(&backend_id).and_then(|l| l.iter().find(|r| r.id == id)).map(|r| r.title.clone()))
         .or_else(|| msgs.iter().find(|m| m.1 == Role::User).map(|m| aiscraft_core::title_from(&m.2)))
         .unwrap_or_else(|| "Aus AIS.chat".into());
@@ -1249,6 +1386,8 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
         kind,
         remote_id: None,
         temporary: false,
+        archived: false,
+        deleted_at: None,
     };
     c.store(|st| {
         st.save_conversation(&conv)?;
@@ -1276,7 +1415,7 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
         s.conversations.retain(|x| x.id != conv.id);
         s.conversations.insert(0, conv);
     });
-    chat_open(c, json!({"id": id})).await
+    Ok(())
 }
 
 /// Chats whose title contains every word of the query (as people see the title, names shown
@@ -1300,6 +1439,7 @@ fn search_chats(c: &Ctx, query: &str) -> Result<Vec<aiscraft_store::SearchHit>> 
                     title,
                     snippet: "Treffer im Titel".into(),
                     backend_id: conv.backend_id.clone(),
+                    archived: conv.archived,
                 });
                 if hits.len() >= LIMIT {
                     return Ok(hits);
@@ -1603,8 +1743,8 @@ async fn backend_login(c: Ctx, p: Value) -> Result<Value> {
         NoticeLevel::Success,
         format!("Angemeldet bei {}: {who}", config.name),
         (config.kind == BackendKind::AisChat).then(|| NoticeAction {
-            label: "Verlauf laden".into(),
-            command: "remote.refresh".into(),
+            label: "Mit AIS.chat abgleichen".into(),
+            command: "remote.sync".into(),
             params: json!({"backend": id}),
         }),
     );

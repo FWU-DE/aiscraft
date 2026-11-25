@@ -5,7 +5,9 @@
 mod action_log;
 mod answer_tools;
 mod app;
+mod app_catalog;
 mod approval;
+mod archive_view;
 mod artifact_panel;
 mod backdrop;
 mod chat_import;
@@ -31,6 +33,7 @@ mod nod_settings;
 mod palette;
 pub mod plot;
 mod privacy_panel;
+mod privacy_setup;
 mod rich;
 mod share;
 mod sidebar;
@@ -40,6 +43,7 @@ mod trust_rules;
 mod update;
 mod views;
 mod widgets;
+mod windows;
 pub mod worksheet;
 
 pub use app::{AisCraftApp, PanelLayout, UiRequest};

@@ -45,6 +45,52 @@ pub(crate) fn make_executable(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A large file arriving piece by piece (a download of hundreds of MB that must not sit in
+/// memory): written to `<path>.part` next to its place, moved there in one step by [`Staged::finish`],
+/// removed when dropped unfinished. A full disk is named like every other write.
+pub(crate) struct Staged {
+    file: Option<std::fs::File>,
+    tmp: std::path::PathBuf,
+}
+
+impl Staged {
+    pub(crate) fn create(path: &Path) -> Result<Staged> {
+        let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        name.push(".part");
+        let tmp = path.with_file_name(name);
+        let file = std::fs::File::create(&tmp).map_err(|e| Error::io(tmp.display(), &e))?;
+        Ok(Staged { file: Some(file), tmp })
+    }
+
+    pub(crate) fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        use std::io::Write;
+        match self.file.as_mut() {
+            Some(f) => f.write_all(bytes).map_err(|e| Error::io(self.tmp.display(), &e)),
+            None => Err(Error::storage("Datei schon geschlossen")),
+        }
+    }
+
+    /// Where the bytes are while they arrive (read back to check or unpack them).
+    pub(crate) fn path(&self) -> &Path {
+        &self.tmp
+    }
+
+    /// Flush to the disk and move the file to `to` (replacing an older one).
+    pub(crate) fn finish(mut self, to: &Path) -> Result<()> {
+        if let Some(f) = self.file.take() {
+            f.sync_all().map_err(|e| Error::io(self.tmp.display(), &e))?;
+        }
+        std::fs::rename(&self.tmp, to).map_err(|e| Error::io(to.display(), &e))
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        self.file = None;
+        let _ = std::fs::remove_file(&self.tmp);
+    }
+}
+
 /// Create a folder and its parents.
 pub(crate) fn create_dir(dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir).map_err(|e| Error::io(format_args!("Ordner {}", dir.display()), &e))

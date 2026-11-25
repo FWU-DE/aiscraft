@@ -2,9 +2,11 @@
 //! and exposes one registry of commands. The egui shell, the CLI and the JSON control channel
 //! all dispatch the same commands by id, so everything a person can do, an agent can do.
 
+mod accounts;
 mod action_log;
 mod ai_label;
 mod apps;
+mod archive;
 mod artifacts;
 mod attach;
 mod bridge;
@@ -50,6 +52,7 @@ mod usage;
 mod vault;
 mod voice;
 pub mod voice_mode;
+mod windows;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -62,6 +65,7 @@ use aiscraft_store::Store;
 use futures::future::BoxFuture;
 use serde_json::Value;
 
+pub use accounts::{BUILTIN_GOOGLE_CLIENT_ID, BUILTIN_MICROSOFT_CLIENT_ID, CatalogEntry, CatalogField, catalog as connector_catalog, catalog_categories};
 pub use aiscraft_backends::SESSION_COOKIE;
 pub use artifacts::{change_blocks, doc_replace, doc_text, markdown_html, merge_states};
 pub use attach::{AIS_ACCEPTS, AttachmentPreview, RangeKind};
@@ -83,6 +87,7 @@ pub use tasks::{TASK_RESULT, TaskCard, running_summary, task_card};
 pub use tools::{obsidian_vaults, presets as connector_presets};
 pub use update::{CURRENT_VERSION, finish_update_helper};
 pub use vault::{EntryInfo as VaultEntry, totp_at};
+pub use windows::{DetachedView, WindowPlace};
 
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
@@ -155,6 +160,8 @@ pub(crate) struct Inner {
     cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
     next_notice: std::sync::atomic::AtomicU64,
     tools: tools::ToolRuntime,
+    /// Connected apps (#26): the browser opener, test endpoints, one token refresh at a time.
+    pub(crate) accounts: accounts::Runtime,
     /// Local files, connector packages, plug-ins and connector views (#25, #43, #28, #74).
     ext: ext::Runtime,
     bridge: bridge::Bridge,
@@ -175,6 +182,11 @@ pub(crate) struct Inner {
     pub(crate) preview: Mutex<Option<PathBuf>>,
     /// Running previews; they exit when their stdin (held here) closes.
     pub(crate) previews: Mutex<Vec<std::process::Child>>,
+    /// The optional H5P player (#62), unpacked (`<data>/h5p-player`).
+    pub(crate) h5p_player_dir: PathBuf,
+    /// Where the H5P player is downloaded from; `None` for engines in memory unless a test
+    /// hands them a local server.
+    pub(crate) h5p_player_source: Mutex<Option<learn::h5p_player::Source>>,
     /// Cached pictures of assistants, characters and scenarios (`<data>/personas`).
     pub(crate) pictures_dir: PathBuf,
     /// Per-backend cache kept across restarts (AIS.chat action ids, the persona list), so the
@@ -191,6 +203,8 @@ pub(crate) struct Inner {
     pub(crate) update_feed: Mutex<update::Feed>,
     /// Placeholder mappings of chats read so far (#55), so drawing never waits for the database.
     pub(crate) privacy_maps: Mutex<HashMap<String, Arc<privacy::Mapping>>>,
+    /// The downloadable name recognition (#73): its folder, source and the loaded model.
+    pub(crate) ner: privacy::ner::Runtime,
 }
 
 /// What commands and tasks hold. It never owns the runtime, so it can be dropped anywhere.
@@ -211,10 +225,20 @@ pub struct Options {
 }
 
 impl Options {
+    /// The per-user data folder, or in portable mode (#58: `portable.txt` next to the program, as
+    /// in the portable zip) a folder next to the program, so the stick carries the data along.
     pub fn default_dirs() -> Self {
-        let dir = directories::ProjectDirs::from("ai", "uds", "aiscraft").map(|d| d.data_dir().to_path_buf());
+        let portable = std::env::current_exe().ok().and_then(|exe| portable_data_dir(&exe));
+        let dir = portable.or_else(|| directories::ProjectDirs::from("ai", "uds", "aiscraft").map(|d| d.data_dir().to_path_buf()));
         Self { data_dir: dir, secrets: None }
     }
+}
+
+/// Portable mode: with `portable.txt` beside `exe`, the data live in `AIS.ChatCraftData/aiscraft`
+/// next to it (craft-update keeps its own files in the same `AIS.ChatCraftData` folder).
+pub fn portable_data_dir(exe: &std::path::Path) -> Option<PathBuf> {
+    let parent = exe.parent()?;
+    parent.join("portable.txt").is_file().then(|| parent.join("AIS.ChatCraftData").join("aiscraft"))
 }
 
 impl Engine {
@@ -248,6 +272,7 @@ impl Engine {
             cancels: Mutex::new(HashMap::new()),
             next_notice: std::sync::atomic::AtomicU64::new(1),
             tools: Default::default(),
+            accounts: accounts::Runtime::new(opts.data_dir.is_some() && std::env::var_os("AISCRAFT_NO_BROWSER").is_none()),
             ext: ext::Runtime::new(opts.data_dir.clone()),
             bridge: Default::default(),
             voice: Default::default(),
@@ -281,7 +306,15 @@ impl Engine {
                 .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-open-{}", std::process::id()))),
             preview: Mutex::new(None),
             privacy_maps: Mutex::new(HashMap::new()),
+            ner: privacy::ner::Runtime::new(opts.data_dir.as_deref()),
             previews: Mutex::new(Vec::new()),
+            // Engines in memory get a folder of their own, so tests never share an install.
+            h5p_player_dir: opts
+                .data_dir
+                .clone()
+                .map(|d| d.join("h5p-player"))
+                .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-h5p-player-{}", new_id()))),
+            h5p_player_source: Mutex::new((opts.data_dir.is_some() && !cfg!(test)).then(learn::h5p_player::Source::github)),
             attachments_dir: opts
                 .data_dir
                 .clone()
@@ -289,6 +322,8 @@ impl Engine {
                 .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-attachments-{}", std::process::id()))),
         }));
         ctx.load()?;
+        // Chats longer than 30 days in the trash go for good (#77).
+        archive::purge_expired(&ctx);
         // Leftovers of a run that ended without closing (engines in memory share a folder, skip).
         if opts.data_dir.is_some() {
             temporary::clean_up(&ctx);
@@ -302,6 +337,7 @@ impl Engine {
         {
             let _guard = engine._rt.enter();
             tools::load(&engine.ctx);
+            accounts::load(&engine.ctx);
             ext::load(&engine.ctx);
             let schedules = schedules::load(&engine.ctx);
             let skills = skills::load(&engine.ctx);
@@ -322,6 +358,7 @@ impl Engine {
             tools::settle_claims(&engine.ctx);
             privacy::refresh(&engine.ctx);
             update::start(&engine.ctx);
+            learn::h5p_player::refresh(&engine.ctx);
             #[cfg(feature = "collab")]
             collab::load(&engine.ctx);
         }
@@ -336,6 +373,23 @@ impl Engine {
     /// Without it, learning apps open in the system browser.
     pub fn set_preview_program(&self, path: Option<PathBuf>) {
         *self.ctx.0.preview.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = path;
+        learn::h5p_player::refresh(&self.ctx);
+    }
+
+    /// Download the H5P player from a local server instead of the GitHub release (tests and the
+    /// offscreen demo): `base` is the folder holding `SHA256SUMS.txt` and the zip, `pinned` the
+    /// SHA-256 the code would pin. Only `http://127.0.0.1:…`, only for engines in memory.
+    pub fn set_h5p_player_source(&self, base: &str, pinned: Option<&str>) -> Result<()> {
+        if self.ctx.0.pictures_online {
+            return Err(Error::refused("Nur ohne Datenordner (Tests, Vorschau) erlaubt"));
+        }
+        if !(base.starts_with("http://127.0.0.1:") || base.starts_with("http://localhost:")) {
+            return Err(Error::invalid("Nur ein lokaler Server (http://127.0.0.1:…) ist erlaubt"));
+        }
+        let source = learn::h5p_player::Source { base: base.trim_end_matches('/').to_string(), pinned: pinned.map(str::to_string) };
+        *self.ctx.0.h5p_player_source.lock().unwrap_or_else(PoisonError::into_inner) = Some(source);
+        learn::h5p_player::refresh(&self.ctx);
+        Ok(())
     }
 
     /// The current state. Cheap: an `Arc` that stays valid while the engine moves on.
@@ -649,9 +703,12 @@ impl Ctx {
     }
 
     fn load(&self) -> Result<()> {
-        let (mut backends, conversations, projects, memory, settings, artifacts) = self.store(|st| {
+        let (mut backends, conversations, trash, projects, memory, settings, artifacts) = self.store(|st| {
             let settings: Settings = st.setting("settings")?.and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
-            Ok((st.backends()?, st.conversations(500)?, st.projects()?, st.memory()?, settings, st.artifacts()?))
+            // Archived chats come along (marked), so they open and are found by title (#77).
+            let mut conversations = st.conversations(500)?;
+            conversations.extend(st.archived_conversations(2000)?);
+            Ok((st.backends()?, conversations, st.trashed_conversations(2000)?, st.projects()?, st.memory()?, settings, st.artifacts()?))
         })?;
         if backends.is_empty() {
             let ais = BackendConfig {
@@ -668,6 +725,7 @@ impl Ctx {
         let selection = self.store(|st| Ok(st.setting("selection")?.and_then(|v| serde_json::from_value::<Selection>(v).ok())))?;
         self.update(|s| {
             s.conversations = conversations;
+            s.trash = trash;
             s.projects = projects;
             s.memory = memory;
             s.settings = settings;
@@ -723,7 +781,11 @@ mod tests;
 mod trust_tests;
 
 #[cfg(test)]
+mod accounts_tests;
+#[cfg(test)]
 mod apps_tests;
+#[cfg(test)]
+mod archive_tests;
 #[cfg(test)]
 mod chatux_tests;
 #[cfg(test)]

@@ -5,7 +5,9 @@ mod aischat;
 mod anthropic;
 pub mod browser_login;
 mod claude_cli;
-mod http;
+pub mod download;
+pub mod http;
+pub mod oauth;
 mod openai;
 pub mod picture;
 mod sse;
@@ -91,6 +93,11 @@ pub trait Backend: Send + Sync {
     /// Mark or unmark an assistant, character or learning scenario as a favourite.
     fn set_favorite(&self, _kind: aiscraft_core::PersonaKind, _id: String, _favorite: bool) -> BoxFuture<'_, Result<()>> {
         Box::pin(async { Err(Error::unsupported("Dieses Backend kennt keine Favoriten")) })
+    }
+    /// Delete a conversation in the service's own history (#77; AIS.chat
+    /// `deleteConversationAction`). Only on the owner's explicit yes, one chat at a time.
+    fn delete_conversation(&self, _id: String) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async { Err(Error::unsupported("Dieser Dienst hat keinen eigenen Verlauf zum Löschen")) })
     }
     /// Models that draw images instead of writing text.
     fn image_models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>>> {

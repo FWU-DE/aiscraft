@@ -33,6 +33,8 @@ pub(crate) struct ToolRuntime {
     views: Mutex<HashMap<String, aiscraft_core::ToolView>>,
     /// Structured results of calls from a view, by tool name, until the view gets them.
     structured: Mutex<HashMap<String, Value>>,
+    /// Views open right now (#74), for host events.
+    pub(crate) open_views: crate::apps::OpenViews,
 }
 
 // ---- built-in tools -------------------------------------------------------------------------
@@ -139,7 +141,10 @@ async fn run_builtin(c: &Ctx, conv: &str, call: &ToolCall) -> Option<Result<Stri
         WEB_FETCH => web_fetch(c, a).await,
         "history_search" => {
             let q = a.get("query").and_then(Value::as_str).unwrap_or("").to_string();
+            // Like recall: archived chats only with the switch (#77).
+            let with_archived = c.state().settings.recall_archived;
             c.store(|st| st.search(&q, 12)).map(|hits| {
+                let hits: Vec<_> = hits.into_iter().filter(|h| with_archived || !h.archived).collect();
                 if hits.is_empty() {
                     return "Keine Treffer.".to_string();
                 }
@@ -555,6 +560,31 @@ async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> O
             }
         };
     }
+    // Connected apps (#26) run in the engine; a request that went out may have changed something.
+    if crate::accounts::is_account(&r.conn.id) {
+        return match crate::accounts::execute(c, &r.conn.id, &r.tool.name, &r.arguments).await {
+            Ok(text) => {
+                finish("done");
+                (wrap_untrusted(&r.call.name, &crate::vault::scrub(&text, &r.secrets)), false, "ok")
+            }
+            Err(e) if claim.is_some() && matches!(e.kind, aiscraft_core::ErrorKind::Network | aiscraft_core::ErrorKind::Protocol) => {
+                finish("uncertain");
+                c.notice(NoticeLevel::Warning, format!("{UNCERTAIN}: {} · {}. Ob die Aktion ausgeführt wurde, ist nicht klar.", r.conn.name, r.tool.title));
+                (
+                    format!(
+                        "{UNCERTAIN}: Es ist nicht klar, ob die Aktion ausgeführt wurde ({}). Nicht erneut versuchen; sag der Person, dass sie das Ergebnis prüfen soll.",
+                        e.message
+                    ),
+                    true,
+                    "uncertain",
+                )
+            }
+            Err(e) => {
+                finish("failed");
+                (format!("Fehler: {}", crate::vault::scrub(&e.message, &r.secrets)), true, "error")
+            }
+        };
+    }
     let client = match client_for(c, &r.conn.id).await {
         Ok(cl) => cl,
         Err(e) => {
@@ -856,7 +886,13 @@ const MAX_VIEW_STRUCTURED: usize = 256 * 1024;
 fn remember_view(c: &Ctx, r: &Ready, res: &aiscraft_mcp::ToolResult) {
     let structured = res.structured_content.clone().filter(|v| v.to_string().len() <= MAX_VIEW_STRUCTURED);
     if let Some(uri) = &r.tool.ui_resource {
-        let view = aiscraft_core::ToolView { connector: r.conn.id.clone(), tool: r.tool.name.clone(), resource: uri.clone(), structured: structured.clone() };
+        let view = aiscraft_core::ToolView {
+            connector: r.conn.id.clone(),
+            tool: r.tool.name.clone(),
+            resource: uri.clone(),
+            structured: structured.clone(),
+            cancelled: None,
+        };
         let mut views = c.0.tools.views.lock().unwrap_or_else(PoisonError::into_inner);
         if views.len() > 200 {
             views.clear();
@@ -1033,6 +1069,9 @@ pub(crate) async fn add(c: Ctx, p: Value) -> Result<Value> {
 
 pub(crate) async fn remove(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
+    if crate::accounts::is_account(&id) {
+        return crate::accounts::remove(&c, &id).await;
+    }
     let mut all = load_configs(&c);
     all.retain(|x| x.id != id);
     save_configs(&c, &all)?;
@@ -1047,6 +1086,9 @@ pub(crate) async fn remove(c: Ctx, p: Value) -> Result<Value> {
 pub(crate) async fn toggle(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let enabled = p.get("enabled").and_then(Value::as_bool).ok_or_else(|| Error::invalid("enabled fehlt"))?;
+    if crate::accounts::is_account(&id) {
+        return crate::accounts::toggle(&c, &id, enabled).await;
+    }
     let mut all = load_configs(&c);
     let cfg = all.iter_mut().find(|x| x.id == id).ok_or_else(|| Error::not_found("Konnektor nicht gefunden"))?;
     cfg.enabled = enabled;
@@ -1071,6 +1113,9 @@ pub(crate) async fn toggle(c: Ctx, p: Value) -> Result<Value> {
 
 pub(crate) async fn refresh(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
+    if crate::accounts::is_account(&id) {
+        return crate::accounts::refresh(&c, &id).await;
+    }
     c.0.tools.clients.lock().unwrap_or_else(PoisonError::into_inner).remove(&id);
     let cfg = all_configs(&c).into_iter().find(|x| x.id == id).ok_or_else(|| Error::not_found("Konnektor nicht gefunden"))?;
     connect(&c, &cfg).await?;
@@ -1112,6 +1157,18 @@ pub(crate) async fn insert(c: Ctx, p: Value) -> Result<Value> {
     let label = format!("{} · {}", conn.name, if tool.title.is_empty() { &tool.name } else { &tool.title });
     let conv = c.state().current.clone().unwrap_or_default();
     let detail = crate::action_log::summary(&arguments, &tool.input_schema, &[]);
+    if crate::accounts::is_account(&conn.id) {
+        let r = crate::accounts::execute(&c, &conn.id, &tool.name, &arguments).await;
+        crate::action_log::tool(&c, &conv, &label, detail, &crate::action_log::Why::ReadOnly, if r.is_ok() { "ok" } else { "error" });
+        let raw = r?;
+        let mut body: String = raw.trim().chars().take(MAX_INSERT_CHARS).collect();
+        if raw.trim().chars().count() > MAX_INSERT_CHARS {
+            body.push_str("\n… (gekürzt)");
+        }
+        let text = format!("[Aus {label}]\n{body}\n[Ende {label}]\n");
+        crate::templates::fill_composer(&c, text.clone(), false);
+        return Ok(serde_json::json!({"text": text, "label": label}));
+    }
     let client = match client_for(&c, &conn.id).await {
         Ok(cl) => cl,
         Err(e) => {
