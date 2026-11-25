@@ -11,7 +11,7 @@
 //! Commands: `attachment.prepare` (what will happen, shown on the attachment chip),
 //! `attachment.set_range` (the "Nur Seiten …" field) and `attachment.remove`.
 
-mod docs;
+pub(crate) mod docs;
 mod image;
 mod pdf;
 pub(crate) mod pdf_text;

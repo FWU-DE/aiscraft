@@ -64,6 +64,12 @@ pub enum Dialog {
         totp: String,
         url: String,
     },
+    /// An app of the catalog being set up (#26): its fields as typed, and whether it may write.
+    ConnectApp {
+        entry: String,
+        values: std::collections::BTreeMap<String, String>,
+        write: bool,
+    },
     AddConnector {
         name: String,
         command: String,
@@ -465,6 +471,10 @@ impl AisCraftApp {
             Dialog::Install { id, values } => {
                 let id = id.clone();
                 self.install_body(ui, &id, values)
+            }
+            Dialog::ConnectApp { entry, values, write } => {
+                let entry = entry.clone();
+                self.connect_app_body(ui, &entry, values, write)
             }
             Dialog::H5pPlayer { artifact } => {
                 let artifact = artifact.clone();
@@ -1034,6 +1044,8 @@ impl AisCraftApp {
                 ui.add_space(8.0);
                 self.local_files_section(ui);
                 ui.add_space(8.0);
+                self.apps_catalog_section(ui);
+                ui.add_space(8.0);
                 self.extensions_section(ui);
                 ui.add_space(8.0);
                 for k in self.state.connectors.clone() {
@@ -1059,6 +1071,10 @@ impl AisCraftApp {
                                 }
                                 if ui.small_button("Neu verbinden").clicked() {
                                     self.run("connector.refresh", json!({"id": k.id}));
+                                }
+                                // A connected app (#26) whose sign-in ran out signs in again.
+                                if k.id.starts_with("app-") && k.status == "error" && ui.small_button("Neu anmelden").clicked() {
+                                    self.run("connector.connect", json!({"id": k.id}));
                                 }
                                 let mut en = k.enabled;
                                 if ui.checkbox(&mut en, "aktiv").changed() {

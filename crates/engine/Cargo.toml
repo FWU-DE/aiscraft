@@ -25,6 +25,7 @@ craft-epub.workspace = true
 craft-html.workspace = true
 craft-mime.workspace = true
 craft-ical.workspace = true
+craft-dav.workspace = true
 craft-vcard.workspace = true
 craft-csv.workspace = true
 craft-ods.workspace = true

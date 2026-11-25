@@ -216,6 +216,16 @@ Werkzeuge, die nur lesen, laufen direkt. Alles andere läuft nur, wenn du darum 
 
 Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
 
+### Apps verbinden (Mail, Kalender, Dateien)
+
+Unter **Einstellungen › Konnektoren › Apps verbinden** steht ein Katalog: Outlook-Mail, Outlook-Kalender und OneDrive (Microsoft 365), Gmail, Google Kalender und Google Drive, CalDAV-Kalender (Nextcloud, iCloud, mailbox.org, Posteo) sowie zwei bekannte MCP-Server für Microsoft 365 und Google Workspace. Oben wählst du eine Kategorie (Mail, Kalender, Dateien) oder suchst nach einem Namen; **Verbinden** öffnet die Einrichtung.
+
+- **Microsoft 365 und Google** melden sich im Browser an (OAuth mit PKCE, Rückkehr über eine Adresse auf deinem eigenen Rechner). AIS.ChatCraft hat noch keine eigene registrierte App; du trägst die Client-ID einer App-Registrierung ein, bei Microsoft dazu den Mandanten (für Schulkonten meist `organizations` oder die ID der Schule), bei Google auch den Clientschlüssel. Wo du die App registrierst, steht im Fenster; oft richtet das die Schul-IT ein. Die Anmeldung wartet höchstens fünf Minuten auf den Browser.
+- **CalDAV** braucht die Adresse des Kalenders (https), den Benutzernamen und ein App-Passwort. Stimmen die Angaben nicht, wird nichts gespeichert.
+- **MCP-Server** (`@softeria/ms-365-mcp-server` über npx, `workspace-mcp` über uvx) starten im Nur-Lesen-Modus als gewöhnliche Konnektoren und melden sich selbst an; ihre Anmeldung speichern sie selbst.
+
+Verbundene Apps **lesen nur**: Mails auflisten und lesen, Kalender und Termine eines Zeitraums, Dateien suchen und als Text lesen. Kreuzt du beim Verbinden **Auch schreiben** an, kommen Mail-Entwürfe (es wird nie etwas gesendet) oder neue Termine dazu; sie fragen wie jede Aktion vorher. Client-Schlüssel, Anmeldung und Passwörter liegen im Schlüsselbund, abgelaufene Anmeldungen erneuert AIS.ChatCraft selbst. Ist eine Anmeldung nicht mehr gültig, zeigt die Liste **Neu anmelden**. Entfernen löscht auch die gespeicherte Anmeldung.
+
 ### Pakete mit einem Klick
 
 MCP-Pakete (`.mcpb`, wie die Erweiterungen von Claude Desktop) installierst du unter **Einstellungen › Konnektoren › Paket installieren …**. Vorher zeigt AIS.ChatCraft, was das Paket darf: welches Programm es startet (mit deinen Rechten, ohne Abschottung), welche Ordner, Dateien und Zugangsdaten es bekommt, und seine Einstellungen. Erst „Installieren und starten“ legt es unter `plugins/` im Datenordner ab und startet es. Zugangsdaten liegen im Schlüsselbund. Versteckte Ordner wie `.ssh` gibt AIS.ChatCraft keinem Paket.

@@ -2,6 +2,7 @@
 //! and exposes one registry of commands. The egui shell, the CLI and the JSON control channel
 //! all dispatch the same commands by id, so everything a person can do, an agent can do.
 
+mod accounts;
 mod action_log;
 mod ai_label;
 mod apps;
@@ -82,6 +83,7 @@ pub use secrets::Secrets;
 pub use skills::Skill;
 pub use state::*;
 pub use tasks::{TASK_RESULT, TaskCard, running_summary, task_card};
+pub use accounts::{BUILTIN_GOOGLE_CLIENT_ID, BUILTIN_MICROSOFT_CLIENT_ID, CatalogEntry, CatalogField, catalog as connector_catalog, catalog_categories};
 pub use tools::{obsidian_vaults, presets as connector_presets};
 pub use update::{CURRENT_VERSION, finish_update_helper};
 pub use vault::{EntryInfo as VaultEntry, totp_at};
@@ -158,6 +160,8 @@ pub(crate) struct Inner {
     cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
     next_notice: std::sync::atomic::AtomicU64,
     tools: tools::ToolRuntime,
+    /// Connected apps (#26): the browser opener, test endpoints, one token refresh at a time.
+    pub(crate) accounts: accounts::Runtime,
     /// Local files, connector packages, plug-ins and connector views (#25, #43, #28, #74).
     ext: ext::Runtime,
     bridge: bridge::Bridge,
@@ -268,6 +272,7 @@ impl Engine {
             cancels: Mutex::new(HashMap::new()),
             next_notice: std::sync::atomic::AtomicU64::new(1),
             tools: Default::default(),
+            accounts: accounts::Runtime::new(opts.data_dir.is_some() && std::env::var_os("AISCRAFT_NO_BROWSER").is_none()),
             ext: ext::Runtime::new(opts.data_dir.clone()),
             bridge: Default::default(),
             voice: Default::default(),
@@ -332,6 +337,7 @@ impl Engine {
         {
             let _guard = engine._rt.enter();
             tools::load(&engine.ctx);
+            accounts::load(&engine.ctx);
             ext::load(&engine.ctx);
             let schedules = schedules::load(&engine.ctx);
             let skills = skills::load(&engine.ctx);
@@ -784,6 +790,8 @@ mod chatux_tests;
 mod know_tests;
 #[cfg(test)]
 mod local_files_tests;
+#[cfg(test)]
+mod accounts_tests;
 
 #[cfg(test)]
 mod nod_tests;

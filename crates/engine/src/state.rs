@@ -57,6 +57,9 @@ pub struct State {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detached: Vec<crate::windows::DetachedView>,
     pub connectors: Vec<ConnectorView>,
+    /// The connected app whose sign-in in the browser is running (#26), by catalog name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_sign_in: Option<String>,
     /// Local files (#25): on or off, folders kept out.
     #[serde(default)]
     pub local_files: crate::local_files::LocalFilesState,

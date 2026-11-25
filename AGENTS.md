@@ -146,7 +146,8 @@ behaviour, then the code.
 
 Feature parity with n8n Nod is tracked in the issues (Nod: …). Done: memory from the owner's own
 words (with provenance, hourly tidy-up), trust check and approvals bound to exact arguments,
-connectors (MCP, also for the Claude subscription via the tool bridge), schedules, page watches,
+connectors (MCP, also for the Claude subscription via the tool bridge), connected apps (catalog:
+Microsoft 365, Google, CalDAV; OAuth in the system browser, `engine/src/accounts`), schedules, page watches,
 check-ins, usage ledger with monthly limit, history search and recall, learned skills, background
 tasks, voice in and out, hints (nudges) with quiet hours, vault with placeholders and TOTP.
 Not adopted on purpose: Nod's own sandbox computer and browser (AIS.ChatCraft runs no code itself; learning
