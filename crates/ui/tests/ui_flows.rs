@@ -45,6 +45,23 @@ fn sources_popup_stays_open_until_closed() {
     assert!(h.query_by_label("Gedächtnis (deine Notizen)").is_none(), "Schließen closes it");
 }
 
+/// „Erstellen“ with nothing typed: the choice waits in the composer for its topic; „Abbrechen“
+/// returns to a normal message. Every entry can be chosen, there is no extra topic field.
+#[test]
+fn create_menu_asks_for_the_topic_in_the_composer() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let mut h = harness(&engine);
+    h.get_by_label_contains("Erstellen").click();
+    settled(&mut h, "📝 Arbeitsblatt");
+    assert!(h.query_by_label("Thema").is_none(), "no second topic field in the menu");
+    let entry = h.get_by_label("📝 Arbeitsblatt");
+    assert!(!entry.accesskit_node().is_disabled(), "choosable with an empty composer");
+    entry.click();
+    step_until(&mut h, "the composer asks for the topic", |h| h.query_by_label_contains("Arbeitsblatt erstellen: Thema eingeben").is_some());
+    click_until(&mut h, "Abbrechen", "back to a normal message", |h| h.query_by_label_contains("Thema eingeben").is_none());
+    assert!(engine.state().messages.is_empty(), "nothing was sent");
+}
+
 /// Project instructions are a source only inside a project.
 #[test]
 fn project_instructions_are_a_source_only_in_a_project() {

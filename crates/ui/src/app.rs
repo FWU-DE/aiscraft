@@ -74,6 +74,8 @@ pub struct AisCraftApp {
     panel_layout: PanelLayout,
     /// Draw the next "Erstellen" menu as an icon (narrow composer).
     pub(crate) create_as_icon: bool,
+    /// "Erstellen" chosen with an empty composer: (command, what) until the topic is sent or cancelled.
+    pub(crate) create_pending: Option<(&'static str, &'static str)>,
     pub(crate) pending_files: Vec<PathBuf>,
     /// Web links for the next message, and the address being typed (`Some` while the field is open).
     pub(crate) pending_links: Vec<String>,
@@ -271,6 +273,7 @@ impl AisCraftApp {
             composer_need: 0.0,
             panel_layout: PanelLayout::default(),
             create_as_icon: false,
+            create_pending: None,
             pending_files: Vec::new(),
             pending_links: Vec::new(),
             link_input: None,
