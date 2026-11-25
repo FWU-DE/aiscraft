@@ -83,6 +83,8 @@ fn exports_are_labelled_as_ai_generated() {
     let text = md(&engine, &mid);
     assert!(text.starts_with("Ich bin Goethe.") && text.contains("*Erstellt mit KI (AIS.chat, Modell GPT), "), "{text}");
     assert!(!text.contains("Wandertag"), "no prompt unless asked for");
+    let chat = engine.call("chat.export", json!({})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(chat.trim_end().ends_with(".*") && chat.contains("*Erstellt mit KI (AIS.chat, Modell GPT), "), "the chat export too: {chat}");
     engine.call("settings.set", json!({"key": "ai_label_prompt", "value": true})).unwrap();
     assert!(md(&engine, &mid).contains("**Prompt:**\n\n> Elternbrief zum Wandertag"));
     // Word and PDF carry it too.

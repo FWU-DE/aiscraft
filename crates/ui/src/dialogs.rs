@@ -1003,7 +1003,7 @@ impl AisCraftApp {
                 if ui.checkbox(&mut with_prompt, "Prompt mitschreiben").changed() {
                     self.run("settings.set", json!({"key": "ai_label_prompt", "value": with_prompt}));
                 }
-                ui.label(small_muted(&t, "Word, PDF, Markdown, Excel, Arbeitsblätter, Lern-Apps, H5P und Kalenderdateien bekommen am Ende „Erstellt mit KI (Dienst, Modell), Datum“. Die Nutzungsbedingungen von AIS.chat verlangen das für weitergegebene Ausgaben. Kopieren bleibt unverändert; „Mit Kennzeichnung kopieren“ steht im Rechtsklick-Menü von „Kopieren“."));
+                ui.label(small_muted(&t, "Word, PDF, Markdown, Excel, Arbeitsblätter, Lern-Apps, H5P, Kalenderdateien und der Chat-Export bekommen am Ende „Erstellt mit KI (Dienst, Modell), Datum“, Bilder als Kommentar in der Datei. Die Nutzungsbedingungen von AIS.chat verlangen das für weitergegebene Ausgaben. Kopieren bleibt unverändert; „Mit Kennzeichnung kopieren“ steht im Rechtsklick-Menü von „Kopieren“."));
                 ui.add_space(6.0);
                 let mut pro = st.proactive;
                 if ui.checkbox(&mut pro, "Hinweise: stündlich auf offene Zusagen, Fristen und Erinnerungswünsche achten").changed() {

@@ -142,6 +142,57 @@ pub(crate) fn note_for_artifact(c: &Ctx, a: &Artifact) -> Option<Note> {
     build(c, &conv.backend_id, Some(&model), prompt_before(&messages, idx), false)
 }
 
+/// The note for a whole chat exported as Markdown: service and the newest answer's model, no
+/// prompt (the chat holds them all).
+pub(crate) fn note_for_chat(c: &Ctx, conv: &aiscraft_core::Conversation, messages: &[Message]) -> Option<Note> {
+    let model = messages.iter().rev().find(|m| m.role == Role::Assistant).and_then(|m| m.model.clone()).unwrap_or(conv.model_id.clone());
+    build(c, &conv.backend_id, Some(&model), None, false)
+}
+
+/// Picture bytes with the note as their comment: a PNG `iTXt` chunk after the header, a JPEG
+/// `COM` segment after the start marker. Other formats, and anything that does not look like
+/// one of these, stay as they are.
+pub fn picture_with_note(bytes: &[u8], note: &str) -> Vec<u8> {
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
+    let text: String = note.chars().take(2000).collect();
+    if bytes.starts_with(PNG) && bytes.get(12..16) == Some(b"IHDR") {
+        // Signature (8) + IHDR: length (4), type (4), 13 bytes, CRC (4).
+        let at = 33;
+        let mut data = b"Comment\0\0\0de\0Kommentar\0".to_vec();
+        data.extend_from_slice(text.as_bytes());
+        let mut chunk = (data.len() as u32).to_be_bytes().to_vec();
+        let mut typed = b"iTXt".to_vec();
+        typed.extend_from_slice(&data);
+        chunk.extend_from_slice(&typed);
+        chunk.extend_from_slice(&crc32(&typed).to_be_bytes());
+        if let (Some(head), Some(tail)) = (bytes.get(..at), bytes.get(at..)) {
+            return [head, &chunk, tail].concat();
+        }
+    }
+    if bytes.starts_with(&[0xFF, 0xD8]) {
+        let body: Vec<u8> = text.into_bytes().into_iter().take(60_000).collect();
+        let mut seg = vec![0xFF, 0xFE];
+        seg.extend_from_slice(&((body.len() + 2) as u16).to_be_bytes());
+        seg.extend_from_slice(&body);
+        if let (Some(head), Some(tail)) = (bytes.get(..2), bytes.get(2..)) {
+            return [head, &seg, tail].concat();
+        }
+    }
+    bytes.to_vec()
+}
+
+/// CRC-32 (IEEE) as PNG chunks need it.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &b in data {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
 pub(crate) static COMMANDS: &[CommandSpec] = &[CommandSpec {
     id: "message.copy_labeled",
     label: "Mit Kennzeichnung kopieren",
@@ -174,5 +225,20 @@ mod tests {
         assert!(n.plain().ends_with("Prompt: Brief <an> Eltern\nzweite -- Zeile"));
         let h = n.html();
         assert!(!h.contains("<an>") && h.matches("--").count() == 2, "{h}");
+    }
+
+    #[test]
+    fn pictures_carry_the_note() {
+        assert_eq!(crc32(b"IEND"), 0xAE42_6082, "the CRC of an empty IEND chunk");
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend_from_slice(&[0; 17]);
+        png.extend_from_slice(b"\0\0\0\0IEND\xaeB`\x82");
+        let out = picture_with_note(&png, "Erstellt mit KI (AIS.chat), 01.12.2026");
+        assert_eq!(out.get(37..41), Some(&b"iTXt"[..]));
+        assert!(out.windows(9).any(|w| w == b"Erstellt "));
+        let jpg = picture_with_note(&[0xFF, 0xD8, 0xFF, 0xD9], "KI");
+        assert_eq!(jpg, vec![0xFF, 0xD8, 0xFF, 0xFE, 0, 4, b'K', b'I', 0xFF, 0xD9]);
+        assert_eq!(picture_with_note(b"GIF89a", "KI"), b"GIF89a");
+        assert_eq!(picture_with_note(b"\x89PNG", "KI"), b"\x89PNG", "too short stays as is");
     }
 }

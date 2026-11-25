@@ -965,7 +965,14 @@ async fn chat_export(c: Ctx, p: Value) -> Result<Value> {
     let text = match opt_str(&p, "format").as_deref().unwrap_or("markdown") {
         "json" => serde_json::to_string_pretty(&json!({"conversation": conv, "messages": messages}))?,
         // Placeholders of „Namen schützen“ back to the names; the JSON keeps what was sent.
-        "markdown" | "md" => crate::privacy::reveal(&c, &id, &markdown_export(&conv.title, &messages)),
+        "markdown" | "md" => {
+            let mut md = markdown_export(&conv.title, &messages);
+            // „Erstellt mit KI“ (#57) under the chat.
+            if let Some(note) = crate::ai_label::note_for_chat(&c, &conv, &messages) {
+                md.push_str(&note.markdown());
+            }
+            crate::privacy::reveal(&c, &id, &md)
+        }
         other => return Err(Error::invalid(format!("Unbekanntes Format {other}"))),
     };
     if let Some(path) = opt_str(&p, "path") {
@@ -1023,7 +1030,17 @@ async fn save_image(c: Ctx, p: Value) -> Result<Value> {
         .and_then(|m| m.attachments.iter().filter(|a| a.mime.starts_with("image/")).nth(index))
         .and_then(|a| a.local_path.clone())
         .ok_or_else(|| Error::not_found("Bild nicht gefunden"))?;
-    std::fs::copy(&src, &path).map_err(|e| Error::storage(format!("{path}: {e}")))?;
+    let size = std::fs::metadata(&src).map_err(|e| Error::storage(format!("{src}: {e}")))?.len();
+    if size > crate::files::MAX_FILE_BYTES {
+        return Err(Error::invalid("Das Bild ist größer als 25 MB"));
+    }
+    let bytes = std::fs::read(&src).map_err(|e| Error::storage(format!("{src}: {e}")))?;
+    // „Erstellt mit KI“ (#57) as the picture's comment.
+    let bytes = match crate::ai_label::note_for_message(&c, Some(&mid)) {
+        Some(note) => crate::ai_label::picture_with_note(&bytes, &note.plain()),
+        None => bytes,
+    };
+    crate::disk::write(std::path::Path::new(&path), &bytes)?;
     c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
     Ok(json!({"path": path}))
 }
