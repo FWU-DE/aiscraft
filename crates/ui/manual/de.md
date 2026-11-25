@@ -49,10 +49,13 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 - **Anhänge:** Büroklammer oder Dateien ins Fenster ziehen. Bilder und PDFs gehen an Modelle, die sie lesen können; Textdateien werden mitgeschickt. Für AIS.chat siehe „Dateien für AIS.chat“.
 - **Diktieren:** Mikrofon im Eingabefeld. Der Text landet im Eingabefeld, du schickst ihn selbst ab. Braucht einen OpenAI-kompatiblen Dienst mit Transkription.
 - **Vorlesen:** „Vorlesen“ unter einer Antwort. Nutzt AIS.chat, wenn du dort angemeldet bist.
+- **Speichern als:** „Speichern als“ unter einer Antwort schreibt sie als Word, PDF oder Markdown; Excel nimmt die Tabellen der Antwort, eine pro Blatt. Stehen Termine in der Antwort (ein ics-Block oder eine Tabelle mit Datum), speichert „Kalenderdatei (.ics)“ sie für Outlook, Google, Apple oder Thunderbird.
+- **Erstellt mit KI:** Was du aus einer AIS.chat-Antwort speicherst (Word, PDF, Markdown, Excel, Arbeitsblätter, Lern-Apps, H5P, Kalenderdateien, der Chat als Markdown), bekommt am Ende; gespeicherte Bilder tragen ihn als Kommentar in der Datei „Erstellt mit KI (AIS.chat, Modell …), Datum“; das verlangen die Nutzungsbedingungen von AIS.chat. Einstellungen › Fähigkeiten & Hinweise: für alle Dienste, nie, und ob der Prompt mitgeschrieben wird. Kopieren bleibt unverändert; ein Rechtsklick auf „Kopieren“ bietet „Mit Kennzeichnung kopieren“.
+- **Lesbarkeit:** „Lesbarkeit“ unter einer Antwort zeigt Wortzahl, Flesch-Wert, LIX, etwa welche Klassenstufe und wie viele Sätze länger als 20 Wörter sind. Fährst du über die Zeile, siehst du die langen Sätze. Berechnet wird auf diesem Rechner; nichts geht nach außen.
 - **Links prüfen:** „Links prüfen“ unter einer Antwort fragt jede Adresse darin einmal an (höchstens 20). Tote Links stehen durchgestrichen unter der Antwort. Adressen im lokalen Netz fragt AIS.ChatCraft nie an. Automatisch für jede Antwort: Einstellungen › Fähigkeiten & Hinweise (standardmäßig aus, weil dabei fremde Seiten kontaktiert werden).
 - **Nachdenken:** Modelle, die vor der Antwort nachdenken (Claude, Denkmodelle bei Ollama, LM Studio oder DeepSeek), zeigen eine Zusammenfassung davon zugeklappt als „Nachgedacht“ über der Antwort; ein Klick klappt sie auf. Bei AIS.chat stehen dort die Analyseschritte. Wie gründlich Claude nachdenkt, stellst du pro Chat unter **Quellen** › „Nachdenken vor der Antwort“ ein: Standard, Wenig, Mittel, Gründlich oder Sehr gründlich. Gründlicher dauert länger und kostet mehr.
 - **Antwortstil:** „Stil“ im Eingabefeld legt fest, wie dieser Chat antwortet: Normal, Knapp, Erklärend, Formell oder „Eigener Stil …“ nach einem Beispieltext, den du einfügst (etwa einem eigenen Elternbrief; übernommen wird nur der Stil, nicht der Inhalt). Der Stil gilt für diesen Chat; ein neuer Chat beginnt wieder normal. Bei AIS.chat geht er als Hinweis in deiner nächsten Nachricht mit, danach erst wieder, wenn du ihn änderst.
-- **Vorübergehender Chat:** „Vorübergehender Chat“ oben auf der Startseite (vor der ersten Nachricht) beginnt einen Chat, der nur im Arbeitsspeicher liegt: Er steht nicht in der Seitenleiste, wird nicht durchsucht oder erinnert, legt keine Notizen an (auch nicht mit „Merk dir“) und lernt keine Fähigkeiten. Notizen aus dem Gedächtnis gehen zuerst nicht mit (unter „Quellen“ zuschaltbar). Sobald du ihn schließt oder einen anderen Chat öffnest, ist er samt Kopien seiner Anhänge weg. Was du an den Dienst schickst, verarbeitet dieser trotzdem nach seinen Regeln; bei AIS.chat steht der Chat dort im Verlauf. Dokumente, die du daraus anlegst, bleiben.
+- **Temporärer Chat:** „Temporärer Chat“ oben auf der Startseite (anderswo auch „Inkognito“ genannt) beginnt vor der ersten Nachricht einen Chat, der nur im Arbeitsspeicher liegt: Er steht nicht in der Seitenleiste, wird nicht durchsucht oder erinnert, legt keine Notizen an (auch nicht mit „Merk dir“) und lernt keine Fähigkeiten. Notizen aus dem Gedächtnis gehen zuerst nicht mit (unter „Quellen“ zuschaltbar). Sobald du ihn schließt oder einen anderen Chat öffnest, ist er samt Kopien seiner Anhänge weg. Was du an den Dienst schickst, verarbeitet dieser trotzdem nach seinen Regeln; bei AIS.chat steht der Chat dort im Verlauf. Dokumente, die du daraus anlegst, bleiben.
 - **Kontextfenster:** oben rechts im Chat, wie viel vom Kontext des Modells belegt ist. „≈“ heißt geschätzt. Die Tokens einer einzelnen Antwort stehen im Tooltip am Modellnamen über ihr.
 - **Bilder erzeugen:** „🖼 Bild erzeugen“ in der Seitenleiste (oder ein Bildmodell im Modellmenü) startet einen Bild-Chat bei AIS.chat: beschreibe, was das Bild zeigen soll, und wähle das Format. Fehlt der Eintrag, hat dein Land die Bilderzeugung in AIS.chat ausgeschaltet.
 - **AIS.chat-Kontingent:** unten links, wie viele Token-Punkte noch übrig sind.
@@ -131,6 +134,8 @@ Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebt
 
 **Erstellen mit AIS.chat:** Schreib das Thema ins Eingabefeld, z. B. „Brüche vergleichen, Klasse 6“, und wähle unten **Erstellen** › **Lern-App** oder **Arbeitsblatt**. AIS.ChatCraft schickt eine ausführliche Anfrage mit allen Vorgaben (eine Datei, kein Internet, barrierefrei, Deutsch) und öffnet das Ergebnis rechts. Im Chat steht davon nur dein Thema; die Vorgaben liegen eingeklappt darunter unter „Formatvorgabe“ und klappen per Klick auf. Kommt in einer Antwort ein ```` ```html ````-Block mit einer ganzen HTML-Datei oder ein ```` ```aiscraft-worksheet ````-Block vor, zeigt AIS.ChatCraft darunter eine Karte mit „Als Lern-App öffnen“ bzw. „Als Arbeitsblatt öffnen“. Kleine HTML-Schnipsel werden nie von selbst zu Lern-Apps.
 
+**Whiteboard und Termine:** **Erstellen** › **Whiteboard** bittet um eine Mindmap, einen Cluster, einen Ablauf oder eine Zeitleiste; die Antwort kommt als ```` ```aiscraft-board ````-Block mit der Karte „Whiteboard öffnen“, die Anordnung übernimmt AIS.ChatCraft. Ist der Block fehlerhaft, bittet AIS.ChatCraft einmal um Korrektur, danach bleibt die Antwort als Text. **Erstellen** › **Termine** bittet um Termine als Kalenderdatei; gespeichert wird sie mit „Speichern als“ › „Kalenderdatei (.ics)“.
+
 **Erstellen mit Claude oder OpenAI:** Modelle mit Werkzeugen legen Lern-Apps und Arbeitsblätter direkt an, wenn du darum bittest („Mach mir ein Arbeitsblatt zur Fotosynthese“). „Erstellen“ funktioniert genauso. Ein Dokument wird mit **Als Arbeitsblatt** oben im Dokument zu einem Arbeitsblatt.
 
 **Ändern:** Mit „Mit KI ändern“ oben in der Lern-App oder im Arbeitsblatt, oder im Chat mit eingeschaltetem „Im Chat“ („Ändere die App: mehr Aufgaben“). Jede Änderung ist eine neue Fassung unter **Versionen**. Bei AIS.chat übernimmst du eine geänderte Fassung mit „In die Lern-App übernehmen“ bzw. „Ins Arbeitsblatt übernehmen“.
@@ -192,6 +197,39 @@ Werkzeuge, die nur lesen, laufen direkt. Alles andere läuft nur, wenn du darum 
 **Eine Freigabe, ein Ergebnis.** Eine freigegebene Aktion oder ein Tresor-Eintrag läuft nie zweimal: nicht bei einem Doppelklick, nicht aus einem zweiten Fenster und nicht nach einem Neustart. Bricht die Verbindung mitten im Aufruf ab, versucht AIS.ChatCraft es nicht erneut, sondern meldet „unsicher – bitte prüfen“; prüfe dann im Zielprogramm, ob es geklappt hat. Dieselbe Aktion fragt danach wieder, mit diesem Hinweis auf der Karte. Was beim Beenden noch lief, meldet AIS.ChatCraft beim nächsten Start ebenso.
 
 Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
+
+### Pakete mit einem Klick
+
+MCP-Pakete (`.mcpb`, wie die Erweiterungen von Claude Desktop) installierst du unter **Einstellungen › Konnektoren › Paket installieren …**. Vorher zeigt AIS.ChatCraft, was das Paket darf: welches Programm es startet (mit deinen Rechten, ohne Abschottung), welche Ordner, Dateien und Zugangsdaten es bekommt, und seine Einstellungen. Erst „Installieren und starten“ legt es unter `plugins/` im Datenordner ab und startet es. Zugangsdaten liegen im Schlüsselbund. Versteckte Ordner wie `.ssh` gibt AIS.ChatCraft keinem Paket.
+
+- Seine Werkzeuge folgen denselben Freigaben wie jeder Konnektor. Verbote, die ein Paket mitbringt, gelten als eigene Regeln; Erlaubnisse übernimmt AIS.ChatCraft nie.
+- Abgewiesen werden Pakete mit Pfaden, die aus dem Paket hinausführen, mit Verknüpfungen, mit einem Programm außerhalb des Pakets oder für ein anderes Betriebssystem.
+- Aus- und einschalten oder entfernen geht in derselben Liste; Entfernen löscht Dateien, Einstellungen und Zugangsdaten.
+
+### Plug-ins
+
+Plug-ins erweitern AIS.ChatCraft, ohne es neu zu bauen. Sie folgen dem offenen Format [Agent Plugins](https://agent-plugins.org/specification), das auch Nod nutzt: `plugin.json` beschreibt das Plug-in, `mcp.json` seine Werkzeuge (MCP-Server), `skills/<name>/SKILL.md` seine Fähigkeiten in Markdown. Ein Plug-in-Ordner oder eine ZIP-Datei lässt sich wie ein Paket über **Plug-in-Ordner …** oder **Paket installieren …** prüfen und installieren. Wer Plug-ins von Hand in den Ordner `plugins` im Datenordner legt, findet sie nach **Ordner neu einlesen** in der Liste; sie starten erst, wenn du sie einschaltest.
+
+- Die Werkzeuge folgen denselben Freigaben wie jeder Konnektor; Verbote im Plug-in (`extensions` › `ai.uds.aischatcraft` › `rules`) gelten als deine Regeln, Erlaubnisse nie.
+- Fähigkeiten sind Hinweise für das Modell, wenn eine Bitte dazu passt, nie eine Erlaubnis. Skripte darin führt AIS.ChatCraft nicht aus.
+- Ein fehlerhafter Server oder eine fehlerhafte Fähigkeit wird übergangen und genannt; der Rest lädt. Programme müssen im Plug-in liegen oder ein reiner Programmname sein (etwa `node`); Verknüpfungen nach außen werden nicht übernommen. Das alte HTTP+SSE wird nicht unterstützt.
+
+### Ansichten von Konnektoren
+
+Manche Konnektoren liefern zu einem Ergebnis eine kleine Oberfläche, etwa einen Kalender zum Auswählen oder eine Tabelle zum Filtern (MCP Apps, wie in Claude Desktop). Unter dem Ergebnis erscheint dann die Karte **Ansicht öffnen**. Die Ansicht öffnet im eigenen Vorschaufenster, nie im Hauptfenster, in den Farben deines Looks.
+
+- Netz gibt es dort nur zu den Adressen, die der Konnektor ausdrücklich nennt, sonst keins. Ansichten, die beliebiges Netz (`*`), unverschlüsseltes `http`, fremde eingebettete Seiten, den falschen Typ oder mehr als 2 MB verlangen, öffnet AIS.ChatCraft nicht. Kamera, Mikrofon und Standort gibt es nie.
+- Aktionen aus der Ansicht laufen wie Aufrufe des Modells: Lesendes direkt, alles andere fragt mit genau den Angaben. Eine Ansicht erreicht nur Werkzeuge ihres eigenen Konnektors. Links aus der Ansicht öffnen erst, wenn du auf „Im Browser öffnen“ klickst.
+- Ohne Vorschaufenster (eine Fassung ohne `aiscraft-preview`) bleibt der Text des Ergebnisses im Chat; die Ansicht öffnet dann nicht, auch nicht im Browser.
+- Noch nicht: Nachrichten der Ansicht an den Chat (`ui/message`).
+
+### Lokale Dateien
+
+„Lies die PDF in Downloads und fasse sie zusammen“ oder „Speichere den Bericht in Dokumente“ geht ohne eigenen Konnektor. Lokale Dateien sind zuerst aus. Fragt ein Modell danach, erscheint im Chat eine Frage; „Erlauben“ schaltet sie ein und führt die Aktion aus, „Ablehnen“ lässt sie aus. Aufgaben und Zeitpläne können sie nicht einschalten und greifen nie auf Dateien zu. Abschalten unter **Einstellungen › Konnektoren**.
+
+- Erlaubt sind dein Persönlicher Ordner und externe Laufwerke. Verknüpfungen werden aufgelöst; zählt, wohin sie führen.
+- Immer gesperrt: versteckte Ordner und Dateien (`.ssh`, `.config`, Browserprofile, Schlüsselbund), Programmordner (`Library`, `AppData`), Dateien mit Geheimnissen (`.env`, Schlüssel wie `id_rsa` oder `.pem`, Passwort-Datenbanken wie `.kdbx`), die Daten von AIS.ChatCraft und Ordner, die du unter **Ordner sperren** einträgst.
+- Auflisten läuft ohne Frage. Lesen (Text bis 256 KB, PDF als Text) und Speichern (Text bis 1 MB) folgen den Freigaben oben; Ersetzen einer Datei fragt immer. Programme und Skripte legt AIS.ChatCraft nicht an.
 
 ## Zeitpläne und Aufgaben
 

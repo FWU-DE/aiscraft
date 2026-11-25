@@ -19,6 +19,9 @@ pub struct State {
     pub backends: Vec<BackendView>,
     pub conversations: Vec<Conversation>,
     pub projects: Vec<Project>,
+    /// Files in the projects' knowledge (#32), without their text.
+    #[serde(default)]
+    pub project_files: Vec<aiscraft_core::ProjectFile>,
     pub memory: Vec<MemoryNote>,
     /// The open conversation; `None` = a new chat that starts on the first message.
     pub current: Option<String>,
@@ -46,6 +49,12 @@ pub struct State {
     /// Increases when any artifact's content changes, so open views reload.
     pub artifact_rev: u64,
     pub connectors: Vec<ConnectorView>,
+    /// Local files (#25): on or off, folders kept out.
+    #[serde(default)]
+    pub local_files: crate::local_files::LocalFilesState,
+    /// Installed connector packages and plug-ins, and the one being installed (#43, #28).
+    #[serde(default)]
+    pub extensions: crate::ext::ExtensionsState,
     /// Tool calls waiting for the owner's yes or no.
     pub approvals: Vec<Approval>,
     pub schedules: Vec<crate::schedules::Schedule>,
@@ -55,6 +64,9 @@ pub struct State {
     pub skills: Vec<crate::skills::Skill>,
     /// Dictation is recording.
     pub recording: bool,
+    /// The voice mode (#40), while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_mode: Option<crate::voice_mode::VoiceModeView>,
     /// Vault entries, without their secrets.
     pub vault: Vec<crate::vault::EntryInfo>,
     /// „Namen schützen“: class lists (without names) and the composer's preview (#55).
@@ -74,6 +86,18 @@ pub struct State {
     /// The update check: running version, what the last check found.
     #[serde(default)]
     pub update: UpdateState,
+    /// Research in the background (#37).
+    #[serde(default)]
+    pub research: crate::research::ResearchState,
+    /// Templates for recurring tasks (#54).
+    #[serde(default)]
+    pub templates: Vec<crate::templates::Template>,
+    /// Text for the composer from a template or a connector (#53, #54); the UI takes each `seq` once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer_fill: Option<crate::templates::ComposerFill>,
+    /// Readability shown under answers (`message.readability`, #48), by message id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub readability: BTreeMap<String, crate::readability::Readability>,
 }
 
 /// Work running in the background (#69).
@@ -179,6 +203,9 @@ pub struct ConnectorView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub tools: Vec<ConnectorTool>,
+    /// The installed package or plug-in it comes from (#43, #28); managed there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,6 +219,15 @@ pub struct ConnectorTool {
     pub destructive: bool,
     #[serde(skip)]
     pub input_schema: serde_json::Value,
+    /// The `ui://` view the tool comes with (MCP Apps, #74).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_resource: Option<String>,
+    /// Only for the view: the model neither sees nor calls it.
+    #[serde(default)]
+    pub app_only: bool,
+    /// A view of the same connector may call it.
+    #[serde(default)]
+    pub app_callable: bool,
 }
 
 /// A tool call the model wants to make and the owner has to allow.
@@ -390,6 +426,12 @@ pub struct Settings {
     /// New worksheets count points (on by default); off: they count right tasks, and models
     /// are told to leave points out. Each sheet has its own switch afterwards.
     pub worksheet_points: bool,
+    /// „Erstellt mit KI“ on exports (#57): `ais-chat` (only content from AIS.chat, the
+    /// default, as its terms of use ask), `all` or `off`.
+    pub ai_label: String,
+    /// Write the prompt along with the label (off: a prompt may hold things not meant for a
+    /// handout).
+    pub ai_label_prompt: bool,
     /// The owner's own rules for the trust check (#22); changed with `trust.rule_add` and
     /// `trust.rule_remove`.
     pub trust_rules: Vec<TrustRule>,
@@ -444,6 +486,8 @@ impl Default for Settings {
             quiet_end: 7,
             update_check: true,
             worksheet_points: true,
+            ai_label: "ais-chat".into(),
+            ai_label_prompt: false,
             trust_rules: Vec::new(),
             fallback_models: Vec::new(),
             fallback_other_services: false,

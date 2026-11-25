@@ -856,6 +856,21 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     // the message, once and again only after they change, when the person agreed to it; fitting
     // skills and earlier chats once per chat. The message says what went along.
     let inline = inline_context(&c, &conv, caps.system_prompt, &request);
+    // Project knowledge (#32): fitting parts of the project's files; documents with citations for
+    // Claude (API), text in front of the message elsewhere. The message names the files.
+    let knowledge = crate::knowledge::pick(&c, &conv, &request, caps.remote_history);
+    let as_documents = backend.config().kind == aiscraft_core::BackendKind::Anthropic;
+    let mut last_user = last_user;
+    if let (Some(k), Some(user)) = (&knowledge, last_user.as_mut()) {
+        user.activity.retain(|s| s.label != crate::knowledge::KNOWLEDGE);
+        user.activity.push(aiscraft_core::ActivityStep {
+            label: crate::knowledge::KNOWLEDGE.into(),
+            detail: Some(k.names()),
+            done: true,
+            ..Default::default()
+        });
+        put_message(&c, &conv_id, user);
+    }
     // Fitting chats with another service left out are named there too.
     if let (Some(sent), Some(mut user)) = (&inline, last_user) {
         user.activity.retain(|s| s.label != SENT_ALONG && s.label != LEFT_OUT);
@@ -869,6 +884,11 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     let context = match (inline.as_ref().filter(|s| !s.block.is_empty()), context) {
         (Some(sent), Some(ctx)) => Some(format!("{}\n\n{ctx}", sent.block)),
         (Some(sent), None) => Some(sent.block.clone()),
+        (None, ctx) => ctx,
+    };
+    let context = match (knowledge.as_ref().filter(|_| !as_documents), context) {
+        (Some(k), Some(ctx)) => Some(format!("{}\n\n{ctx}", k.block())),
+        (Some(k), None) => Some(k.block()),
         (None, ctx) => ctx,
     };
     // „Namen schützen“ (#55): the single point every request of this chat passes. The system
@@ -919,6 +939,19 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         let mut history = c.store(|st| st.messages(&conv_id))?;
         history.retain(|m| m.id != answer.id);
         files::hydrate(&mut history);
+        if as_documents
+            && let Some(k) = &knowledge
+            && let Some(last) = history.iter_mut().rev().find(|m| m.role == Role::User)
+        {
+            for (name, text) in &k.docs {
+                last.attachments.push(aiscraft_core::Attachment {
+                    name: name.clone(),
+                    mime: "text/plain".into(),
+                    text: Some(text.clone()),
+                    ..Default::default()
+                });
+            }
+        }
         if let Some(g) = guard.as_mut() {
             g.messages(&mut history);
         }
@@ -976,7 +1009,8 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
                     tool_msg.role = Role::Tool;
                     tool_msg.model = None;
                     tool_msg.content = text;
-                    tool_msg.tool_result = Some(aiscraft_core::ToolResultInfo { call_id: call.id.clone(), name: call.name.clone(), is_error });
+                    let view = crate::tools::take_view(&c, &call.id);
+                    tool_msg.tool_result = Some(aiscraft_core::ToolResultInfo { call_id: call.id.clone(), name: call.name.clone(), is_error, view });
                     put_message(&c, &conv_id, &tool_msg);
                 }
                 if *cancel_rx.borrow() {
@@ -1058,6 +1092,9 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     let sent = inline.filter(|_| result.is_ok() && answer.error.is_none());
     if let Some(sent) = &sent {
         remember_inline(&mut updated.sources, sent);
+    }
+    if let Some(k) = knowledge.as_ref().filter(|_| caps.remote_history && result.is_ok() && answer.error.is_none()) {
+        crate::knowledge::remember(&mut updated.sources, &k.keys);
     }
     let _ = c.store(|st| st.save_conversation(&updated));
     c.0.cancels.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&conv_id);

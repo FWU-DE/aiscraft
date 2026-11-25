@@ -30,6 +30,7 @@ craft-csv.workspace = true
 craft-ods.workspace = true
 craft-metadata.workspace = true
 craft-image-codecs.workspace = true
+craft-text.workspace = true
 aiscraft-core.workspace = true
 aiscraft-store.workspace = true
 aiscraft-backends.workspace = true
@@ -43,10 +44,12 @@ directories.workspace = true
 log.workspace = true
 regex.workspace = true
 base64 = "0.22"
+# Glyph positions from craft-pdf's interpreter (PDF text for project knowledge, #32); already in the tree.
+kurbo = "0.13"
 yrs = "0.28"
 hmac = "0.12"
 sha1 = "0.10"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 notify-rust = { version = "4", default-features = false, features = ["z"] }
 webbrowser = "1"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }

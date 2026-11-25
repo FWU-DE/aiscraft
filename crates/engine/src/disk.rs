@@ -28,6 +28,23 @@ pub(crate) fn write_new(path: &Path, bytes: &[u8], what: &str) -> Result<()> {
     WriteOptions::default().write_new_custom(fs_for(path), path, bytes).map_err(|e| Error::io(what, &e))
 }
 
+/// Mark a program file of an installed package as executable (Unix); elsewhere nothing to do.
+pub(crate) fn make_executable(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(path).map_err(|e| Error::io(path.display(), &e))?;
+        let mut perms = meta.permissions();
+        if perms.mode() & 0o100 == 0 {
+            perms.set_mode(perms.mode() | 0o700);
+            std::fs::set_permissions(path, perms).map_err(|e| Error::io(path.display(), &e))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 /// Create a folder and its parents.
 pub(crate) fn create_dir(dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir).map_err(|e| Error::io(format_args!("Ordner {}", dir.display()), &e))

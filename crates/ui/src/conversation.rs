@@ -29,7 +29,8 @@ impl AisCraftApp {
             .show_separator_line(false)
             .frame(Frame::new().inner_margin(Margin { left: 0, right: 0, top: 6, bottom: 10 }))
             .show(ui, |ui| {
-                centered(ui, |ui| self.composer(ui));
+                let w = crate::app::CONTENT_WIDTH.max(self.composer_need);
+                centered_w(ui, w, |ui| self.composer(ui));
             });
         let main = if self.tokens.glass.is_some() { self.tokens.main.gamma_multiply(0.6) } else { self.tokens.main };
         let out = ScrollArea::vertical().id_salt(("messages", self.state.current.clone())).stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
@@ -45,7 +46,9 @@ impl AisCraftApp {
                     let top = ui.cursor().min.y;
                     match m.role {
                         Role::User => self.user_message(ui, m),
-                        // Tool results are shown as chips on the call, not as messages.
+                        // Tool results are shown as chips on the call, not as messages; a result
+                        // with a connector's view gets its card (#74).
+                        Role::Tool if m.tool_result.as_ref().is_some_and(|r| r.view.is_some()) => self.view_card(ui, m),
                         Role::Tool => continue,
                         _ => self.assistant_message(ui, m, Some(i) == last_assistant),
                     }
@@ -191,8 +194,7 @@ impl AisCraftApp {
                 } else {
                     // A temporary chat (#34): switched on before the first message.
                     let temp = self.state.selection.temporary;
-                    let (kind, label) =
-                        if temp { (crate::kit::Pill::Accent2, "Vorübergehend: an") } else { (crate::kit::Pill::Ghost, "Vorübergehender Chat") };
+                    let (kind, label) = if temp { (crate::kit::Pill::Accent2, "Temporär: an") } else { (crate::kit::Pill::Ghost, "Temporärer Chat") };
                     if crate::kit::pill(ui, &t, kind, None, label, 12.5, None)
                         .on_hover_text("Wird nicht gespeichert, nicht durchsucht und legt keine Notizen an; beim Schließen ist er weg.")
                         .clicked()
@@ -237,7 +239,7 @@ impl AisCraftApp {
                                 meta.push(self.state.model_name(&self.state.selection.backend_id, &self.state.selection.model_id));
                             }
                             if c.temporary {
-                                meta.push("Vorübergehend, wird nicht gespeichert".to_string());
+                                meta.push("Temporär, wird nicht gespeichert".to_string());
                             } else {
                                 meta.push(aiscraft_engine::friendly_time(c.updated_at, aiscraft_engine::now_ms()));
                             }
@@ -390,7 +392,8 @@ impl AisCraftApp {
         if home {
             ScrollArea::vertical().id_salt("start-page").auto_shrink([false, false]).show(ui, |ui| {
                 ui.add_space(18.0);
-                centered_w(ui, 820.0, |ui| self.home_page(ui, first));
+                let w = 820.0_f32.max(self.composer_need);
+                centered_w(ui, w, |ui| self.home_page(ui, first));
             });
             return;
         }
@@ -714,6 +717,7 @@ impl AisCraftApp {
                     crate::markup::Segment::App(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::App, src),
                     crate::markup::Segment::Worksheet(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::Worksheet, src),
                     crate::markup::Segment::H5p(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::H5p, src),
+                    crate::markup::Segment::Board(src) => self.learn_card(ui, aiscraft_core::ArtifactKind::Board, src),
                     seg => {
                         if let Some(crate::markup::Action::Board(outline)) = crate::markup::show(ui, &mut self.md, &t, &seg, (&m.id, k)) {
                             self.run("artifact.create", json!({"kind": "board", "content": outline}));
@@ -787,7 +791,10 @@ impl AisCraftApp {
                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                 use crate::icons::Icon;
                 use crate::kit::{Pill, pill};
-                if pill(ui, &t, Pill::Ghost, Some(Icon::Copy), "Kopieren", 13.0, None).on_hover_text("Antwort in die Zwischenablage").clicked() {
+                let copy = pill(ui, &t, Pill::Ghost, Some(Icon::Copy), "Kopieren", 13.0, None)
+                    .on_hover_text("Antwort in die Zwischenablage; Rechtsklick: mit Kennzeichnung");
+                self.copy_menu(&copy, m);
+                if copy.clicked() {
                     ui.ctx().copy_text(m.content.clone());
                 }
                 if pill(ui, &t, Pill::Ghost, Some(Icon::Speaker), "Vorlesen", 13.0, None)
@@ -815,10 +822,12 @@ impl AisCraftApp {
                 {
                     self.run("message.check_links", json!({"message_id": m.id}));
                 }
+                self.answer_tools(ui, &t, m);
                 if is_last && crate::kit::icon_button(ui, &t, Icon::Refresh, "Neu erzeugen (Strg+R)", t.muted, 17.0, 32.0).clicked() {
                     self.run("chat.regenerate", json!({}));
                 }
             });
+            self.readability_line(ui, &t, m);
         } else if !generating && !m.content.is_empty() {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
@@ -1036,6 +1045,12 @@ impl AisCraftApp {
                     &t,
                     format!("Gehen am Anfang deiner nächsten Nachricht mit und bleiben im Verlauf bei {name}; danach nur, wenn sie sich ändern."),
                 ));
+            }
+            if self.state.selection.project_id.as_ref().is_some_and(|p| self.state.project_files.iter().any(|f| &f.project_id == p)) {
+                let mut knowledge = src.knowledge;
+                if ui.checkbox(&mut knowledge, "Projektwissen (Dateien des Projekts)").changed() {
+                    set("knowledge", knowledge);
+                }
             }
             let mut tools = src.tools;
             if ui.checkbox(&mut tools, "Werkzeuge (Dokumente, Whiteboards, Zeitpläne)").changed() {
@@ -1332,7 +1347,7 @@ impl AisCraftApp {
         frame.show(ui, |ui| {
             self.status_line(ui);
             if self.state.selection.temporary {
-                ui.label(small_muted(&t, "Vorübergehender Chat: wird nicht gespeichert und ist beim Schließen weg."));
+                ui.label(small_muted(&t, "Temporärer Chat: wird nicht gespeichert und ist beim Schließen weg."));
             }
             if !self.pending_files.is_empty() {
                 let remove = self.attachment_chips(ui);
@@ -1396,6 +1411,7 @@ impl AisCraftApp {
             {
                 ui.label(small_muted(&t, format!("📄 {} geht als Kontext mit", a.title)));
             }
+            self.composer_bars(ui);
             if !image_mode {
                 self.privacy_preview(ui);
             }
@@ -1461,6 +1477,7 @@ impl AisCraftApp {
     /// chips, the microphone and the round send button.
     fn composer_tools(&mut self, ui: &mut Ui, generating: bool, image_mode: bool, send: &mut bool) {
         let t = self.tokens.clone();
+        let mut tools_w = 0.0_f32;
         // A narrow composer (next to a panel, small window): "Erstellen" becomes the sparkle icon.
         let compact = ui.available_width() < 560.0;
         ui.horizontal(|ui| {
@@ -1493,6 +1510,9 @@ impl AisCraftApp {
                         *send = true;
                     }
                 }
+                if !image_mode && !self.state.recording {
+                    self.voice_mode_button(ui);
+                }
                 if self.state.recording {
                     if crate::kit::pill(ui, &t, crate::kit::Pill::Accent2, Some(crate::icons::Icon::Stop), "Diktat beenden", 13.5, None).clicked() {
                         let engine = self.engine.clone();
@@ -1518,25 +1538,40 @@ impl AisCraftApp {
                 } else if crate::kit::icon_button(ui, &t, crate::icons::Icon::Mic, "Diktieren", t.text2, 19.0, 36.0).clicked() {
                     self.run("voice.record_start", json!({}));
                 }
+                // Everything right of here (send, voice, microphone) is drawn already.
+                let right_used = ui.max_rect().width() - ui.available_width();
                 ui.with_layout(Layout::left_to_right(Align::Center).with_main_wrap(true), |ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    let start = ui.cursor().min;
+                    // The width all buttons take in one row: each step adds what the cursor moved
+                    // (after a wrap: from the row start).
+                    let (mut acc, mut last) = (0.0_f32, start);
+                    fn step(ui: &Ui, acc: &mut f32, last: &mut egui::Pos2, start: egui::Pos2) {
+                        let now = ui.cursor().min;
+                        *acc += if (now.y - last.y).abs() < 1.0 { now.x - last.x } else { now.x - start.x };
+                        *last = now;
+                    }
                     if compact && !image_mode {
                         self.create_menu_icon(ui);
                     }
+                    step(ui, &mut acc, &mut last, start);
                     if !image_mode
                         && crate::kit::icon_button(ui, &t, crate::icons::Icon::Clip, "Dateien anhängen (oder hineinziehen)", t.text2, 19.0, 34.0).clicked()
                         && let Some(files) = rfd::FileDialog::new().pick_files()
                     {
                         self.take_files(files);
                     }
+                    step(ui, &mut acc, &mut last, start);
                     if !image_mode
                         && self.link_input.is_none()
                         && crate::kit::icon_button(ui, &t, crate::icons::Icon::Globe, "Webseite anhängen (bis zu 5 Links)", t.text2, 19.0, 34.0).clicked()
                     {
                         self.link_input = Some(String::new());
                     }
+                    step(ui, &mut acc, &mut last, start);
                     ui.add_space(2.0);
                     self.model_picker(ui);
+                    step(ui, &mut acc, &mut last, start);
                     if image_mode {
                         let cur = self.state.selection.aspect_ratio.clone();
                         let label = aiscraft_core::ASPECT_RATIOS.iter().find(|(k, _)| *k == cur).map(|(_, l)| *l).unwrap_or("Quadratisch");
@@ -1551,15 +1586,25 @@ impl AisCraftApp {
                         });
                     } else {
                         self.sources_menu(ui);
+                        step(ui, &mut acc, &mut last, start);
                         self.style_menu(ui);
+                        step(ui, &mut acc, &mut last, start);
                         self.privacy_switch(ui);
+                        step(ui, &mut acc, &mut last, start);
                         if !compact {
                             self.create_menu(ui);
                         }
                     }
+                    step(ui, &mut acc, &mut last, start);
+                    tools_w = acc + right_used;
                 });
             });
         });
+        // Frame margins (keyline left, 16 right), the stroke and a little air. Capped, so a long
+        // model name can't make the column endless.
+        if tools_w > 0.0 {
+            self.composer_need = (tools_w + f32::from(crate::home::KEYLINE_I8) + 16.0 + 8.0).min(1100.0);
+        }
     }
 
     /// Say when project instructions or notes are not sent, so nobody relies on them silently.

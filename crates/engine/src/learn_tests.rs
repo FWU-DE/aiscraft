@@ -35,6 +35,14 @@ fn h5p_json() -> Value {
     })
 }
 
+fn board_json() -> Value {
+    json!({
+        "title": "Wasserkreislauf", "layout": "mindmap",
+        "nodes": [{"id": "a", "text": "Wasserkreislauf"}, {"id": "b", "text": "Verdunstung"}, {"id": "c", "text": "Niederschlag"}],
+        "links": [{"from": "a", "to": "b"}, {"from": "a", "to": "c"}]
+    })
+}
+
 /// What the scripted model answers, by what the request contains.
 fn route(req: &str) -> Vec<Value> {
     let text = |t: &str| vec![json!({"choices": [{"delta": {"content": t}}]})];
@@ -45,6 +53,39 @@ fn route(req: &str) -> Vec<Value> {
         ]
     };
     let has_tool_result = req.contains("\"role\":\"tool\"");
+    if req.contains("Werkzeug calendar_file_create") && !has_tool_result {
+        return tool(
+            "calendar_file_create",
+            json!({"title": "Termine 7b", "events": [{"title": "Elternabend", "start": "2026-12-03T19:00", "end": "2026-12-03T20:30", "location": "Aula"}, {"title": "", "start": "kaputt"}]}),
+        );
+    }
+    if req.contains("Kalendertermine zum Thema: Leer") && !has_tool_result {
+        return text("Dazu kenne ich keine Termine.");
+    }
+    if req.contains("Kalendertermine zum Thema") && !has_tool_result {
+        return text(
+            "```ics\nBEGIN:VCALENDAR\nBEGIN:VEVENT\nSUMMARY:Klassenarbeit Mathe\nDTSTART;TZID=Europe/Berlin:20270118T080000\nDTEND;TZID=Europe/Berlin:20270118T093000\nEND:VEVENT\nBEGIN:VEVENT\nSUMMARY:Wandertag\nDTSTART;VALUE=DATE:20270615\nEND:VEVENT\nEND:VCALENDAR\n```\n- 18.1.: Klassenarbeit\n- 15.6.: Wandertag",
+        );
+    }
+    if req.contains("Werkzeug board_create") && !has_tool_result {
+        return tool("board_create", json!({"board": board_json()}));
+    }
+    if req.contains("reparierst ein Whiteboard") {
+        return text(&if req.contains("NOCHMAL") {
+            "```aiscraft-board\n{\"title\":\"NOCHMAL\",\"nodes\":[]}\n```".to_string()
+        } else {
+            format!("```aiscraft-board\n{}\n```", board_json())
+        });
+    }
+    if req.contains("Whiteboard zum Thema: Dauerkaputt") && !has_tool_result {
+        return text("```aiscraft-board\n{\"title\":\"NOCHMAL\",\"nodes\":[]}\n```");
+    }
+    if req.contains("Whiteboard zum Thema: Kaputt") && !has_tool_result {
+        return text("```aiscraft-board\n{\"title\":\"Wasser\",\"nodes\":[{\"id\":\"a\"}]}\n```");
+    }
+    if req.contains("Whiteboard zum Thema") && !has_tool_result {
+        return text(&format!("Hier dein Whiteboard:\n```aiscraft-board\n{}\n```", board_json()));
+    }
     if req.contains("Werkzeug h5p_create") && !has_tool_result {
         return tool("h5p_create", json!({"h5p": h5p_json()}));
     }
@@ -166,6 +207,8 @@ fn format_requests_send_the_spec_but_show_only_the_topic() {
         ("worksheet.request", "worksheet", worksheet_prompt("Bruchrechnung (Klasse: 6)", 8, false, true)),
         ("learning_app.request", "learning_app", app_prompt("Bruchrechnung (Klasse: 6)", false)),
         ("h5p.request", "h5p", crate::learn::h5p::h5p_prompt("Bruchrechnung (Klasse: 6)", 6, false)),
+        ("board.request", "board", crate::learn::board::board_prompt("Bruchrechnung (Klasse: 6)", None, false)),
+        ("calendar.request", "calendar", crate::learn::calendar::calendar_prompt("Bruchrechnung (Klasse: 6)", false)),
     ];
     assert_eq!(cases.len(), formats::formats().len(), "every format in the registry is covered");
     for (command, format, expected) in cases {
@@ -193,6 +236,125 @@ fn format_requests_send_the_spec_but_show_only_the_topic() {
         assert!(md.contains("Bruchrechnung (Klasse: 6)") && md.contains(&format!("_Mit Formatvorgabe: {}_", r.format.label)), "{md}");
         assert!(!md.contains(&(r.format.prompt_description)(&formats::PromptOptions::default())), "{command}: no spec in the export");
     }
+}
+
+/// Whiteboards as an output format (#56): the request carries the format, the block becomes a
+/// laid-out board; a broken block gets exactly one repair round, then the answer stays text;
+/// tool backends get `board_create`; a plain message carries no format description.
+#[test]
+fn whiteboard_format_one_round_one_repair_at_most() {
+    use aiscraft_core::ArtifactKind;
+    let (engine, log) = routed_engine_logged();
+    engine.call("settings.set", json!({"key": "tools", "value": false})).unwrap();
+    // A plain message: no format description goes along.
+    engine.call("chat.send", json!({"text": "Was ist der Wasserkreislauf?"})).unwrap();
+    let first = log.lock().unwrap()[0].to_string();
+    assert!(!first.contains("aiscraft-board") && !first.contains("aiscraft-worksheet"), "{first}");
+
+    engine.call("chat.new", json!({})).unwrap();
+    let out = engine.call("board.request", json!({"topic": "Wasserkreislauf", "layout": "mindmap"})).unwrap();
+    assert_eq!(out["created"], true, "{out}");
+    let id = out["id"].as_str().unwrap().to_string();
+    let s = engine.state();
+    let a = s.artifacts.iter().find(|a| a.id == id).unwrap();
+    assert_eq!((a.kind, a.title.as_str()), (ArtifactKind::Board, "Wasserkreislauf"));
+    let text = engine.call("artifact.get", json!({"id": id})).unwrap()["text"].as_str().unwrap().to_string();
+    assert!(text.contains("Verdunstung") && text.contains("Niederschlag"), "{text}");
+    assert!(s.messages[0].content.contains("Anordnung: mindmap") && s.messages[0].content.contains("Format aiscraft-board"));
+    assert!(engine.call("board.request", json!({"topic": "Wasser", "layout": "spirale"})).is_err());
+
+    // Broken, repaired once.
+    engine.call("chat.new", json!({})).unwrap();
+    log.lock().unwrap().clear();
+    let out = engine.call("board.request", json!({"topic": "Kaputt"})).unwrap();
+    assert_eq!(out["created"], true, "{out}");
+    assert_eq!(log.lock().unwrap().len(), 2, "the answer and one repair round");
+    // Broken twice: no second repair, the answer stays text.
+    engine.call("chat.new", json!({})).unwrap();
+    log.lock().unwrap().clear();
+    let before = engine.state().artifacts.len();
+    let out = engine.call("board.request", json!({"topic": "Dauerkaputt"})).unwrap();
+    assert_eq!(out["created"], false, "{out}");
+    assert_eq!(log.lock().unwrap().len(), 2, "one repair round at most");
+    assert_eq!(engine.state().artifacts.len(), before);
+
+    // From a block (the card in the chat), from an object, through artifact.create.
+    let block = format!("Text\n```aiscraft-board\n{}\n```", json!({"layout": "flow", "nodes": ["Erst", "Dann", "Zuletzt"]}));
+    let out = engine.call("board.create", json!({"content": block, "title": "Ablauf"})).unwrap();
+    assert_eq!((out["nodes"].as_u64(), out["layout"].as_str()), (Some(3), Some("flow")));
+    let out = engine.call("board.create", json!({"board": board_json()})).unwrap();
+    assert_eq!(out["nodes"], 3);
+    assert!(engine.call("board.create", json!({"content": "{kaputt"})).is_err());
+    let out = engine.call("artifact.create", json!({"kind": "board", "content": board_json().to_string()})).unwrap();
+    let board_id = out["id"].as_str().unwrap().to_string();
+    // Cards added to an open board from a JSON block.
+    let added = engine.call("artifact.board_add", json!({"id": board_id, "outline": board_json().to_string()})).unwrap();
+    assert!(added["added"].as_u64().unwrap() >= 3, "{added}");
+
+    // With tools: board_create from the same description.
+    engine.call("settings.set", json!({"key": "tools", "value": true})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    let out = engine.call("board.request", json!({"topic": "Wasserkreislauf"})).unwrap();
+    assert_eq!(out["created"], true, "{out}");
+    assert!(crate::learn::tool_specs(true).iter().any(|t| t.name == "board_create" && t.description.contains("aiscraft-board")));
+}
+
+/// Dates as a calendar file (#51), a format of the registry: the request carries the iCalendar
+/// description, the answer's block is checked and saved as our own .ics (time zone, UID,
+/// folding); a table with dates works too; tool backends get the file as a download.
+#[test]
+fn dates_become_a_calendar_file() {
+    let (engine, log) = routed_engine_logged();
+    engine.call("settings.set", json!({"key": "tools", "value": false})).unwrap();
+    let out = engine.call("calendar.request", json!({"topic": "Termine 7b", "grade": "7"})).unwrap();
+    assert_eq!(out["events"], 2, "{out}");
+    assert!(log.lock().unwrap()[0].to_string().contains("BEGIN:VEVENT"), "the format goes along");
+    let mid = engine.state().messages[1].id.clone();
+    let checked = engine.call("calendar.validate", json!({"from_message": mid})).unwrap();
+    assert_eq!((checked["ok"].as_bool(), checked["events"][0]["title"].as_str()), (Some(true), Some("Klassenarbeit Mathe")));
+    let dir = tmp_dir("ics");
+    let path = dir.join("termine.ics");
+    let saved = engine.call("calendar.save", json!({"from_message": mid, "title": "Termine 7b", "path": path.display().to_string()})).unwrap();
+    assert_eq!(saved["events"], 2);
+    let ics = std::fs::read_to_string(&path).unwrap();
+    assert!(ics.contains("BEGIN:VTIMEZONE") && ics.contains("DTSTART;TZID=Europe/Berlin:20270118T080000") && ics.contains("UID:"), "{ics}");
+    assert!(!ics.contains("Erstellt mit KI"), "not labelled by default outside AIS.chat");
+    // A table with dates, and plain text without any.
+    let table = "| Datum | Was |\n|---|---|\n| 3.12.2026 | Elternabend |";
+    let path2 = dir.join("tabelle.ics");
+    engine.call("calendar.save", json!({"content": table, "path": path2.display().to_string()})).unwrap();
+    assert!(std::fs::read_to_string(&path2).unwrap().contains("SUMMARY:Elternabend"));
+    assert!(engine.call("calendar.save", json!({"content": "keine Termine", "path": path2.display().to_string()})).is_err());
+    assert_eq!(engine.call("calendar.validate", json!({"content": "nichts"})).unwrap()["ok"], false);
+    let out = engine.call("calendar.request", json!({"topic": "Leer"})).unwrap();
+    assert_eq!(out["events"], 0);
+    assert!(engine.state().notices.iter().any(|n| n.text.contains("keine Termine")));
+    // With tools: calendar_file_create puts the file into the chat; broken events are skipped.
+    engine.call("settings.set", json!({"key": "tools", "value": true})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    engine.call("calendar.request", json!({"topic": "Elternabend"})).unwrap();
+    let s = engine.state();
+    let file = s.messages.iter().flat_map(|m| &m.attachments).find(|a| a.name.ends_with(".ics")).expect("a calendar file in the chat");
+    assert_eq!(file.mime, "text/calendar");
+    let body = std::fs::read_to_string(file.local_path.as_ref().unwrap()).unwrap();
+    assert!(body.contains("SUMMARY:Elternabend") && body.contains("LOCATION:Aula"), "{body}");
+}
+
+/// AIS.chat has no tools: the format description travels in the message text, once per format
+/// request and never with a plain message.
+#[test]
+fn ais_chat_gets_the_format_in_the_message_text() {
+    let (engine, posted) = super::ais_engine();
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let plain = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(!plain.contains("aiscraft-board"), "{plain}");
+    engine.call("chat.new", json!({})).unwrap();
+    let out = engine.call("board.request", json!({"topic": "Wasserkreislauf"})).unwrap();
+    assert_eq!(out["created"], false, "the scripted answer has no block: {out}");
+    let sent = posted.lock().unwrap().last().cloned().unwrap();
+    assert!(sent.contains("Whiteboard zum Thema: Wasserkreislauf") && sent.contains("aiscraft-board"), "{sent}");
+    assert!(!sent.contains("board_create"), "no tool wording for AIS.chat");
+    assert!(engine.state().notices.iter().any(|n| n.text.contains("kein Whiteboard")));
 }
 
 fn tmp_dir(name: &str) -> std::path::PathBuf {

@@ -196,6 +196,23 @@ pub struct ToolResultInfo {
     pub name: String,
     #[serde(default)]
     pub is_error: bool,
+    /// The interactive view the tool comes with (MCP Apps, #74): a card „Ansicht öffnen“.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<ToolView>,
+}
+
+/// A connector tool's view (MCP Apps, #74): where it is and what it shows first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolView {
+    /// The connector's id.
+    pub connector: String,
+    /// The tool's name at the connector.
+    pub tool: String,
+    /// The `ui://` resource.
+    pub resource: String,
+    /// The tool's structured result, for the view (capped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -423,6 +440,13 @@ pub struct Sources {
     /// part of the memory.
     #[serde(default = "yes")]
     pub own_style: bool,
+    /// The project's files (#32): fitting parts go along with every message.
+    #[serde(default = "yes")]
+    pub knowledge: bool,
+    /// For backends that keep the chat on their server (AIS.chat): parts of project files sent
+    /// already (`file:chunk`), each goes along once per chat. Newest last, capped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub knowledge_sent: Vec<String>,
 }
 
 impl Default for Sources {
@@ -444,6 +468,8 @@ impl Default for Sources {
             style_sample: None,
             style_sent: None,
             own_style: true,
+            knowledge: true,
+            knowledge_sent: Vec::new(),
         }
     }
 }
@@ -471,6 +497,23 @@ pub struct Project {
     /// Custom instructions sent as the system prompt of every chat in the project.
     pub instructions: String,
     pub created_at: Millis,
+}
+
+/// A file in a project's knowledge (#32): its text is extracted on the device and searched; the
+/// fitting parts go along with every chat in the project.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectFile {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub mime: String,
+    /// Bytes of the original file.
+    pub size: u64,
+    /// Characters of the extracted text.
+    pub chars: u64,
+    /// The kept copy in the data folder.
+    pub path: String,
+    pub added_at: Millis,
 }
 
 /// What kind of artifact: a Markdown document, a whiteboard, a learning app (one self-contained

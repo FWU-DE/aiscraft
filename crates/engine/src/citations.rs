@@ -97,6 +97,14 @@ pub(crate) fn open(c: &Ctx, p: &Value) -> Result<Value> {
             crate::files::is_text(&a.mime).then(|| std::fs::read_to_string(path).ok()).flatten()
         })
     });
+    // Not attached: a file of the chat's project knowledge (#32).
+    let (text, file_path) = match (text, file.as_ref().and_then(|a| a.local_path.clone())) {
+        (None, None) if citation.url.is_none() => match crate::knowledge::text_by_name(c, &conv, &citation.title) {
+            Some((t, p)) => (Some(t), Some(p)),
+            None => (None, None),
+        },
+        other => other,
+    };
     let located = text.as_deref().map(|t| crate::privacy::reveal(c, &conv, t)).and_then(|t| locate(&t, &citation));
     let found = located.is_some();
     let (before, passage, after) = located.unwrap_or_else(|| (String::new(), citation.cited_text.clone(), String::new()));
@@ -107,7 +115,7 @@ pub(crate) fn open(c: &Ctx, p: &Value) -> Result<Value> {
         before,
         passage,
         after,
-        path: file.and_then(|a| a.local_path),
+        path: file_path,
         found,
     };
     let out = serde_json::to_value(&view)?;

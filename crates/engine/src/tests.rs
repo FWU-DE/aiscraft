@@ -1077,11 +1077,17 @@ fn every_command_has_a_functional_test() {
     let src = concat!(
         include_str!("tests.rs"),
         include_str!("learn_tests.rs"),
+        include_str!("output_tests.rs"),
         include_str!("attach/tests.rs"),
         include_str!("privacy/tests.rs"),
         include_str!("trust_tests.rs"),
         include_str!("chatux_tests.rs"),
-        include_str!("nod_tests.rs")
+        include_str!("nod_tests.rs"),
+        include_str!("know_tests.rs"),
+        include_str!("local_files_tests.rs"),
+        include_str!("ext/tests.rs"),
+        include_str!("ext/plugin_tests.rs"),
+        include_str!("apps_tests.rs")
     );
     // The panic hunt touches every command; count only calls outside it.
     let hunt_start = src.find("fn panic_hunt_every_command_with_hostile_params").unwrap_or(0);
@@ -2190,6 +2196,8 @@ fn update_check_remembers_across_starts() {
 
 #[path = "learn_tests.rs"]
 mod learn_tests;
+#[path = "output_tests.rs"]
+mod output_tests;
 
 /// The look: Modern by default, every listed look accepted and kept, unknown ones refused;
 /// Glas' transparency and the "look chosen" flag are plain settings.

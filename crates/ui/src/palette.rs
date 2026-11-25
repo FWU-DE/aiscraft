@@ -21,6 +21,7 @@ enum Item {
     Project { id: String, name: String },
     Model { backend: String, model: String, label: String },
     Ui { label: &'static str, group: &'static str, action: UiAction },
+    Template { id: String, title: String },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -34,6 +35,9 @@ enum UiAction {
     Export,
     Search,
     Explore,
+    Research,
+    ConnectorInsert,
+    NewTemplate,
 }
 
 impl Item {
@@ -43,6 +47,7 @@ impl Item {
             Item::Chat { title, .. } => title.clone(),
             Item::Project { name, .. } => format!("Projekt: {name}"),
             Item::Model { label, .. } => format!("Modell: {label}"),
+            Item::Template { title, .. } => format!("Vorlage: {title}"),
         }
     }
     /// What the row is about (Chat, Dokumente, Einstellungen …), shown on its right unless it has a shortcut.
@@ -53,6 +58,7 @@ impl Item {
             Item::Chat { .. } => "Chat",
             Item::Project { .. } => "Projekt",
             Item::Model { .. } => "Modell",
+            Item::Template { .. } => "Vorlage",
         }
     }
 }
@@ -91,7 +97,11 @@ impl AisCraftApp {
             Item::Ui { label: "Chat exportieren", group: "Chat", action: UiAction::Export },
             Item::Ui { label: "Alle Chats durchsuchen", group: "Suche", action: UiAction::Search },
             Item::Ui { label: "Assistenten, Dialogpartner & Lernszenarien entdecken", group: "AIS.chat", action: UiAction::Explore },
+            Item::Ui { label: "Recherche starten", group: "Chat", action: UiAction::Research },
+            Item::Ui { label: "Konnektor-Ergebnis einfügen", group: "Konnektoren", action: UiAction::ConnectorInsert },
+            Item::Ui { label: "Neue Vorlage", group: "Vorlage", action: UiAction::NewTemplate },
         ]);
+        items.extend(self.state.templates.iter().map(|t| Item::Template { id: t.id.clone(), title: t.title.clone() }));
         for b in &self.state.backends {
             if matches!(b.status, BackendStatus::Ready { .. }) {
                 for m in &b.models {
@@ -184,6 +194,11 @@ impl AisCraftApp {
                 self.run("chat.new", json!({"project": id}));
             }
             Item::Model { backend, model, .. } => self.run("chat.select_model", json!({"backend": backend, "model": model})),
+            Item::Template { id, .. } => {
+                if let Some(t) = self.state.templates.iter().find(|t| t.id == id) {
+                    self.dialog = Some(Dialog::Know(crate::know::KnowDialog::use_template(t)));
+                }
+            }
             Item::Ui { action, .. } => match action {
                 UiAction::Settings => self.dialog = Some(Dialog::settings()),
                 UiAction::Memory => self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Memory, new_note: String::new() }),
@@ -193,6 +208,12 @@ impl AisCraftApp {
                 UiAction::Manual => self.manual = Some(Default::default()),
                 UiAction::Export => self.export_dialog(),
                 UiAction::Explore => self.open_explore(),
+                UiAction::Research => {
+                    self.dialog =
+                        Some(Dialog::Know(crate::know::KnowDialog::Research { question: String::new(), search: self.state.research.search_url.clone() }))
+                }
+                UiAction::ConnectorInsert => self.dialog = Some(Dialog::Know(crate::know::KnowDialog::Connector { tool: None, args: Vec::new() })),
+                UiAction::NewTemplate => self.dialog = Some(Dialog::Know(crate::know::KnowDialog::edit_template(None))),
                 UiAction::Search => {
                     self.sidebar_open = true;
                     self.focus_search = true;

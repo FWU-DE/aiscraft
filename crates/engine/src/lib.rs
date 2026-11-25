@@ -3,6 +3,8 @@
 //! all dispatch the same commands by id, so everything a person can do, an agent can do.
 
 mod action_log;
+mod ai_label;
+mod apps;
 mod artifacts;
 mod attach;
 mod bridge;
@@ -12,19 +14,24 @@ pub mod citations;
 mod collab;
 mod commands;
 mod disk;
+mod ext;
 mod fallback;
 mod files;
 pub mod find;
 pub mod highlights;
 mod inbox;
+mod knowledge;
 pub mod learn;
 mod links;
+mod local_files;
 mod memory;
 pub mod office;
 mod pictures;
 pub mod privacy;
 mod proactive;
 pub mod quick;
+pub mod readability;
+pub mod research;
 mod schedule_ideas;
 mod schedule_templates;
 mod schedules;
@@ -33,6 +40,7 @@ mod skills;
 mod state;
 mod style;
 mod tasks;
+pub mod templates;
 mod temporary;
 pub mod tools;
 mod trust;
@@ -40,6 +48,7 @@ mod update;
 mod usage;
 mod vault;
 mod voice;
+pub mod voice_mode;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -57,10 +66,15 @@ pub use artifacts::{change_blocks, doc_replace, doc_text, markdown_html, merge_s
 pub use attach::{AIS_ACCEPTS, AttachmentPreview, RangeKind};
 pub use chat::{LEFT_OUT, SENT_ALONG};
 pub use commands::{CommandSpec, commands};
+pub use ext::{ConfigField, ExtensionOffer, ExtensionView, ExtensionsState, PackageRule, PluginSkill};
 pub use fallback::{FALLBACK, FallbackModel};
 pub use files::{MAX_FILE_BYTES, mime_of};
+pub use files::{MAX_FILE_BYTES, mime_of};
+pub use inbox::InboxItem;
 pub use inbox::InboxItem;
 pub use links::{LINK_CHECK, has_links};
+pub use links::{LINK_CHECK, has_links};
+pub use local_files::LocalFilesState;
 pub use schedule_ideas::ScheduleIdea;
 pub use schedule_templates::{TemplateView, template_views};
 pub use schedules::{Cron, Schedule, next_run as schedule_next_run, parse_when};
@@ -143,8 +157,11 @@ pub(crate) struct Inner {
     cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
     next_notice: std::sync::atomic::AtomicU64,
     tools: tools::ToolRuntime,
+    /// Local files, connector packages, plug-ins and connector views (#25, #43, #28, #74).
+    ext: ext::Runtime,
     bridge: bridge::Bridge,
     voice: voice::Voice,
+    research: research::Stops,
     #[cfg(feature = "collab")]
     collab: collab::Hub,
     /// Copies of attached files, so they stay readable for later requests.
@@ -233,8 +250,10 @@ impl Engine {
             cancels: Mutex::new(HashMap::new()),
             next_notice: std::sync::atomic::AtomicU64::new(1),
             tools: Default::default(),
+            ext: ext::Runtime::new(opts.data_dir.clone()),
             bridge: Default::default(),
             voice: Default::default(),
+            research: Default::default(),
             #[cfg(feature = "collab")]
             collab: Default::default(),
             browser_allowed: opts.data_dir.is_some() && std::env::var_os("AISCRAFT_NO_BROWSER").is_none(),
@@ -285,10 +304,17 @@ impl Engine {
         {
             let _guard = engine._rt.enter();
             tools::load(&engine.ctx);
+            ext::load(&engine.ctx);
             let schedules = schedules::load(&engine.ctx);
             let skills = skills::load(&engine.ctx);
             let inbox = inbox::load(&engine.ctx);
+            let templates = templates::load(&engine.ctx);
+            let project_files = knowledge::load(&engine.ctx);
+            let search_url = research::load(&engine.ctx);
             engine.ctx.update(|s| {
+                s.research.search_url = search_url;
+                s.templates = templates;
+                s.project_files = project_files;
                 s.schedules = schedules;
                 s.skills = skills;
                 s.inbox = inbox;
@@ -677,7 +703,13 @@ mod tests;
 mod trust_tests;
 
 #[cfg(test)]
+mod apps_tests;
+#[cfg(test)]
 mod chatux_tests;
+#[cfg(test)]
+mod know_tests;
+#[cfg(test)]
+mod local_files_tests;
 
 #[cfg(test)]
 mod nod_tests;

@@ -225,10 +225,16 @@ fn read_package_file(c: &Ctx, p: &PackageInfo) -> Result<Vec<u8>> {
 }
 
 /// The `.h5p` bytes of an artifact's content, and notes on what did not come across.
-pub(crate) fn package_bytes(c: &Ctx, h: &H5p) -> Result<(Vec<u8>, Vec<String>)> {
+/// `note`: „Erstellt mit KI“ (#57) for the package's `authorComments`; packages opened from a
+/// file keep their own metadata.
+pub(crate) fn package_bytes(c: &Ctx, h: &H5p, note: Option<&str>) -> Result<(Vec<u8>, Vec<String>)> {
     let Some(pkg) = &h.package else {
         let built = h5p::build(h).map_err(Error::invalid)?;
-        let bytes = write_package(&h5p::h5p_json(&h.title, &built), &built.content, None)?;
+        let mut meta = h5p::h5p_json(&h.title, &built);
+        if let (Some(n), Some(o)) = (note, meta.as_object_mut()) {
+            o.insert("authorComments".into(), json!(n));
+        }
+        let bytes = write_package(&meta, &built.content, None)?;
         return Ok((bytes, built.notes));
     };
     let original = read_package_file(c, pkg)?;
@@ -577,8 +583,9 @@ async fn update_task(c: Ctx, p: Value) -> Result<Value> {
 
 async fn export(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
-    let (_, h, _) = h5p_of(&c, &id)?;
-    let (bytes, notes) = package_bytes(&c, &h)?;
+    let (a, h, _) = h5p_of(&c, &id)?;
+    let note = crate::ai_label::note_for_artifact(&c, &a).map(|n| n.plain());
+    let (bytes, notes) = package_bytes(&c, &h, note.as_deref())?;
     if !notes.is_empty() && opt_str(&p, "path").is_some() {
         c.notice(NoticeLevel::Info, format!("Als H5P gespeichert. Hinweis: {}", notes.iter().take(3).cloned().collect::<Vec<_>>().join("; ")));
     }
@@ -593,7 +600,7 @@ async fn export(c: Ctx, p: Value) -> Result<Value> {
 pub(crate) fn export_bytes(c: &Ctx, a: &Artifact, format: Option<&str>) -> Result<Vec<u8>> {
     let (_, h, _) = h5p_of(c, &a.id)?;
     match format.unwrap_or("h5p") {
-        "h5p" => package_bytes(c, &h).map(|(b, _)| b),
+        "h5p" => package_bytes(c, &h, crate::ai_label::note_for_artifact(c, a).map(|n| n.plain()).as_deref()).map(|(b, _)| b),
         "json" => Ok(h5p::to_json(&h).into_bytes()),
         other => Err(Error::invalid(format!("Format {other} gibt es für H5P nicht (h5p, json)"))),
     }

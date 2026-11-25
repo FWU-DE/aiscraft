@@ -147,6 +147,115 @@ fn counting_backend(engine: &Engine) -> String {
     })
 }
 
+/// A local OpenAI-compatible server that always answers `answer`; the engine is set up to use it.
+fn answering_backend(engine: &Engine, answer: &str) {
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let answer = answer.to_string();
+    let url = engine.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let answer = answer.clone();
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = vec![0u8; 1 << 16];
+                    loop {
+                        let k = sock.read(&mut chunk).await.unwrap_or(0);
+                        if k == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..k]);
+                        let s = String::from_utf8_lossy(&buf).to_string();
+                        if let Some(h) = s.find("\r\n\r\n") {
+                            let len = s[..h]
+                                .lines()
+                                .find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                                .unwrap_or(0);
+                            if buf.len() >= h + 4 + len {
+                                break;
+                            }
+                        }
+                    }
+                    if buf.starts_with(b"GET") {
+                        let body = r#"{"data":[{"id":"m"}]}"#;
+                        let head = format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", body.len());
+                        let _ = sock.write_all(format!("{head}{body}").as_bytes()).await;
+                        return;
+                    }
+                    let c = json!({"choices":[{"delta":{"content": answer}}]});
+                    let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
+                    let _ = sock.write_all(format!("data: {c}\n\ndata: [DONE]\n\n").as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}/v1")
+    });
+    let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+}
+
+/// An answer with an `aiscraft-board` block (#56) shows a card instead of the JSON; „Whiteboard
+/// öffnen“ lays it out next to the chat.
+#[test]
+fn whiteboard_block_becomes_a_card() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    answering_backend(
+        &engine,
+        "Hier:\n```aiscraft-board\n{\"title\":\"Wasserkreislauf\",\"layout\":\"cluster\",\"nodes\":[\"Verdunstung\",\"Regen\",\"Grundwasser\"]}\n```",
+    );
+    engine.call("chat.send", serde_json::json!({"text": "Whiteboard bitte"})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    assert!(h.query_by_label_contains("Whiteboard · 3 Karten, Cluster").is_some(), "the card names the board");
+    assert!(h.query_by_label_contains("\"nodes\"").is_none(), "no raw JSON in the chat");
+    click_until(&mut h, "Whiteboard öffnen", "a board opens", |_| engine.state().artifacts.iter().any(|a| a.kind == aiscraft_core::ArtifactKind::Board));
+    assert_eq!(engine.state().artifacts[0].title, "Wasserkreislauf");
+}
+
+/// „Lesbarkeit“ under an answer (#48) shows one discreet line and hides it again.
+#[test]
+fn readability_line_under_an_answer() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    answering_backend(&engine, "Der Hund ist klein. Er spielt im Garten. Die Sonne scheint.");
+    engine.call("chat.send", serde_json::json!({"text": "Leicht bitte"})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    click_until(&mut h, "Lesbarkeit", "the line shows", |h| h.query_by_label_contains("11 Wörter · Flesch").is_some());
+    click_until(&mut h, "Lesbarkeit", "the line hides", |h| h.query_by_label_contains("11 Wörter · Flesch").is_none());
+}
+
+/// „Speichern als“ under an answer (#46) offers Word, PDF and Markdown; Excel only with a table.
+/// (The items open a save dialog, so the test only looks.)
+#[test]
+fn save_as_menu_under_an_answer() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    answering_backend(&engine, "Nur Text.");
+    engine.call("chat.send", serde_json::json!({"text": "Hallo"})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    click_until(&mut h, "Speichern als", "the menu opens", |h| h.query_by_label("Word (.docx)").is_some());
+    assert!(h.query_by_label("PDF").is_some() && h.query_by_label("Markdown (.md)").is_some());
+    use egui_kittest::kittest::NodeT;
+    assert!(h.get_by_label("Excel (.xlsx)").accesskit_node().is_disabled(), "no table, no Excel");
+}
+
+/// An answer with dates (#51) offers them as a calendar file in „Speichern als“.
+#[test]
+fn dates_in_an_answer_are_offered_as_a_calendar_file() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    answering_backend(&engine, "| Datum | Was |\n|---|---|\n| 3.12.2026 | Elternabend |\n| 15.6.2027 | Wandertag |");
+    engine.call("chat.send", serde_json::json!({"text": "Termine bitte"})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    click_until(&mut h, "Speichern als", "the menu opens", |h| h.query_by_label("Kalenderdatei (.ics), 2 Termine").is_some());
+    assert!(h.query_by_label("Excel (.xlsx)").is_some());
+}
+
 /// After "Neu erzeugen" the answer shows ‹ 2/2 ›; ‹ brings the first answer back.
 #[test]
 fn variant_switcher_shows_the_old_answer() {
@@ -481,4 +590,62 @@ fn each_app_reads_its_own_omarchy_theme() {
         assert!(without.query_by_label("Omarchy").is_none(), "no card where it has none");
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An expired AIS.chat session offers "Neu anmelden" in Einstellungen › Dienste, not "Abmelden".
+#[test]
+fn expired_ais_session_offers_sign_in_again() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let engine = Engine::open(Options { data_dir: None, secrets: Some(aiscraft_engine::Secrets::memory()) }).unwrap();
+    let valid = std::sync::Arc::new(AtomicBool::new(true));
+    let v = valid.clone();
+    let base = engine.block_on(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let v = v.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 1 << 16];
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let authed = v.load(Ordering::SeqCst) && req.contains("ais-chat-app.authjs.session-token=good");
+                    let (status, ctype, body) = if !authed {
+                        ("307 Temporary Redirect\r\nlocation: /login", "text/plain", String::new())
+                    } else if req.starts_with("GET /api/auth/session") {
+                        ("200 OK", "application/json", r#"{"user":{"firstName":"Ada","lastName":"Lehrerin"},"expires":"2030-01-01"}"#.to_string())
+                    } else if req.starts_with("GET / ") {
+                        let row = r#"3:{"usedBudget":250,"maxBudget":1000,"models":[{"id":"m-uuid","name":"gpt","displayName":"GPT","priceMetadata":{"type":"text"}}]}"#;
+                        ("200 OK", "text/html", format!("<script>self.__next_f.push([1,{}])</script>", serde_json::to_string(&format!("{row}\n")).unwrap()))
+                    } else {
+                        ("200 OK", "application/json", "{}".to_string())
+                    };
+                    let _ = sock.write_all(format!("HTTP/1.1 {status}\r\ncontent-type: {ctype}\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    });
+    engine.call("backend.update", serde_json::json!({"id": "ais-chat", "base_url": base})).unwrap();
+    engine.call("backend.login", serde_json::json!({"id": "ais-chat", "secret": "good"})).unwrap();
+    // The session runs out on the server.
+    valid.store(false, Ordering::SeqCst);
+    let _ = engine.call("backend.check", serde_json::json!({"id": "ais-chat"}));
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| {
+        s.backend("ais-chat").is_some_and(|b| {
+            b.has_secret && matches!(b.status, aiscraft_engine::BackendStatus::SignedOut { .. } | aiscraft_engine::BackendStatus::Failed { .. })
+        })
+    }));
+    let mut h = harness(&engine);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
+    step_until(&mut h, "the Dienste tab", |h| h.query_by_label("Neu anmelden").is_some());
+    assert!(h.query_by_label("Abmelden").is_none(), "no sign-out for an expired session");
+    // The buttons of the row keep a gap (the settings rail sets none; it must not leak in).
+    let (a, b) = (h.get_by_label("Prüfen").rect(), h.get_by_label("Neu anmelden").rect());
+    let gap = if a.min.x > b.max.x { a.min.x - b.max.x } else { b.min.x - a.max.x };
+    assert!(gap >= 6.0, "buttons touch: gap {gap}");
+    h.get_by_label("Neu anmelden").click();
+    step_until(&mut h, "the sign-in dialog", |h| h.query_by_label_contains("Im Browser anmelden").is_some());
 }

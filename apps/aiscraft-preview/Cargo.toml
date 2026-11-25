@@ -11,6 +11,7 @@ rust-version.workspace = true
 # webview (WebKitGTK 4.1 on Linux, WebView2 on Windows, WKWebView on macOS).
 wry = "0.57"
 tao = "0.37"
+serde_json.workspace = true
 
 [lints]
 workspace = true

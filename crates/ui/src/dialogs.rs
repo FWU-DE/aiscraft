@@ -90,6 +90,13 @@ pub enum Dialog {
         command: String,
         params: Value,
     },
+    /// Templates, connector results, research (#37, #53, #54).
+    Know(crate::know::KnowDialog),
+    /// A connector package or plug-in before it is installed (#43, #28): its settings as typed.
+    Install {
+        id: String,
+        values: std::collections::BTreeMap<String, String>,
+    },
 }
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
@@ -177,6 +184,7 @@ const DIALOG_SCREEN_GAP: f32 = 24.0;
 
 impl AisCraftApp {
     pub(crate) fn dialogs(&mut self, ctx: &egui::Context) {
+        self.sync_install_dialog();
         let Some(mut dialog) = self.dialog.take() else { return };
         let mut keep = true;
         let settings = matches!(dialog, Dialog::Settings { .. });
@@ -186,6 +194,7 @@ impl AisCraftApp {
                 Dialog::Settings { .. } => (ctx.content_rect().width() - 48.0).clamp(600.0, 940.0),
                 Dialog::Welcome { .. } => 640.0,
                 Dialog::Login { .. } | Dialog::WelcomeSignIn => 520.0,
+                Dialog::Install { .. } => 600.0,
                 _ => 460.0,
             });
             keep = self.dialog_body(ui, &mut dialog);
@@ -360,6 +369,9 @@ impl AisCraftApp {
                         .desired_width(f32::INFINITY),
                 );
                 ui.label(small_muted(&t, "Gehen an Dienste, die Kontext erlauben (nicht an AIS.chat über die Anmeldung)."));
+                if let Some(pid) = id.clone() {
+                    self.project_knowledge(ui, &pid);
+                }
                 ui.add_space(8.0);
                 let mut keep = true;
                 ui.horizontal(|ui| {
@@ -392,6 +404,10 @@ impl AisCraftApp {
                     }
                 });
                 keep
+            }
+            Dialog::Install { id, values } => {
+                let id = id.clone();
+                self.install_body(ui, &id, values)
             }
             Dialog::AddConnector { name, command, env, url, headers, http } => {
                 ui.heading("Konnektor hinzufügen");
@@ -576,6 +592,7 @@ impl AisCraftApp {
                 });
                 keep
             }
+            Dialog::Know(d) => self.know_dialog(ui, d),
             Dialog::Confirm { text, command, params } => {
                 ui.label(RichText::new(text.as_str()).strong());
                 ui.add_space(8.0);
@@ -804,6 +821,9 @@ impl AisCraftApp {
     /// The content of one settings section.
     fn settings_tab(&mut self, ui: &mut Ui, tab: &mut SettingsTab, new_note: &mut String, max_h: f32) {
         let t = self.tokens.clone();
+        // The rail beside it sets no gap between items; the tabs need the usual one, or dots,
+        // names and buttons touch.
+        ui.spacing_mut().item_spacing.x = 8.0;
         egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| match tab {
             SettingsTab::Backends => {
                 for b in self.state.backends.clone() {
@@ -827,6 +847,11 @@ impl AisCraftApp {
                                 let is_ais = b.config.kind == BackendKind::AisChat;
                                 if b.config.kind == BackendKind::ClaudeCli {
                                     // Signed in through `claude auth login`; nothing to store here.
+                                } else if is_ais && b.has_secret && matches!(b.status, BackendStatus::SignedOut { .. } | BackendStatus::Failed { .. }) {
+                                    // The session ran out: signing in again is what's needed, not signing out.
+                                    if action(ui, "Neu anmelden").clicked() {
+                                        self.dialog = Some(Dialog::login(&b.config.id));
+                                    }
                                 } else if b.has_secret {
                                     if action(ui, if is_ais { "Abmelden" } else { "Schlüssel entfernen" }).clicked() {
                                         self.run("backend.logout", json!({"id": b.config.id}));
@@ -882,6 +907,10 @@ impl AisCraftApp {
                 ui.add_space(8.0);
                 self.trust_rules_section(ui);
                 ui.add_space(8.0);
+                self.local_files_section(ui);
+                ui.add_space(8.0);
+                self.extensions_section(ui);
+                ui.add_space(8.0);
                 for k in self.state.connectors.clone() {
                     card(&t).show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -895,6 +924,11 @@ impl AisCraftApp {
                             ui.label(RichText::new(&k.name).strong());
                             ui.label(small_muted(&t, format!("{} Werkzeuge", k.tools.len())));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                // A package's connector is switched and removed with its package.
+                                if k.extension.is_some() {
+                                    ui.label(small_muted(&t, "aus einem Paket"));
+                                    return;
+                                }
                                 if ui.small_button("Entfernen").clicked() {
                                     self.dialog = Some(Dialog::Confirm { text: format!("Konnektor {} entfernen?", k.name), command: "connector.remove".into(), params: json!({"id": k.id}) });
                                 }
@@ -996,6 +1030,21 @@ impl AisCraftApp {
                     self.run("settings.set", json!({"key": "worksheet_points", "value": ws_points}));
                 }
                 ui.label(small_muted(&t, "Gilt für neue Arbeitsblätter, auch die, die ein Modell erstellt. Aus: keine Punkte, „Prüfen“ zählt richtige Aufgaben. Jedes Arbeitsblatt hat beim Bearbeiten seinen eigenen Schalter „Punkte vergeben“."));
+                ui.add_space(6.0);
+                ui.label("Beim Speichern als KI-generiert kennzeichnen");
+                ui.horizontal_wrapped(|ui| {
+                    let mut label = st.ai_label.clone();
+                    for (value, text) in [("ais-chat", "Bei AIS.chat"), ("all", "Immer"), ("off", "Nie")] {
+                        if ui.radio_value(&mut label, value.to_string(), text).changed() {
+                            self.run("settings.set", json!({"key": "ai_label", "value": value}));
+                        }
+                    }
+                });
+                let mut with_prompt = st.ai_label_prompt;
+                if ui.checkbox(&mut with_prompt, "Prompt mitschreiben").changed() {
+                    self.run("settings.set", json!({"key": "ai_label_prompt", "value": with_prompt}));
+                }
+                ui.label(small_muted(&t, "Word, PDF, Markdown, Excel, Arbeitsblätter, Lern-Apps, H5P, Kalenderdateien und der Chat-Export bekommen am Ende „Erstellt mit KI (Dienst, Modell), Datum“, Bilder als Kommentar in der Datei. Die Nutzungsbedingungen von AIS.chat verlangen das für weitergegebene Ausgaben. Kopieren bleibt unverändert; „Mit Kennzeichnung kopieren“ steht im Rechtsklick-Menü von „Kopieren“."));
                 ui.add_space(6.0);
                 let mut pro = st.proactive;
                 if ui.checkbox(&mut pro, "Hinweise: stündlich auf offene Zusagen, Fristen und Erinnerungswünsche achten").changed() {
