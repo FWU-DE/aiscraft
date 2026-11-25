@@ -718,6 +718,7 @@ impl AisCraftApp {
             }
         }
         sources_row(ui, &t, m);
+        self.citations_row(ui, m);
         dead_links_row(ui, &t, m);
         if let Some(err) = &m.error {
             Frame::new()

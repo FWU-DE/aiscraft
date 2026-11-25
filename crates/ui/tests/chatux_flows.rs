@@ -153,3 +153,49 @@ fn ctrl_f_finds_in_the_chat() {
     assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.find.is_none()));
     assert!(engine.state().current.is_some(), "Esc closed only the search, not the chat");
 }
+
+/// #39: under a Claude answer the passages that back it; a click shows the passage marked in
+/// the attached file.
+#[test]
+fn citations_show_under_the_answer_and_open_at_the_passage() {
+    fn cites(req: &str) -> Vec<Value> {
+        if !req.contains("\"type\":\"document\"") {
+            return vec![json!({"type": "message_stop"})];
+        }
+        vec![
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "citations_delta", "citation": {
+                "type": "char_location", "cited_text": "Im Winter halten sie Winterschlaf.", "document_index": 0,
+                "document_title": "igel.txt", "start_char_index": 23, "end_char_index": 57}}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Igel schlafen im Winter."}}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "message_stop"}),
+        ]
+    }
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let url = backend(&engine, cites);
+    let id = engine
+        .call("backend.add", json!({"kind": "anthropic", "base_url": url.trim_end_matches("/v1"), "name": "Claude", "secret": "sk-ant-test"}))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    engine.call("chat.select_model", json!({"backend": id, "model": "claude-opus-5-5"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    let dir = std::env::temp_dir().join(format!("aiscraft-ui-cite-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("igel.txt");
+    std::fs::write(&file, "Igel fressen Insekten. Im Winter halten sie Winterschlaf. Sie sind nachtaktiv.").unwrap();
+    engine.call("chat.send", json!({"text": "Was machen Igel im Winter?", "files": [file.display().to_string()]})).unwrap();
+    let mut h = harness(&engine);
+    step_until(&mut h, "the citation shows under the answer", |h| h.query_by_label("Belege:").is_some());
+    let e = engine.clone();
+    click_until(&mut h, "[1] igel.txt", "the citation opens", move |_| e.state().citation.is_some());
+    step_until(&mut h, "the passage shows in its window", |h| {
+        h.query_by_label("Beleg").is_some() && h.query_by_label_contains("Igel fressen Insekten. Im Winter halten sie Winterschlaf.").is_some()
+    });
+    assert_eq!(engine.state().citation.as_ref().map(|c| c.passage.as_str()), Some("Im Winter halten sie Winterschlaf."));
+    engine.call("message.citation", json!({"close": true})).unwrap();
+    step_until(&mut h, "the window closes", |h| h.query_by_label("Beleg").is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -247,3 +247,110 @@ fn find_in_the_open_chat() {
     engine.call("chat.new", json!({})).unwrap();
     assert!(engine.state().find.is_none(), "a search belongs to its chat");
 }
+
+/// #35: a quick entry with text opens a new chat and sends it; without text the chat waits, the
+/// window is asked to come to the front each time. Screenshots are refused in tests.
+#[test]
+fn quick_entry_sends_or_waits() {
+    let (engine, seen) = engine_with(plain);
+    engine.call("chat.send", json!({"text": "Alter Chat"})).unwrap();
+    let old = engine.state().current.clone().unwrap();
+    let r = engine.call("chat.quick_ask", json!({"text": "Schnelle Frage"})).unwrap();
+    assert_eq!(r["sent"], true);
+    assert_ne!(engine.state().current.as_ref(), Some(&old), "a new chat");
+    assert!(!last_chat_request(&seen, "Schnelle Frage").contains("Alter Chat"));
+    assert_eq!(engine.state().quick.as_ref().unwrap().seq, 1);
+    let r = engine.call("chat.quick_ask", json!({})).unwrap();
+    assert_eq!(r["sent"], false);
+    assert!(engine.state().current.is_none());
+    assert_eq!(engine.state().quick.as_ref().unwrap().seq, 2);
+    let e = engine.call("chat.quick_ask", json!({"screenshot": true})).unwrap_err();
+    assert!(e.message.contains("Bildschirmfoto"), "{}", e.message);
+    assert!(engine.call("chat.quick_ask", json!({"text": 5})).is_err());
+}
+
+/// A Claude API server (Anthropic messages, streamed) on the scripted server: answers with a
+/// sentence backed by a passage of the attached `igel.txt` and a page of the web.
+fn claude_engine() -> (Engine, Seen) {
+    fn cites(req: &str) -> Vec<Value> {
+        if !req.contains("\"type\":\"document\"") {
+            return vec![
+                json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Kein Dokument."}}),
+                json!({"type": "message_stop"}),
+            ];
+        }
+        vec![
+            json!({"type": "message_start", "message": {"usage": {"input_tokens": 10}}}),
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Laut deiner Datei gilt: "}}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}}),
+            json!({"type": "content_block_delta", "index": 1, "delta": {"type": "citations_delta", "citation": {
+                "type": "char_location", "cited_text": "Im Winter halten sie Winterschlaf.", "document_index": 0,
+                "document_title": "igel.txt", "start_char_index": 23, "end_char_index": 57}}}),
+            json!({"type": "content_block_delta", "index": 1, "delta": {"type": "citations_delta", "citation": {
+                "type": "web_search_result_location", "url": "https://example.org/igel", "title": "Igel im Garten", "cited_text": "Igel schlafen von November bis März."}}}),
+            json!({"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "Igel schlafen im Winter."}}),
+            json!({"type": "content_block_stop", "index": 1}),
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 9}}),
+            json!({"type": "message_stop"}),
+        ]
+    }
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let (url, seen) = scripted(&engine, cites);
+    let base = url.trim_end_matches("/v1").to_string();
+    let id = engine.call("backend.add", json!({"kind": "anthropic", "base_url": base, "name": "Claude", "secret": "sk-ant-test"})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    engine.call("chat.select_model", json!({"backend": id, "model": "claude-opus-5-5"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    (engine, seen)
+}
+
+/// #39: an attached file goes to Claude as a document with citations on; the answer keeps the
+/// passages that back it, and `message.citation` shows the passage where it stands in the file.
+#[test]
+fn citations_are_kept_and_open_at_the_passage() {
+    let (engine, seen) = claude_engine();
+    let dir = std::env::temp_dir().join(format!("aiscraft-cite-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("igel.txt");
+    std::fs::write(&file, "Igel fressen Insekten. Im Winter halten sie Winterschlaf. Sie sind nachtaktiv.").unwrap();
+    engine.call("chat.send", json!({"text": "Was machen Igel im Winter?", "files": [file.display().to_string()]})).unwrap();
+    let req = last_chat_request(&seen, "Igel im Winter");
+    assert!(req.contains("\"citations\":{\"enabled\":true}") && req.contains("\"title\":\"igel.txt\""), "{req}");
+    let answer = engine.state().messages.last().cloned().unwrap();
+    assert_eq!(answer.content, "Laut deiner Datei gilt: Igel schlafen im Winter.");
+    assert_eq!(answer.citations.len(), 2, "{:?}", answer.citations);
+    assert_eq!(answer.citations[0].claim, "Igel schlafen im Winter.");
+    assert_eq!(answer.citations[1].url.as_deref(), Some("https://example.org/igel"));
+    // Kept in the store.
+    let conv = engine.state().current.clone().unwrap();
+    engine.call("chat.close", json!({})).unwrap();
+    engine.call("chat.open", json!({"id": conv})).unwrap();
+    assert_eq!(engine.state().messages.last().unwrap().citations, answer.citations);
+
+    let v = engine.call("message.citation", json!({"message_id": answer.id, "index": 0})).unwrap();
+    assert_eq!(v["found"], true, "{v}");
+    assert_eq!(v["passage"], "Im Winter halten sie Winterschlaf.");
+    assert_eq!(v["before"], "Igel fressen Insekten. ");
+    assert_eq!(v["after"], " Sie sind nachtaktiv.");
+    assert!(v["path"].as_str().is_some_and(|p| p.ends_with(".txt")), "the kept copy: {v}");
+    assert_eq!(engine.state().citation.as_ref().map(|c| c.index), Some(0));
+    // A web page: the quoted words and the address, no file.
+    let web = engine.call("message.citation", json!({"message_id": answer.id, "index": 1})).unwrap();
+    assert_eq!((web["found"].as_bool(), web["passage"].as_str()), (Some(false), Some("Igel schlafen von November bis März.")));
+    assert!(web.get("path").is_none());
+    // Hostile or stale references are refused, never panic.
+    assert!(engine.call("message.citation", json!({"message_id": answer.id, "index": 7})).is_err());
+    assert!(engine.call("message.citation", json!({"message_id": "weg", "index": 0})).is_err());
+    assert!(engine.call("message.citation", json!({"message_id": answer.id, "index": -1})).is_err());
+    assert!(engine.call("message.citation", json!({})).is_err());
+    engine.call("message.citation", json!({"close": true})).unwrap();
+    assert!(engine.state().citation.is_none());
+    engine.call("message.citation", json!({"message_id": answer.id, "index": 0})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    assert!(engine.state().citation.is_none(), "a citation belongs to its chat");
+    let _ = std::fs::remove_dir_all(dir);
+}

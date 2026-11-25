@@ -971,6 +971,7 @@ mod tests {
             tool_calls: vec![],
             tool_result: None,
             thinking: String::new(),
+            citations: Vec::new(),
         };
         let a = Message { id: "a0".into(), role: Role::Assistant, content: String::new(), attachments: vec![], ..u.clone() };
         u.id = "u1".into();
@@ -1073,6 +1074,7 @@ mod tests {
             tool_calls: vec![],
             tool_result: None,
             thinking: String::new(),
+            citations: Vec::new(),
         };
         let mut s = backend
             .chat(ChatRequest {
@@ -1164,6 +1166,7 @@ mod tests {
             tool_calls: vec![],
             tool_result: None,
             thinking: String::new(),
+            citations: Vec::new(),
         };
         for (kind, key) in
             [(PersonaKind::Assistant, "assistantId"), (PersonaKind::Character, "characterId"), (PersonaKind::LearningScenario, "learningScenarioId")]
@@ -1359,6 +1362,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_result: None,
                 thinking: String::new(),
+                citations: Vec::new(),
             },
             Message {
                 id: "u".into(),
@@ -1374,6 +1378,7 @@ mod tests {
                 tool_calls: vec![],
                 tool_result: None,
                 thinking: String::new(),
+                citations: Vec::new(),
             },
         ];
         let req = ChatRequest {

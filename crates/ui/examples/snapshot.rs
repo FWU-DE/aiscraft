@@ -19,6 +19,7 @@
 //! `["ui.wait", {"ms": 1500}]` lets the pictures arrive; `["ui.drop", {"paths": [..]}]` drops
 //! files on the window). `--theme modern|glas|system|…` (see `aiscraft_engine::THEMES`),
 //! `--system light|dark` for what "Wie das System" follows.
+//! `--demo-claude` adds a local stand-in for the Claude API that cites attached files (#39).
 //! `--demo-update` hands the update check a made-up newer release (no request to GitHub) and
 //! checks, so the hint shows (`["ui.show", {"what": "about"}]` for the settings part).
 //! The engine runs in memory; nothing touches your real data.
@@ -490,6 +491,9 @@ fn main() {
     if args.iter().any(|a| a == "--demo-ais") {
         demo_ais(&engine);
     }
+    if args.iter().any(|a| a == "--demo-claude") {
+        demo_claude(&engine);
+    }
     if args.iter().any(|a| a == "--demo-update") {
         let release = json!([{"tag_name": "v0.2.0", "name": "AIS.ChatCraft 0.2.0", "draft": false, "prerelease": false,
             "html_url": "https://github.com/FWU-DE/aiscraft/releases/tag/v0.2.0", "body": "- Startseite\n- Bilder in AIS.chat", "assets": []}]);
@@ -563,6 +567,77 @@ fn main() {
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     println!("wrote {out} ({}×{})", img.width(), img.height());
+}
+
+/// A local stand-in for the Claude API (`--demo-claude`): a message with an attached file gets
+/// an answer whose sentence cites a passage of it (#39). Send with
+/// `["chat.send", {"text": "…", "files": ["/tmp/igel.txt"]}]`; the citation cites the file's
+/// second sentence.
+fn demo_claude(engine: &Engine) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let url = engine.block_on(async {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = vec![0u8; 1 << 16];
+                    loop {
+                        let k = sock.read(&mut chunk).await.unwrap_or(0);
+                        if k == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..k]);
+                        let s = String::from_utf8_lossy(&buf).to_string();
+                        if let Some(h) = s.find("\r\n\r\n") {
+                            let len = s[..h].lines().find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0))).unwrap_or(0);
+                            if buf.len() >= h + 4 + len {
+                                break;
+                            }
+                        }
+                    }
+                    let req = String::from_utf8_lossy(&buf).to_string();
+                    if req.starts_with("GET") {
+                        let body = r#"{"data":[{"id":"claude-opus-5-5","display_name":"Claude Opus 5.5"}]}"#;
+                        let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
+                        return;
+                    }
+                    let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
+                    let body: Value = req.split_once("\r\n\r\n").and_then(|(_, b)| serde_json::from_str(b).ok()).unwrap_or(Value::Null);
+                    let doc = body["messages"].as_array().into_iter().flatten().flat_map(|m| m["content"].as_array().into_iter().flatten()).find(|b| b["type"] == "document").cloned();
+                    let mut events = vec![json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})];
+                    if let Some(d) = doc {
+                        let text = d["source"]["data"].as_str().unwrap_or("");
+                        let start = text.find(". ").map(|i| i + 2).unwrap_or(0);
+                        let end = text[start..].find('.').map(|i| start + i + 1).unwrap_or(text.len());
+                        let cited = &text[start..end];
+                        events.push(json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Laut deiner Datei: "}}));
+                        events.push(json!({"type": "content_block_stop", "index": 0}));
+                        events.push(json!({"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}}));
+                        events.push(json!({"type": "content_block_delta", "index": 1, "delta": {"type": "citations_delta", "citation": {"type": "char_location",
+                            "cited_text": cited, "document_index": 0, "document_title": d["title"], "start_char_index": text[..start].chars().count(), "end_char_index": text[..end].chars().count()}}}));
+                        events.push(json!({"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": cited}}));
+                        events.push(json!({"type": "content_block_stop", "index": 1}));
+                    } else {
+                        events.push(json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hänge eine Datei an, dann zeige ich die Belege."}}));
+                        events.push(json!({"type": "content_block_stop", "index": 0}));
+                    }
+                    events.push(json!({"type": "message_stop"}));
+                    for e in events {
+                        let _ = sock.write_all(format!("data: {e}\n\n").as_bytes()).await;
+                    }
+                });
+            }
+        });
+        format!("http://{addr}")
+    });
+    let id = engine.call("backend.add", json!({"kind": "anthropic", "base_url": url, "name": "Claude", "secret": "sk-ant-demo"})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    engine.call("chat.select_model", json!({"backend": id, "model": "claude-opus-5-5"})).unwrap();
 }
 
 /// A file "dropped" by `ui.drop`.

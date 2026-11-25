@@ -83,6 +83,7 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
         tool_calls: vec![],
         tool_result: None,
         thinking: String::new(),
+        citations: Vec::new(),
     });
     c.store(|st| st.save_conversation(&conv))?;
     if let Some(g) = &greeting {
@@ -148,6 +149,7 @@ pub(crate) async fn complete(c: &Ctx, system: Option<&str>, prompt: &str) -> Res
         tool_calls: vec![],
         tool_result: None,
         thinking: String::new(),
+        citations: Vec::new(),
     };
     let req = ChatRequest {
         conversation_id: new_id(),
@@ -319,6 +321,7 @@ pub(crate) async fn send_full(
         tool_calls: vec![],
         tool_result: None,
         thinking: String::new(),
+        citations: Vec::new(),
     };
     if let Some((p, _)) = &protection {
         crate::privacy::save_mapping(&c, &conv, &p.mapping)?;
@@ -409,6 +412,7 @@ pub(crate) async fn send_background(c: &Ctx, conv_id: &str, prompt: &str) -> Res
         tool_calls: vec![],
         tool_result: None,
         thinking: String::new(),
+        citations: Vec::new(),
     };
     c.store(|st| st.save_message(&user))?;
     put_message(c, conv_id, &user);
@@ -665,6 +669,8 @@ fn system_prompt_for(c: &Ctx, conv: &Conversation, send_context: bool, takes_sys
 
 /// The most thinking kept for one answer.
 const MAX_THINKING: usize = 256 * 1024;
+/// Most citations kept for one answer (#39), over all rounds.
+const MAX_CITATIONS: usize = 200;
 
 /// At most this many model rounds per answer (each round may call tools).
 const MAX_TOOL_ROUNDS: usize = 10;
@@ -684,6 +690,7 @@ fn new_answer(conv_id: &str, model_name: &str) -> Message {
         tool_calls: vec![],
         tool_result: None,
         thinking: String::new(),
+        citations: Vec::new(),
     }
 }
 
@@ -707,11 +714,12 @@ async fn stream_round(
     let mut dirty = false;
     let mut usage = answer.usage.unwrap_or_default();
     let flush = |answer: &Message| {
-        let (content, activity, thinking) = (answer.content.clone(), answer.activity.clone(), answer.thinking.clone());
+        let (content, activity, thinking, citations) = (answer.content.clone(), answer.activity.clone(), answer.thinking.clone(), answer.citations.clone());
         patch_message(c, conv_id, &answer.id, |m| {
             m.content = content;
             m.activity = activity;
             m.thinking = thinking;
+            m.citations = citations;
         });
     };
     loop {
@@ -755,6 +763,12 @@ async fn stream_round(
                 answer.usage = Some(usage);
             }
             StreamEvent::ToolCall { call } => calls.push(call),
+            // Passages that back the answer (#39), shown under it; capped like the backend does.
+            StreamEvent::Citations { citations } => {
+                let room = MAX_CITATIONS.saturating_sub(answer.citations.len());
+                answer.citations.extend(citations.into_iter().take(room));
+                dirty = true;
+            }
             StreamEvent::Done => break,
         }
         if dirty && last_flush.elapsed() >= FLUSH_EVERY {
@@ -1061,6 +1075,7 @@ fn plain_message(conv: &str, role: Role, text: &str) -> Message {
         tool_calls: vec![],
         tool_result: None,
         thinking: String::new(),
+        citations: Vec::new(),
     }
 }
 

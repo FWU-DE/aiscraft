@@ -312,6 +312,7 @@ mod tests {
             tool_calls: vec![],
             tool_result: None,
             thinking: String::new(),
+            citations: Vec::new(),
         }
     }
 

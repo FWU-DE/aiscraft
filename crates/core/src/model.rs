@@ -129,6 +129,47 @@ pub struct Message {
     /// `reasoning_content` of OpenAI-compatible servers). Shown folded above the answer.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub thinking: String,
+    /// Passages of attached documents or web pages that back statements of this answer (#39).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub citations: Vec<Citation>,
+}
+
+/// A passage that backs a statement of an answer (#39, Claude's citations): where in an attached
+/// document or on which web page it stands.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Citation {
+    /// The words of the source, as the model quotes them.
+    #[serde(default)]
+    pub cited_text: String,
+    /// The statement of the answer they back.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub claim: String,
+    /// The document's title (the file name) or the page's title.
+    #[serde(default)]
+    pub title: String,
+    /// A web page: its address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Characters `start..end` in a text document (0-based, end excluded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chars: Option<(u64, u64)>,
+    /// Pages `first..=last` of a PDF (1-based).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pages: Option<(u64, u64)>,
+    /// Which document of the request (0-based, in the order they were sent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_index: Option<u64>,
+}
+
+impl Citation {
+    /// Where the passage stands, for people: "S. 3", "S. 3–4", or the page title.
+    pub fn place(&self) -> String {
+        match self.pages {
+            Some((a, b)) if b > a => format!("S. {a}–{b}"),
+            Some((a, _)) => format!("S. {a}"),
+            None => String::new(),
+        }
+    }
 }
 
 /// A tool the model may call.
@@ -760,6 +801,10 @@ pub enum StreamEvent {
     /// The model wants this tool called (arguments complete).
     ToolCall {
         call: ToolCall,
+    },
+    /// Passages that back the text just streamed (#39).
+    Citations {
+        citations: Vec<Citation>,
     },
     Done,
 }

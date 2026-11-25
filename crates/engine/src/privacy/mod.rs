@@ -556,6 +556,10 @@ pub(crate) fn shown_messages(c: &Ctx, state: &crate::State) -> Vec<aiscraft_core
                     doc.content = m.reveal(&doc.content);
                 }
             }
+            for cite in x.citations.iter_mut() {
+                cite.cited_text = m.reveal(&cite.cited_text);
+                cite.claim = m.reveal(&cite.claim);
+            }
             x
         })
         .collect()
