@@ -21,6 +21,7 @@ pub mod office;
 mod pictures;
 pub mod privacy;
 mod proactive;
+pub mod readability;
 mod schedules;
 mod secrets;
 mod skills;

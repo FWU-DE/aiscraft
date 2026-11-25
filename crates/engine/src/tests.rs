@@ -1077,6 +1077,7 @@ fn every_command_has_a_functional_test() {
     let src = concat!(
         include_str!("tests.rs"),
         include_str!("learn_tests.rs"),
+        include_str!("output_tests.rs"),
         include_str!("attach/tests.rs"),
         include_str!("privacy/tests.rs"),
         include_str!("trust_tests.rs"),
@@ -2189,6 +2190,8 @@ fn update_check_remembers_across_starts() {
 
 #[path = "learn_tests.rs"]
 mod learn_tests;
+#[path = "output_tests.rs"]
+mod output_tests;
 
 /// The look: Modern by default, every listed look accepted and kept, unknown ones refused;
 /// Glas' transparency and the "look chosen" flag are plain settings.

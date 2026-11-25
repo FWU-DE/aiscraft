@@ -64,6 +64,9 @@ pub struct State {
     /// The update check: running version, what the last check found.
     #[serde(default)]
     pub update: UpdateState,
+    /// Readability shown under answers (`message.readability`, #48), by message id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub readability: BTreeMap<String, crate::readability::Readability>,
 }
 
 /// The update check (`app.check_update`). No download, no install: a hint with a link.

@@ -806,10 +806,12 @@ impl AisCraftApp {
                 {
                     self.run("message.check_links", json!({"message_id": m.id}));
                 }
+                self.answer_tools(ui, &t, m);
                 if is_last && crate::kit::icon_button(ui, &t, Icon::Refresh, "Neu erzeugen (Strg+R)", t.muted, 17.0, 32.0).clicked() {
                     self.run("chat.regenerate", json!({}));
                 }
             });
+            self.readability_line(ui, &t, m);
         } else if !generating && !m.content.is_empty() {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;

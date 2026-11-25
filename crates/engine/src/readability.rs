@@ -2,9 +2,9 @@
 //! an approximate school grade (first Vienna formula, Wiener Sachtextformel) and the long
 //! sentences. Computed on the device; nothing leaves it.
 //!
-//! Syllables are approximated: the German hyphenation points of craft-text (`hyphen` +
-//! `german`, Liang patterns) plus one, or the number of vowel groups when that is more (the
-//! patterns leave short ends unbroken, „Abend“ has no hyphenation point). The formulas are ours.
+//! Syllables are approximated: the pieces between the German hyphenation points of craft-text
+//! (`hyphen` + `german`, Liang patterns) that hold a vowel, or the number of vowel groups when
+//! that is more („Theater“ has one group but three pieces). The formulas are ours.
 
 use aiscraft_core::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -49,10 +49,7 @@ impl Readability {
             1 => "1 langer Satz".to_string(),
             n => format!("{n} lange Sätze"),
         };
-        format!(
-            "{} Wörter · Flesch {:.0} ({}) · LIX {:.0} · etwa Klasse {} · {long}",
-            self.words, self.flesch, self.level, self.lix, self.grade
-        )
+        format!("{} Wörter · Flesch {:.0} ({}) · LIX {:.0} · etwa Klasse {} · {long}", self.words, self.flesch, self.level, self.lix, self.grade)
     }
 }
 
@@ -86,14 +83,15 @@ fn prose(md: &str) -> String {
             out.push('\n');
             continue;
         }
-        let t = t.trim_start_matches(['#', '>', '-', '*', '+', ' ']);
+        let t = t.trim_start_matches(['#', '>', '-', '*', '+', '|', ' ']).trim_end_matches(['|', ' ']);
         let t = t.trim_start_matches(|c: char| c.is_ascii_digit()).trim_start_matches(['.', ')']).trim_start();
         let mut s = String::with_capacity(t.len());
         let mut chars = t.chars().peekable();
         while let Some(c) = chars.next() {
             match c {
                 '*' | '_' | '`' | '#' => {}
-                '|' => s.push_str(". "),
+                // A table row is one sentence, its cells parts of it.
+                '|' => s.push_str(", "),
                 ']' if chars.peek() == Some(&'(') => {
                     for d in chars.by_ref() {
                         if d == ')' {
@@ -117,7 +115,8 @@ fn prose(md: &str) -> String {
 }
 
 const ABBREVIATIONS: &[&str] = &[
-    "z", "b", "d", "h", "u", "a", "o", "ä", "s", "v", "bzw", "usw", "etc", "ca", "nr", "vgl", "evtl", "ggf", "inkl", "max", "min", "bspw", "dr", "prof", "hr", "fr", "str", "abb", "kap", "s", "jh", "mio", "mrd",
+    "z", "b", "d", "h", "u", "a", "o", "ä", "s", "v", "bzw", "usw", "etc", "ca", "nr", "vgl", "evtl", "ggf", "inkl", "max", "min", "bspw", "dr", "prof", "hr",
+    "fr", "str", "abb", "kap", "s", "jh", "mio", "mrd",
 ];
 
 /// The sentences of a text, each a list of its words.
@@ -160,11 +159,23 @@ pub fn syllables(word: &str) -> usize {
         }
         prev = v;
     }
-    let breaks = match craft_text::hyphen::Lang::for_language("de") {
-        Some(lang) if word.chars().count() <= 64 => craft_text::hyphen::word_breaks_in(word, lang).0.len(),
+    // The patterns are unrestricted („Punk-t“): count only the pieces that hold a vowel.
+    let pieces = match craft_text::hyphen::Lang::for_language("de") {
+        Some(lang) if word.chars().count() <= 64 => {
+            let (points, _) = craft_text::hyphen::word_breaks_in(word, lang);
+            let mut start = 0;
+            let mut n = 0;
+            for end in points.into_iter().chain(std::iter::once(word.len())) {
+                if word.get(start..end).is_some_and(|p| p.to_lowercase().chars().any(is_vowel)) {
+                    n += 1;
+                }
+                start = end;
+            }
+            n
+        }
         _ => 0,
     };
-    (breaks + 1).max(groups).max(1)
+    pieces.max(groups).max(1)
 }
 
 /// The readability of a Markdown text.
@@ -281,8 +292,10 @@ mod tests {
 
     #[test]
     fn markdown_and_abbreviations() {
-        let r = measure("# Überschrift\n\n- erster Punkt\n- zweiter Punkt\n\nZ. B. am 3. Dezember gehen wir usw. los.\n\n```rust\nfn main() {}\n```\n\n| A | B |\n|---|---|\n| x | y |\n\n[Link](https://example.org) hier.");
-        // Heading, two items, one sentence with abbreviations, a table row (two cells), the link.
+        let r = measure(
+            "# Überschrift\n\n- erster Punkt\n- zweiter Punkt\n\nZ. B. am 3. Dezember gehen wir usw. los.\n\n```rust\nfn main() {}\n```\n\n| Name | Alter |\n|---|---|\n| Ada | zwölf |\n\n[Link](https://example.org) hier.",
+        );
+        // Heading, two items, one sentence with abbreviations, two table rows, the link.
         assert_eq!(r.sentences, 7, "{r:?}");
         assert!(!r.summary().contains("fn"));
         assert_eq!(measure("").words, 0);

@@ -52,6 +52,8 @@ craft-ods = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd93
 craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a" }
 craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a", features = ["avif-decode"] }
 craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a" }
+# German hyphenation points as a syllable count for the readability of an answer (#48).
+craft-text = { git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a", default-features = false, features = ["hyphen", "german"] }
 
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

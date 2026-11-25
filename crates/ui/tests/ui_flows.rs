@@ -217,6 +217,18 @@ fn whiteboard_block_becomes_a_card() {
     assert_eq!(engine.state().artifacts[0].title, "Wasserkreislauf");
 }
 
+/// „Lesbarkeit“ under an answer (#48) shows one discreet line and hides it again.
+#[test]
+fn readability_line_under_an_answer() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    answering_backend(&engine, "Der Hund ist klein. Er spielt im Garten. Die Sonne scheint.");
+    engine.call("chat.send", serde_json::json!({"text": "Leicht bitte"})).unwrap();
+    let mut h = harness(&engine);
+    h.run_steps(6);
+    click_until(&mut h, "Lesbarkeit", "the line shows", |h| h.query_by_label_contains("11 Wörter · Flesch").is_some());
+    click_until(&mut h, "Lesbarkeit", "the line hides", |h| h.query_by_label_contains("11 Wörter · Flesch").is_none());
+}
+
 /// After "Neu erzeugen" the answer shows ‹ 2/2 ›; ‹ brings the first answer back.
 #[test]
 fn variant_switcher_shows_the_old_answer() {
