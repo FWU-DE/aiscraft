@@ -201,4 +201,11 @@ follow craft-update (`aischatcraft-<version>-<os>-<arch>.<ext>`); `update.rs` fi
 `pick_asset`. Windows (Azure Trusted Signing or a PFX) and macOS (Developer ID, notarization) are
 signed once their secrets are in the repository's `release` environment; the shared workflow signs
 Linux packages only on a `release` branch, so tag builds stay unsigned there. "Run workflow" on
-Release with dry-run builds everything except macOS and publishes nothing.
+Release with dry-run builds the packages and publishes nothing.
+
+For now (owner's decision, 2026-11-25) releases have no macOS package and no signatures: our
+workflow always calls the shared one in dry-run mode (no macOS, whose `macos-15-xlarge` runner is
+paid for, no signing, no draft), and its own job `publish` drafts the release with the suite's
+`draft-release` action and publishes it on a tag. Once the runner is allowed and the certificates
+are in the `release` environment, go back to the shared workflow's own draft (see the comment in
+`release.yml`).

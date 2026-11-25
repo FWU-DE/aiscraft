@@ -105,6 +105,11 @@ pub async fn wait_for_cookie(port: u16, host: &str, timeout: Duration, alive: &m
 }
 
 async fn read_cookies(http: &reqwest::Client, port: u16) -> Result<Value> {
+    cdp_call(http, port, "Storage.getCookies").await
+}
+
+/// One DevTools call on the browser target; returns its `result`.
+async fn cdp_call(http: &reqwest::Client, port: u16, method: &str) -> Result<Value> {
     let v: Value = http
         .get(format!("http://127.0.0.1:{port}/json/version"))
         .send()
@@ -121,9 +126,7 @@ async fn read_cookies(http: &reqwest::Client, port: u16) -> Result<Value> {
         .await
         .map_err(|_| Error::network("DevTools antwortet nicht"))?
         .map_err(|e| Error::network(format!("DevTools: {e}")))?;
-    sock.send(WsMessage::Text(json!({"id": 1, "method": "Storage.getCookies"}).to_string().into()))
-        .await
-        .map_err(|e| Error::network(format!("DevTools: {e}")))?;
+    sock.send(WsMessage::Text(json!({"id": 1, "method": method}).to_string().into())).await.map_err(|e| Error::network(format!("DevTools: {e}")))?;
     let reply = tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(m) = sock.next().await {
             if let Ok(WsMessage::Text(t)) = m
@@ -146,14 +149,42 @@ async fn read_cookies(http: &reqwest::Client, port: u16) -> Result<Value> {
     Ok(reply.get("result").cloned().unwrap_or(Value::Null))
 }
 
-async fn wait_for_port(profile: &Path, timeout: Duration) -> Result<u16> {
-    let file = profile.join("DevToolsActivePort");
+fn read_port(profile: &Path) -> Option<u16> {
+    std::fs::read_to_string(profile.join("DevToolsActivePort")).ok()?.lines().next()?.trim().parse().ok()
+}
+
+/// A browser from an earlier sign-in that still holds the profile (the app was ended while its
+/// window was open) would take over the new start: Chromium hands the window to the running
+/// instance and the new process ends. Close it through DevTools while it still answers.
+async fn close_leftover_browser(profile: &Path) {
+    let Some(port) = read_port(profile) else { return };
+    let Ok(http) = crate::http::client(false) else { return };
+    if cdp_call(&http, port, "Browser.close").await.is_err() {
+        return;
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && http.get(format!("http://127.0.0.1:{port}/json/version")).send().await.is_ok() {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    // The profile lock goes a moment after the endpoint.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+}
+
+/// Waits for the port file of the browser just started. `alive` says whether that process still
+/// runs; when it ends before the port appears, another browser has the profile.
+async fn wait_for_port(profile: &Path, timeout: Duration, alive: &mut (dyn FnMut() -> bool + Send)) -> Result<u16> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if let Ok(s) = std::fs::read_to_string(&file)
-            && let Some(port) = s.lines().next().and_then(|l| l.trim().parse::<u16>().ok())
-        {
+        if let Some(port) = read_port(profile) {
             return Ok(port);
+        }
+        if !alive() {
+            // One more look: the process may have written the file and ended in between.
+            return read_port(profile).ok_or_else(|| {
+                Error::protocol(
+                    "Für die Anmeldung ist noch ein Browserfenster von vorhin offen. Bitte alle Fenster der AIS.chat-Anmeldung schließen und erneut anmelden.",
+                )
+            });
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -185,6 +216,7 @@ pub async fn login(opts: LoginOptions) -> Result<String> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&opts.profile_dir, std::fs::Permissions::from_mode(0o700));
     }
+    close_leftover_browser(&opts.profile_dir).await;
     let _ = std::fs::remove_file(opts.profile_dir.join("DevToolsActivePort"));
     let login_url = format!("{}/login", opts.base_url.trim_end_matches('/'));
     let mut cmd = tokio::process::Command::new(&browser);
@@ -201,8 +233,8 @@ pub async fn login(opts: LoginOptions) -> Result<String> {
     }
     let mut child = cmd.spawn().map_err(|e| Error::not_found(format!("Browser {} lässt sich nicht starten: {e}", browser.display())))?;
     let result = async {
-        let port = wait_for_port(&opts.profile_dir, Duration::from_secs(20)).await?;
         let mut alive = || matches!(child.try_wait(), Ok(None));
+        let port = wait_for_port(&opts.profile_dir, Duration::from_secs(20), &mut alive).await?;
         wait_for_cookie(port, &host, opts.timeout, &mut alive).await
     }
     .await;
@@ -230,6 +262,25 @@ mod tests {
         assert_eq!(cookie_from_cdp(&r, "app.ais-chat.schule").unwrap(), format!("{SESSION_COOKIE}=abc; {SESSION_COOKIE}.0=b1; {SESSION_COOKIE}.1=b2"));
         assert_eq!(cookie_from_cdp(&json!({"cookies": []}), "x"), None);
         assert_eq!(cookie_from_cdp(&json!("garbage"), "x"), None);
+    }
+
+    /// A start handed to a browser that already holds the profile ends at once without a port
+    /// file: say so right away instead of waiting 20 s for nothing.
+    #[tokio::test]
+    async fn a_start_taken_over_by_a_leftover_browser_is_named_at_once() {
+        let dir = std::env::temp_dir().join(format!("aiscraft-port-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::remove_file(dir.join("DevToolsActivePort"));
+        let started = Instant::now();
+        let err = wait_for_port(&dir, Duration::from_secs(20), &mut || false).await.unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(err.message.contains("Browserfenster von vorhin"), "{}", err.message);
+
+        std::fs::write(dir.join("DevToolsActivePort"), "9222\n/devtools/browser/x\n").unwrap();
+        assert_eq!(wait_for_port(&dir, Duration::from_secs(1), &mut || false).await.unwrap(), 9222);
+        // Nothing answers on that port: closing a leftover is a no-op, never an error.
+        close_leftover_browser(&dir).await;
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A fake DevTools endpoint: the cookie appears on the third ask.
