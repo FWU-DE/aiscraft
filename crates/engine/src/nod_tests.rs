@@ -2,9 +2,102 @@
 
 use std::time::Duration;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
 use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::tests::engine_with_recording;
+use crate::{Engine, Options};
+
+/// What the scripted server does with one chat request.
+enum Reply {
+    /// Stream this text.
+    Text(&'static str),
+    /// Answer with this HTTP status and JSON body.
+    Status(u16, &'static str),
+    /// Stream this text once the flag is set (checked every few milliseconds).
+    After(Arc<AtomicBool>, &'static str),
+}
+
+/// An OpenAI-compatible server: `/models` lists `models`, each chat request is answered as
+/// `reply` decides from its body; every body is recorded.
+fn scripted(engine: &Engine, models: &'static str, reply: impl Fn(&str) -> Reply + Send + Sync + 'static) -> (String, Arc<Mutex<Vec<String>>>) {
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let seen2 = seen.clone();
+    let reply = Arc::new(reply);
+    let url = engine.block_on(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let (seen, reply) = (seen2.clone(), reply.clone());
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut chunk = vec![0u8; 1 << 16];
+                    loop {
+                        let k = sock.read(&mut chunk).await.unwrap_or(0);
+                        if k == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..k]);
+                        let s = String::from_utf8_lossy(&buf).to_string();
+                        if let Some(h) = s.find("\r\n\r\n") {
+                            let len = s[..h]
+                                .lines()
+                                .find_map(|l| l.to_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                                .unwrap_or(0);
+                            if buf.len() >= h + 4 + len {
+                                break;
+                            }
+                        }
+                    }
+                    let req = String::from_utf8_lossy(&buf).to_string();
+                    if req.starts_with("GET") {
+                        let head =
+                            format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", models.len());
+                        let _ = sock.write_all(format!("{head}{models}").as_bytes()).await;
+                        return;
+                    }
+                    seen.lock().unwrap().push(req.clone());
+                    let text = match reply(&req) {
+                        Reply::Status(code, body) => {
+                            let head =
+                                format!("HTTP/1.1 {code} X\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", body.len());
+                            let _ = sock.write_all(format!("{head}{body}").as_bytes()).await;
+                            return;
+                        }
+                        Reply::Text(t) => t,
+                        Reply::After(flag, t) => {
+                            while !flag.load(Ordering::SeqCst) {
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                            }
+                            t
+                        }
+                    };
+                    let c = json!({"choices":[{"delta":{"content": text}}]});
+                    let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
+                    let _ = sock.write_all(format!("data: {c}\n\ndata: [DONE]\n\n").as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}/v1")
+    });
+    (url, seen)
+}
+
+/// An engine with one scripted service selected (model `m`); returns the service's id.
+fn engine_with(models: &'static str, reply: impl Fn(&str) -> Reply + Send + Sync + 'static) -> (Engine, String, Arc<Mutex<Vec<String>>>) {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let (url, seen) = scripted(&engine, models, reply);
+    let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Erster Dienst"})).unwrap()["id"].as_str().unwrap().to_string();
+    engine.call("backend.check", json!({"id": id})).unwrap();
+    engine.call("chat.select_model", json!({"backend": id, "model": "m"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    (engine, id, seen)
+}
 
 fn note_id(engine: &crate::Engine, has: &str) -> String {
     engine.state().memory.iter().find(|n| n.text.contains(has)).map(|n| n.id.clone()).unwrap_or_default()
@@ -252,4 +345,54 @@ fn recurring_requests_become_schedule_ideas() {
         engine.ctx().store(|st| st.save_message(&m)).unwrap();
     }
     assert!(engine.call("schedule.ideas", json!({})).unwrap().as_array().unwrap().is_empty(), "tool text does not count");
+}
+
+/// #69: a running task is in the status line until it ends; its result comes back as a card that
+/// leads to the task's chat. Schedules show there while they run.
+#[test]
+fn running_tasks_show_in_the_status_line_and_end_as_a_card() {
+    use crate::{JobKind, RunningJob, running_summary};
+    let job = |kind, title: &str| RunningJob { id: title.into(), kind, title: title.into(), started_at: 0 };
+    assert_eq!(running_summary(&[]), None);
+    assert_eq!(running_summary(&[job(JobKind::Task, "Elternbrief prüfen"), job(JobKind::Task, "Noten")]).unwrap(), "2 Aufgaben laufen · Elternbrief prüfen …");
+    assert_eq!(running_summary(&[job(JobKind::Task, "A"), job(JobKind::Watch, "Plan")]).unwrap(), "1 Aufgabe läuft · 1 Beobachtung läuft · A …");
+
+    let release = Arc::new(AtomicBool::new(false));
+    let r2 = release.clone();
+    let (engine, _, _) = engine_with(r#"{"data":[{"id":"m"}]}"#, move |body| {
+        if body.contains("Aufgabe") {
+            Reply::After(r2.clone(), "**Ergebnis**\nDer Elternbrief ist geprüft, zwei Tippfehler sind korrigiert.")
+        } else {
+            Reply::Text("ok")
+        }
+    });
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let origin = engine.state().current.clone().unwrap();
+    let task =
+        engine.call("task.start", json!({"title": "Elternbrief prüfen", "instructions": "Prüfe den Elternbrief"})).unwrap()["id"].as_str().unwrap().to_string();
+    let s = engine.state();
+    assert_eq!(s.running.len(), 1);
+    assert_eq!((s.running[0].id.as_str(), s.running[0].kind), (task.as_str(), JobKind::Task));
+    assert!(!s.messages.iter().any(|m| m.content.contains("Elternbrief ist geprüft")), "no progress in the chat");
+    release.store(true, Ordering::SeqCst);
+    let o = origin.clone();
+    assert!(engine.wait_for(Duration::from_secs(20), move |s| s.running.is_empty()
+        && s.current.as_deref() == Some(o.as_str())
+        && s.messages.iter().any(|m| m.activity.iter().any(|a| a.label == crate::TASK_RESULT))));
+    let s = engine.state();
+    let m = s.messages.iter().find(|m| m.activity.iter().any(|a| a.label == crate::TASK_RESULT)).unwrap();
+    let card = crate::task_card(&s, m).unwrap();
+    assert_eq!((card.task_id.as_str(), card.title.as_str(), card.ok), (task.as_str(), "Elternbrief prüfen", true));
+    assert_eq!(card.line, "Der Elternbrief ist geprüft, zwei Tippfehler sind korrigiert.", "the first line that is no heading");
+
+    // A schedule is listed while it runs, and gone afterwards.
+    let r3 = Arc::new(AtomicBool::new(false));
+    let r4 = r3.clone();
+    let (engine, _, _) = engine_with(r#"{"data":[{"id":"m"}]}"#, move |_| Reply::After(r4.clone(), "Heute nichts Neues"));
+    let id = engine.call("schedule.create", json!({"title": "Vertretungsplan", "prompt": "Prüfe den Plan", "cron": "0 7 * * *", "watch": true})).unwrap()["id"]
+        .clone();
+    engine.dispatch("schedule.run", json!({"id": id}));
+    assert!(engine.wait_for(Duration::from_secs(20), |s| s.running.iter().any(|j| j.kind == JobKind::Watch && j.title == "Vertretungsplan")));
+    r3.store(true, Ordering::SeqCst);
+    assert!(engine.wait_for(Duration::from_secs(20), |s| s.running.is_empty()));
 }

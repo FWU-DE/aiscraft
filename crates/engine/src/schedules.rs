@@ -246,6 +246,8 @@ async fn run(c: &Ctx, mut s: Schedule) -> Result<Value> {
             id
         }
     };
+    // In the status line while it runs (#69).
+    let _running = crate::tasks::Running::start(c, &conv_id, if s.watch { crate::JobKind::Watch } else { crate::JobKind::Schedule }, &s.title);
     let mut prompt = format!("(Zeitplan „{}“) {}", s.title, s.prompt);
     if s.watch {
         let last = s.last_result.clone().unwrap_or_else(|| "(noch keine)".into());

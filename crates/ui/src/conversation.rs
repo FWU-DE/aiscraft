@@ -549,6 +549,11 @@ impl AisCraftApp {
     }
 
     fn assistant_message(&mut self, ui: &mut Ui, m: &Message, is_last: bool) {
+        // A task's result is a compact card (#69).
+        if let Some(card) = aiscraft_engine::task_card(&self.state, m) {
+            self.task_card(ui, &card);
+            return;
+        }
         let t = self.tokens.clone();
         let generating = is_last && self.state.current.as_ref().is_some_and(|c| self.state.is_generating(c));
         // Token counts are for the curious: on the model name, not in the row of actions.
@@ -1321,6 +1326,7 @@ impl AisCraftApp {
             .inner_margin(m)
             .shadow(t.composer_shadow);
         frame.show(ui, |ui| {
+            self.status_line(ui);
             if self.state.selection.temporary {
                 ui.label(small_muted(&t, "Vorübergehender Chat: wird nicht gespeichert und ist beim Schließen weg."));
             }

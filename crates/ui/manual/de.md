@@ -199,7 +199,7 @@ Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
 
 **Ideen aus deinen Bitten.** Bittest du an mindestens drei Tagen um dasselbe, etwa jeden Montag „Fass mir die Mails der Schulleitung zusammen“, schlägt AIS.ChatCraft unter den Zeitplänen einen Zeitplan vor: mit deinem Auftrag, dem Rhythmus und dem Modell, das du dafür genommen hast. „Als Zeitplan anlegen“ legt ihn an, „Anpassen …“ öffnet ihn vorher zum Ändern, „Nein danke“ lässt ihn nie wieder auftauchen. Gesucht wird nur auf diesem Gerät, in deinen eigenen Nachrichten, ohne Modell. Sind die Hinweise an, meldet sich eine neue Idee einmal in den Benachrichtigungen. Das Modell jedes Zeitplans wählst du in seiner Karte.
 
-**Aufgaben** laufen im Hintergrund in einem eigenen Chat (Titel mit ▶), während du weiterchattest. Das Ergebnis kommt in den Chat zurück, aus dem die Aufgabe kam.
+**Aufgaben** laufen im Hintergrund in einem eigenen Chat (Titel mit ▶), während du weiterchattest. Solange Aufgaben, Zeitpläne oder Beobachtungen laufen, steht über dem Eingabefeld eine Statuszeile, etwa „2 Aufgaben laufen · Elternbrief prüfen …“; ein Klick öffnet den Chat. Das Ergebnis kommt als kleine Karte in den Chat zurück, aus dem die Aufgabe kam: Titel, eine Zeile Ergebnis und „Details“, das den Chat der Aufgabe öffnet.
 
 ## Fähigkeiten und Hinweise
 

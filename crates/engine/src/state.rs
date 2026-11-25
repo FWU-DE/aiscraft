@@ -30,6 +30,9 @@ pub struct State {
     pub selection: Selection,
     /// Conversations with an answer being generated right now.
     pub generating: Vec<String>,
+    /// Tasks, schedules and page watches running in the background (#69), for the status line.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub running: Vec<RunningJob>,
     pub remote: BTreeMap<String, Vec<RemoteConversation>>,
     pub search: Option<SearchState>,
     pub notices: Vec<Notice>,
@@ -71,6 +74,24 @@ pub struct State {
     /// The update check: running version, what the last check found.
     #[serde(default)]
     pub update: UpdateState,
+}
+
+/// Work running in the background (#69).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunningJob {
+    /// The chat it works in.
+    pub id: String,
+    pub kind: JobKind,
+    pub title: String,
+    pub started_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    Task,
+    Schedule,
+    Watch,
 }
 
 /// The update check (`app.check_update`). No download, no install: a hint with a link.

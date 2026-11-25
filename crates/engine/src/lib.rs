@@ -65,6 +65,7 @@ pub use schedules::{Cron, Schedule, next_run as schedule_next_run, parse_when};
 pub use secrets::Secrets;
 pub use skills::Skill;
 pub use state::*;
+pub use tasks::{TASK_RESULT, TaskCard, running_summary, task_card};
 pub use tools::{obsidian_vaults, presets as connector_presets};
 pub use update::{CURRENT_VERSION, finish_update_helper};
 pub use vault::{EntryInfo as VaultEntry, totp_at};

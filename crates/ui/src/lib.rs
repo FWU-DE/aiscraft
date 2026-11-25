@@ -29,6 +29,7 @@ mod privacy_panel;
 mod rich;
 mod share;
 mod sidebar;
+mod status_line;
 pub mod theme;
 mod trust_rules;
 mod update;
