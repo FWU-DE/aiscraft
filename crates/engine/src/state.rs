@@ -427,6 +427,9 @@ pub struct Settings {
     /// The person has picked a look (or closed the question) once; until then the welcome
     /// dialog asks on start.
     pub look_chosen: bool,
+    /// „Namen schützen“ was set up once (`privacy.onboarding_done`, #73); until then switching
+    /// protection on opens the setup.
+    pub privacy_onboarded: bool,
     /// Keep notes from "Merke dir: …" and send them to backends that allow context.
     pub memory: bool,
     /// UI zoom.
@@ -505,6 +508,7 @@ impl Default for Settings {
             theme: "modern".into(),
             transparency: "gradient".into(),
             look_chosen: false,
+            privacy_onboarded: false,
             memory: true,
             zoom: 1.0,
             enter_sends: true,

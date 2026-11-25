@@ -784,7 +784,31 @@ pub(crate) async fn reveal_cmd(c: Ctx, p: Value) -> Result<Value> {
     Ok(json!({"text": reveal(&c, &conv, text.get(..text.len().min(MAX_TEXT)).unwrap_or(""))}))
 }
 
+/// The setup of „Namen schützen“ (#73) was gone through: switching protection on no longer
+/// opens it. `done: false` brings it back.
+pub(crate) async fn onboarding_done(c: Ctx, p: Value) -> Result<Value> {
+    let done = match p.get("done") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(Error::invalid("done muss true oder false sein")),
+    };
+    let mut settings = c.state().settings.clone();
+    settings.privacy_onboarded = done;
+    c.store(|st| st.set_setting("settings", &serde_json::to_value(&settings)?))?;
+    c.update(|s| s.settings.privacy_onboarded = done);
+    Ok(json!({"done": done}))
+}
+
 impl crate::State {
+    /// The switch of the open chat (or the next new one) as set: `None` is automatic (on once a
+    /// class list fits).
+    pub fn protect_choice(&self) -> Option<bool> {
+        match self.current.as_ref().and_then(|id| self.conversation(id)) {
+            Some(c) => c.sources.protect,
+            None => self.selection.sources.protect,
+        }
+    }
+
     /// „Namen schützen“ is on for the open chat (or the next new one).
     pub fn protection_on(&self) -> bool {
         let (sources, project) = match self.current.as_ref().and_then(|id| self.conversation(id)) {

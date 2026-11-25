@@ -33,6 +33,7 @@ mod nod_settings;
 mod palette;
 pub mod plot;
 mod privacy_panel;
+mod privacy_setup;
 mod rich;
 mod share;
 mod sidebar;

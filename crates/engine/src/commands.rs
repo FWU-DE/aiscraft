@@ -797,6 +797,15 @@ static COMMANDS: &[CommandSpec] = &[
         |c, p| Box::pin(crate::privacy::ner::install(c, p))
     ),
     cmd!("privacy.ner_remove", "Namenserkennung entfernen", "Namen schützen", None, "", false, |c, p| Box::pin(crate::privacy::ner::remove(c, p))),
+    cmd!(
+        "privacy.onboarding_done",
+        "Einrichtung von „Namen schützen“ abschließen",
+        "Namen schützen",
+        None,
+        "done?: bool (ohne: true; false: die Einrichtung kommt beim nächsten Einschalten wieder)",
+        false,
+        |c, p| Box::pin(crate::privacy::onboarding_done(c, p))
+    ),
     cmd!("vault.remove", "Tresor-Eintrag löschen", "Tresor", None, "id: string", false, |c, p| Box::pin(crate::vault::remove(c, p))),
     cmd!("vault.code", "Einmalcode anzeigen", "Tresor", None, "id: string", false, |c, p| Box::pin(crate::vault::code(c, p))),
     cmd!("vault.import_bitwarden", "Aus Bitwarden übernehmen", "Tresor", None, "path: string (CSV-Export)", false, |c, p| Box::pin(

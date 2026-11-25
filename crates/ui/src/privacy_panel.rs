@@ -68,7 +68,13 @@ impl AisCraftApp {
         };
         let r = crate::kit::pill(ui, &t, if on { crate::kit::Pill::Soft } else { crate::kit::Pill::Chip }, Some(crate::icons::Icon::Lock), label, 13.5, None);
         if r.on_hover_text(hint).clicked() {
+            // Switched on for the first time: the setup explains it (#73); „Einrichtung
+            // abbrechen“ switches it back.
+            let setup = (!on && !self.state.settings.privacy_onboarded).then(|| self.privacy_setup(0, false));
             self.run("chat.set_sources", json!({"protect": !on}));
+            if setup.is_some() {
+                self.dialog = setup;
+            }
         }
     }
 

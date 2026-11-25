@@ -123,6 +123,8 @@ pub enum Dialog {
     H5pPlayer {
         artifact: String,
     },
+    /// The setup of „Namen schützen“ (#73), step by step.
+    PrivacySetup(Box<crate::privacy_setup::PrivacySetup>),
 }
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
@@ -236,7 +238,7 @@ impl AisCraftApp {
         let modal = egui::Modal::new(Id::unique("dialog")).frame(frame).backdrop_color(self.tokens.overlay).show(ctx, |ui| {
             ui.set_width(match dialog {
                 Dialog::Settings { .. } => (ctx.content_rect().width() - 48.0).clamp(600.0, 940.0),
-                Dialog::Welcome { .. } => 640.0,
+                Dialog::Welcome { .. } | Dialog::PrivacySetup(_) => 640.0,
                 Dialog::Login { .. } | Dialog::WelcomeSignIn => 520.0,
                 Dialog::Install { .. } | Dialog::Share { .. } => 600.0,
                 _ => 460.0,
@@ -244,6 +246,10 @@ impl AisCraftApp {
             keep = self.dialog_body(ui, &mut dialog);
         });
         if modal.should_close() {
+            // Esc or a click beside the setup of „Namen schützen“ is „Einrichtung abbrechen“.
+            if let (true, Dialog::PrivacySetup(s)) = (keep, &dialog) {
+                self.privacy_setup_cancel(s);
+            }
             keep = false;
         }
         // The look question shows once: picking, going on or closing all count.
@@ -672,6 +678,7 @@ impl AisCraftApp {
             Dialog::Join { code } => self.join_body(ui, code),
             Dialog::DeleteChats(d) => self.delete_chats_dialog(ui, d),
             Dialog::PurgeChats(d) => self.purge_chats_dialog(ui, d),
+            Dialog::PrivacySetup(s) => self.privacy_setup_body(ui, s),
             Dialog::Confirm { text, command, params } => {
                 ui.label(RichText::new(text.as_str()).strong());
                 ui.add_space(8.0);
@@ -1450,6 +1457,16 @@ impl AisCraftApp {
             "Vor dem Senden ersetzt AIS.ChatCraft Namen aus diesen Listen sowie E-Mail-Adressen, Telefonnummern, IBAN, Geburtsdaten und Adressen durch Platzhalter wie [S1] oder [E-Mail 1]. Die Zuordnung bleibt auf diesem Gerät; in der Antwort stehen wieder die Namen. Mit einer Liste ist der Schutz in passenden Chats von selbst an.",
         ));
         ui.add_space(6.0);
+        // The setup (#73): step by step through what it does, lists, the model and the switch.
+        let onboarded = self.state.settings.privacy_onboarded;
+        let setup = if onboarded { "Einrichtung erneut durchlaufen" } else { "Einrichtung starten" };
+        if ui.button(setup).on_hover_text("Schritt für Schritt: was geschützt wird, Klassenlisten, Namenserkennung, Einstellungen").clicked() {
+            self.dialog = Some(self.privacy_setup(0, true));
+        }
+        ui.add_space(8.0);
+        // The first list switches protection on: before the setup was gone through, the setup
+        // follows, with this list on its list step (and „Einrichtung abbrechen“ takes it back).
+        let first_setup = (!onboarded && self.state.privacy.lists.is_empty()).then(|| self.privacy_setup(1, true));
         for l in self.state.privacy.lists.clone() {
             card(&t).show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1480,6 +1497,7 @@ impl AisCraftApp {
         }
         let project = self.state.selection.project_id.clone();
         let project_name = project.as_ref().and_then(|p| self.state.projects.iter().find(|x| &x.id == p)).map(|p| p.name.clone());
+        let mut added = false;
         ui.horizontal_wrapped(|ui| {
             if ui
                 .button("Klassenliste einlesen …")
@@ -1488,12 +1506,14 @@ impl AisCraftApp {
                 && let Some(path) = rfd::FileDialog::new().add_filter("Klassenliste", &["csv", "tsv", "txt", "xlsx", "xls", "ods", "vcf"]).pick_file()
             {
                 self.run("privacy.list_import", json!({"path": path.display().to_string()}));
+                added = true;
             }
             if let (Some(pid), Some(name)) = (&project, &project_name)
                 && ui.button(format!("… nur für Projekt {name}")).clicked()
                 && let Some(path) = rfd::FileDialog::new().add_filter("Klassenliste", &["csv", "tsv", "txt", "xlsx", "xls", "ods", "vcf"]).pick_file()
             {
                 self.run("privacy.list_import", json!({"path": path.display().to_string(), "project": pid}));
+                added = true;
             }
         });
         ui.add_space(8.0);
@@ -1502,25 +1522,32 @@ impl AisCraftApp {
         if ui.add_enabled(!pasted.trim().is_empty(), egui::Button::new("Als Klassenliste speichern")).clicked() {
             self.run("privacy.list_add", json!({"text": pasted.clone(), "name": "Eingefügte Namen"}));
             pasted.clear();
+            added = true;
+        }
+        if let Some(setup) = first_setup.filter(|_| added) {
+            self.dialog = Some(setup);
         }
         ui.add_space(12.0);
-        self.ner_settings(ui);
+        self.ner_settings(ui, true);
         ui.add_space(8.0);
         ui.label(small_muted(&t, "Grenzen: Spitznamen, Tippfehler, Namen außerhalb der Listen (ohne Namenserkennung) und Namen in Bildern oder PDF-Dateien erkennt AIS.ChatCraft nicht. Prüfe die Vorschau über dem Eingabefeld vor dem Senden."));
     }
 
     /// „Namenserkennung laden“ (#73): size, source and licence first; the download starts only
     /// after the second click („Ja, laden“).
-    fn ner_settings(&mut self, ui: &mut Ui) {
+    /// Also the model step of the setup (`privacy_setup.rs`), there without the heading.
+    pub(crate) fn ner_settings(&mut self, ui: &mut Ui, heading: bool) {
         use aiscraft_engine::privacy::ner;
         let t = self.tokens.clone();
         let s = self.state.privacy.ner.clone();
-        ui.label(RichText::new("Namenserkennung (Modell)").strong());
-        ui.label(muted(
-            &t,
-            "Erkennt auch Namen, die in keiner Liste stehen, etwa Nachnamen ohne Anrede. Läuft auf diesem Rechner, ohne Internet. Treffer sind unsicher und werden ersetzt; in der Vorschau lässt du einzelne stehen.",
-        ));
-        ui.add_space(4.0);
+        if heading {
+            ui.label(RichText::new("Namenserkennung (Modell)").strong());
+            ui.label(muted(
+                &t,
+                "Erkennt auch Namen, die in keiner Liste stehen, etwa Nachnamen ohne Anrede. Läuft auf diesem Rechner, ohne Internet. Treffer sind unsicher und werden ersetzt; in der Vorschau lässt du einzelne stehen.",
+            ));
+            ui.add_space(4.0);
+        }
         let ask_id = egui::Id::unique("ner-install-ask");
         if !s.available {
             ui.label(small_muted(&t, "Diese Ausgabe von AIS.ChatCraft enthält die Namenserkennung nicht."));
