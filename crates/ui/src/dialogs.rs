@@ -810,6 +810,9 @@ impl AisCraftApp {
     /// The content of one settings section.
     fn settings_tab(&mut self, ui: &mut Ui, tab: &mut SettingsTab, new_note: &mut String, max_h: f32) {
         let t = self.tokens.clone();
+        // The rail beside it sets no gap between items; the tabs need the usual one, or dots,
+        // names and buttons touch.
+        ui.spacing_mut().item_spacing.x = 8.0;
         egui::ScrollArea::vertical().max_height(max_h).show(ui, |ui| match tab {
             SettingsTab::Backends => {
                 for b in self.state.backends.clone() {

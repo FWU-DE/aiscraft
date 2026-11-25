@@ -642,6 +642,10 @@ fn expired_ais_session_offers_sign_in_again() {
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
     step_until(&mut h, "the Dienste tab", |h| h.query_by_label("Neu anmelden").is_some());
     assert!(h.query_by_label("Abmelden").is_none(), "no sign-out for an expired session");
+    // The buttons of the row keep a gap (the settings rail sets none; it must not leak in).
+    let (a, b) = (h.get_by_label("Prüfen").rect(), h.get_by_label("Neu anmelden").rect());
+    let gap = if a.min.x > b.max.x { a.min.x - b.max.x } else { b.min.x - a.max.x };
+    assert!(gap >= 6.0, "buttons touch: gap {gap}");
     h.get_by_label("Neu anmelden").click();
     step_until(&mut h, "the sign-in dialog", |h| h.query_by_label_contains("Im Browser anmelden").is_some());
 }
