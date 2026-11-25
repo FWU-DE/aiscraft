@@ -357,7 +357,7 @@ mod unit {
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.as_path().join("aiscraft.exe");
         assert_eq!(crate::portable_data_dir(&exe), None);
-        std::fs::write(dir.as_path().join("portable.txt"), "AIS.ChatCraft portable.").unwrap();
+        crate::disk::write(&dir.as_path().join("portable.txt"), b"AIS.ChatCraft portable.").unwrap();
         assert_eq!(crate::portable_data_dir(&exe), Some(dir.as_path().join("AIS.ChatCraftData").join("aiscraft")));
         let paths = craft_update::Paths::for_exe(&APP, &exe).unwrap();
         assert!(paths.data.starts_with(dir.as_path().join("AIS.ChatCraftData")), "{:?}", paths.data);
