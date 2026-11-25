@@ -368,7 +368,9 @@ fn close_chat_shows_the_start_page() {
     h.run_steps(8);
     assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.current.is_none()), "Esc closed the chat");
 
-    // A prompt starter fills the composer; a new document from the sidebar's "+".
+    // A prompt starter fills the composer; a new document from the sidebar's "+". The start page
+    // may need a few more frames on a slow runner.
+    step_until(&mut h, "the start page with its starters", |h| h.query_by_label("Stundenentwurf").is_some());
     h.get_by_label("Stundenentwurf").click();
     h.run_steps(4);
     assert!(
