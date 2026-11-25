@@ -874,9 +874,11 @@ impl AisCraftApp {
                     self.run("settings.set", json!({"key": "trust_check", "value": trust}));
                 }
                 let mut auto = st.auto_allow_covered;
-                if ui.add_enabled(trust, egui::Checkbox::new(&mut auto, "Ohne Nachfrage ausführen, wenn deine Worte sie wörtlich decken (nie bei löschenden Werkzeugen)")).changed() {
+                if ui.add_enabled(trust, egui::Checkbox::new(&mut auto, "Ohne Nachfrage ausführen, was deine Bitte deckt, auch über mehrere Schritte (nie bei löschenden Werkzeugen und Tresor-Einträgen)")).changed() {
                     self.run("settings.set", json!({"key": "auto_allow_covered", "value": auto}));
                 }
+                ui.add_space(8.0);
+                self.trust_rules_section(ui);
                 ui.add_space(8.0);
                 for k in self.state.connectors.clone() {
                     card(&t).show(ui, |ui| {
@@ -1120,6 +1122,8 @@ impl AisCraftApp {
                     }
                 });
                 ui.label(small_muted(&t, "Ab der Grenze fragt AIS.ChatCraft vor dem Senden nach. Kosten nur für Claude über API (Preise je Million Tokens); Abo und AIS.chat rechnen nicht pro Token ab."));
+                ui.add_space(12.0);
+                crate::action_log::section(self, ui);
             }
             SettingsTab::Memory => {
                 let mut on = self.state.settings.memory;

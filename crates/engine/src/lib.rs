@@ -2,6 +2,7 @@
 //! and exposes one registry of commands. The egui shell, the CLI and the JSON control channel
 //! all dispatch the same commands by id, so everything a person can do, an agent can do.
 
+mod action_log;
 mod artifacts;
 mod attach;
 mod bridge;
@@ -11,6 +12,7 @@ mod collab;
 mod commands;
 mod disk;
 mod files;
+pub mod highlights;
 mod inbox;
 pub mod learn;
 mod links;
@@ -24,6 +26,7 @@ mod skills;
 mod state;
 mod tasks;
 pub mod tools;
+mod trust;
 mod update;
 mod usage;
 mod vault;
@@ -274,6 +277,7 @@ impl Engine {
             });
             schedules::start(&engine.ctx);
             vault::refresh(&engine.ctx);
+            tools::settle_claims(&engine.ctx);
             privacy::refresh(&engine.ctx);
             update::start(&engine.ctx);
             #[cfg(feature = "collab")]
@@ -642,6 +646,8 @@ impl Ctx {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod trust_tests;
 
 #[cfg(test)]
 pub(crate) fn chat_system_prompt_for_test(c: &Ctx, conv: &aiscraft_core::Conversation, send: bool, takes: bool) -> Option<String> {

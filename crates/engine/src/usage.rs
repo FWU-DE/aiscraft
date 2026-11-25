@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::{Ctx, NoticeAction, NoticeLevel};
 
 /// Dollars per million tokens (input, output) for API backends where the price is known.
-fn price(model: &str) -> Option<(f64, f64)> {
+pub(crate) fn price(model: &str) -> Option<(f64, f64)> {
     let m = model.to_lowercase();
     [
         ("opus 5.5", (4.0, 20.0)),

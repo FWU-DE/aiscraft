@@ -151,7 +151,13 @@ Schreib im Chat „Merke dir: …“, und AIS.ChatCraft legt eine Notiz an. Noti
 
 Konnektoren sind MCP-Server, deren Werkzeuge Modelle aufrufen können: Obsidian, Dateien, Webseiten abrufen und viele mehr. Unter **Einstellungen › Konnektoren** gibt es Vorlagen, etwa für deinen Obsidian-Tresor.
 
-Werkzeuge, die nur lesen, laufen direkt. Alles andere fragt vorher, mit genau den Angaben, die ausgeführt würden. „Einmal erlauben“ gilt nur für diese Angaben. Die **Vertrauensprüfung** zeigt dazu, ob deine eigenen Worte die Aktion decken; sie muss dich wörtlich zitieren.
+Werkzeuge, die nur lesen, laufen direkt. Alles andere läuft nur, wenn du darum gebeten hast, sonst fragt AIS.ChatCraft vorher, mit genau den Angaben, die ausgeführt würden. Die Karte nennt die wenigen Werte, auf die es ankommt, fett: Empfänger, Betreff oder Titel, Datum, Datei, Betrag. Alle Angaben stehen eingeklappt darunter. „Einmal erlauben“ gilt nur für genau diese Angaben.
+
+**Eine Bitte deckt alle Schritte.** Bittest du um etwas, das mehrere Aufrufe braucht („Verschieb alle Termine der Projektwoche um einen Tag“), fragt AIS.ChatCraft nicht bei jedem Schritt neu. Die **Vertrauensprüfung** liest dazu jede deiner Nachrichten zusammen mit der Antwort, auf die sie reagiert; ein „ja, mach das“ auf einen konkreten Vorschlag zählt so als Bitte. Sie nennt die Nachricht, aus der die Erlaubnis stammt, und vergleicht jeden ausdrücklichen Wert (Empfänger, Datum, Datei, Betrag) mit der Aktion; AIS.ChatCraft prüft das nach. Ein abweichender Wert, ein Wert, der nur im Vorschlag stand, angehaltene Anfragen und alles, was aus Werkzeug-Ergebnissen stammt, erlauben nichts. Aktionen, um die du nicht gebeten hast, löschende Werkzeuge und Tresor-Einträge fragen immer. Wartet eine Frage, laufen reine Lese-Aufrufe desselben Schritts weiter; andere Aufrufe enden mit dem Hinweis, dass für sie nicht gefragt wurde. Aufgaben und Zeitpläne führen nie etwas aus, das eine Freigabe braucht.
+
+**Eigene Regeln** (Einstellungen › Konnektoren) sind die zweite Quelle der Vertrauensprüfung neben deinen Worten. „Erlauben“ lässt Passendes ohne Nachfrage laufen, etwa „Termine im Kalender immer eintragen“ (nie Löschendes oder Tresor-Einträge). „Verbieten“ lehnt Passendes ab, ohne zu fragen, etwa „nie Mails an Eltern senden“, auch wenn du im Chat darum bittest. Verbote gewinnen immer. Eine Regel gilt für alle Konnektoren oder nur für einen. Regeln gelten für Aktionen, die etwas ändern oder verschicken, und auch bei ausgeschalteter Vertrauensprüfung; Aufgaben und Zeitpläne öffnen sie nicht.
+
+**Eine Freigabe, ein Ergebnis.** Eine freigegebene Aktion oder ein Tresor-Eintrag läuft nie zweimal: nicht bei einem Doppelklick, nicht aus einem zweiten Fenster und nicht nach einem Neustart. Bricht die Verbindung mitten im Aufruf ab, versucht AIS.ChatCraft es nicht erneut, sondern meldet „unsicher – bitte prüfen“; prüfe dann im Zielprogramm, ob es geklappt hat. Dieselbe Aktion fragt danach wieder, mit diesem Hinweis auf der Karte. Was beim Beenden noch lief, meldet AIS.ChatCraft beim nächsten Start ebenso.
 
 Werkzeuge gibt es bei Claude (API und Abo) und OpenAI-kompatiblen Diensten.
 
@@ -197,6 +203,8 @@ Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats
 ## Nutzung
 
 Unter **Einstellungen › Nutzung** stehen die Tokens pro Monat, Dienst und Modell, bei Claude über API auch die Kosten. Mit einer **Monatsgrenze** fragt AIS.ChatCraft vor dem Senden nach, sobald sie erreicht ist.
+
+Darunter steht das **Aktionsprotokoll**: jeder Modellaufruf (Modell, Tokens, bei Claude über API die Kosten) und jede Werkzeugaktion mit Ziel, den wichtigsten Angaben und warum sie erlaubt war: „Nur lesen“, „Deine Bitte“ mit deinen Worten, „Deine Regel“, „Deine Freigabe“ oder warum sie nicht lief. Zugangsdaten aus dem Tresor stehen nie darin. Es behält die letzten 5000 Einträge; **Als CSV exportieren** speichert alle als Tabelle.
 
 ## Updates
 

@@ -553,6 +553,14 @@ impl AisCraftApp {
                             self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::About, new_note: String::new() });
                             true
                         }
+                        "usage" => {
+                            self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Usage, new_note: String::new() });
+                            true
+                        }
+                        "connectors" => {
+                            self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Connectors, new_note: String::new() });
+                            true
+                        }
                         "privacy" => {
                             self.dialog = Some(Dialog::Settings { tab: crate::dialogs::SettingsTab::Privacy, new_note: String::new() });
                             true

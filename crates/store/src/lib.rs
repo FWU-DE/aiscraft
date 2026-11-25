@@ -35,6 +35,16 @@ CREATE TABLE IF NOT EXISTS artifacts (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NOT NULL, conversation_id TEXT, project_id TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, state BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS action_log (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, conversation_id TEXT NOT NULL, kind TEXT NOT NULL,
+    name TEXT NOT NULL, detail TEXT NOT NULL, reason TEXT NOT NULL, outcome TEXT NOT NULL,
+    input_tokens INTEGER, output_tokens INTEGER, usd REAL
+);
+CREATE TABLE IF NOT EXISTS tool_claims (
+    id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, tool TEXT NOT NULL, args_hash TEXT NOT NULL,
+    state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tool_claims_args ON tool_claims(conversation_id, tool, args_hash);
 CREATE TABLE IF NOT EXISTS artifact_versions (
     artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, version INTEGER NOT NULL,
     created_at INTEGER NOT NULL, note TEXT NOT NULL, state BLOB NOT NULL, PRIMARY KEY (artifact_id, version)
@@ -68,6 +78,28 @@ pub struct UsageRow {
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub answers: i64,
+}
+
+/// The action log keeps this many entries (#23).
+pub const MAX_LOG: i64 = 5000;
+
+/// One entry of the action log: a model call or a tool action, with why it was allowed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LogEntry {
+    pub at: i64,
+    pub conversation_id: String,
+    /// "model" or "tool".
+    pub kind: String,
+    /// The model, or connector and tool.
+    pub name: String,
+    /// The arguments in short (secrets scrubbed), or what the call was for.
+    pub detail: String,
+    /// Why it ran: „Nur lesen“, „Deine Freigabe“, the owner's words, a rule; or why not.
+    pub reason: String,
+    pub outcome: String,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -739,6 +771,94 @@ impl Store {
         Ok(out)
     }
 
+    // ---- action log (#23) -----------------------------------------------------------------
+
+    /// Add an entry; the log keeps the newest [`MAX_LOG`] entries.
+    pub fn log_action(&self, e: &LogEntry) -> Result<()> {
+        self.db
+            .execute(
+                "INSERT INTO action_log (at, conversation_id, kind, name, detail, reason, outcome, input_tokens, output_tokens, usd)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![e.at, e.conversation_id, e.kind, e.name, e.detail, e.reason, e.outcome, e.input_tokens, e.output_tokens, e.usd],
+            )
+            .map_err(db_err)?;
+        self.db.execute("DELETE FROM action_log WHERE seq <= (SELECT MAX(seq) FROM action_log) - ?1", [MAX_LOG]).map_err(db_err)?;
+        Ok(())
+    }
+
+    /// The newest entries first, optionally of one chat.
+    pub fn action_log(&self, limit: usize, conversation_id: Option<&str>) -> Result<Vec<LogEntry>> {
+        let mut st = self
+            .db
+            .prepare(
+                "SELECT at, conversation_id, kind, name, detail, reason, outcome, input_tokens, output_tokens, usd FROM action_log
+                 WHERE ?1 IS NULL OR conversation_id = ?1 ORDER BY seq DESC LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = st
+            .query_map(params![conversation_id, limit.min(MAX_LOG as usize) as i64], |r| {
+                Ok(LogEntry {
+                    at: r.get(0)?,
+                    conversation_id: r.get(1)?,
+                    kind: r.get(2)?,
+                    name: r.get(3)?,
+                    detail: r.get(4)?,
+                    reason: r.get(5)?,
+                    outcome: r.get(6)?,
+                    input_tokens: r.get(7)?,
+                    output_tokens: r.get(8)?,
+                    usd: r.get(9)?,
+                })
+            })
+            .map_err(db_err)?;
+        rows.collect::<rusqlite::Result<_>>().map_err(db_err)
+    }
+
+    // ---- claims (#24: one approval, one result) -------------------------------------------
+
+    /// Claim an action before it runs. `false` when it was claimed before (by a double click,
+    /// another window or an earlier run): then it must not run again.
+    pub fn claim(&self, id: &str, conversation_id: &str, tool: &str, args_hash: &str, at: i64) -> Result<bool> {
+        let n = self
+            .db
+            .execute(
+                "INSERT OR IGNORE INTO tool_claims (id, conversation_id, tool, args_hash, state, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?5)",
+                params![id, conversation_id, tool, args_hash, at],
+            )
+            .map_err(db_err)?;
+        Ok(n == 1)
+    }
+
+    /// The end of a claimed action: `done`, `failed` (it never reached the connector) or
+    /// `uncertain` (it may have run).
+    pub fn finish_claim(&self, id: &str, state: &str, at: i64) -> Result<()> {
+        self.db.execute("UPDATE tool_claims SET state = ?2, updated_at = ?3 WHERE id = ?1", params![id, state, at]).map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Whether the same action (chat, tool, arguments) ended uncertain before.
+    pub fn uncertain_claim(&self, conversation_id: &str, tool: &str, args_hash: &str) -> Result<bool> {
+        self.db
+            .prepare("SELECT 1 FROM tool_claims WHERE conversation_id = ?1 AND tool = ?2 AND args_hash = ?3 AND state = 'uncertain'")
+            .and_then(|mut st| st.exists(params![conversation_id, tool, args_hash]))
+            .map_err(db_err)
+    }
+
+    pub fn claim_state(&self, id: &str) -> Result<Option<String>> {
+        self.db.query_row("SELECT state FROM tool_claims WHERE id = ?1", [id], |r| r.get(0)).optional().map_err(db_err)
+    }
+
+    /// After a restart: everything still running may have run. It becomes uncertain and is
+    /// returned (conversation, tool) so the person can check; nothing runs again.
+    pub fn settle_running_claims(&self, at: i64) -> Result<Vec<(String, String)>> {
+        let mut st = self.db.prepare("SELECT conversation_id, tool FROM tool_claims WHERE state = 'running'").map_err(db_err)?;
+        let rows: Vec<(String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map_err(db_err)?.collect::<rusqlite::Result<_>>().map_err(db_err)?;
+        self.db.execute("UPDATE tool_claims SET state = 'uncertain', updated_at = ?1 WHERE state = 'running'", [at]).map_err(db_err)?;
+        // Keep the table small: claims older than 90 days have done their job.
+        self.db.execute("DELETE FROM tool_claims WHERE updated_at < ?1", [at - 90 * 24 * 3600 * 1000]).map_err(db_err)?;
+        Ok(rows)
+    }
+
     // ---- settings -------------------------------------------------------------------------
 
     pub fn setting(&self, key: &str) -> Result<Option<Value>> {
@@ -1145,5 +1265,47 @@ mod tests {
         s.set_setting("theme", &serde_json::json!("dark")).unwrap();
         assert_eq!(s.setting("theme").unwrap(), Some(serde_json::json!("dark")));
         assert_eq!(s.setting("nope").unwrap(), None);
+    }
+
+    #[test]
+    fn a_claim_is_taken_once_and_running_claims_become_uncertain() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.claim("approval:1", "c", "k__send", "h", 1).unwrap());
+        assert!(!s.claim("approval:1", "c", "k__send", "h", 2).unwrap(), "a second claim fails");
+        assert!(s.claim("approval:2", "c", "k__send", "h2", 3).unwrap());
+        s.finish_claim("approval:2", "done", 4).unwrap();
+        assert!(!s.uncertain_claim("c", "k__send", "h").unwrap());
+        let settled = s.settle_running_claims(5).unwrap();
+        assert_eq!(settled, [("c".to_string(), "k__send".to_string())]);
+        assert_eq!(s.claim_state("approval:1").unwrap().as_deref(), Some("uncertain"));
+        assert_eq!(s.claim_state("approval:2").unwrap().as_deref(), Some("done"));
+        assert!(s.uncertain_claim("c", "k__send", "h").unwrap());
+        assert!(s.settle_running_claims(6).unwrap().is_empty());
+    }
+
+    #[test]
+    fn action_log_keeps_the_newest_entries() {
+        let s = Store::open_in_memory().unwrap();
+        let e = |i: i64, conv: &str| LogEntry {
+            at: i,
+            conversation_id: conv.into(),
+            kind: "tool".into(),
+            name: format!("Kalender · {i}"),
+            detail: String::new(),
+            reason: "Nur lesen".into(),
+            outcome: "ok".into(),
+            input_tokens: None,
+            output_tokens: None,
+            usd: None,
+        };
+        for i in 0..(MAX_LOG + 20) {
+            s.log_action(&e(i, if i % 2 == 0 { "a" } else { "b" })).unwrap();
+        }
+        let all = s.action_log(usize::MAX, None).unwrap();
+        assert_eq!(all.len() as i64, MAX_LOG, "capped");
+        assert_eq!(all[0].at, MAX_LOG + 19, "newest first");
+        let a = s.action_log(10, Some("a")).unwrap();
+        assert_eq!(a.len(), 10);
+        assert!(a.iter().all(|x| x.conversation_id == "a"));
     }
 }

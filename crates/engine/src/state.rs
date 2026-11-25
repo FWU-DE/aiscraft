@@ -177,15 +177,51 @@ pub struct Approval {
     /// The trust check's verdict, when it ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trust: Option<TrustVerdict>,
+    /// The few values to check, shown in bold on the card (#67); the yes still covers exactly
+    /// `arguments`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub highlights: Vec<Highlight>,
+    /// A warning for the card, e.g. that the same action may have run already (#24).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// One value worth checking before a yes: „An“ kollegium@schule.de.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Highlight {
+    pub label: String,
+    pub value: String,
 }
 
 /// Whether the owner's own words cover an action (Nod's trust check).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TrustVerdict {
     pub covered: bool,
-    /// The owner's words that allow it, verbatim (checked against what they actually wrote).
+    /// The owner's words the permission rests on, taken by the app from the named source (never
+    /// copied from the checker's answer).
     pub quote: String,
     pub reason: String,
+    /// Where the permission comes from: `message:N` (one of the owner's messages) or `rule:N`
+    /// (one of the owner's rules, #22).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// Each explicit term of the source next to the action's value (#63).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terms: Vec<TrustTerm>,
+    /// The owner's prohibition that applies (#22): then the action never runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forbidden: Option<String>,
+    /// The allowing rule the permission rests on, in the owner's words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+}
+
+/// One explicit term of the owner's words (recipient, date, file, amount) and the action's value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrustTerm {
+    pub term: String,
+    pub value: String,
+    pub matches: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -321,6 +357,29 @@ pub struct Settings {
     /// New worksheets count points (on by default); off: they count right tasks, and models
     /// are told to leave points out. Each sheet has its own switch afterwards.
     pub worksheet_points: bool,
+    /// The owner's own rules for the trust check (#22); changed with `trust.rule_add` and
+    /// `trust.rule_remove`.
+    pub trust_rules: Vec<TrustRule>,
+}
+
+/// What a rule does: let matching actions run without asking, or never let them run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleKind {
+    Allow,
+    Forbid,
+}
+
+/// One of the owner's rules, in their words („Lesen in Obsidian immer“, „nie Mails an Eltern
+/// senden“).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrustRule {
+    pub id: String,
+    pub kind: RuleKind,
+    pub text: String,
+    /// Only for this connector (id); empty: every connector.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub connector: String,
 }
 
 /// Accepted values of the `theme` setting.
@@ -337,7 +396,7 @@ impl Default for Settings {
             enter_sends: true,
             tools: true,
             trust_check: true,
-            auto_allow_covered: false,
+            auto_allow_covered: true,
             monthly_token_limit: 0,
             learn_skills: true,
             recall: true,
@@ -347,6 +406,7 @@ impl Default for Settings {
             quiet_end: 7,
             update_check: true,
             worksheet_points: true,
+            trust_rules: Vec::new(),
         }
     }
 }

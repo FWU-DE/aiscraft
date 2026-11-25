@@ -129,15 +129,8 @@ pub(crate) async fn handle(c: &Ctx, conv: &str, req: &Value) -> Option<Value> {
             let name = req.pointer("/params/name").and_then(Value::as_str).unwrap_or("").to_string();
             let arguments = req.pointer("/params/arguments").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
             let call = ToolCall { id: new_id(), name, arguments, outcome: None };
-            let owner = c
-                .store(|st| st.messages(conv))
-                .unwrap_or_default()
-                .iter()
-                .filter(|m| m.role == aiscraft_core::Role::User)
-                .map(|m| m.content.clone())
-                .collect::<Vec<_>>()
-                .join("\n");
-            let (text, is_error, outcome) = crate::tools::run(c, conv, &call, &owner, true).await;
+            let evidence = crate::trust::evidence(&c.store(|st| st.messages(conv)).unwrap_or_default());
+            let (text, is_error, outcome) = crate::tools::run(c, conv, &call, &evidence, true).await;
             record(c, conv, ToolCall { outcome: Some(outcome.to_string()), ..call });
             ok(json!({"content": [{"type": "text", "text": text}], "isError": is_error}))
         }
