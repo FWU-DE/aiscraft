@@ -1087,7 +1087,8 @@ fn every_command_has_a_functional_test() {
         include_str!("local_files_tests.rs"),
         include_str!("ext/tests.rs"),
         include_str!("ext/plugin_tests.rs"),
-        include_str!("apps_tests.rs")
+        include_str!("apps_tests.rs"),
+        include_str!("chat_import.rs")
     );
     // The panic hunt touches every command; count only calls outside it.
     let hunt_start = src.find("fn panic_hunt_every_command_with_hostile_params").unwrap_or(0);

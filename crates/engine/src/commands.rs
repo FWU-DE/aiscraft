@@ -194,6 +194,15 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("chat.export", "Chat exportieren", "Chat", Some("Ctrl+Shift+E"), "id?: string, format?: markdown|json, path?: string", true, |c, p| Box::pin(
         chat_export(c, p)
     )),
+    cmd!(
+        "chat.import",
+        "Chats aus claude.ai oder ChatGPT übernehmen",
+        "Chat",
+        None,
+        "path: string (Datenexport als ZIP oder conversations.json), project?: string",
+        false,
+        |c, p| Box::pin(crate::chat_import::import(c, p))
+    ),
     cmd!("chat.new_image", "Neuer Bild-Chat", "Chat", None, "backend?: string, model?: string", true, |c, p| Box::pin(async move {
         let mut p = if p.is_object() { p } else { json!({}) };
         if let Some(o) = p.as_object_mut() {

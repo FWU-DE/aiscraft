@@ -648,6 +648,10 @@ impl AisCraftApp {
                             self.manual = Some(Default::default());
                             true
                         }
+                        "import_chats" => {
+                            self.dialog = Some(Dialog::ImportChats);
+                            true
+                        }
                         "palette" => {
                             self.palette = Some(Palette::default());
                             true
