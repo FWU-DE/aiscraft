@@ -190,7 +190,7 @@ pub struct ToolCall {
     pub outcome: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ToolResultInfo {
     pub call_id: String,
     pub name: String,
@@ -199,10 +199,16 @@ pub struct ToolResultInfo {
     /// The interactive view the tool comes with (MCP Apps, #74): a card „Ansicht öffnen“.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub view: Option<ToolView>,
+    /// Set when a connector's open view put this entry into the chat (#74): `"message"`
+    /// (`ui/message`) or `"context"` (`ui/update-model-context`). Untrusted data, never the
+    /// person's words: it goes to the model marked as such, and the trust check never counts it
+    /// as a request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_view: Option<String>,
 }
 
 /// A connector tool's view (MCP Apps, #74): where it is and what it shows first.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ToolView {
     /// The connector's id.
     pub connector: String,
@@ -213,6 +219,10 @@ pub struct ToolView {
     /// The tool's structured result, for the view (capped).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured: Option<serde_json::Value>,
+    /// Why the call did not run (refused, not asked, cut off midway): the view gets
+    /// `ui/notifications/tool-cancelled` instead of a result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancelled: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

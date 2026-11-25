@@ -33,6 +33,8 @@ pub(crate) struct ToolRuntime {
     views: Mutex<HashMap<String, aiscraft_core::ToolView>>,
     /// Structured results of calls from a view, by tool name, until the view gets them.
     structured: Mutex<HashMap<String, Value>>,
+    /// Views open right now (#74), for host events.
+    pub(crate) open_views: crate::apps::OpenViews,
 }
 
 // ---- built-in tools -------------------------------------------------------------------------
@@ -856,7 +858,13 @@ const MAX_VIEW_STRUCTURED: usize = 256 * 1024;
 fn remember_view(c: &Ctx, r: &Ready, res: &aiscraft_mcp::ToolResult) {
     let structured = res.structured_content.clone().filter(|v| v.to_string().len() <= MAX_VIEW_STRUCTURED);
     if let Some(uri) = &r.tool.ui_resource {
-        let view = aiscraft_core::ToolView { connector: r.conn.id.clone(), tool: r.tool.name.clone(), resource: uri.clone(), structured: structured.clone() };
+        let view = aiscraft_core::ToolView {
+            connector: r.conn.id.clone(),
+            tool: r.tool.name.clone(),
+            resource: uri.clone(),
+            structured: structured.clone(),
+            cancelled: None,
+        };
         let mut views = c.0.tools.views.lock().unwrap_or_else(PoisonError::into_inner);
         if views.len() > 200 {
             views.clear();

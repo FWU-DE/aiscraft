@@ -15,7 +15,7 @@ pub(crate) type Seen = Arc<Mutex<Vec<String>>>;
 
 /// The fake MCP server (`cargo build -p aiscraft-mcp --example fake_server`).
 pub(crate) fn fake_server() -> Option<std::path::PathBuf> {
-    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/examples/fake_server");
+    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../target/debug/examples/fake_server{}", std::env::consts::EXE_SUFFIX));
     if bin.exists() {
         Some(bin)
     } else {

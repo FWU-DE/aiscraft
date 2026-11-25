@@ -17,7 +17,9 @@
 //! is delivered to the view as a `message` event. AIS.ChatCraft answers on the other end and
 //! applies its approval rules there. The network stays closed except for the domains given with
 //! `--connect` (requests) and `--resource` (scripts, styles, images, fonts), each checked again
-//! here: `https://host[:port]` or `https://*.host`, never `*`.
+//! here: `https://host[:port]` or `https://*.host`, never `*`. Lines `{"aiscraft/window": …}`
+//! from the app steer the window instead (the size a view asked for, within caps; the small
+//! window on top for the `pip` display mode) and never reach the view.
 
 use std::borrow::Cow;
 use std::io::{BufRead as _, Read as _, Write as _};
@@ -98,19 +100,56 @@ fn view_csp(connect: &[String], resources: &[String]) -> String {
     )
 }
 
-/// A line from the app, as a JavaScript expression to hand to the view (parsed and written
-/// again, so nothing but JSON reaches the page).
-fn delivery(line: &str) -> Option<String> {
+/// Lines from the app that steer the window; never delivered to the view. Only the app writes
+/// to stdin, so a view cannot send them itself.
+const WINDOW_KEY: &str = "aiscraft/window";
+/// The window of a view stays within these sizes (logical pixels); the app caps them too.
+const MIN_SIZE: (f64, f64) = (240.0, 160.0);
+const MAX_SIZE: (f64, f64) = (1600.0, 1200.0);
+/// The normal window and the small one on top (`pip`).
+const NORMAL_SIZE: (f64, f64) = (1100.0, 800.0);
+const PIP_SIZE: (f64, f64) = (420.0, 320.0);
+
+#[derive(Debug, PartialEq)]
+enum Steer {
+    /// Resize to (width, height), within the caps.
+    Size(f64, f64),
+    /// `true`: small and on top; `false`: the normal window.
+    Pip(bool),
+}
+
+#[derive(Debug, PartialEq)]
+enum Incoming {
+    /// A JavaScript expression to hand to the view.
+    Deliver(String),
+    Window(Steer),
+}
+
+/// A line from the app: a window instruction, or a message for the view as a JavaScript
+/// expression (parsed and written again, so nothing but JSON reaches the page).
+fn incoming(line: &str) -> Option<Incoming> {
     if line.len() > MAX_MESSAGE {
         return None;
     }
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
-    v.is_object().then(|| format!("window.__aiscraftDeliver({v});"))
+    if let Some(w) = v.get(WINDOW_KEY) {
+        if let Some(mode) = w.get("mode").and_then(serde_json::Value::as_str) {
+            return match mode {
+                "pip" => Some(Incoming::Window(Steer::Pip(true))),
+                "fullscreen" => Some(Incoming::Window(Steer::Pip(false))),
+                _ => None,
+            };
+        }
+        let dim = |k: &str, min: f64, max: f64| w.get(k).and_then(serde_json::Value::as_f64).filter(|x| x.is_finite() && *x > 0.0).map(|x| x.clamp(min, max));
+        return Some(Incoming::Window(Steer::Size(dim("width", MIN_SIZE.0, MAX_SIZE.0)?, dim("height", MIN_SIZE.1, MAX_SIZE.1)?)));
+    }
+    v.is_object().then(|| Incoming::Deliver(format!("window.__aiscraftDeliver({v});")))
 }
 
 enum UserEvent {
     ParentGone,
     Deliver(String),
+    Window(Steer),
 }
 
 fn main() {
@@ -142,9 +181,12 @@ fn main() {
             let stdin = std::io::stdin();
             for line in stdin.lock().lines() {
                 let Ok(line) = line else { break };
-                if let Some(js) = delivery(&line) {
-                    let _ = proxy.send_event(UserEvent::Deliver(js));
-                }
+                let ev = match incoming(&line) {
+                    Some(Incoming::Deliver(js)) => UserEvent::Deliver(js),
+                    Some(Incoming::Window(s)) => UserEvent::Window(s),
+                    None => continue,
+                };
+                let _ = proxy.send_event(ev);
             }
             let _ = proxy.send_event(UserEvent::ParentGone);
         });
@@ -223,6 +265,12 @@ fn main() {
             Event::UserEvent(UserEvent::Deliver(js)) => {
                 let _ = webview.evaluate_script(&js);
             }
+            Event::UserEvent(UserEvent::Window(Steer::Size(w, h))) => window.set_inner_size(LogicalSize::new(w, h)),
+            Event::UserEvent(UserEvent::Window(Steer::Pip(pip))) => {
+                window.set_always_on_top(pip);
+                let (w, h) = if pip { PIP_SIZE } else { NORMAL_SIZE };
+                window.set_inner_size(LogicalSize::new(w, h));
+            }
             _ => {}
         }
     });
@@ -244,10 +292,26 @@ mod tests {
 
     #[test]
     fn only_json_objects_reach_the_view() {
-        let js = delivery(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).unwrap();
+        let Some(Incoming::Deliver(js)) = incoming(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#) else { panic!("a message for the view") };
         assert!(js.starts_with("window.__aiscraftDeliver({") && js.ends_with("});") && js.contains(r#""jsonrpc":"2.0""#), "{js}");
-        assert!(delivery("alert(1)").is_none());
-        assert!(delivery("[1]").is_none());
-        assert!(delivery(r#"{"a":"</script>"}"#).is_some());
+        assert!(incoming("alert(1)").is_none());
+        assert!(incoming("[1]").is_none());
+        assert!(matches!(incoming(r#"{"a":"</script>"}"#), Some(Incoming::Deliver(_))));
+    }
+
+    #[test]
+    fn window_lines_steer_the_window_within_caps_and_never_reach_the_view() {
+        assert_eq!(incoming(r#"{"aiscraft/window":{"width":500,"height":400}}"#), Some(Incoming::Window(Steer::Size(500.0, 400.0))));
+        assert_eq!(incoming(r#"{"aiscraft/window":{"width":99999,"height":1}}"#), Some(Incoming::Window(Steer::Size(MAX_SIZE.0, MIN_SIZE.1))));
+        assert_eq!(incoming(r#"{"aiscraft/window":{"mode":"pip"}}"#), Some(Incoming::Window(Steer::Pip(true))));
+        assert_eq!(incoming(r#"{"aiscraft/window":{"mode":"fullscreen"}}"#), Some(Incoming::Window(Steer::Pip(false))));
+        for bad in [
+            r#"{"aiscraft/window":{"mode":"inline"}}"#,
+            r#"{"aiscraft/window":{"width":"x","height":2}}"#,
+            r#"{"aiscraft/window":{"width":-5,"height":200}}"#,
+            r#"{"aiscraft/window":1}"#,
+        ] {
+            assert!(incoming(bad).is_none(), "{bad}");
+        }
     }
 }

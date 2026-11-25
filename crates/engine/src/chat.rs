@@ -804,7 +804,7 @@ async fn stream_round(
     Ok(calls)
 }
 
-fn put_message(c: &Ctx, conv_id: &str, m: &Message) {
+pub(crate) fn put_message(c: &Ctx, conv_id: &str, m: &Message) {
     let _ = c.store(|st| st.save_message(m));
     let m = m.clone();
     c.update(|s| {
@@ -966,6 +966,8 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
         {
             last.content = format!("{ctx_block}\n\n{}", last.content);
         }
+        // What a connector's view put into the chat (#74) goes along marked as untrusted data.
+        let history = crate::apps::view_entries_for_model(history, !caps.remote_history);
         // The last round offers no tools, so the model has to answer.
         let same = active_id == conv.backend_id;
         let active_caps = active.capabilities();
@@ -1015,7 +1017,9 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
                     tool_msg.model = None;
                     tool_msg.content = text;
                     let view = crate::tools::take_view(&c, &call.id);
-                    tool_msg.tool_result = Some(aiscraft_core::ToolResultInfo { call_id: call.id.clone(), name: call.name.clone(), is_error, view });
+                    let view = view.or_else(|| crate::apps::cancelled_view(&c, &call.name, outcome));
+                    tool_msg.tool_result =
+                        Some(aiscraft_core::ToolResultInfo { call_id: call.id.clone(), name: call.name.clone(), is_error, view, from_view: None });
                     put_message(&c, &conv_id, &tool_msg);
                 }
                 if *cancel_rx.borrow() {
@@ -1154,7 +1158,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     result.map(|()| json!({"conversation_id": conv_id, "message_id": answer.id, "text": answer.content}))
 }
 
-fn plain_message(conv: &str, role: Role, text: &str) -> Message {
+pub(crate) fn plain_message(conv: &str, role: Role, text: &str) -> Message {
     Message {
         id: new_id(),
         conversation_id: conv.to_string(),
