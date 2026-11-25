@@ -27,6 +27,7 @@ mod rich;
 mod share;
 mod sidebar;
 pub mod theme;
+mod trust_rules;
 mod update;
 mod widgets;
 pub mod worksheet;

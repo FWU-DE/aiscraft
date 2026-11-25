@@ -198,12 +198,19 @@ pub struct TrustVerdict {
     /// copied from the checker's answer).
     pub quote: String,
     pub reason: String,
-    /// Where the permission comes from: `message:N` (one of the owner's messages).
+    /// Where the permission comes from: `message:N` (one of the owner's messages) or `rule:N`
+    /// (one of the owner's rules, #22).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
     /// Each explicit term of the source next to the action's value (#63).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub terms: Vec<TrustTerm>,
+    /// The owner's prohibition that applies (#22): then the action never runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forbidden: Option<String>,
+    /// The allowing rule the permission rests on, in the owner's words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
 }
 
 /// One explicit term of the owner's words (recipient, date, file, amount) and the action's value.
@@ -347,6 +354,29 @@ pub struct Settings {
     /// New worksheets count points (on by default); off: they count right tasks, and models
     /// are told to leave points out. Each sheet has its own switch afterwards.
     pub worksheet_points: bool,
+    /// The owner's own rules for the trust check (#22); changed with `trust.rule_add` and
+    /// `trust.rule_remove`.
+    pub trust_rules: Vec<TrustRule>,
+}
+
+/// What a rule does: let matching actions run without asking, or never let them run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleKind {
+    Allow,
+    Forbid,
+}
+
+/// One of the owner's rules, in their words („Lesen in Obsidian immer“, „nie Mails an Eltern
+/// senden“).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrustRule {
+    pub id: String,
+    pub kind: RuleKind,
+    pub text: String,
+    /// Only for this connector (id); empty: every connector.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub connector: String,
 }
 
 /// Accepted values of the `theme` setting.
@@ -373,6 +403,7 @@ impl Default for Settings {
             quiet_end: 7,
             update_check: true,
             worksheet_points: true,
+            trust_rules: Vec::new(),
         }
     }
 }

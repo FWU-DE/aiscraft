@@ -344,6 +344,9 @@ static COMMANDS: &[CommandSpec] = &[
         false,
         |c, p| Box::pin(async move {
             let key = req_str(&p, "key")?;
+            if key == "trust_rules" {
+                return Err(Error::invalid("Regeln ändern trust.rule_add und trust.rule_remove"));
+            }
             let value = p.get("value").cloned().unwrap_or(Value::Null);
             let mut settings = serde_json::to_value(&c.state().settings)?;
             let Some(obj) = settings.as_object_mut().filter(|o| o.contains_key(&key)) else {
@@ -443,6 +446,16 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("tool.answer", "Werkzeugaufruf erlauben oder ablehnen", "Konnektoren", None, "id: string, allow: bool", false, |c, p| Box::pin(crate::tools::answer(
         c, p
     ))),
+    cmd!(
+        "trust.rule_add",
+        "Eigene Regel für die Vertrauensprüfung",
+        "Konnektoren",
+        None,
+        "kind: allow|forbid, text: string (z. B. „nie Mails an Eltern senden“), connector?: string (Konnektor-ID, leer: alle)",
+        false,
+        |c, p| Box::pin(crate::tools::rule_add(c, p))
+    ),
+    cmd!("trust.rule_remove", "Eigene Regel löschen", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::rule_remove(c, p))),
     cmd!("tools.list", "Werkzeuge auflisten", "Konnektoren", None, "", false, |c, _| Box::pin(
         async move { Ok(serde_json::to_value(crate::tools::specs(&c))?) }
     )),

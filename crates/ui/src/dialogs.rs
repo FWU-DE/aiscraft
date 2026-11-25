@@ -951,6 +951,8 @@ impl AisCraftApp {
                     self.run("settings.set", json!({"key": "auto_allow_covered", "value": auto}));
                 }
                 ui.add_space(8.0);
+                self.trust_rules_section(ui);
+                ui.add_space(8.0);
                 for k in self.state.connectors.clone() {
                     card(&t).show(ui, |ui| {
                         ui.horizontal(|ui| {

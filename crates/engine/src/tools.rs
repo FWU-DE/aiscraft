@@ -400,20 +400,33 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     if ready.tool.read_only && ready.secrets.is_empty() {
         return Prep::Run(ready);
     }
-    // Work without a person present never runs what needs a yes, whatever a check says: the
-    // words in a task or a schedule are not the owner's.
+    // Work without a person present never runs what needs a yes, whatever a check or a rule
+    // says: the words in a task or a schedule are not the owner's (#22: rules do not open it).
     if !interactive {
         return Prep::Done(("Abgelehnt: Diese Aktion braucht die Freigabe der Person, und gerade ist niemand da.".into(), true, "denied"));
     }
     let settings = c.state().settings.clone();
-    let trust = if settings.trust_check {
+    let rules = crate::trust::rules_for(&settings.trust_rules, &ready.conn.id);
+    // The owner's rules need the check even when it is switched off: a prohibition must not
+    // fall silent.
+    let trust = if settings.trust_check || !rules.is_empty() {
         let shown = crate::privacy::reveal_value(c, conv, &call.arguments);
-        crate::trust::check(c, &ready.conn.name, &ready.tool, &shown, ev).await
+        crate::trust::check(c, &ready.conn.name, &ready.tool, &shown, ev, &rules).await
     } else {
         None
     };
-    // Deleting tools and vault values always ask, even when the request covers them.
-    let auto = settings.auto_allow_covered && trust.as_ref().is_some_and(|t| t.covered) && !ready.tool.destructive && ready.secrets.is_empty();
+    // Prohibitions win: the action does not run and nobody is asked.
+    if let Some(rule) = trust.as_ref().and_then(|t| t.forbidden.clone()) {
+        return Prep::Done((
+            format!("Abgelehnt: Die Regel der Person „{rule}“ verbietet diese Aktion. Nicht erneut versuchen; sag der Person, dass ihre Regel das verbietet."),
+            true,
+            "denied",
+        ));
+    }
+    // A rule the owner set runs what it names; a covering request does when that is switched on.
+    // Deleting tools and vault values always ask.
+    let covered = trust.as_ref().is_some_and(|t| t.covered && (t.rule.is_some() || settings.auto_allow_covered));
+    let auto = covered && !ready.tool.destructive && ready.secrets.is_empty();
     if auto { Prep::Run(ready) } else { Prep::Ask(ready, trust) }
 }
 
@@ -468,6 +481,58 @@ pub(crate) async fn answer(c: Ctx, p: Value) -> Result<Value> {
     let tx =
         c.0.tools.waiters.lock().unwrap_or_else(PoisonError::into_inner).remove(&id).ok_or_else(|| Error::not_found("Diese Frage ist nicht mehr offen"))?;
     let _ = tx.send(allow);
+    Ok(json!({}))
+}
+
+// ---- own rules (#22) ------------------------------------------------------------------------
+
+const MAX_RULES: usize = 50;
+const MAX_RULE_CHARS: usize = 300;
+
+fn save_rules(c: &Ctx, rules: Vec<crate::TrustRule>) -> Result<()> {
+    let mut settings = c.state().settings.clone();
+    settings.trust_rules = rules;
+    c.store(|st| st.set_setting("settings", &serde_json::to_value(&settings)?))?;
+    c.update(|s| s.settings = settings);
+    Ok(())
+}
+
+pub(crate) async fn rule_add(c: Ctx, p: Value) -> Result<Value> {
+    let kind = match req_str(&p, "kind")?.as_str() {
+        "allow" | "erlauben" => crate::RuleKind::Allow,
+        "forbid" | "verbieten" => crate::RuleKind::Forbid,
+        other => return Err(Error::invalid(format!("Art {other} gibt es nicht (allow oder forbid)"))),
+    };
+    let text: String = req_str(&p, "text")?.chars().filter(|ch| !ch.is_control()).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return Err(Error::invalid("Die Regel ist leer"));
+    }
+    if text.chars().count() > MAX_RULE_CHARS {
+        return Err(Error::invalid(format!("Eine Regel hat höchstens {MAX_RULE_CHARS} Zeichen")));
+    }
+    let connector = opt_str(&p, "connector").unwrap_or_default();
+    if !connector.is_empty() && !c.state().connectors.iter().any(|k| k.id == connector) {
+        return Err(Error::not_found("Konnektor nicht gefunden"));
+    }
+    let mut rules = c.state().settings.trust_rules.clone();
+    if rules.len() >= MAX_RULES {
+        return Err(Error::invalid(format!("Höchstens {MAX_RULES} Regeln; lösche erst eine")));
+    }
+    let id = new_id();
+    rules.push(crate::TrustRule { id: id.clone(), kind, text, connector });
+    save_rules(&c, rules)?;
+    Ok(json!({"id": id}))
+}
+
+pub(crate) async fn rule_remove(c: Ctx, p: Value) -> Result<Value> {
+    let id = req_str(&p, "id")?;
+    let mut rules = c.state().settings.trust_rules.clone();
+    let before = rules.len();
+    rules.retain(|r| r.id != id);
+    if rules.len() == before {
+        return Err(Error::not_found("Regel nicht gefunden"));
+    }
+    save_rules(&c, rules)?;
     Ok(json!({}))
 }
 

@@ -251,3 +251,66 @@ fn background_work_never_runs_a_change() {
     assert!(err && outcome == "denied");
     assert!(!seen.lock().unwrap().iter().any(|b| is_trust_check(b)), "no check, no question");
 }
+
+/// #22: own rules. An allowing rule runs what it names without asking (even with „ohne
+/// Nachfrage“ off), a prohibition refuses without asking, also against a covering request, and
+/// background work stays closed whatever a rule says.
+#[test]
+fn own_rules_allow_forbid_and_prohibitions_win() {
+    let Some((engine, seen, notify, _)) = setup(|body| {
+        if !is_trust_check(body) {
+            return text("x");
+        }
+        let args = action_args(body);
+        let forbid = body.contains("art=\\\"verbieten\\\"") && args.contains("eltern");
+        text(&if forbid {
+            json!({"covered": true, "source": "message:1", "terms": [], "forbidden": ["rule:2"], "reason": "Mail an Eltern"}).to_string()
+        } else if body.contains("rule:1") {
+            json!({"covered": true, "source": "rule:1", "terms": [{"term": "Kalender", "value": "", "match": true}], "forbidden": [], "reason": "Regel"})
+                .to_string()
+        } else {
+            json!({"covered": false, "source": "", "terms": [], "reason": "nicht gebeten"}).to_string()
+        })
+    }) else {
+        return;
+    };
+    engine.call("settings.set", json!({"key": "auto_allow_covered", "value": false})).unwrap();
+    let conn = engine.state().connectors[0].id.clone();
+    assert!(engine.call("trust.rule_add", json!({"kind": "vielleicht", "text": "x"})).is_err());
+    assert!(engine.call("trust.rule_add", json!({"kind": "allow", "text": "   "})).is_err());
+    assert!(engine.call("trust.rule_add", json!({"kind": "allow", "text": "x", "connector": "gibtsnicht"})).is_err());
+    assert!(engine.call("settings.set", json!({"key": "trust_rules", "value": []})).is_err(), "rules only through their commands");
+    let allow = engine.call("trust.rule_add", json!({"kind": "allow", "text": "Termine im Kalender immer eintragen", "connector": conn})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    engine.call("trust.rule_add", json!({"kind": "forbid", "text": "nie Mails an Eltern senden"})).unwrap();
+    assert_eq!(engine.state().settings.trust_rules.len(), 2);
+
+    let ev = crate::trust::Evidence { messages: vec![crate::trust::OwnerMessage { n: 1, text: "Schreib allen".into(), answered: Some("Soll ich?".into()) }] };
+    let call = |args: Value| aiscraft_core::ToolCall { id: "c".into(), name: notify.clone(), arguments: args, outcome: None };
+    // Allow: runs without a question.
+    let (_, err, outcome) = engine.block_on(crate::tools::run(engine.ctx(), "conv", &call(json!({"termin": "Elternabend"})), &ev, true));
+    assert!(!err && outcome == "ok", "{outcome}");
+    assert!(engine.state().approvals.is_empty());
+    // Conflict: the request and the allowing rule would cover it; the prohibition wins.
+    let (text, err, outcome) = engine.block_on(crate::tools::run(engine.ctx(), "conv", &call(json!({"an": "eltern@schule.de"})), &ev, true));
+    assert!(err && outcome == "denied" && text.contains("nie Mails an Eltern senden"), "{text}");
+    assert!(engine.state().approvals.is_empty(), "a prohibition asks nobody");
+    // Background: closed, whatever a rule says; no check at all.
+    let before = seen.lock().unwrap().len();
+    let (_, err, outcome) = engine.block_on(crate::tools::run(engine.ctx(), "conv", &call(json!({"termin": "Elternabend"})), &ev, false));
+    assert!(err && outcome == "denied");
+    assert_eq!(seen.lock().unwrap().len(), before);
+    // Gate (payload): the check sees the rules for this connector with their kind.
+    let last = seen.lock().unwrap().iter().rev().find(|b| is_trust_check(b)).cloned().unwrap();
+    assert!(last.contains("Termine im Kalender immer eintragen") && last.contains("nie Mails an Eltern senden") && last.contains("forbidden"));
+
+    // With the trust check off, rules still apply (a prohibition must not fall silent).
+    engine.call("settings.set", json!({"key": "trust_check", "value": false})).unwrap();
+    let (_, err, _) = engine.block_on(crate::tools::run(engine.ctx(), "conv", &call(json!({"an": "eltern@schule.de"})), &ev, true));
+    assert!(err);
+    engine.call("trust.rule_remove", json!({"id": allow})).unwrap();
+    assert!(engine.call("trust.rule_remove", json!({"id": allow})).is_err());
+    assert_eq!(engine.state().settings.trust_rules.len(), 1);
+}
