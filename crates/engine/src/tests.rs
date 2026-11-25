@@ -585,7 +585,12 @@ fn management_commands() {
         if let Some(m) = s.messages.iter_mut().find(|m| m.id == mid) {
             m.activity.push(aiscraft_core::ActivityStep {
                 label: "Dokument erstellen".into(),
-                document: Some(aiscraft_core::GeneratedDocument { file_name: "a.md".into(), format: "md".into(), content: "# Hallo".into() }),
+                document: Some(aiscraft_core::GeneratedDocument {
+                    file_name: "a.md".into(),
+                    format: "md".into(),
+                    content: "# Hallo".into(),
+                    title: String::new(),
+                }),
                 ..Default::default()
             });
         }
@@ -594,6 +599,36 @@ fn management_commands() {
     engine.call("chat.save_document", json!({"message_id": mid, "step": 0, "path": path.display().to_string()})).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Hallo");
     let _ = std::fs::remove_file(path);
+    // AIS.chat sends Word and PDF documents as Markdown: they become real files.
+    let ready_pdf = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(b"%PDF-1.4 schon fertig")
+    };
+    for (format, content, magic) in [
+        ("docx", "# Elternbrief\n\nLiebe Eltern", &b"PK\x03\x04"[..]),
+        ("pdf", "# Elternbrief\n\nLiebe Eltern", b"%PDF"),
+        ("pdf", ready_pdf.as_str(), b"%PDF-1.4 schon"),
+    ] {
+        engine.ctx().update(|s| {
+            if let Some(m) = s.messages.iter_mut().find(|m| m.id == mid) {
+                m.activity = vec![aiscraft_core::ActivityStep {
+                    label: "Dokument erstellen".into(),
+                    document: Some(aiscraft_core::GeneratedDocument {
+                        file_name: format!("Elternbrief.{format}"),
+                        format: format.into(),
+                        content: content.into(),
+                        title: "Elternbrief".into(),
+                    }),
+                    ..Default::default()
+                }];
+            }
+        });
+        let path = std::env::temp_dir().join(format!("aiscraft-doc-{}.{format}", uuid::Uuid::new_v4()));
+        engine.call("chat.save_document", json!({"message_id": mid, "step": 0, "path": path.display().to_string()})).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(bytes.starts_with(magic), "{format}: {:?}", bytes.get(..16));
+        let _ = std::fs::remove_file(path);
+    }
 
     // Search, notices, state, commands, tools.
     engine.call("search", json!({"query": "Geänderte"})).unwrap();
