@@ -5,6 +5,17 @@
 //! ort and gline-rs can panic inside (a library that does not load, an unexpected tensor); every
 //! call into them runs under `catch_unwind`, so a broken model means "no model hits", never a
 //! crash.
+//!
+//! DLL search order (Windows, residual risk): ort loads the library by its full path, but the
+//! libraries *it* imports are looked up in the standard order (the app's folder, System32, the
+//! Windows folder, the current directory, `PATH`), not in `<data>/ner/`. A DLL planted under the
+//! right name in the current directory or a writable `PATH` folder could be loaded into the app.
+//! The clean fix is to preload the library ourselves with
+//! `LoadLibraryExW(path, 0, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32)`
+//! (or `SetDefaultDllDirectories` at start-up), but every such call is `unsafe` and the workspace
+//! forbids `unsafe_code`; no safe wrapper exists in our dependencies. Until a reviewed safe
+//! wrapper (e.g. in craft-libs) exists, the risk stays: the attacker must already be able to
+//! write into the current directory or a `PATH` folder of this user.
 
 use std::path::Path;
 use std::sync::Mutex;

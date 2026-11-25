@@ -180,7 +180,9 @@ fn browser(shared: Shared, how: Browser) -> crate::accounts::Opener {
         let back = match how {
             Browser::SignsIn => format!("{redirect}?code=CODE1&state={}", aiscraft_backends::oauth::encode(&get("state"))),
             Browser::WrongState => format!("{redirect}?code=CODE1&state=fremd"),
-            Browser::Cancels => format!("{redirect}?error=access_denied&error_description=abgebrochen"),
+            Browser::Cancels => {
+                format!("{redirect}?error=access_denied&error_description=abgebrochen&state={}", aiscraft_backends::oauth::encode(&get("state")))
+            }
             Browser::Gone => return Ok(()),
         };
         std::thread::spawn(move || {
@@ -236,7 +238,16 @@ fn connector_catalog_lists_filters_and_every_entry_is_well_formed() {
                 assert!(e.read_scopes.iter().all(|s| !s.contains("ReadWrite") && !s.contains("compose") && !s.ends_with("calendar.events")), "{}", e.id);
             }
             "caldav" => assert_eq!(e.auth, "password"),
-            "mcp" => assert_eq!(e.auth, "own"),
+            "mcp" => {
+                assert_eq!(e.auth, "own");
+                // npx and uvx fetch what the command names on every start: an exact version.
+                for org in [false, true] {
+                    let cmd = crate::accounts::mcp_command(e.id, org);
+                    let pkg = cmd.split_whitespace().find(|w| w.contains("mcp") && !w.starts_with('-')).unwrap();
+                    let version = pkg.rsplit_once('@').map(|(_, v)| v).unwrap_or("");
+                    assert!(version.split('.').count() == 3 && version.split('.').all(|n| n.parse::<u32>().is_ok()), "{}: {cmd}", e.id);
+                }
+            }
             other => panic!("unknown provider {other}"),
         }
         assert_eq!(e.writes.is_empty(), e.write_scopes.is_empty(), "{}: writes and write scopes go together", e.id);
@@ -323,9 +334,11 @@ fn sign_in_with_pkce_reads_mail_and_renews_the_token() {
 
 #[test]
 fn a_wrong_state_a_cancel_a_timeout_and_no_browser_are_refused() {
-    let (engine, _, _) = setup(Browser::WrongState, Duration::from_secs(20));
+    // A callback with another state is ignored (anything on this computer can reach the port);
+    // the sign-in keeps waiting for the real browser until its time is up.
+    let (engine, _, _) = setup(Browser::WrongState, Duration::from_millis(1500));
     let e = engine.call("connector.connect", json!({"entry": "outlook-calendar", "client_id": "cid"})).unwrap_err();
-    assert_eq!(e.kind, aiscraft_core::ErrorKind::Refused, "{}", e.message);
+    assert!(e.message.contains("nicht rechtzeitig"), "{}", e.message);
     assert!(engine.state().connectors.is_empty(), "nothing is kept");
 
     let (engine, _, _) = setup(Browser::Cancels, Duration::from_secs(20));

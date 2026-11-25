@@ -32,8 +32,13 @@ jobs:
   build:
     name: Sandbox-Abbild bauen
     runs-on: ubuntu-24.04
+    # The build (build.sh, package downloads) runs with read rights only and without a stored
+    # token; only the job `publish` can write, and it runs no code from the repository.
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      asset: ${{ steps.sum.outputs.asset }}
+      sha256: ${{ steps.sum.outputs.sha256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -59,12 +64,25 @@ jobs:
           path: dist/sandbox/
           retention-days: 7
           compression-level: 0
+
+  publish:
+    name: Sandbox-Abbild veröffentlichen
+    needs: build
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sandbox-image
+          path: dist/sandbox/
       - name: Veröffentlichen
-        if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
-          ASSET: ${{ steps.sum.outputs.asset }}
-          SHA256: ${{ steps.sum.outputs.sha256 }}
+          GH_REPO: ${{ github.repository }}
+          ASSET: ${{ needs.build.outputs.asset }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
         run: |
           layout="${ASSET#aiscraft-sandbox-}"
           layout="${layout%%-*}"

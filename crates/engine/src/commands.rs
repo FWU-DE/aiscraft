@@ -62,7 +62,84 @@ impl CommandSpec {
     fn copy(&self) -> CommandSpec {
         CommandSpec { id: self.id, label: self.label, group: self.group, shortcut: self.shortcut, params: self.params, palette: self.palette, run: self.run }
     }
+
+    /// Whether an outside program may list and run this command, e.g. an MCP client through
+    /// `aiscraft-cli mcp`. Such a client may itself be steered by a prompt injection, so it gets
+    /// chats, search, artifacts and learning materials, but nothing that installs, downloads or
+    /// enables code or tools (extensions, connectors, sandbox, computer use, players, models),
+    /// changes settings, trust rules or approvals, touches secrets, the vault or the name
+    /// mapping, plants instructions (memory, skills, schedules) or deletes data.
+    ///
+    /// Fail closed by category: a namespace not in [`EXTERNAL_NAMESPACES`] stays inside the app,
+    /// so new feature areas (say `computer.*`) are not reachable until someone decides they may
+    /// be; within an allowed namespace, [`OWNER_ONLY_VERBS`] and [`OWNER_ONLY_VERB_WORDS`] keep
+    /// out switches, installs and deletions.
+    pub fn external(&self) -> bool {
+        external_id(self.id)
+    }
 }
+
+/// [`CommandSpec::external`] by id, so ids of commands that do not exist yet can be checked.
+pub fn external_id(id: &str) -> bool {
+    let (namespace, verb) = id.split_once('.').unwrap_or((id, ""));
+    EXTERNAL_NAMESPACES.contains(&namespace) && !OWNER_ONLY_VERBS.contains(&verb) && !verb.split('_').any(|word| OWNER_ONLY_VERB_WORDS.contains(&word))
+}
+
+/// Command namespaces an outside program may use (see [`CommandSpec::external`]). Everything
+/// else, e.g. `backend`, `settings`, `connector`, `tool`, `trust`, `vault`, `privacy`,
+/// `extension`, `sandbox`, `computer`, `collab`, `memory`, `skill`, `schedule`, `files`, `view`,
+/// `voice`, stays inside the app.
+const EXTERNAL_NAMESPACES: &[&str] = &[
+    "app",
+    "artifact",
+    "attachment",
+    "board",
+    "calendar",
+    "chat",
+    "file",
+    "h5p",
+    "learning_app",
+    "log",
+    "message",
+    "notice",
+    "persona",
+    "project",
+    "remote",
+    "research",
+    "search",
+    "task",
+    "template",
+    "tools",
+    "usage",
+    "worksheet",
+];
+
+/// Whole verbs that stay inside the app even in an allowed namespace: settings switches
+/// (`chat.set_sources` turns on tools and connectors), update handling.
+const OWNER_ONLY_VERBS: &[&str] = &["set", "set_sources", "set_search", "check_update", "update_open", "update_skip", "update_dismiss"];
+
+/// Words of a verb (split at `_`) that keep a command inside the app: installs, downloads,
+/// switches, sign-in and every deletion.
+const OWNER_ONLY_VERB_WORDS: &[&str] = &[
+    "install",
+    "uninstall",
+    "download",
+    "enable",
+    "disable",
+    "toggle",
+    "allow",
+    "approve",
+    "answer",
+    "login",
+    "logout",
+    "secret",
+    "key",
+    "player",
+    "remove",
+    "delete",
+    "purge",
+    "empty",
+];
 
 pub fn find(id: &str) -> Option<&'static CommandSpec> {
     commands().iter().find(|c| c.id == id)
@@ -1778,4 +1855,70 @@ async fn backend_login(c: Ctx, p: Value) -> Result<Value> {
         }),
     );
     Ok(serde_json::to_value(account)?)
+}
+
+#[cfg(test)]
+mod external_tests {
+    use super::{commands, external_id};
+
+    #[test]
+    fn outside_programs_get_no_installs_switches_secrets_or_deletions() {
+        for id in [
+            "extension.install",
+            "extension.toggle",
+            "h5p.player_install",
+            "h5p.player_remove",
+            "privacy.ner_install",
+            "privacy.reveal",
+            "privacy.mapping",
+            "sandbox.install",
+            "sandbox.set",
+            "connector.add",
+            "connector.toggle",
+            "tool.answer",
+            "trust.rule_add",
+            "vault.add",
+            "vault.code",
+            "settings.set",
+            "fallback.set",
+            "backend.login",
+            "backend.update",
+            "memory.add",
+            "skill.create",
+            "schedule.create",
+            "files.local_set",
+            "chat.set_sources",
+            "chat.purge",
+            "chat.empty_trash",
+            "chat.delete",
+            "artifact.delete",
+            "project.delete",
+            "research.set_search",
+            "app.update_open",
+            // Feature areas that do not exist yet stay closed by category.
+            "computer.set",
+            "computer.never_allow",
+            "sandbox.update",
+            "sandbox.remove",
+            "anything.new",
+        ] {
+            assert!(!external_id(id), "{id} must stay inside the app");
+        }
+        for id in [
+            "chat.send",
+            "chat.new",
+            "chat.open",
+            "chat.export",
+            "search",
+            "artifact.get",
+            "app.state",
+            "app.commands",
+            "worksheet.create",
+            "tools.list",
+            "persona.refresh",
+        ] {
+            assert!(external_id(id), "{id} should be usable from outside");
+            assert!(commands().iter().any(|c| c.id == id && c.external()), "{id} is a command");
+        }
+    }
 }
