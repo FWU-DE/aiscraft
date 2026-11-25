@@ -104,7 +104,7 @@ Unter Wayland erlauben manche Desktops einem Programm nicht, sein Fenster selbst
 
 Für einen neuen Chat stellst du die Quellen vor der ersten Nachricht ein. Das Menü bleibt offen, bis du „Schließen“ klickst.
 
-Bei AIS.chat sind Gedächtnis und Projektanweisungen zuerst aus. Schaltest du sie ein, gehen sie am Anfang deiner nächsten Nachricht mit und bleiben im AIS.chat-Verlauf; erneut nur, wenn sie sich ändern. Werkzeuge und Konnektoren nimmt AIS.chat nicht an. Seine eigenen Werkzeuge (Websuche, Bilder, Diagramme) legt das Land fest, bei Assistenten und Dialogpartnern auch deren Einstellung in AIS.chat; das Menü zeigt sie.
+Bei AIS.chat sind Gedächtnis, Projektanweisungen und Projektdateien zuerst aus. Schaltest du sie ein, gehen sie am Anfang deiner nächsten Nachricht mit und bleiben im AIS.chat-Verlauf; erneut nur, wenn sie sich ändern. Werkzeuge und Konnektoren nimmt AIS.chat nicht an. Seine eigenen Werkzeuge (Websuche, Bilder, Diagramme) legt das Land fest, bei Assistenten und Dialogpartnern auch deren Einstellung in AIS.chat; das Menü zeigt sie.
 
 ## Belege in Antworten
 
@@ -115,6 +115,8 @@ Ein Klick zeigt die Stelle: im Text der Datei markiert, mit dem Text davor und d
 ## Projekte
 
 Projekte bündeln Chats mit gemeinsamen Anweisungen, etwa „Antworte für Siebtklässler, kurz und mit Alltagsbeispielen“. Ein Klick auf ein Projekt in der Seitenleiste zeigt seine Chats und startet einen neuen Chat darin. Rechtsklick auf einen Chat › „In Projekt“ verschiebt ihn.
+
+**Dateien im Projekt:** Im Projekt-Dialog fügst du Dateien hinzu (PDF, Word, Text, Tabellen). AIS.ChatCraft liest sie auf diesem Rechner und schickt mit jeder Nachricht im Projekt die passenden Teile mit, die ganze Datei, wenn sie in ein Viertel des Kontexts passt. Unter der Nachricht steht, welche Dateien mitgingen; unter **Quellen** schaltest du das pro Chat ab. Claude (API) bekommt sie als Dokumente und nennt Belege. Bei AIS.chat gehen sie wie Gedächtnis und Projektanweisungen erst mit, wenn du das unter **Quellen** erlaubst, denn sie bleiben dann im AIS.chat-Verlauf; jeder Teil geht einmal pro Chat mit, mit „Namen schützen“. Eingescannte PDFs ohne Text lehnt AIS.ChatCraft mit einem Hinweis ab.
 
 ## Dokumente und Whiteboards
 

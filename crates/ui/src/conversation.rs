@@ -1049,9 +1049,18 @@ impl AisCraftApp {
                 ));
             }
             if self.state.selection.project_id.as_ref().is_some_and(|p| self.state.project_files.iter().any(|f| &f.project_id == p)) {
-                let mut knowledge = src.knowledge;
+                // Without a system prompt (AIS.chat) the files need the same consent as notes and
+                // instructions; switching them on leaves those two as they are.
+                let mut knowledge = src.knowledge && (takes || src.inline);
                 if ui.checkbox(&mut knowledge, "Projektwissen (Dateien des Projekts)").changed() {
-                    set("knowledge", knowledge);
+                    if takes || !knowledge {
+                        set("knowledge", knowledge);
+                    } else {
+                        self.engine.dispatch(
+                            "chat.set_sources",
+                            json!({"knowledge": true, "memory": src.memory_for(false), "project": src.project_for(false), "inline": true}),
+                        );
+                    }
                 }
             }
             let mut tools = src.tools;
