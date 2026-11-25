@@ -25,6 +25,8 @@ Ist kein Chat offen, zeigt AIS.ChatCraft die Startseite: oben das Eingabefeld (S
 
 **Chat schließen:** das × oben rechts im Chat (in Modern, Glas und Omarchy im Menü ⋯ oben rechts), Esc bei leerem Eingabefeld oder „Chat schließen“ in den Befehlen (Strg+K). Der Chat bleibt in der Seitenleiste.
 
+**Fenster schließen:** Jedes Fenster, das sich öffnet (Einstellungen, Fragen, Dialoge, das Handbuch, ein Beleg), schließt mit dem × oben rechts, mit Esc oder mit einem Klick daneben.
+
 ## Anmelden
 
 **AIS.chat.** „Im Browser anmelden“ öffnet ein eigenes Browserfenster mit der AIS.chat-Anmeldung (VIDIS, Schulkonto oder Microsoft 365). Nach der Anmeldung übernimmt AIS.ChatCraft die Sitzung und schließt das Fenster. Dafür braucht es Chrome, Chromium, Edge, Brave oder Vivaldi. Die Sitzung gilt einige Stunden; ist sie abgelaufen, meldet AIS.ChatCraft dich beim nächsten Start ohne Fenster neu an, solange die VIDIS-Sitzung noch gilt.
