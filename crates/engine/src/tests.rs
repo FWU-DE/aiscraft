@@ -1054,10 +1054,38 @@ fn ais_chat_image_generation() {
     assert!(first.contains(r#""aspectRatio":"landscape""#) && first.contains(r#""modelId":"m-img""#) && !first.contains("conversationId"), "{first}");
 
     let target = std::env::temp_dir().join(format!("aiscraft-bild-{}.png", std::process::id()));
-    engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string()})).unwrap();
+    // Without „KI-Kennzeichnung“ the file is the picture as it came.
+    let out = engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string(), "badge": false})).unwrap();
+    assert_eq!(out["badge"], false);
     assert_eq!(std::fs::read(&target).unwrap().len(), img.size as usize);
     let _ = std::fs::remove_file(&target);
+    // With it (the default) the picture has to be readable: these stand-in bytes are not.
+    let err = engine.call("chat.save_image", json!({"message_id": answer.id, "path": target.display().to_string()})).unwrap_err();
+    assert!(err.message.contains("KI-Kennzeichnung"), "{}", err.message);
+    assert!(!target.exists(), "nothing half-written");
     assert!(engine.call("chat.save_image", json!({"message_id": answer.id, "index": 3, "path": "/tmp/x.png"})).is_err());
+    // A real picture: the saved file carries the badge bottom right, the same size, and the note.
+    {
+        use craft_image_codecs::{ChannelLayout, DecodeOptions, EncodeOptions, Format, Image, SampleType};
+        let pic = Image::from_u8(400, 300, ChannelLayout::Rgb, vec![200; 400 * 300 * 3]).unwrap();
+        std::fs::write(img.local_path.as_ref().unwrap(), craft_image_codecs::encode(&pic, Format::Png, &EncodeOptions::default()).unwrap()).unwrap();
+        let read = |badge: Option<bool>| {
+            let mut p = json!({"message_id": answer.id, "path": target.display().to_string()});
+            if let Some(b) = badge {
+                p["badge"] = json!(b);
+            }
+            let out = engine.call("chat.save_image", p).unwrap();
+            let bytes = std::fs::read(&target).unwrap();
+            let px = craft_image_codecs::decode_with(&bytes, &DecodeOptions::default()).unwrap().convert(ChannelLayout::Rgb, SampleType::U8);
+            let (cx, cy, r) = crate::ai_badge::geometry(400, 300);
+            let i = (((cy - r * 0.85) as usize) * 400 + cx as usize) * 3;
+            (out["badge"].as_bool().unwrap(), (px.width(), px.height()), px.data()[i], px.data()[3], bytes.windows(13).any(|w| w == b"Erstellt mit "))
+        };
+        assert_eq!(read(None), (true, (400, 300), 0, 200, true), "badge dark, corner unchanged, note kept");
+        assert_eq!(read(Some(true)).2, 0);
+        assert_eq!(read(Some(false)), (false, (400, 300), 200, 200, true), "the original");
+    }
+    let _ = std::fs::remove_file(&target);
 
     // The next prompt continues the server's image chat; regenerate draws again.
     engine.call("chat.send", json!({"text": "jetzt mit Mond", "aspect_ratio": "portrait"})).unwrap();
