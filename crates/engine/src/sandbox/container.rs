@@ -13,10 +13,14 @@
 
 use aiscraft_core::{Error, Result};
 
-/// The workspace image, preloaded in the private computer (`packaging/sandbox`).
-pub(crate) const IMAGE: &str = "aiscraft-workspace:1";
-/// Where the private computer keeps the image until it is loaded into Docker.
-pub(crate) const IMAGE_TAR: &str = "/opt/aiscraft/workspace-image.tar";
+/// The workspace image of the pinned Nod runtime, started by its id (never by a tag that a
+/// later load could point elsewhere).
+pub(crate) const IMAGE: &str = super::image::WORKSPACE_ID;
+/// Where Nod's runtime keeps the image until it is loaded into Docker.
+pub(crate) const IMAGE_TAR: &str = super::image::WORKSPACE_TAR;
+/// The network containers use while the network switch is on (Nod's runtime turns Docker's
+/// default bridge off).
+pub(crate) const NETWORK: &str = "aiscraft-net";
 pub(crate) const MEMORY: &str = "2g";
 pub(crate) const CPUS: &str = "2";
 pub(crate) const PIDS: &str = "1024";
@@ -35,8 +39,11 @@ pub(crate) const CONVERT_SCRIPT: &str =
 /// `$1` folder: type, size and path of up to 500 entries.
 pub(crate) const LIST_SCRIPT: &str = r#"cd -- "$1" && find . -mindepth 1 -maxdepth 4 -printf '%y %s %P\n' | head -n 500"#;
 
-/// In the private computer as root, before a container: Docker running, the image loaded, the
-/// chat's folder there and owned by the container's user. `$1` image, `$2` chat (may be empty), `$3` the image file.
+/// In the private computer as root, before a container: Docker running, the workspace image
+/// loaded (only after its tar matched the pinned checksum, as Nod does), Nod's images we never
+/// use removed, the network for the switch there, the chat's folder there and owned by the
+/// container's user. `$1` image id, `$2` chat (may be empty), `$3` the image tar, `$4` its
+/// SHA-256, `$5` `1` when the network switch is on.
 pub(crate) const PREPARE_SCRIPT: &str = r#"set -e
 if ! docker info >/dev/null 2>&1; then
   (setsid dockerd </dev/null >/var/log/aiscraft-dockerd.log 2>&1 &)
@@ -47,7 +54,13 @@ if ! docker info >/dev/null 2>&1; then
     sleep 0.5
   done
 fi
-docker image inspect "$1" >/dev/null 2>&1 || docker load -i "$3" >/dev/null
+if [ "$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null)" != "$1" ]; then
+  echo "$4  $3" | sha256sum -c --quiet - >/dev/null 2>&1 || { echo "Das Abbild des Arbeitsbereichs ist beschädigt. Bitte den eigenen Rechner entfernen und neu einrichten." >&2; exit 3; }
+  docker load --input "$3" >/dev/null
+  [ "$(docker image inspect --format '{{.Id}}' "$1" 2>/dev/null)" = "$1" ] || { echo "Das geladene Abbild ist nicht das erwartete." >&2; exit 3; }
+fi
+rm -f /opt/nod-assets/images/browser.tar.zst /opt/nod-assets/images/postgres.tar.zst
+if [ "$5" = 1 ]; then docker network inspect aiscraft-net >/dev/null 2>&1 || docker network create aiscraft-net >/dev/null; fi
 if [ -n "$2" ]; then install -d -o 1000 -g 1000 -m 0700 "/work/$2"; fi"#;
 /// Remove a chat's working folder. `$1` chat.
 pub(crate) const CLEAR_SCRIPT: &str = r#"[ -n "$1" ] && rm -rf -- "/work/$1""#;
@@ -108,7 +121,7 @@ pub(crate) fn docker_run(chat: &str, name: &str, network: bool, script: &str, ar
         "--name",
         name,
         "--network",
-        if network { "bridge" } else { "none" },
+        if network { NETWORK } else { "none" },
         "--cap-drop",
         "ALL",
         "--security-opt",
@@ -181,6 +194,6 @@ mod tests {
         }
         assert_eq!(argv.iter().filter(|a| a.as_str() == "--mount").count(), 1, "one mount only");
         assert!(!joined.contains("--privileged") && !joined.contains("docker.sock"));
-        assert!(docker_run("c1", "n", true, RUN_SCRIPT, &[]).join(" ").contains("--network bridge"));
+        assert!(docker_run("c1", "n", true, RUN_SCRIPT, &[]).join(" ").contains("--network aiscraft-net"));
     }
 }

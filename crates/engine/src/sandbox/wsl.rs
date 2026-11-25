@@ -257,8 +257,6 @@ mod tests {
         assert!(Wsl::new("Ubuntu".into()).guard().is_err());
         assert!(Wsl::new("aiscraft-default".into()).guard().is_ok());
         assert!(WSL_CONF.contains("[automount]\nenabled = false") && WSL_CONF.contains("[interop]\nenabled = false"));
-        // The image ships the same file the app writes.
-        assert_eq!(include_str!("../../../../packaging/sandbox/wsl.conf").replace("\r\n", "\n"), WSL_CONF);
         let a = Wsl::new("aiscraft-default".into()).exec_args(&["echo".into(), "a \"b\" $c".into()]);
         assert!(a.iter().skip(11).all(|x| x.chars().all(|c| c.is_ascii_alphanumeric() || "+/=".contains(c))), "{a:?}");
         let out = Output { code: Some(1), stderr: b"Error code: Wsl/Service/CreateInstance/HCS_E_HYPERV_NOT_INSTALLED".to_vec(), ..Default::default() };

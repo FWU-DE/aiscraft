@@ -281,9 +281,11 @@ Manche Konnektoren liefern zu einem Ergebnis eine kleine Oberfläche, etwa einen
 
 ### Eigener Rechner (Sandbox)
 
-Mit dem eigenen Rechner kann ein Modell Befehle ausführen, ohne deinen Computer zu berühren: Dateien umwandeln („Mach aus dem Elternbrief eine PDF“), Tabellen neu berechnen, PDFs reparieren oder zusammenfügen, Noten mit Python auswerten. Darin gibt es LibreOffice, Python 3 (mit pandas, openpyxl, matplotlib), qpdf, Ghostscript und die Noto-Schriften.
+Mit dem eigenen Rechner kann ein Modell Befehle ausführen, ohne deinen Computer zu berühren: Dateien umwandeln („Mach aus dem Elternbrief eine PDF“), Tabellen neu berechnen, PDFs reparieren oder zusammenfügen, Text in Scans erkennen, Noten mit Python auswerten. Darin gibt es LibreOffice, Python 3, Tesseract (Texterkennung), qpdf, Ghostscript und die Noto-Schriften. Es ist derselbe Arbeitsbereich wie in n8n Nod.
 
-**Einrichten:** Er ist zuerst aus. Unter **Einstellungen › Fähigkeiten** steht, was er kann, was er nicht sieht, wie groß das Abbild ist (rund 900 MB Download, etwa 4 GB auf der Platte), woher es kommt (ein Release dieses Projekts auf github.com, aus Ubuntu 24.04 gebaut) und unter welchen Lizenzen. Geladen wird erst nach **Einrichten …** und **Ja, laden und einrichten**. Das Abbild wird mit seiner festen SHA-256-Prüfsumme geprüft; stimmt sie nicht, bleibt nichts davon.
+**Einrichten:** Er ist zuerst aus. Unter **Einstellungen › Fähigkeiten** steht, was er kann, was er nicht sieht, wie groß er ist (rund 1,3 GB Download, etwa 5 GB auf der Platte), woher er kommt (die Windows-Laufzeit von n8n Nod, unverändert von github.com/n8n-io/nod) und unter welchen Lizenzen. Geladen wird erst nach **Einrichten …** und **Ja, laden und einrichten**. Die Datei wird mit ihrer in AIS.ChatCraft eingetragenen SHA-256-Prüfsumme geprüft; stimmt sie nicht, bleibt nichts davon.
+
+**Aktualisieren:** Bringt eine neue Version von AIS.ChatCraft eine neuere Nod-Laufzeit mit, steht unter **Einstellungen › Fähigkeiten** „Neue Version verfügbar“. Geladen wird erst nach **Aktualisieren …** und **Ja, laden und aktualisieren**; der Rechner wird dabei neu angelegt, die Arbeitsordner der Chats werden geleert (Anhänge im Chat bleiben).
 
 **Unter Windows** wird daraus eine eigene WSL2-Distribution `aiscraft-default` (bei der portablen Ausgabe mit einem Kürzel statt `default`). Deine anderen Linux-Distributionen und die WSL-Einstellungen bleiben unberührt. Fehlt WSL auf dem Rechner, steht in den Einstellungen, was zu tun ist: Eine Administratorin oder ein Administrator führt einmal `wsl --install --no-distribution` aus (bei einer alten Version `wsl --update`) und startet neu. **Unter macOS und Linux** gibt es den eigenen Rechner noch nicht.
 
