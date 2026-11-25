@@ -34,7 +34,8 @@ apps/
   aiscraft-cli  CLI (chat, login, status, search, export, `call`, `mcp` server)
   aiscraft-collab-server  relay for live collaboration (rooms on disk, compaction, /healthz)
   aiscraft-preview  HTML preview of one learning app (wry webview, own process, CSP, no network,
-                    no navigation); needs WebKitGTK 4.1 on Linux
+                    no navigation), and connector views (MCP Apps, `--bridge`: JSON-RPC over
+                    stdin/stdout, network only to declared domains); needs WebKitGTK 4.1 on Linux
 deploy/autocraft  Coolify compose for AutoCraft
 deploy/collab     Dockerfile and Coolify compose for the collab relay
 docs/craft-libs.md  which shared Craft libraries we use, defer or reject, and why

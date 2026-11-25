@@ -196,6 +196,23 @@ pub struct ToolResultInfo {
     pub name: String,
     #[serde(default)]
     pub is_error: bool,
+    /// The interactive view the tool comes with (MCP Apps, #74): a card „Ansicht öffnen“.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<ToolView>,
+}
+
+/// A connector tool's view (MCP Apps, #74): where it is and what it shows first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolView {
+    /// The connector's id.
+    pub connector: String,
+    /// The tool's name at the connector.
+    pub tool: String,
+    /// The `ui://` resource.
+    pub resource: String,
+    /// The tool's structured result, for the view (capped).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
