@@ -19,6 +19,8 @@
 
 pub(crate) mod container;
 pub mod image;
+pub(crate) mod lima;
+pub(crate) mod process;
 pub(crate) mod runtime;
 #[cfg(windows)]
 pub(crate) mod wsl;
@@ -134,7 +136,7 @@ impl Runtime {
         let real = data_dir.is_some() && !cfg!(test);
         Runtime {
             dir: data_dir.map(|d| d.join("sandbox")).unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-sandbox-{}", crate::new_id()))),
-            machine: Mutex::new(real.then(|| runtime::for_this_system(machine_name(data_dir)))),
+            machine: Mutex::new(real.then(|| runtime::for_this_system(machine_name(data_dir), data_dir.map(|d| d.join("sandbox")).unwrap_or_default()))),
             source: Mutex::new(if real { image::Source::github() } else { None }),
             busy: AtomicBool::new(false),
         }
@@ -154,15 +156,24 @@ impl Runtime {
         *self.machine.lock().unwrap_or_else(PoisonError::into_inner) = Some(m);
     }
 
+    /// Test hook: several downloads, as on Linux (Lima, then Nod's archive).
+    #[cfg(test)]
+    pub(crate) fn set_parts(&self, parts: Vec<image::Part>, version: &str) {
+        *self.source.lock().unwrap_or_else(PoisonError::into_inner) = Some(image::Source { parts, version: version.into() });
+    }
+
     /// Test hook: the image comes from a local server.
     #[cfg(test)]
     pub(crate) fn set_source(&self, base: &str, asset: &str, pinned: Option<&str>) {
         *self.source.lock().unwrap_or_else(PoisonError::into_inner) = Some(image::Source {
-            base: base.into(),
-            asset: asset.into(),
-            sums: "SHA256SUMS.txt".into(),
-            pinned: pinned.map(str::to_string),
-            bytes: None,
+            parts: vec![image::Part {
+                url: format!("{base}/{asset}"),
+                sums_url: Some(format!("{base}/SHA256SUMS.txt")),
+                name: asset.into(),
+                sha256: pinned.map(str::to_string),
+                bytes: None,
+                file: "image.tar.gz".into(),
+            }],
             version: format!("test-{}", pinned.unwrap_or("").chars().take(6).collect::<String>()),
         });
     }
@@ -203,7 +214,7 @@ pub(crate) fn refresh(c: &Ctx) {
     let installed = marker.is_some();
     // As Nod compares its guest: the installed runtime against the pinned one.
     let update = match (&marker, c.0.sandbox.source()) {
-        (Some(m), Some(src)) if m.version.is_empty() || src.pinned.as_deref().is_some_and(|p| p != m.sha256) => Some(src.version.clone()),
+        (Some(m), Some(src)) if m.version.is_empty() || src.id().is_some_and(|p| p != m.sha256) => Some(src.version.clone()),
         _ => None,
     };
     c.update(|s| {
@@ -246,7 +257,7 @@ pub(crate) fn offer(c: &Ctx) -> Value {
         "can": CAN,
         "cannot": CANNOT,
         "ais_chat": NOT_WITH_AIS,
-        "size": image::APPROX_MB * 1_000_000,
+        "size": c.0.sandbox.source().map(|s| s.bytes()).filter(|b| *b > 0).unwrap_or(image::APPROX_MB * 1_000_000),
         "size_text": mb(image::APPROX_MB),
         "disk_text": mb(image::DISK_MB),
         "source": image::SOURCE_TEXT,
@@ -410,15 +421,17 @@ async fn set_up(c: Ctx, p: Value, updating: bool) -> Result<Value> {
     set_problem(&c, None);
     let r = async {
         step(&c, Some("Abbild wird geladen"));
-        let (file, sha256) = image::fetch(&c, &src, &rt.dir).await?;
+        let (files, sha256) = image::fetch(&c, &src, &rt.dir).await?;
         step(&c, Some("Rechner wird angelegt"));
         // A leftover of a broken setup (it is ours by name) goes first.
         if machine.exists().await {
             machine.destroy().await?;
         }
-        let created = machine.create(file.clone(), rt.dir.join("machine")).await;
-        // The image is in the machine now (or not needed any more): ~1 GB back.
-        let _ = std::fs::remove_file(&file);
+        let created = machine.create(files.clone(), rt.dir.join("machine")).await;
+        // The downloads are in the machine now (or not needed any more): 1 to 2 GB back.
+        for f in &files {
+            let _ = std::fs::remove_file(f);
+        }
         created?;
         step(&c, Some("Arbeitsumgebung wird vorbereitet"));
         prepare(&machine, None, saved(&c).network).await?;
@@ -537,7 +550,8 @@ pub(crate) fn forget(c: &Ctx, conv: &str) {
 
 /// Docker running, the image loaded, the chat's folder there (idempotent, cheap when ready).
 async fn prepare(m: &runtime::Shared, chat: Option<&str>, network: bool) -> Result<()> {
-    let args = [k::IMAGE, chat.unwrap_or(""), k::IMAGE_TAR, image::WORKSPACE_TAR_SHA256, if network { "1" } else { "0" }];
+    let ws = m.workspace()?;
+    let args = [ws.image.as_str(), chat.unwrap_or(""), ws.tar, ws.tar_sha256, if network { "1" } else { "0" }];
     // Loading the 2 GB workspace image the first time takes a while.
     let out = m.exec(k::machine_script(k::PREPARE_SCRIPT, &args), Vec::new(), Duration::from_secs(900), 16 * 1024).await?;
     if out.ok() {
@@ -730,7 +744,8 @@ pub(crate) async fn execute(c: &Ctx, conv: &str, name: &str, args: &Value) -> Re
     let (m, network) = usable(c)?;
     let chat = k::chat_folder(conv)?;
     prepare(&m, Some(&chat), network).await?;
-    let start = |script: &str, a: &[&str]| k::docker_run(&chat, &container_name(), network, script, a);
+    let image = m.workspace()?.image;
+    let start = |script: &str, a: &[&str]| k::docker_run(&chat, &container_name(), network, &image, script, a);
     match name {
         RUN => {
             let folder = k::rel_path(args.get("folder").and_then(Value::as_str).unwrap_or("."))?;

@@ -21,9 +21,14 @@ fn sha(bytes: &[u8]) -> String {
 
 /// A local release: `SHA256SUMS.txt` and the image, counting requests.
 fn release(engine: &Engine, image: Vec<u8>, sums: String) -> (String, Arc<Mutex<usize>>) {
+    serve(engine, vec![("/SHA256SUMS.txt".to_string(), sums.into_bytes()), ("/image.tar.gz".to_string(), image)])
+}
+
+/// A local server for `files` (path, body), counting requests.
+fn serve(engine: &Engine, files: Vec<(String, Vec<u8>)>) -> (String, Arc<Mutex<usize>>) {
     let count = Arc::new(Mutex::new(0usize));
     let count2 = count.clone();
-    let files = Arc::new(vec![("/SHA256SUMS.txt".to_string(), sums.into_bytes()), ("/image.tar.gz".to_string(), image)]);
+    let files = Arc::new(files);
     let url = engine.block_on(async move {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -181,7 +186,7 @@ fn nothing_is_downloaded_or_started_before_the_yes() {
     ctx.0.sandbox.set_source(&url, "image.tar.gz", Some(&sha(IMAGE)));
     let ok = engine.call("sandbox.install", json!({"yes": true})).unwrap();
     assert_eq!((ok["installed"].as_bool(), ok["enabled"].as_bool(), ok["network"].as_bool()), (Some(true), Some(true), Some(false)));
-    assert!(fake.calls().iter().any(|c| matches!(c, FakeCall::Create(p) if p.ends_with("image.tar.gz"))));
+    assert!(fake.calls().iter().any(|c| matches!(c, FakeCall::Create(p) if p.len() == 1 && p[0].ends_with("image.tar.gz"))));
     assert!(!dir.join("image.tar.gz").exists(), "the image is not kept twice");
     assert!(engine.state().sandbox.progress.is_none() && engine.state().sandbox.step.is_none());
     assert!(fake.container_starts().is_empty(), "setting up starts no container");
@@ -369,6 +374,72 @@ fn a_newer_pinned_nod_runtime_is_offered_and_installed_only_after_yes() {
     assert!(engine.call("sandbox.update", json!({})).unwrap()["updated"] == false);
 }
 
+/// Linux (#102) downloads two things, as Nod does: Lima (its line in Lima's `SHA256SUMS` must
+/// match the pin) and Nod's runtime archive (pinned only). Both are checked, nothing is fetched
+/// before the yes, a wrong pin on the second keeps the computer uncreated, and the computer is
+/// created from both files in that order.
+#[test]
+fn the_linux_downloads_are_each_checked_and_handed_over_in_order() {
+    use crate::sandbox::image::Part;
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let ctx = engine.ctx().clone();
+    let fake = Fake::new();
+    ctx.0.sandbox.set_machine(fake.clone());
+    const LIMA: &[u8] = b"lima fuer linux";
+    const NOD: &[u8] = b"nods laufzeit-archiv";
+    let (url, count) = serve(
+        &engine,
+        vec![
+            ("/lima/SHA256SUMS".into(), format!("{}  lima-2.2.0-Linux-x86_64.tar.gz\n", sha(LIMA)).into_bytes()),
+            ("/lima/lima-2.2.0-Linux-x86_64.tar.gz".into(), LIMA.to_vec()),
+            ("/nod/nod-Runtime-darwin-x64-x.tar.gz".into(), NOD.to_vec()),
+        ],
+    );
+    let parts = |nod_sha: &str| {
+        vec![
+            Part {
+                url: format!("{url}/lima/lima-2.2.0-Linux-x86_64.tar.gz"),
+                sums_url: Some(format!("{url}/lima/SHA256SUMS")),
+                name: "lima-2.2.0-Linux-x86_64.tar.gz".into(),
+                sha256: Some(sha(LIMA)),
+                bytes: Some(LIMA.len() as u64),
+                file: "lima.tar.gz".into(),
+            },
+            Part {
+                url: format!("{url}/nod/nod-Runtime-darwin-x64-x.tar.gz"),
+                sums_url: None,
+                name: "nod-Runtime-darwin-x64-x.tar.gz".into(),
+                sha256: Some(nod_sha.to_string()),
+                bytes: Some(NOD.len() as u64),
+                file: "nod-runtime.tar.gz".into(),
+            },
+        ]
+    };
+    ctx.0.sandbox.set_parts(parts(&sha(b"anders")), "linux-test");
+    let asked = engine.call("sandbox.install", json!({})).unwrap();
+    assert_eq!(asked["needs_yes"], true);
+    assert_eq!(asked["size"], (LIMA.len() + NOD.len()) as u64, "the question names both downloads together");
+    assert_eq!(*count.lock().unwrap(), 0);
+    // A wrong pin on Nod's archive: refused, no computer.
+    let e = engine.call("sandbox.install", json!({"yes": true})).unwrap_err();
+    assert!(e.message.contains("Prüfsumme") && e.message.contains("nod-Runtime"), "{e}");
+    assert!(!fake.calls().iter().any(|c| matches!(c, FakeCall::Create(_))));
+    assert!(!ctx.0.sandbox.dir().join("nod-runtime.tar.gz").exists());
+    // Right pins: created from Lima and Nod's archive, in that order; the downloads are gone again.
+    ctx.0.sandbox.set_parts(parts(&sha(NOD)), "linux-test");
+    engine.call("sandbox.install", json!({"yes": true})).unwrap();
+    let created = fake.calls().into_iter().find_map(|c| if let FakeCall::Create(f) = c { Some(f) } else { None }).unwrap();
+    let names: Vec<String> = created.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+    assert_eq!(names, ["lima.tar.gz", "nod-runtime.tar.gz"]);
+    assert!(created.iter().all(|p| !p.exists()));
+    let s = engine.state().sandbox.clone();
+    assert!(s.installed && s.enabled && s.version == "linux-test" && s.update.is_none(), "{s:?}");
+    // The installed id is both checksums: a new pin for either one offers an update.
+    ctx.0.sandbox.set_parts(parts(&sha(b"naechste Laufzeit")), "linux-test-2");
+    crate::sandbox::refresh(&ctx);
+    assert_eq!(engine.state().sandbox.update.as_deref(), Some("linux-test-2"));
+}
+
 /// A computer set up by v0.2.2 (AIS.ChatCraft's own image `sandbox-v1`, a marker without a Nod
 /// version) runs nothing after the switch to Nod's runtime: the tools are gone, a call says why,
 /// and „Aktualisieren“ (only after a yes) replaces it with the pinned Nod runtime.
@@ -494,45 +565,22 @@ fn workspace_output_passes_name_protection() {
     );
 }
 
-/// Live (Windows, not in CI): imports a real WSL2 distribution `aiscraft-livetest` from an image
-/// and runs `echo` in a locked-down container, then removes it again. Downloads and installs:
-/// run only on request, with `AISCRAFT_SANDBOX_IMAGE` set to an already downloaded Nod runtime (`nod-Runtime-win32-x64.tar.gz`)
-/// or unset to use the published release.
-///
-/// `cargo test -p aiscraft-engine real_wsl_runs_echo_in_the_container -- --ignored --nocapture`
-#[cfg(windows)]
-#[test]
-#[ignore]
-fn real_wsl_runs_echo_in_the_container() {
+/// The live check both real runtimes go through: create the computer from the downloads,
+/// prepare Docker and the workspace, run `echo` in a locked-down container, check it is user
+/// 1000 without capabilities and network, check the computer sees no host drive, remove it.
+#[cfg(any(windows, target_os = "linux"))]
+fn live_machine_runs_echo(machine: &dyn crate::sandbox::runtime::SandboxRuntime, files: Vec<std::path::PathBuf>, dir: &std::path::Path, drives: &str) {
     use crate::sandbox::container as k;
-    use crate::sandbox::runtime::SandboxRuntime;
-    let dir = std::env::temp_dir().join(format!("aiscraft-sandbox-live-{}", crate::new_id()));
-    // The download with the app's own checks (pinned checksum and size), outside the runtime
-    // below: an engine owns a runtime and must not be dropped inside another one.
-    let image = match std::env::var_os("AISCRAFT_SANDBOX_IMAGE") {
-        Some(p) => std::path::PathBuf::from(p),
-        None => {
-            let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
-            let src = crate::sandbox::image::Source::github().expect("x86-64");
-            let ctx = engine.ctx().clone();
-            engine.block_on(crate::sandbox::image::fetch(&ctx, &src, &dir)).expect("published image").0
-        }
-    };
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let wsl = crate::sandbox::wsl::Wsl::new("aiscraft-livetest".into());
     rt.block_on(async {
-        wsl.probe().await.expect("WSL2 is there");
-        if wsl.exists().await {
-            wsl.destroy().await.unwrap();
+        machine.probe().await.expect("the computer can run it");
+        if machine.exists().await {
+            machine.destroy().await.unwrap();
         }
-        wsl.create(image, dir.join("machine")).await.expect("imported");
-        let prep = wsl
-            .exec(
-                k::machine_script(k::PREPARE_SCRIPT, &[k::IMAGE, "live", k::IMAGE_TAR, crate::sandbox::image::WORKSPACE_TAR_SHA256, "0"]),
-                Vec::new(),
-                Duration::from_secs(300),
-                65536,
-            )
+        machine.create(files, dir.join("machine")).await.expect("created");
+        let ws = machine.workspace().unwrap();
+        let prep = machine
+            .exec(k::machine_script(k::PREPARE_SCRIPT, &[&ws.image, "live", ws.tar, ws.tar_sha256, "0"]), Vec::new(), Duration::from_secs(900), 65536)
             .await
             .unwrap();
         assert!(prep.ok(), "{prep:?}");
@@ -540,20 +588,73 @@ fn real_wsl_runs_echo_in_the_container() {
             "live",
             "aiscraft-live",
             false,
+            &ws.image,
             k::RUN_SCRIPT,
             &[".", "echo hallo aus dem Container; id -u; cat /proc/self/status | grep CapEff", "30"],
         );
-        let out = wsl.exec(argv, Vec::new(), Duration::from_secs(120), 65536).await.unwrap();
+        let out = machine.exec(argv, Vec::new(), Duration::from_secs(120), 65536).await.unwrap();
         let text = String::from_utf8_lossy(&out.stdout).to_string();
         eprintln!("{text}{}", String::from_utf8_lossy(&out.stderr));
         assert!(out.ok() && text.contains("hallo aus dem Container"), "{out:?}");
         assert!(text.contains("\n1000\n") && text.contains("CapEff:\t0000000000000000"), "{text}");
-        let net = k::docker_run("live", "aiscraft-live2", false, k::RUN_SCRIPT, &[".", "ls /sys/class/net", "30"]);
-        let out = wsl.exec(net, Vec::new(), Duration::from_secs(120), 65536).await.unwrap();
+        let net = k::docker_run("live", "aiscraft-live2", false, &ws.image, k::RUN_SCRIPT, &[".", "ls /sys/class/net", "30"]);
+        let out = machine.exec(net, Vec::new(), Duration::from_secs(120), 65536).await.unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "lo", "no network but loopback");
-        let drives = wsl.exec(k::machine_script("ls /mnt", &[]), Vec::new(), Duration::from_secs(60), 65536).await.unwrap();
-        assert!(!String::from_utf8_lossy(&drives.stdout).contains('c'), "no Windows drive in the machine");
-        wsl.destroy().await.unwrap();
-        let _ = std::fs::remove_dir_all(dir);
+        let seen = machine.exec(k::machine_script(drives, &[]), Vec::new(), Duration::from_secs(60), 65536).await.unwrap();
+        assert!(seen.ok(), "the computer sees a host drive or folder: {seen:?}");
+        machine.destroy().await.unwrap();
     });
+}
+
+/// Download with the app's own checks (pinned checksums and sizes), outside the runtime that
+/// drives the computer: an engine owns a runtime and must not be dropped inside another one.
+#[cfg(any(windows, target_os = "linux"))]
+fn live_downloads(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let src = crate::sandbox::image::Source::github().expect("x86-64");
+    let ctx = engine.ctx().clone();
+    engine.block_on(crate::sandbox::image::fetch(&ctx, &src, dir)).expect("published downloads").0
+}
+
+/// Live (Windows, not in CI): imports a real WSL2 distribution `aiscraft-livetest` from Nod's
+/// runtime and runs `echo` in a locked-down container, then removes it again. Downloads (1.3 GB)
+/// and installs: run only on request, with `AISCRAFT_SANDBOX_IMAGE` set to an already downloaded
+/// `nod-Runtime-win32-x64.tar.gz` or unset to download it.
+///
+/// `cargo test -p aiscraft-engine real_wsl_runs_echo_in_the_container -- --ignored --nocapture`
+#[cfg(windows)]
+#[test]
+#[ignore]
+fn real_wsl_runs_echo_in_the_container() {
+    let dir = std::env::temp_dir().join(format!("aiscraft-sandbox-live-{}", crate::new_id()));
+    let files = match std::env::var_os("AISCRAFT_SANDBOX_IMAGE") {
+        Some(p) => vec![std::path::PathBuf::from(p)],
+        None => live_downloads(&dir),
+    };
+    let wsl = crate::sandbox::wsl::Wsl::new("aiscraft-livetest".into());
+    live_machine_runs_echo(&wsl, files, &dir, r#"! grep -Eq '^[^ ]+ /mnt/[a-zA-Z] ' /proc/mounts"#);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Live (Linux with KVM, QEMU and ssh, not in CI): creates a real Lima VM `aiscraft-livetest`
+/// from Lima and Nod's runtime (1.77 GB download) and runs `echo` in a locked-down container,
+/// then removes it again. Run only on request; with `AISCRAFT_SANDBOX_LIMA` and
+/// `AISCRAFT_SANDBOX_NOD` set to already downloaded files, nothing is downloaded.
+///
+/// `cargo test -p aiscraft-engine real_lima_runs_echo_in_the_container -- --ignored --nocapture`
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore]
+fn real_lima_runs_echo_in_the_container() {
+    let dir = std::env::temp_dir().join(format!("aiscraft-sandbox-live-{}", crate::new_id()));
+    let files = match (std::env::var_os("AISCRAFT_SANDBOX_LIMA"), std::env::var_os("AISCRAFT_SANDBOX_NOD")) {
+        (Some(l), Some(n)) => vec![l.into(), n.into()],
+        _ => live_downloads(&dir),
+    };
+    let lima = crate::sandbox::lima::Lima::new("aiscraft-livetest".into(), dir.clone());
+    // Only Nod's assets, read-only; no home folder, no host drive.
+    let only_assets =
+        r#"! grep -E ' (9p|virtiofs|fuse.sshfs) ' /proc/mounts | grep -v ' /opt/nod-assets ' | grep -q . && ! touch /opt/nod-assets/x 2>/dev/null"#;
+    live_machine_runs_echo(&lima, files, &dir, only_assets);
+    let _ = std::fs::remove_dir_all(dir);
 }

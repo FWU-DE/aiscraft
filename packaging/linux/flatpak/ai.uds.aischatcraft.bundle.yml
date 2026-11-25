@@ -19,6 +19,9 @@ finish-args:
   - --share=network
   # GPU access for the wgpu UI.
   - --device=dri
+  # „Eigener Rechner“ (#102) needs hardware virtualization; QEMU is not in this bundle yet, so
+  # the app names the AppImage or the deb/rpm package for it, but the check needs the device.
+  - --device=kvm
   # Voice input and read-aloud.
   - --socket=pulseaudio
   # Session cookies and API keys live in the desktop's keychain (Secret Service).
