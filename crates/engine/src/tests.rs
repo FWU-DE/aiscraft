@@ -1683,12 +1683,8 @@ fn provide_offers_the_files_of_each_kind_and_each_one_exports() {
     ];
     for (kind, id, want) in kinds {
         let paths = engine.call("artifact.export_paths", json!({"id": id})).unwrap();
-        let got: Vec<(String, Option<String>)> = paths
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| (p["format"].as_str().unwrap().to_string(), p["variant"].as_str().map(str::to_string)))
-            .collect();
+        let got: Vec<(String, Option<String>)> =
+            paths.as_array().unwrap().iter().map(|p| (p["format"].as_str().unwrap().to_string(), p["variant"].as_str().map(str::to_string))).collect();
         let want: Vec<(String, Option<String>)> = want.into_iter().map(|(f, v)| (f.to_string(), v.map(str::to_string))).collect();
         assert_eq!(got, want, "{kind}: the files to provide");
         for p in paths.as_array().unwrap() {
@@ -1713,7 +1709,8 @@ fn a_whiteboard_exports_as_a_png_picture() {
         let img = craft_image_codecs::decode_with(&bytes, &DecodeOptions::default()).unwrap().convert(ChannelLayout::Rgb, SampleType::U8);
         (img.width(), img.height(), img.data().to_vec())
     };
-    let id = engine.call("artifact.create", json!({"kind": "board", "content": "# Wald\n- Bäume\n- Tiere\n- Pilze"})).unwrap()["id"].as_str().unwrap().to_string();
+    let id =
+        engine.call("artifact.create", json!({"kind": "board", "content": "# Wald\n- Bäume\n- Tiere\n- Pilze"})).unwrap()["id"].as_str().unwrap().to_string();
     let (w, h, rgb) = decode(&engine.call("artifact.export", json!({"id": id, "format": "png"})).unwrap());
     assert!(w > 100 && h > 100 && w <= aiscraft_board::MAX_IMAGE_EDGE && h <= aiscraft_board::MAX_IMAGE_EDGE, "{w}x{h}");
     assert_eq!(rgb.len(), (w * h * 3) as usize);
@@ -2508,7 +2505,10 @@ fn detached_windows_one_per_content_and_back_into_the_panel() {
     let engine = open();
     let chat = "chat-a".to_string();
     engine.ctx().update(|s| s.current = Some(chat.clone()));
-    let doc = engine.call("artifact.create", json!({"kind": "document", "content": "# Plan\n\nText", "conversation": chat})).unwrap()["id"].as_str().unwrap().to_string();
+    let doc = engine.call("artifact.create", json!({"kind": "document", "content": "# Plan\n\nText", "conversation": chat})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(engine.state().open_artifact.as_deref(), Some(doc.as_str()), "opens in the panel");
 
     // Lifted out: the panel closes, one window.
@@ -2537,7 +2537,11 @@ fn detached_windows_one_per_content_and_back_into_the_panel() {
     assert!(engine.call("artifact.detach", json!({"id": doc, "present": true})).is_err(), "only whiteboards are presented");
 
     // Learning apps stay in the preview window; unknown ids and nothing open are refused.
-    let app = engine.call("learning_app.create", json!({"html": "<!doctype html><html><head><title>Quiz</title></head><body>Hallo</body></html>"})).unwrap()["id"].as_str().unwrap().to_string();
+    let app =
+        engine.call("learning_app.create", json!({"html": "<!doctype html><html><head><title>Quiz</title></head><body>Hallo</body></html>"})).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
     let err = engine.call("artifact.detach", json!({"id": app})).unwrap_err();
     assert!(err.message.contains("Vorschaufenster"), "{}", err.message);
     assert!(engine.call("artifact.detach", json!({"id": "nope"})).is_err());

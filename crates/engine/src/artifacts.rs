@@ -313,9 +313,7 @@ fn strip_fence(s: &str) -> String {
 /// `artifact.export` with `format` (and `variant` for worksheets). The file is named after the
 /// title plus `suffix` and `ext`.
 pub(crate) fn export_paths(kind: ArtifactKind) -> Vec<Value> {
-    let path = |label: &str, hint: &str, format: &str, variant: Option<&str>, ext: &str, suffix: &str| {
-        json!({"label": label, "hint": hint, "format": format, "variant": variant, "ext": ext, "suffix": suffix})
-    };
+    let path = |label: &str, hint: &str, format: &str, variant: Option<&str>, ext: &str, suffix: &str| json!({"label": label, "hint": hint, "format": format, "variant": variant, "ext": ext, "suffix": suffix});
     match kind {
         ArtifactKind::Document => vec![
             path("Word (DOCX)", "Zum Weiterbearbeiten in Word oder LibreOffice", "docx", None, "docx", ""),
@@ -407,7 +405,8 @@ fn board_png(a: &Artifact, state: &[u8]) -> Result<Vec<u8>> {
         .render_image(aiscraft_board::MAX_IMAGE_EDGE)
         .ok_or_else(|| Error::invalid("Das Whiteboard ist leer. Füge erst Notizen, Formen oder Zeichnungen hinzu, dann lässt es sich als Bild speichern."))?;
     let img = Image::from_u8(r.width, r.height, ChannelLayout::Rgb, r.rgb).map_err(|e| Error::invalid(format!("Das Bild ließ sich nicht anlegen: {e}")))?;
-    craft_image_codecs::encode(&img, Format::Png, &EncodeOptions::default()).map_err(|e| Error::invalid(format!("Das Bild ließ sich nicht als PNG speichern: {e}")))
+    craft_image_codecs::encode(&img, Format::Png, &EncodeOptions::default())
+        .map_err(|e| Error::invalid(format!("Das Bild ließ sich nicht als PNG speichern: {e}")))
 }
 
 pub(crate) async fn versions(c: Ctx, p: Value) -> Result<Value> {

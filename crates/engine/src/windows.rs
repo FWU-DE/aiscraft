@@ -53,9 +53,8 @@ fn places(c: &Ctx) -> BTreeMap<String, WindowPlace> {
 /// `attach` the newest window.
 fn target(c: &Ctx, p: &Value, newest_window: bool) -> Result<String> {
     let s = c.state();
-    let id = opt_str(p, "id").filter(|i| !i.is_empty()).or_else(|| {
-        if newest_window { s.detached.last().map(|d| d.id.clone()) } else { s.open_artifact.clone() }
-    });
+    let id =
+        opt_str(p, "id").filter(|i| !i.is_empty()).or_else(|| if newest_window { s.detached.last().map(|d| d.id.clone()) } else { s.open_artifact.clone() });
     let Some(id) = id else {
         return Err(Error::invalid(if newest_window {
             "Kein Inhalt ist in einem eigenen Fenster."

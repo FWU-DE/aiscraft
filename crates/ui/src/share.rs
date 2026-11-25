@@ -97,7 +97,9 @@ impl AisCraftApp {
         let h = pad + 36.0 + 10.0 + 20.0 + 4.0 + text_h + pad;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
-            for ((choice, icon, title), line) in [(ShareWay::Together, Icon::Users, TOGETHER), (ShareWay::Provide, Icon::Download, PROVIDE)].into_iter().zip(lines) {
+            for ((choice, icon, title), line) in
+                [(ShareWay::Together, Icon::Users, TOGETHER), (ShareWay::Provide, Icon::Download, PROVIDE)].into_iter().zip(lines)
+            {
                 let on = *way == Some(choice);
                 let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, on, title));
@@ -105,7 +107,13 @@ impl AisCraftApp {
                 let hovered = resp.hovered() || resp.has_focus();
                 let r = egui::CornerRadius::same(t.r_card);
                 let fill = if on { t.opaque(t.accent_soft) } else { t.surface };
-                let stroke = if on || hovered { t.accent } else if t.glass.is_some() { t.card_stroke } else { t.border };
+                let stroke = if on || hovered {
+                    t.accent
+                } else if t.glass.is_some() {
+                    t.card_stroke
+                } else {
+                    t.border
+                };
                 p.rect(rect, r, fill, egui::Stroke::new(if on { 2.0 } else { 1.0 }, stroke), egui::StrokeKind::Inside);
                 let tile = egui::Rect::from_min_size(rect.min + vec2(pad, pad), vec2(36.0, 36.0));
                 if on {
@@ -149,11 +157,8 @@ impl AisCraftApp {
                 ui.add(egui::Label::new(RichText::new(&v.detail).color(t.text2)).wrap());
             });
             ui.add(
-                egui::Label::new(small_muted(
-                    &t,
-                    format!("Wer den Code hat, kann mitschreiben. Der Inhalt liegt dafür auf dem Server {}.", host(&v.server)),
-                ))
-                .wrap(),
+                egui::Label::new(small_muted(&t, format!("Wer den Code hat, kann mitschreiben. Der Inhalt liegt dafür auf dem Server {}.", host(&v.server))))
+                    .wrap(),
             );
             ui.add_space(8.0);
             ui.horizontal(|ui| {
@@ -200,10 +205,7 @@ impl AisCraftApp {
         }
         for line in [
             "Wer den Code hat, kann mitschreiben. Alle arbeiten am selben Original; Änderungen erscheinen sofort bei allen.".to_string(),
-            format!(
-                "Der Inhalt liegt dafür auf dem Server {}. Räume, die lange niemand öffnet, löscht der Server.",
-                host(&self.state.collab.server)
-            ),
+            format!("Der Inhalt liegt dafür auf dem Server {}. Räume, die lange niemand öffnet, löscht der Server.", host(&self.state.collab.server)),
         ] {
             ui.horizontal_top(|ui| {
                 ui.label(RichText::new("•").color(t.accent));

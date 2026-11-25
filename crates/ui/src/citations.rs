@@ -58,9 +58,8 @@ pub(crate) fn with_markers<'a>(content: &'a str, citations: &[Citation]) -> std:
             continue;
         }
         let fits = |p: &usize| content.is_char_boundary(*p) && !in_code_or_math(content, *p);
-        let after = |from: usize| {
-            content.get(from..).and_then(|rest| rest.match_indices(claim).map(|(k, _)| from + k + claim.len()).take(20).find(|p| fits(p)))
-        };
+        let after =
+            |from: usize| content.get(from..).and_then(|rest| rest.match_indices(claim).map(|(k, _)| from + k + claim.len()).take(20).find(|p| fits(p)));
         let pos = match last {
             Some((prev, at)) if prev == claim => Some(at),
             _ => after(cursor).or_else(|| after(0)),

@@ -69,8 +69,10 @@ impl AisCraftApp {
         if d.ais_chat {
             ui.add_space(6.0);
             ui.label(
-                RichText::new("Im Verlauf von AIS.chat bleibt der Chat stehen: AIS.chat speichert jeden Chat selbst. Löschen in AIS.ChatCraft ändert daran nichts.")
-                    .color(t.warning),
+                RichText::new(
+                    "Im Verlauf von AIS.chat bleibt der Chat stehen: AIS.chat speichert jeden Chat selbst. Löschen in AIS.ChatCraft ändert daran nichts.",
+                )
+                .color(t.warning),
             );
             if d.ids.len() == 1 {
                 ui.checkbox(&mut d.also_ais_chat, "Auch in AIS.chat löschen (lässt sich dort nicht rückgängig machen)");
@@ -82,11 +84,7 @@ impl AisCraftApp {
         let mut keep = true;
         ui.horizontal(|ui| {
             if ui.add(egui::Button::new(RichText::new("Löschen").color(t.on_accent)).fill(t.danger)).clicked() {
-                let p = if d.ids.len() == 1 && d.also_ais_chat {
-                    json!({"ids": d.ids, "ais_chat": true})
-                } else {
-                    json!({"ids": d.ids})
-                };
+                let p = if d.ids.len() == 1 && d.also_ais_chat { json!({"ids": d.ids, "ais_chat": true}) } else { json!({"ids": d.ids}) };
                 self.run("chat.delete", p);
                 self.selected_chats.retain(|id| !d.ids.contains(id));
                 keep = false;
@@ -102,7 +100,9 @@ impl AisCraftApp {
         let t = self.tokens.clone();
         ui.label(RichText::new(format!("{} endgültig löschen?", d.what)).strong());
         ui.add_space(4.0);
-        ui.label("Das lässt sich nicht rückgängig machen. Nachrichten, Suchtreffer, die Kopien der Anhänge und die Zuordnung von „Namen schützen“ werden entfernt.");
+        ui.label(
+            "Das lässt sich nicht rückgängig machen. Nachrichten, Suchtreffer, die Kopien der Anhänge und die Zuordnung von „Namen schützen“ werden entfernt.",
+        );
         ui.add_space(4.0);
         ui.label(small_muted(
             &t,
@@ -209,7 +209,11 @@ impl AisCraftApp {
                     ui,
                     |ui| {
                         if view.trash && !trash.is_empty() && ui.add(egui::Button::new(RichText::new("Papierkorb leeren").color(t.danger))).clicked() {
-                            self.dialog = Some(Dialog::PurgeChats(PurgeChats { ids: Vec::new(), what: format!("Alle {} Chats im Papierkorb", trash.len()), forget_notes: false }));
+                            self.dialog = Some(Dialog::PurgeChats(PurgeChats {
+                                ids: Vec::new(),
+                                what: format!("Alle {} Chats im Papierkorb", trash.len()),
+                                forget_notes: false,
+                            }));
                         }
                     },
                     |ui, w| {
@@ -279,7 +283,11 @@ impl AisCraftApp {
                 ui,
                 |ui| {
                     if trash {
-                        if ui.add(egui::Button::new(RichText::new("Endgültig löschen").color(t.danger))).on_hover_text("Lässt sich nicht rückgängig machen").clicked() {
+                        if ui
+                            .add(egui::Button::new(RichText::new("Endgültig löschen").color(t.danger)))
+                            .on_hover_text("Lässt sich nicht rückgängig machen")
+                            .clicked()
+                        {
                             self.dialog = Some(Dialog::PurgeChats(PurgeChats { ids: vec![c.id.clone()], what: format!("„{title}“"), forget_notes: false }));
                         }
                         if ui.button("Wiederherstellen").clicked() {

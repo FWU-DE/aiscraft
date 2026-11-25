@@ -124,7 +124,9 @@ fn right_click_archives_and_the_archive_restores() {
 
     // „Archiv (1)“ at the bottom of the sidebar opens the archive; „Wiederherstellen“ brings it back.
     click_until(&mut h, "Archiv (1)", "the archive page", |h| h.query_by_label("Nach Titel suchen").is_some() || h.query_by_label("Öffnen").is_some());
-    step_until(&mut h, "the archived chat is listed", |h| h.query_all_by_label("Kastanienfest planen").next().is_some() && h.query_by_label("Öffnen").is_some());
+    step_until(&mut h, "the archived chat is listed", |h| {
+        h.query_all_by_label("Kastanienfest planen").next().is_some() && h.query_by_label("Öffnen").is_some()
+    });
     click_until(&mut h, "Wiederherstellen", "the chat is back", |_| engine.state().conversation(&ids[0]).is_some_and(|c| !c.archived));
     step_until(&mut h, "back in the sidebar", |h| in_sidebar(h, "Kastanienfest planen"));
 }
@@ -145,7 +147,9 @@ fn undo_after_delete_brings_the_chat_back() {
     // The menu has closed: the dialog's button is the only „Löschen“.
     step_until(&mut h, "the context menu closes", |h| h.query_all_by_label("Löschen").count() == 1);
     click_until(&mut h, "Löschen", "the chat is in the trash", |_| engine.state().trash.iter().any(|c| c.id == ids[0]));
-    step_until(&mut h, "the toast offers „Rückgängig“", |h| h.query_by_label("Rückgängig").is_some() && h.query_all_by_label_contains("Gelöscht").next().is_some());
+    step_until(&mut h, "the toast offers „Rückgängig“", |h| {
+        h.query_by_label("Rückgängig").is_some() && h.query_all_by_label_contains("Gelöscht").next().is_some()
+    });
     assert!(!in_sidebar(&h, "Wandertag organisieren"), "gone from the sidebar");
     assert!(in_sidebar(&h, "Papierkorb (1)"), "the trash shows at the bottom");
     click_until(&mut h, "Rückgängig", "the chat is back", |_| engine.state().conversation(&ids[0]).is_some() && engine.state().trash.is_empty());

@@ -39,7 +39,6 @@ const MARKER: &str = "installed.json";
 const MODEL_REPO: &str = "onnx-community/gliner_multi_pii-v1";
 const MODEL_REV: &str = "2e0397a7e8a250d76c37122232b3cbde42c8d629";
 
-
 /// One file to download.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Part {

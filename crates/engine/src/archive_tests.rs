@@ -155,7 +155,8 @@ fn a_purged_chat_leaves_nothing_behind() {
     let map_key = format!("privacy.map.{conv}");
     assert!(engine.ctx().store(|st| st.setting(&map_key)).unwrap().is_some(), "Klaus was replaced");
     let note = engine.state().memory.iter().find(|n| n.text.contains("Kastanienfest")).cloned().expect("a note from the chat");
-    let doc = engine.call("artifact.create", json!({"kind": "document", "title": "Festplan", "content": "Ablauf"})).unwrap()["id"].as_str().unwrap().to_string();
+    let doc =
+        engine.call("artifact.create", json!({"kind": "document", "title": "Festplan", "content": "Ablauf"})).unwrap()["id"].as_str().unwrap().to_string();
     let words = ["Kastanienfest".to_string()];
 
     // In the trash, all is kept, for a restore.

@@ -9,10 +9,10 @@
 use std::path::Path;
 use std::sync::Mutex;
 
+use gliner::model::GLiNER;
 use gliner::model::input::text::TextInput;
 use gliner::model::params::Parameters;
 use gliner::model::pipeline::span::SpanMode;
-use gliner::model::GLiNER;
 use orp::params::RuntimeParameters;
 
 /// The label the model looks for. GLiNER is zero-shot; "person" is what the PII model was trained

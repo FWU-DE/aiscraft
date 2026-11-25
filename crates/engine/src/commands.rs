@@ -538,10 +538,18 @@ static COMMANDS: &[CommandSpec] = &[
         c.update(|s| s.open_artifact = None);
         Ok(json!({}))
     })),
-    cmd!("artifact.detach", "In eigenem Fenster öffnen", "Artefakte", None, "id?: string (sonst das offene), present?: bool (Whiteboard präsentieren)", true, |c, p| {
-        Box::pin(crate::windows::detach(c, p))
-    }),
-    cmd!("artifact.attach", "Zurück ins Panel", "Artefakte", None, "id?: string (sonst das zuletzt gelöste)", true, |c, p| Box::pin(crate::windows::attach(c, p))),
+    cmd!(
+        "artifact.detach",
+        "In eigenem Fenster öffnen",
+        "Artefakte",
+        None,
+        "id?: string (sonst das offene), present?: bool (Whiteboard präsentieren)",
+        true,
+        |c, p| { Box::pin(crate::windows::detach(c, p)) }
+    ),
+    cmd!("artifact.attach", "Zurück ins Panel", "Artefakte", None, "id?: string (sonst das zuletzt gelöste)", true, |c, p| Box::pin(crate::windows::attach(
+        c, p
+    ))),
     cmd!("artifact.window", "Fensterplatz merken", "Artefakte", None, "id: string, x: number, y: number, width: number, height: number", false, |c, p| {
         Box::pin(crate::windows::place(c, p))
     }),
@@ -552,13 +560,25 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("artifact.revise", "Mit KI überarbeiten", "Artefakte", None, "id: string, instruction: string", false, |c, p| Box::pin(crate::artifacts::revise(
         c, p
     ))),
-    cmd!("artifact.export", "Artefakt exportieren", "Artefakte", None, "id: string, format?: markdown|html|docx|pdf|json|png (png: nur Whiteboards), path?: string", false, |c, p| {
-        Box::pin(crate::artifacts::export(c, p))
-    }),
-    cmd!("artifact.export_paths", "Dateien zum Bereitstellen", "Artefakte", None, "id: string (je Eintrag: label, hint, format, variant, ext, suffix für artifact.export)", false, |c, p| {
-        Box::pin(crate::artifacts::export_paths_cmd(c, p))
-    }),
-    cmd!("artifact.versions", "Versionen","Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::versions(c, p))),
+    cmd!(
+        "artifact.export",
+        "Artefakt exportieren",
+        "Artefakte",
+        None,
+        "id: string, format?: markdown|html|docx|pdf|json|png (png: nur Whiteboards), path?: string",
+        false,
+        |c, p| { Box::pin(crate::artifacts::export(c, p)) }
+    ),
+    cmd!(
+        "artifact.export_paths",
+        "Dateien zum Bereitstellen",
+        "Artefakte",
+        None,
+        "id: string (je Eintrag: label, hint, format, variant, ext, suffix für artifact.export)",
+        false,
+        |c, p| { Box::pin(crate::artifacts::export_paths_cmd(c, p)) }
+    ),
+    cmd!("artifact.versions", "Versionen", "Artefakte", None, "id: string", false, |c, p| Box::pin(crate::artifacts::versions(c, p))),
     cmd!("artifact.restore", "Version wiederherstellen", "Artefakte", None, "id: string, version: number", false, |c, p| Box::pin(crate::artifacts::restore(
         c, p
     ))),

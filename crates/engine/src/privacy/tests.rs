@@ -345,8 +345,10 @@ fn file_server(engine: &Engine, files: Vec<(&'static str, Vec<u8>)>) -> (String,
                     let path = req.split_whitespace().nth(1).unwrap_or("").to_string();
                     match files.iter().find(|(p, _)| *p == path) {
                         Some((_, body)) => {
-                            let head =
-                                format!("HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\nconnection: close\r\ncontent-length: {}\r\n\r\n", body.len());
+                            let head = format!(
+                                "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\nconnection: close\r\ncontent-length: {}\r\n\r\n",
+                                body.len()
+                            );
                             let _ = sock.write_all(head.as_bytes()).await;
                             let _ = sock.write_all(body).await;
                         }
