@@ -220,6 +220,43 @@ fn temporary_chat_leaves_nothing_behind() {
     assert!(engine.call("chat.temporary", json!({"on": "ja"})).is_err());
 }
 
+/// #34: AIS.chat keeps every chat in its own history, so a temporary chat is only for other
+/// backends: it cannot be switched on with AIS.chat, nor moved there before or after the first
+/// message, and a normal chat with AIS.chat is unaffected.
+#[test]
+fn temporary_chat_is_not_offered_with_ais_chat() {
+    let (engine, _) = engine_with(plain);
+    let other = engine.state().selection.backend_id.clone();
+    assert!(engine.state().temporary_possible(&other));
+    assert!(!engine.state().temporary_possible("ais-chat"));
+
+    // Before the first message: switching AIS.chat in is refused, the selection stays.
+    engine.call("chat.temporary", json!({})).unwrap();
+    let err = engine.call("chat.select_model", json!({"backend": "ais-chat", "model": "m"})).unwrap_err();
+    assert!(err.message.contains("nur mit anderen Diensten"), "{}", err.message);
+    assert_eq!(engine.state().selection.backend_id, other);
+    assert!(engine.state().selection.temporary);
+
+    // Mid-chat: the temporary chat cannot move to AIS.chat either.
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let conv = engine.state().current.clone().unwrap();
+    assert!(engine.call("chat.select_model", json!({"backend": "ais-chat", "model": "m"})).is_err());
+    assert_eq!(engine.state().conversation(&conv).unwrap().backend_id, other);
+
+    // With AIS.chat selected, a temporary chat cannot be started.
+    engine.call("chat.new", json!({"backend": "ais-chat"})).unwrap();
+    assert!(!engine.state().selection.temporary);
+    let err = engine.call("chat.temporary", json!({})).unwrap_err();
+    assert!(err.message.contains("AIS.chat speichert"), "{}", err.message);
+    assert!(!engine.state().selection.temporary);
+    engine.call("chat.temporary", json!({"on": false})).unwrap();
+
+    // Even a selection that says temporary never creates a temporary chat at AIS.chat.
+    engine.ctx().update(|s| s.selection.temporary = true);
+    assert!(engine.call("chat.send", json!({"text": "Hallo"})).is_err());
+    assert!(engine.state().conversations.iter().all(|c| !(c.temporary && c.backend_id == "ais-chat")));
+}
+
 /// #41: finding in the open chat counts every hit, steps forward and back around the end, and
 /// forgets the search with the chat.
 #[test]

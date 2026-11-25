@@ -502,6 +502,11 @@ impl State {
     pub fn conversation(&self, id: &str) -> Option<&Conversation> {
         self.conversations.iter().find(|c| c.id == id)
     }
+    /// A temporary chat (#34) needs a backend that keeps no history of its own. AIS.chat stores
+    /// every chat in its own history, so there is none with it.
+    pub fn temporary_possible(&self, backend_id: &str) -> bool {
+        self.backend(backend_id).is_none_or(|b| b.config.kind != aiscraft_core::BackendKind::AisChat)
+    }
     pub fn share(&self, artifact: &str) -> Option<&CollabView> {
         self.collab.shares.iter().find(|s| s.artifact_id == artifact)
     }

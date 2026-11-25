@@ -889,6 +889,9 @@ async fn chat_temporary(c: Ctx, p: Value) -> Result<Value> {
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(Error::invalid("on muss true oder false sein")),
     };
+    if on && !c.state().temporary_possible(&c.state().selection.backend_id) {
+        return Err(crate::temporary::not_with_ais_chat());
+    }
     chat_new(c.clone(), json!({})).await?;
     if on {
         c.update(|s| {
@@ -967,6 +970,14 @@ async fn select_model(c: Ctx, p: Value) -> Result<Value> {
         return chat_new(c, json!({"backend": backend, "model": model})).await;
     }
     let current = state.current.clone();
+    // A temporary chat stays away from AIS.chat, which would keep it in its history.
+    let temporary = match &current {
+        Some(id) => state.conversation(id).is_some_and(|x| x.temporary),
+        None => state.selection.temporary,
+    };
+    if temporary && !state.temporary_possible(&backend) {
+        return Err(crate::temporary::not_with_ais_chat());
+    }
     c.update(|s| {
         s.selection.backend_id = backend.clone();
         s.selection.model_id = model.clone();

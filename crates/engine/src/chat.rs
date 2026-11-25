@@ -48,6 +48,9 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
     if sel.backend_id.is_empty() {
         return Err(Error::invalid("Kein Backend gewählt"));
     }
+    if sel.temporary && !state.temporary_possible(&sel.backend_id) {
+        return Err(crate::temporary::not_with_ais_chat());
+    }
     let now = now_ms();
     let conv = Conversation {
         id: new_id(),
