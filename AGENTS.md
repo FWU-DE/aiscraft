@@ -108,11 +108,11 @@ changes, the client breaks or misses features. **At least once per working week,
 release**, compare against the AIS.chat repository (`FWU-DE/ais-chat`, public, AGPL) and pull new
 features in.
 
-Last compared: **`d496d627c897` (2026-11-23)**. Update this line when you compare.
+Last compared: **`674c6be3fd5f` (2026-11-25)**. Update this line when you compare.
 
 ```sh
-gh api repos/FWU-DE/ais-chat/compare/d496d627c897...main --jq '.commits[].commit.message' | head -80
-gh api 'repos/FWU-DE/ais-chat/compare/d496d627c897...main' --jq '.files[].filename' | sort -u
+gh api repos/FWU-DE/ais-chat/compare/674c6be3fd5f...main --jq '.commits[].commit.message' | head -80
+gh api 'repos/FWU-DE/ais-chat/compare/674c6be3fd5f...main' --jq '.files[].filename' | sort -u
 ```
 
 What to check, in this order (paths in `FWU-DE/ais-chat`):
@@ -121,6 +121,7 @@ What to check, in this order (paths in `FWU-DE/ais-chat`):
 |---|---|---|
 | `sendChatMessageAction(conversationId, messages, modelId, fileIds, …)` and its result `{stream, messageId, error}` | `apps/chat-bot/src/app/api/chat/actions.ts`, `src/types/chat.ts` | `backends/src/aischat.rs` (`action_payload`, `map_action_event`) |
 | Stream format: text deltas, `\x1e`-prefixed `ai_activity` events | `src/utils/streaming.ts`, `src/types/ai-activity.ts` (`aiActivityStepSchema`, tool names) | `aischat.rs` (`activity_steps`, `tool_label`) |
+| Generated documents: `ai_activity` step `generateDocument` with `document: {fileName, title, format, content}`; for `docx` and `pdf` the content is **Markdown** (AIS.chat converts it in the browser), `html` a page | `api/chat/tools/generate-document-tool.ts`, `src/utils/files/generated-document*.ts` | `aischat.rs` (`GeneratedDocument`), `commands.rs` (`document_file_bytes`) |
 | Session cookie name, Auth.js config, 8 h lifetime | `src/auth/cookies.ts`, `src/auth/index.ts` | `SESSION_COOKIE`, `browser_login.rs` |
 | Models in the page payload (`llm_model` fields, `priceMetadata.type`); repeated objects come as back-references (`"$1f:0:props:models:0:priceMetadata"`), e.g. `defaultImageModel` on `/image-generation` | `packages/shared/src/db/schema.ts`, `llm-model-provider.tsx`, `image-generation/page.tsx`, `image-model-provider.tsx` | `rsc/src/scrape.rs` (`page_models`, `resolve_ref`) |
 | Favourites: `setFavoriteAction({entityType: assistant\|character\|learningScenario, entityId, isFavorite})`, shipped with the overview pages' JS | `(chat-bot)/actions/favorite-actions.ts`, `packages/shared/src/favorites/favorite-service.ts` | `AisChat::set_favorite`, `persona.favorite` |

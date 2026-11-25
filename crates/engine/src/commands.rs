@@ -1316,7 +1316,6 @@ async fn chat_export(c: Ctx, p: Value) -> Result<Value> {
 }
 
 async fn save_document(c: Ctx, p: Value) -> Result<Value> {
-    use base64::Engine as _;
     let mid = req_str(&p, "message_id")?;
     let step = p.get("step").and_then(Value::as_u64).ok_or_else(|| Error::invalid("step fehlt"))? as usize;
     let path = req_str(&p, "path")?;
@@ -1328,16 +1327,31 @@ async fn save_document(c: Ctx, p: Value) -> Result<Value> {
         .and_then(|m| m.activity.get(step))
         .and_then(|s| s.document.clone())
         .ok_or_else(|| Error::not_found("Dokument nicht gefunden"))?;
-    let binary = ["docx", "pptx", "xlsx", "pdf", "odt"].contains(&doc.format.as_str());
-    let bytes = if binary {
-        base64::engine::general_purpose::STANDARD.decode(doc.content.trim()).unwrap_or_else(|_| doc.content.into_bytes())
-    } else {
-        // Text documents: placeholders back to the names (#55).
-        crate::privacy::reveal(&c, c.state().current.as_deref().unwrap_or(""), &doc.content).into_bytes()
-    };
+    let bytes = document_file_bytes(&c, &doc)?;
     crate::disk::write(std::path::Path::new(&path), &bytes)?;
     c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
     Ok(json!({"path": path}))
+}
+
+/// The file of a document AIS.chat generated (`generateDocument`). For `docx` and `pdf` AIS.chat
+/// sends Markdown and converts it in the browser, so it is converted here (names shown again
+/// first, #55); content that already is such a file (base64 of a ZIP or PDF) is kept as it is.
+fn document_file_bytes(c: &Ctx, doc: &aiscraft_core::GeneratedDocument) -> Result<Vec<u8>> {
+    use base64::Engine as _;
+    let format = doc.format.to_ascii_lowercase();
+    if ["docx", "pptx", "xlsx", "pdf", "odt"].contains(&format.as_str())
+        && let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(doc.content.trim())
+        && (raw.starts_with(b"PK\x03\x04") || raw.starts_with(b"%PDF"))
+    {
+        return Ok(raw);
+    }
+    // Placeholders back to the names (#55).
+    let text = crate::privacy::reveal(c, c.state().current.as_deref().unwrap_or(""), &doc.content);
+    let title = if doc.title.trim().is_empty() { doc.file_name.rsplit_once('.').map_or(doc.file_name.as_str(), |(stem, _)| stem) } else { doc.title.as_str() };
+    match crate::office::document_bytes(&format, title, &text) {
+        Some(bytes) => bytes,
+        None => Ok(text.into_bytes()),
+    }
 }
 
 fn set_aspect(c: &Ctx, ratio: &str) -> Result<()> {
