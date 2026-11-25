@@ -19,6 +19,12 @@ log.workspace = true
 bytes = "1"
 base64 = "0.22"
 tokio-tungstenite = "0.30"
+# RSA signing of the service account JWT (Vertex). Already in the tree through rustls.
+ring = "0.17"
+
+[features]
+# The scripted Google of `vertex_fake`, for the engine's tests.
+test-support = []
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util"] }

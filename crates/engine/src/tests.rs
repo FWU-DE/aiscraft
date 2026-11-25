@@ -2322,3 +2322,46 @@ fn every_engine_file_write_goes_through_disk() {
     }
     assert!(offenders.is_empty(), "write files through crate::disk: {offenders:#?}");
 }
+
+/// Google Vertex AI: the key file signs in, the models are found by trying them (usable ones in
+/// the menu, the rest listed with the reason), the menu is there after a restart without a request,
+/// and a bad key file is named.
+#[test]
+fn vertex_signs_in_with_a_key_file_and_finds_its_models() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let (addr, seen) = rt.block_on(aiscraft_backends::vertex_fake::fake_google());
+    let dir = std::env::temp_dir().join(format!("aiscraft-vertex-{}", crate::new_id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let key = dir.join("schluessel.json");
+    std::fs::write(&key, aiscraft_backends::vertex_fake::fake_key(&addr)).unwrap();
+    let open = || Engine::open(Options { data_dir: Some(dir.clone()), secrets: Some(crate::Secrets::File(dir.join("secrets.json"))) }).unwrap();
+    let first = open();
+    let id = first.call("backend.add", json!({"kind": "vertex", "base_url": addr, "key_file": key})).unwrap()["id"].as_str().unwrap().to_string();
+    first.call("backend.check", json!({"id": id})).unwrap();
+    let view = first.state().backend(&id).cloned().unwrap();
+    assert_eq!(view.config.name, "Google Vertex AI");
+    let models: Vec<&str> = view.models.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(models, ["claude-opus-5-5", "google/gemini-2.5-flash"]);
+    let sonnet = view.model_checks.iter().find(|m| m.id == "claude-sonnet-5-5").unwrap();
+    assert!(!sonnet.usable && sonnet.reason.as_deref().unwrap_or_default().contains("nicht freigeschaltet"));
+    assert!(dir.join(format!("cache/{id}.models.json")).exists());
+    // The key is in the secret store, not in the database.
+    let stored = std::fs::read_to_string(dir.join("secrets.json")).unwrap_or_default();
+    assert!(stored.contains("client_email"));
+    let out = first.call("backend.models_check", json!({"id": id})).unwrap();
+    assert_eq!(out["usable"], 2);
+
+    let before = seen.lock().unwrap().len();
+    let second = open();
+    assert_eq!(second.state().backend(&id).map(|b| b.models.len()), Some(2), "the menu from the last run");
+    assert_eq!(seen.lock().unwrap().len(), before, "no request for it");
+
+    assert!(first.call("backend.login", json!({"id": id, "key_file": dir.join("fehlt.json")})).is_err());
+    std::fs::write(dir.join("anders.json"), r#"{"type": "authorized_user"}"#).unwrap();
+    let e = first.call("backend.login", json!({"id": id, "key_file": dir.join("anders.json")})).unwrap_err();
+    assert!(e.message.contains("kein Dienstkonto"), "{e:?}");
+    first.call("backend.login", json!({"id": id, "key_file": key})).unwrap();
+    assert!(matches!(first.state().backend(&id).unwrap().status, crate::BackendStatus::Ready { .. }));
+    drop((first, second));
+    let _ = std::fs::remove_dir_all(dir);
+}

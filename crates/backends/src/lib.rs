@@ -9,13 +9,16 @@ mod http;
 mod openai;
 pub mod picture;
 mod sse;
+pub mod vertex;
+#[cfg(any(test, feature = "test-support"))]
+pub mod vertex_fake;
 pub mod web;
 
 use std::sync::Arc;
 
 use aiscraft_core::{
-    AccountInfo, BackendConfig, BackendKind, Capabilities, ChatRequest, Error, ImageRequest, ImageResult, ModelInfo, PersonaInfo, RemoteConversation, Result,
-    StreamEvent,
+    AccountInfo, BackendConfig, BackendKind, Capabilities, ChatRequest, Error, ImageRequest, ImageResult, ModelCheck, ModelInfo, PersonaInfo,
+    RemoteConversation, Result, StreamEvent,
 };
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -55,6 +58,16 @@ pub trait Backend: Send + Sync {
     /// Ids remembered from an earlier run. A stale one is found again on its first use.
     fn seed_actions(&self, _ids: std::collections::BTreeMap<String, String>) {}
     fn models(&self) -> BoxFuture<'_, Result<Vec<ModelInfo>>>;
+    /// Every model tried and whether it worked (Vertex finds its usable models by trying them).
+    fn model_checks(&self) -> Vec<ModelCheck> {
+        Vec::new()
+    }
+    /// Checks remembered from an earlier run; an empty list forgets them (a new key).
+    fn seed_model_checks(&self, _checks: Vec<ModelCheck>) {}
+    /// Try every model again.
+    fn discover_models(&self) -> BoxFuture<'_, Result<Vec<ModelCheck>>> {
+        Box::pin(async { Err(Error::unsupported("Dieser Dienst prüft seine Modelle nicht einzeln")) })
+    }
     fn chat(&self, req: ChatRequest) -> BoxFuture<'_, Result<EventStream>>;
     /// Upload a file the server keeps; returns its id for [`aiscraft_core::Attachment::remote_id`].
     fn upload(&self, _name: String, _mime: String, _bytes: Vec<u8>) -> BoxFuture<'_, Result<String>> {
@@ -100,6 +113,10 @@ pub trait Backend: Send + Sync {
 /// Build a backend from its config and secret.
 pub fn build(config: BackendConfig, secret: Option<String>, on_secret: SecretSink) -> Result<Arc<dyn Backend>> {
     let base = config.base_url.trim().trim_end_matches('/').to_string();
+    if config.kind == BackendKind::Vertex {
+        // The "address" is a region (or a full address for tests).
+        return Ok(Arc::new(vertex::Vertex::new(config, secret)?));
+    }
     if config.kind == BackendKind::ClaudeCli {
         return Ok(Arc::new(claude_cli::ClaudeCli::new(config, base)?));
     }
@@ -111,5 +128,6 @@ pub fn build(config: BackendConfig, secret: Option<String>, on_secret: SecretSin
         BackendKind::OpenAi => Arc::new(openai::OpenAi::new(config, base, secret)?),
         BackendKind::Anthropic => Arc::new(anthropic::Anthropic::new(config, base, secret)?),
         BackendKind::ClaudeCli => Arc::new(claude_cli::ClaudeCli::new(config, base)?),
+        BackendKind::Vertex => Arc::new(vertex::Vertex::new(config, secret)?),
     })
 }

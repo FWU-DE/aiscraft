@@ -21,7 +21,8 @@ crates/
   rsc        L0  Next.js wire protocol: React Flight parser, server action ids, page payloads
   store      L1  SQLite (FTS5 search, artifacts, settings, usage); schema migrations in Store::init
   backends   L1  AIS.chat (session cookie + server action), OpenAI-compatible, Anthropic, Claude CLI,
-                 browser login (DevTools), SSE helpers
+                 Google Vertex AI (service account JWT, models found by trying them), browser login
+                 (DevTools), SSE helpers
   mcp        L1  MCP client (stdio, Streamable HTTP) for connectors
   board      L1  whiteboard: yrs CRDT model + egui widget + mind map layout
   voice      L1  recording, playback, transcription, text to speech (OpenAI, AIS.chat)

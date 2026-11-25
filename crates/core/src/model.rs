@@ -602,6 +602,10 @@ pub enum BackendKind {
     Anthropic,
     /// The local Claude Code CLI (`claude -p`), signed in with a claude.ai subscription.
     ClaudeCli,
+    /// Google Vertex AI, signed in with a service account key (JSON): Claude through Anthropic's
+    /// Messages API, Gemini through Vertex' OpenAI-compatible endpoint. The "address" is the
+    /// region (`global`, `us`, `eu`, `europe-west3`, …).
+    Vertex,
 }
 
 impl BackendKind {
@@ -611,6 +615,7 @@ impl BackendKind {
             BackendKind::OpenAi => "OpenAI-kompatibel",
             BackendKind::Anthropic => "Anthropic",
             BackendKind::ClaudeCli => "Claude-Abo (lokale CLI)",
+            BackendKind::Vertex => "Google Vertex AI",
         }
     }
     pub fn default_base_url(self) -> &'static str {
@@ -620,6 +625,8 @@ impl BackendKind {
             BackendKind::Anthropic => "https://api.anthropic.com",
             // For the CLI the "address" is the program to run.
             BackendKind::ClaudeCli => "claude",
+            // For Vertex the "address" is the region.
+            BackendKind::Vertex => "global",
         }
     }
     pub fn parse(s: &str) -> Option<Self> {
@@ -628,6 +635,7 @@ impl BackendKind {
             "openai" | "open_ai" => Some(BackendKind::OpenAi),
             "anthropic" => Some(BackendKind::Anthropic),
             "claude_cli" | "claude-cli" | "claude" => Some(BackendKind::ClaudeCli),
+            "vertex" | "vertex_ai" | "google_vertex" => Some(BackendKind::Vertex),
             _ => None,
         }
     }
@@ -666,6 +674,34 @@ pub struct ModelInfo {
     /// How many input tokens the model accepts, when the backend says so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+}
+
+/// The model answers through Anthropic's Messages API: Claude (API), or Claude on Vertex AI.
+/// Such models take documents with citations, thinking effort and are billed per token.
+pub fn speaks_anthropic(kind: BackendKind, model: &str) -> bool {
+    kind == BackendKind::Anthropic || (kind == BackendKind::Vertex && model.starts_with("claude-"))
+}
+
+impl Capabilities {
+    /// What one model of the backend can do: on Vertex AI only Claude searches the web itself.
+    pub fn for_model(mut self, kind: BackendKind, model: &str) -> Self {
+        if kind == BackendKind::Vertex && !model.starts_with("claude-") {
+            self.web_search = false;
+        }
+        self
+    }
+}
+
+/// The result of trying one model of a backend that finds its usable models itself (Vertex).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelCheck {
+    pub id: String,
+    pub name: String,
+    /// The test call worked: the model goes into the model menu.
+    pub usable: bool,
+    /// Why it is not usable ("Im Projekt nicht freigeschaltet", …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
