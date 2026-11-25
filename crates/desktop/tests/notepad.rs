@@ -39,13 +39,14 @@ fn drives_notepad_open_type_read_back_close_without_saving() {
     d.ready().unwrap();
     let path = d.locate("notepad.exe").expect("notepad.exe found");
     assert!(policy::program_refusal(&aiscraft_desktop::Program::new(&path), r"C:\Windows").is_none(), "{path}");
-    let before: Vec<String> = notepad_windows(d.as_ref()).into_iter().map(|w| w.id).collect();
+    // Windows 11 opens a new tab in a Notepad window that is already open, next to the person's
+    // own tabs. The test never works in someone's open Notepad.
+    if !notepad_windows(d.as_ref()).is_empty() {
+        eprintln!("skipped: Notepad is open; close every Notepad window first");
+        return;
+    }
     d.launch(&path).unwrap();
-    // Windows 11 may open a new tab in a Notepad window that is already open.
-    let win = wait("a Notepad window", || {
-        let all = notepad_windows(d.as_ref());
-        all.iter().find(|w| !before.contains(&w.id)).or_else(|| all.first()).cloned()
-    });
+    let win = wait("a Notepad window", || notepad_windows(d.as_ref()).into_iter().next());
     let snap = wait("the text area", || d.snapshot(&win.id).ok().filter(|s| document(s).is_some()));
     let doc = document(&snap).unwrap();
     let text = format!("Hallo von AIS.ChatCraft {}", std::process::id());
