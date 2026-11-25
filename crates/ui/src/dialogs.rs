@@ -90,6 +90,8 @@ pub enum Dialog {
         command: String,
         params: Value,
     },
+    /// Templates, connector results, research (#37, #53, #54).
+    Know(crate::know::KnowDialog),
 }
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
@@ -360,6 +362,9 @@ impl AisCraftApp {
                         .desired_width(f32::INFINITY),
                 );
                 ui.label(small_muted(&t, "Gehen an Dienste, die Kontext erlauben (nicht an AIS.chat über die Anmeldung)."));
+                if let Some(pid) = id.clone() {
+                    self.project_knowledge(ui, &pid);
+                }
                 ui.add_space(8.0);
                 let mut keep = true;
                 ui.horizontal(|ui| {
@@ -576,6 +581,7 @@ impl AisCraftApp {
                 });
                 keep
             }
+            Dialog::Know(d) => self.know_dialog(ui, d),
             Dialog::Confirm { text, command, params } => {
                 ui.label(RichText::new(text.as_str()).strong());
                 ui.add_space(8.0);

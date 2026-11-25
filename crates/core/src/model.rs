@@ -419,6 +419,13 @@ pub struct Sources {
     /// a message; the hint goes along again only when the style changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style_sent: Option<String>,
+    /// The project's files (#32): fitting parts go along with every message.
+    #[serde(default = "yes")]
+    pub knowledge: bool,
+    /// For backends that keep the chat on their server (AIS.chat): parts of project files sent
+    /// already (`file:chunk`), each goes along once per chat. Newest last, capped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub knowledge_sent: Vec<String>,
 }
 
 impl Default for Sources {
@@ -439,6 +446,8 @@ impl Default for Sources {
             style: None,
             style_sample: None,
             style_sent: None,
+            knowledge: true,
+            knowledge_sent: Vec::new(),
         }
     }
 }
@@ -466,6 +475,23 @@ pub struct Project {
     /// Custom instructions sent as the system prompt of every chat in the project.
     pub instructions: String,
     pub created_at: Millis,
+}
+
+/// A file in a project's knowledge (#32): its text is extracted on the device and searched; the
+/// fitting parts go along with every chat in the project.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectFile {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub mime: String,
+    /// Bytes of the original file.
+    pub size: u64,
+    /// Characters of the extracted text.
+    pub chars: u64,
+    /// The kept copy in the data folder.
+    pub path: String,
+    pub added_at: Millis,
 }
 
 /// What kind of artifact: a Markdown document, a whiteboard, a learning app (one self-contained

@@ -19,6 +19,9 @@ pub struct State {
     pub backends: Vec<BackendView>,
     pub conversations: Vec<Conversation>,
     pub projects: Vec<Project>,
+    /// Files in the projects' knowledge (#32), without their text.
+    #[serde(default)]
+    pub project_files: Vec<aiscraft_core::ProjectFile>,
     pub memory: Vec<MemoryNote>,
     /// The open conversation; `None` = a new chat that starts on the first message.
     pub current: Option<String>,
@@ -49,6 +52,9 @@ pub struct State {
     pub skills: Vec<crate::skills::Skill>,
     /// Dictation is recording.
     pub recording: bool,
+    /// The voice mode (#40), while it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice_mode: Option<crate::voice_mode::VoiceModeView>,
     /// Vault entries, without their secrets.
     pub vault: Vec<crate::vault::EntryInfo>,
     /// „Namen schützen“: class lists (without names) and the composer's preview (#55).
@@ -68,6 +74,15 @@ pub struct State {
     /// The update check: running version, what the last check found.
     #[serde(default)]
     pub update: UpdateState,
+    /// Research in the background (#37).
+    #[serde(default)]
+    pub research: crate::research::ResearchState,
+    /// Templates for recurring tasks (#54).
+    #[serde(default)]
+    pub templates: Vec<crate::templates::Template>,
+    /// Text for the composer from a template or a connector (#53, #54); the UI takes each `seq` once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer_fill: Option<crate::templates::ComposerFill>,
     /// Readability shown under answers (`message.readability`, #48), by message id.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub readability: BTreeMap<String, crate::readability::Readability>,

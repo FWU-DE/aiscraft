@@ -45,6 +45,9 @@ pub fn commands() -> &'static [CommandSpec] {
         all.extend(crate::ai_label::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::readability::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::attach::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::templates::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::research::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::voice_mode::COMMANDS.iter().map(CommandSpec::copy));
         all
     })
 }
@@ -254,11 +257,33 @@ static COMMANDS: &[CommandSpec] = &[
         });
         Ok(json!({}))
     })),
+    cmd!(
+        "project.file_add",
+        "Datei ins Projektwissen",
+        "Projekte",
+        None,
+        "project: string, path: string (PDF, Office, Text …; der Text wird auf dem Gerät gelesen)",
+        false,
+        |c, p| Box::pin(crate::knowledge::add(c, p))
+    ),
+    cmd!("project.file_remove", "Datei aus dem Projektwissen entfernen", "Projekte", None, "id: string", false, |c, p| Box::pin(async move {
+        crate::knowledge::remove(&c, &p)
+    })),
+    cmd!(
+        "project.files",
+        "Projektwissen anzeigen",
+        "Projekte",
+        None,
+        "project: string. Antwort: files, usage {tokens, window, percent, whole}",
+        false,
+        |c, p| Box::pin(async move { crate::knowledge::list(&c, &p) })
+    ),
     cmd!("project.delete", "Projekt löschen", "Projekte", None, "id: string", false, |c, p| Box::pin(async move {
         let id = req_str(&p, "id")?;
         c.store(|st| st.delete_project(&id))?;
         c.update(|s| {
             s.projects.retain(|x| x.id != id);
+            s.project_files.retain(|f| f.project_id != id);
             for conv in s.conversations.iter_mut().filter(|x| x.project_id.as_deref() == Some(&id)) {
                 conv.project_id = None;
             }
@@ -496,6 +521,15 @@ static COMMANDS: &[CommandSpec] = &[
     cmd!("connector.remove", "Konnektor entfernen", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::remove(c, p))),
     cmd!("connector.toggle", "Konnektor ein/aus", "Konnektoren", None, "id: string, enabled: bool", false, |c, p| Box::pin(crate::tools::toggle(c, p))),
     cmd!("connector.refresh", "Konnektor neu verbinden", "Konnektoren", None, "id: string", false, |c, p| Box::pin(crate::tools::refresh(c, p))),
+    cmd!(
+        "connector.insert",
+        "Konnektor-Ergebnis einfügen",
+        "Konnektoren",
+        None,
+        "tool: string (Name aus tools.list), arguments?: {…} (von der Person geschrieben). Nur lesende Werkzeuge; das Ergebnis kommt zur Prüfung ins Eingabefeld und geht erst beim Senden mit",
+        false,
+        |c, p| Box::pin(crate::tools::insert(c, p))
+    ),
     cmd!("tool.answer", "Werkzeugaufruf erlauben oder ablehnen", "Konnektoren", None, "id: string, allow: bool", false, |c, p| Box::pin(crate::tools::answer(
         c, p
     ))),
@@ -887,6 +921,7 @@ async fn set_sources(c: Ctx, p: Value) -> Result<Value> {
     src.web = flag("web", src.web);
     src.inline = flag("inline", src.inline);
     src.other_services = flag("other_services", src.other_services);
+    src.knowledge = flag("knowledge", src.knowledge);
     match p.get("protect") {
         Some(Value::Null) => src.protect = None,
         Some(Value::Bool(b)) => src.protect = Some(*b),

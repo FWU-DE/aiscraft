@@ -14,6 +14,7 @@
 mod docs;
 mod image;
 mod pdf;
+pub(crate) mod pdf_text;
 mod range;
 mod sheets;
 mod slides;

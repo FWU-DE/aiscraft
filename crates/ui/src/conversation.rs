@@ -1027,6 +1027,12 @@ impl AisCraftApp {
                     format!("Gehen am Anfang deiner nächsten Nachricht mit und bleiben im Verlauf bei {name}; danach nur, wenn sie sich ändern."),
                 ));
             }
+            if self.state.selection.project_id.as_ref().is_some_and(|p| self.state.project_files.iter().any(|f| &f.project_id == p)) {
+                let mut knowledge = src.knowledge;
+                if ui.checkbox(&mut knowledge, "Projektwissen (Dateien des Projekts)").changed() {
+                    set("knowledge", knowledge);
+                }
+            }
             let mut tools = src.tools;
             if ui.checkbox(&mut tools, "Werkzeuge (Dokumente, Whiteboards, Zeitpläne)").changed() {
                 set("tools", tools);
@@ -1385,6 +1391,7 @@ impl AisCraftApp {
             {
                 ui.label(small_muted(&t, format!("📄 {} geht als Kontext mit", a.title)));
             }
+            self.composer_bars(ui);
             if !image_mode {
                 self.privacy_preview(ui);
             }
@@ -1481,6 +1488,9 @@ impl AisCraftApp {
                     } else if ok {
                         *send = true;
                     }
+                }
+                if !image_mode && !self.state.recording {
+                    self.voice_mode_button(ui);
                 }
                 if self.state.recording {
                     if crate::kit::pill(ui, &t, crate::kit::Pill::Accent2, Some(crate::icons::Icon::Stop), "Diktat beenden", 13.5, None).clicked() {

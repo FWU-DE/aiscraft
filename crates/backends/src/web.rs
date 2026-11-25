@@ -110,6 +110,45 @@ fn redirect_target(url: &reqwest::Url, resp: &reqwest::Response) -> Result<reqwe
     parse(next.as_str())
 }
 
+/// One hit of a web search.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SearchHit {
+    pub title: String,
+    pub url: String,
+    pub snippet: String,
+}
+
+/// Search with a SearXNG server the person set up (`<base>/search?q=…&format=json`), for the
+/// research (#37). The address is the person's own choice, like a local model server, so it may
+/// be in the local network. Results are capped and only http(s) links kept.
+pub async fn search_searx(base: &str, query: &str, max: usize) -> Result<Vec<SearchHit>> {
+    let base = base.trim().trim_end_matches('/');
+    if !(base.starts_with("http://") || base.starts_with("https://")) {
+        return Err(Error::invalid(format!("Suchadresse muss mit https:// beginnen: {base}")));
+    }
+    let mut url = reqwest::Url::parse(&format!("{base}/search")).map_err(|_| Error::invalid(format!("Keine gültige Suchadresse: {base}")))?;
+    url.query_pairs_mut().append_pair("q", query).append_pair("format", "json").append_pair("language", "de");
+    let client = crate::http::client(true)?;
+    let resp = client.get(url).header(reqwest::header::ACCEPT, "application/json").timeout(TIMEOUT).send().await.map_err(crate::http::net_err)?;
+    if !resp.status().is_success() {
+        return Err(crate::http::status_error(resp, "Websuche").await);
+    }
+    let v = crate::http::json(resp, "Websuche").await?;
+    let mut out = Vec::new();
+    for r in v.get("results").and_then(serde_json::Value::as_array).into_iter().flatten() {
+        let s = |k: &str, cap: usize| r.get(k).and_then(serde_json::Value::as_str).unwrap_or("").trim().chars().take(cap).collect::<String>();
+        let link = s("url", 2000);
+        if !(link.starts_with("https://") || link.starts_with("http://")) || out.iter().any(|h: &SearchHit| h.url == link) {
+            continue;
+        }
+        out.push(SearchHit { title: s("title", 200), url: link, snippet: s("content", 600) });
+        if out.len() >= max {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// What a link check found out about one address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkState {
