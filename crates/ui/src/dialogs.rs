@@ -1421,6 +1421,18 @@ impl AisCraftApp {
                         self.transparency_picker(ui)
                     });
                 }
+                setting_row(ui, &t, "Warte-Animation", "Was ein Chat zeigt, bis die Antwort kommt. „Schlicht“ zeigt nur einen kleinen Kreisel, für weniger Bewegung.", |ui| {
+                    let current = self.state.settings.wait_animation.clone();
+                    let name = crate::waiting::CHOICES.iter().find(|(k, _)| *k == current).map(|(_, n)| *n).unwrap_or("Abwechselnd");
+                    egui::ComboBox::from_id_salt("wait-animation").selected_text(name).width(150.0).show_ui(ui, |ui| {
+                        for (key, label) in crate::waiting::CHOICES {
+                            if ui.selectable_label(key == current, label).clicked() && key != current {
+                                self.run("settings.set", json!({"key": "wait_animation", "value": key}));
+                            }
+                        }
+                    });
+                    crate::waiting::preview(ui, &t, &current);
+                });
                 setting_row(ui, &t, "Zoom", "Größe von Schrift und Bedienelementen, für Chats, Dokumente und die Seitenleiste.", |ui| {
                     let mut zoom = self.state.settings.zoom;
                     let r = ui.add(egui::Slider::new(&mut zoom, 0.7..=2.0).step_by(0.05).custom_formatter(|v, _| format!("{:.0} %", v * 100.0)));

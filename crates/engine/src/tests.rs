@@ -2582,6 +2582,14 @@ fn theme_setting_accepts_only_known_looks() {
     assert!(engine.call("settings.set", json!({"key": "transparency", "value": "fenster"})).is_err());
     engine.call("settings.set", json!({"key": "look_chosen", "value": true})).unwrap();
     assert!(engine.state().settings.look_chosen);
+    // The waiting animation: „Abwechselnd“ by default, each listed value kept, others refused.
+    assert_eq!(engine.state().settings.wait_animation, "mix");
+    for v in crate::state::WAIT_ANIMATIONS {
+        engine.call("settings.set", json!({"key": "wait_animation", "value": v})).unwrap();
+        assert_eq!(engine.state().settings.wait_animation, *v);
+    }
+    assert!(engine.call("settings.set", json!({"key": "wait_animation", "value": "feuerwerk"})).is_err());
+    assert_eq!(engine.state().settings.wait_animation, "plain", "a refused value changes nothing");
 }
 
 #[test]

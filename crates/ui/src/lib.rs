@@ -43,6 +43,7 @@ pub mod theme;
 mod trust_rules;
 mod update;
 mod views;
+pub mod waiting;
 mod widgets;
 mod windows;
 pub mod worksheet;

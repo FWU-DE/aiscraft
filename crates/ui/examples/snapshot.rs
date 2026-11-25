@@ -10,7 +10,9 @@
 //!
 //! `--demo` starts a local OpenAI-compatible server that streams a Markdown answer, adds it as a
 //! backend and fills projects, notes and a few chats (a prompt with "Formel" gets formulas and
-//! Mermaid diagrams, "Arbeitsblatt Bruchrechnung" a worksheet block, "Lern-App" an html
+//! Mermaid diagrams, "Geduld" waits a minute before answering, so
+//! `["dispatch:chat.send", {"text": "Geduld bitte"}]` shows the waiting animation,
+//! "Arbeitsblatt Bruchrechnung" a worksheet block, "Lern-App" an html
 //! block; `worksheet.request`/`learning_app.request` go through the tools; "Linkliste" one working and one dead link). `--demo-ais` adds a local stand-in for
 //! AIS.chat (assistants, characters, learning scenarios, image generation, a plot answer for
 //! prompts with "Parabel"), with a catalogue of placeholder portraits for the "Entdecken" page, with
@@ -92,6 +94,10 @@ fn demo_server(engine: &Engine) -> String {
                         let body = r#"{"data":[{"id":"demo-sonnet","name":"Demo Sonnet","context_length":200000},{"id":"demo-haiku","name":"Demo Haiku"}]}"#;
                         let _ = sock.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
                         return;
+                    }
+                    // "Geduld": take a minute before answering, to see the waiting animation.
+                    if req.contains("Geduld") {
+                        tokio::time::sleep(Duration::from_secs(60)).await;
                     }
                     let _ = sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
                     // "Ferien" + the page reader: read the demo's own page, then answer with it as the source.
