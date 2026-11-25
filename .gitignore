@@ -1,3 +1,5 @@
 /target
 **/*.rs.bk
 .env
+# Local build of the optional H5P player (GPL parts, never committed; packaging/h5p-player/build.sh)
+/dist

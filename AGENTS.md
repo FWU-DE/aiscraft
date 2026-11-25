@@ -35,8 +35,11 @@ apps/
   aiscraft-cli  CLI (chat, login, status, search, export, `call`, `mcp` server)
   aiscraft-collab-server  relay for live collaboration (rooms on disk, compaction, /healthz)
   aiscraft-preview  HTML preview of one learning app (wry webview, own process, CSP, no network,
-                    no navigation), and connector views (MCP Apps, `--bridge`: JSON-RPC over
-                    stdin/stdout, network only to declared domains); needs WebKitGTK 4.1 on Linux
+                    no navigation), connector views (MCP Apps, `--bridge`: JSON-RPC over
+                    stdin/stdout, network only to declared domains) and H5P content in the
+                    optional H5P player (`--h5p`, own `aiscraft-h5p` protocol, #62; the player is
+                    a GPL download built by packaging/h5p-player, never in the app package);
+                    needs WebKitGTK 4.1 on Linux
 deploy/autocraft  Coolify compose for AutoCraft
 deploy/collab     Dockerfile and Coolify compose for the collab relay
 docs/craft-libs.md  which shared Craft libraries we use, defer or reject, and why

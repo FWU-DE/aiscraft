@@ -86,6 +86,9 @@ pub struct State {
     /// The update check: running version, what the last check found.
     #[serde(default)]
     pub update: UpdateState,
+    /// The optional H5P player (#62): installed or not, and whether it can be shown here.
+    #[serde(default)]
+    pub h5p_player: crate::learn::h5p_player::PlayerState,
     /// Research in the background (#37).
     #[serde(default)]
     pub research: crate::research::ResearchState,

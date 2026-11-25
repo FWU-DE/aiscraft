@@ -847,3 +847,156 @@ fn h5p_files_open_edit_and_save_back() {
     assert_eq!(engine.call("h5p.export", json!({"id": id})).unwrap_err().kind, aiscraft_core::ErrorKind::NotFound);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+// ---- H5P player (#62) ------------------------------------------------------------------------
+
+/// A player bundle as `packaging/h5p-player/build.sh` makes it (without the real code).
+fn player_bundle(extra: &[(&str, &[u8])]) -> Vec<u8> {
+    let manifest =
+        json!({"name": "aiscraft-h5p-player", "version": 1, "h5p_standalone": "3.8.2", "libraries": ["H5P.QuestionSet 1.20.31", "FontAwesome 4.5.6"]});
+    let mut entries: Vec<(&str, Vec<u8>)> = vec![
+        ("manifest.json", manifest.to_string().into_bytes()),
+        ("player/main.bundle.js", b"/* h5p-standalone */".to_vec()),
+        ("player/frame.bundle.js", b"/* frame */".to_vec()),
+        ("player/styles/h5p.css", b"body{}".to_vec()),
+        ("libraries/H5P.QuestionSet-1.20/library.json", b"{}".to_vec()),
+        ("LICENSES/GPL-3.0.txt", b"GNU GENERAL PUBLIC LICENSE".to_vec()),
+    ];
+    entries.extend(extra.iter().map(|(n, d)| (*n, d.to_vec())));
+    let refs: Vec<(&str, &[u8])> = entries.iter().map(|(n, d)| (*n, d.as_slice())).collect();
+    package(&refs)
+}
+
+/// The optional H5P player: downloaded only with a yes, checked against the release's
+/// SHA256SUMS.txt (and a pinned hash), unpacked as hostile input, shown in the status, removed;
+/// „Im Player ansehen“ writes the content for the preview and opens no window in tests.
+#[test]
+fn h5p_player_install_check_play_and_remove() {
+    use aiscraft_core::ErrorKind;
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    // What the scripted release serves: (SHA256SUMS.txt, zip).
+    let served = std::sync::Arc::new(std::sync::Mutex::new((String::new(), Vec::<u8>::new())));
+    let s2 = served.clone();
+    let (url, seen) = crate::know_tests::scripted(&engine, move |line, _| {
+        let (sums, zip) = s2.lock().unwrap().clone();
+        if line.contains("/SHA256SUMS.txt") {
+            ("text/plain".into(), sums.into_bytes())
+        } else if line.contains("/aiscraft-h5p-player-1.zip") {
+            ("application/zip".into(), zip)
+        } else {
+            ("text/plain".into(), Vec::new())
+        }
+    });
+    let serve =
+        |zip: &[u8], hash: &str| *served.lock().unwrap() = (format!("{hash}  aiscraft-h5p-player-1.zip\n{}  anderes.zip\n", "0".repeat(64)), zip.to_vec());
+    let good = player_bundle(&[]);
+    let good_hash = crate::learn::h5p_player::sha256_hex(&good);
+
+    // Engines in memory download nothing until a test hands them a local server.
+    assert_eq!(engine.call("h5p.player_install", json!({"yes": true})).unwrap_err().kind, ErrorKind::Unsupported);
+    assert!(engine.set_h5p_player_source("https://example.org/x", None).is_err(), "only local servers");
+    engine.set_h5p_player_source(&url, None).unwrap();
+    let st = engine.call("h5p.player_status", json!({})).unwrap();
+    assert_eq!((st["installed"].clone(), st["can_download"].clone(), st["preview"].clone()), (json!(false), json!(true), json!(false)), "{st}");
+    assert!(st["license"].as_str().unwrap().contains("GPL-3.0") && st["source"].as_str().unwrap().contains("h5p-player-v1"));
+
+    // H5P content to look at; without the player „Im Player ansehen“ says how to get it.
+    let id = engine.call("h5p.create", json!({"content": h5p_json().to_string()})).unwrap()["id"].as_str().unwrap().to_string();
+    let e = engine.call("h5p.play", json!({"id": id})).unwrap_err();
+    assert!(e.kind == ErrorKind::NotFound && e.message.contains("H5P-Player laden"), "{}", e.message);
+
+    // No yes, no download.
+    serve(&good, &good_hash);
+    for p in [json!({}), json!({"yes": false}), json!({"yes": "ja"})] {
+        let e = engine.call("h5p.player_install", p).unwrap_err();
+        assert!(e.kind == ErrorKind::Refused && e.message.contains("GPL-3.0") && e.message.contains("MB"), "{}", e.message);
+    }
+    assert!(seen.lock().unwrap().is_empty(), "nothing was requested without a yes");
+
+    // A wrong checksum: refused, nothing installed.
+    serve(&good, &"a".repeat(64));
+    let e = engine.call("h5p.player_install", json!({"yes": true})).unwrap_err();
+    assert!(e.kind == ErrorKind::Refused && e.message.contains("Prüfsumme"), "{}", e.message);
+    assert_eq!(engine.call("h5p.player_status", json!({})).unwrap()["installed"], false);
+    assert!(!engine.state().h5p_player.installing);
+    // A sums file that does not name the bundle.
+    *served.lock().unwrap() = (format!("{good_hash}  etwas-anderes.zip\n"), good.clone());
+    assert_eq!(engine.call("h5p.player_install", json!({"yes": true})).unwrap_err().kind, ErrorKind::Protocol);
+    // A hash pinned in code that differs from the published one: refused before the zip loads.
+    engine.set_h5p_player_source(&url, Some(&"b".repeat(64))).unwrap();
+    serve(&good, &good_hash);
+    seen.lock().unwrap().clear();
+    assert_eq!(engine.call("h5p.player_install", json!({"yes": true})).unwrap_err().kind, ErrorKind::Refused);
+    assert!(seen.lock().unwrap().iter().all(|s| !s.line.contains(".zip")), "the zip was not loaded");
+
+    // The right checksum (and the matching pin): installed.
+    engine.set_h5p_player_source(&url, Some(&good_hash.to_uppercase())).unwrap();
+    let out = engine.call("h5p.player_install", json!({"yes": true})).unwrap();
+    assert_eq!((out["installed"].clone(), out["sha256"].clone()), (json!(true), json!(good_hash)), "{out}");
+    let st = engine.call("h5p.player_status", json!({})).unwrap();
+    assert_eq!((st["installed"].clone(), st["version"].clone(), st["libraries"].clone()), (json!(true), json!(1), json!(2)), "{st}");
+    assert_eq!(st["bytes"], good.len());
+    let dir = std::path::PathBuf::from(st["path"].as_str().unwrap());
+    assert!(dir.join("player/main.bundle.js").is_file() && dir.join("LICENSES/GPL-3.0.txt").is_file());
+
+    // A bundle with a file that does not belong, and one without the player: refused, the
+    // installed one stays.
+    engine.set_h5p_player_source(&url, None).unwrap();
+    for bad in [player_bundle(&[("player/run.exe", b"MZ")]), package(&[("manifest.json", b"{\"name\":\"aiscraft-h5p-player\",\"version\":1}")])] {
+        serve(&bad, &crate::learn::h5p_player::sha256_hex(&bad));
+        assert_eq!(engine.call("h5p.player_install", json!({"yes": true})).unwrap_err().kind, ErrorKind::Invalid);
+        assert!(dir.join("player/main.bundle.js").is_file());
+    }
+    assert!(engine.state().h5p_player.installed);
+
+    // „Im Player ansehen“: the content is written for the preview; tests open no window.
+    let e = engine.call("h5p.play", json!({"id": id})).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Unsupported, "{}", e.message);
+    let content = crate::learn::h5p_player::content_dir(engine.ctx(), &id);
+    let meta: Value = serde_json::from_slice(&std::fs::read(content.join("h5p.json")).unwrap()).unwrap();
+    assert_eq!(meta["mainLibrary"], "H5P.QuestionSet");
+    assert!(content.join("content/content.json").is_file());
+    assert!(engine.call("h5p.play", json!({"id": "nope"})).is_err());
+    // An imported package brings its libraries along, under libraries/.
+    let pkg = package(&[
+        ("h5p.json", br#"{"title":"Mit Bild","mainLibrary":"H5P.TrueFalse","preloadedDependencies":[{"machineName":"H5P.TrueFalse","majorVersion":1,"minorVersion":8}]}"#),
+        ("content/content.json", br#"{"question":"<p>Ja?</p>","correct":"true"}"#),
+        ("content/images/a.png", b"\x89PNG"),
+        ("H5P.TrueFalse-1.8/library.json", b"{}"),
+    ]);
+    assert_eq!(crate::learn::h5p_player::unpack_content(&pkg, &content).unwrap(), 4);
+    assert!(content.join("content/images/a.png").is_file() && content.join("libraries/H5P.TrueFalse-1.8/library.json").is_file());
+    assert!(crate::learn::h5p_player::unpack_content(&package(&[("h5p.json", b"{}")]), &content).is_err());
+
+    // Removed; removing again says so.
+    assert_eq!(engine.call("h5p.player_remove", json!({})).unwrap()["removed"], true);
+    assert!(!dir.exists());
+    assert_eq!(engine.call("h5p.player_status", json!({})).unwrap()["installed"], false);
+    assert_eq!(engine.call("h5p.player_remove", json!({})).unwrap()["removed"], false);
+    let _ = std::fs::remove_dir_all(content);
+}
+
+/// A bundle built by `packaging/h5p-player/build.sh` installs: run with
+/// `AISCRAFT_H5P_BUNDLE=dist/h5p-player cargo test -p aiscraft-engine -- --ignored real_h5p_player_bundle`
+/// (the folder with the zip and SHA256SUMS.txt; served from a local server, no network).
+#[test]
+#[ignore]
+fn real_h5p_player_bundle_installs() {
+    let dir = std::path::PathBuf::from(std::env::var("AISCRAFT_H5P_BUNDLE").expect("AISCRAFT_H5P_BUNDLE: Ordner mit dem gebauten H5P-Player"));
+    let zip = std::fs::read(dir.join(crate::learn::h5p_player::ASSET)).unwrap();
+    let sums = std::fs::read_to_string(dir.join("SHA256SUMS.txt")).unwrap();
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let (url, _) = crate::know_tests::scripted(&engine, move |line, _| {
+        if line.contains("/SHA256SUMS.txt") { ("text/plain".into(), sums.clone().into_bytes()) } else { ("application/zip".into(), zip.clone()) }
+    });
+    engine.set_h5p_player_source(&url, None).unwrap();
+    let out = engine.call("h5p.player_install", json!({"yes": true})).unwrap();
+    assert_eq!(out["installed"], true, "{out}");
+    let st = engine.call("h5p.player_status", json!({})).unwrap();
+    assert!(st["libraries"].as_u64().unwrap() >= 5, "{st}");
+    let installed = std::path::PathBuf::from(st["path"].as_str().unwrap());
+    for lib in ["H5P.QuestionSet-1.20", "H5P.MultiChoice-1.16", "H5P.TrueFalse-1.8", "H5P.Blanks-1.14", "H5P.DragText-1.10"] {
+        assert!(installed.join("libraries").join(lib).join("library.json").is_file(), "{lib}");
+    }
+    engine.call("h5p.player_remove", json!({})).unwrap();
+}

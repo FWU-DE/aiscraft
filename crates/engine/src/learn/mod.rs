@@ -21,6 +21,7 @@ pub mod board;
 pub mod calendar;
 pub mod formats;
 pub mod h5p;
+pub mod h5p_player;
 pub mod print;
 
 use std::path::{Path, PathBuf};
@@ -523,11 +524,24 @@ fn open_copy(c: &Ctx, a: &Artifact, ext: &str, bytes: &[u8]) -> Result<PathBuf> 
 
 /// Shows a local HTML file: in the preview window when it is installed, else in the browser.
 fn show_html(c: &Ctx, path: &Path, title: &str) -> Result<&'static str> {
-    let preview = c.0.preview.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
-    if let Some(bin) = preview.filter(|b| b.is_file()) {
+    if spawn_preview(c, &[std::ffi::OsStr::new("--file"), path.as_os_str()], title) {
+        return Ok("preview");
+    }
+    system_open(path)?;
+    Ok("browser")
+}
+
+/// The preview program, when it is installed (feature `preview` of the app).
+pub(crate) fn preview_program(c: &Ctx) -> Option<PathBuf> {
+    c.0.preview.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone().filter(|b| b.is_file())
+}
+
+/// Starts the preview program with `args` and a window title; false when it is not installed
+/// or did not start.
+pub(crate) fn spawn_preview(c: &Ctx, args: &[&std::ffi::OsStr], title: &str) -> bool {
+    if let Some(bin) = preview_program(c) {
         let child = std::process::Command::new(&bin)
-            .arg("--file")
-            .arg(path)
+            .args(args)
             .arg("--title")
             .arg(title.chars().take(80).collect::<String>())
             .arg("--watch-stdin")
@@ -552,13 +566,12 @@ fn show_html(c: &Ctx, path: &Path, title: &str) -> Result<&'static str> {
                         ctx.notice(NoticeLevel::Warning, preview_gone_message(code));
                     }
                 });
-                return Ok("preview");
+                return true;
             }
             Err(e) => log::warn!("aiscraft-preview: {e}"),
         }
     }
-    system_open(path)?;
-    Ok("browser")
+    false
 }
 
 /// Whether the preview process `pid` has ended with an error; then it is forgotten, and the

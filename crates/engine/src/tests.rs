@@ -1089,7 +1089,9 @@ fn every_command_has_a_functional_test() {
         include_str!("ext/plugin_tests.rs"),
         include_str!("apps_tests.rs"),
         include_str!("chat_import.rs")
-    );
+    )
+    // A Windows checkout may have CRLF line ends in some files and LF in others.
+    .replace("\r\n", "\n");
     // The panic hunt touches every command; count only calls outside it.
     let hunt_start = src.find("fn panic_hunt_every_command_with_hostile_params").unwrap_or(0);
     let hunt_end = src[hunt_start..].find("\n}\n").map(|e| hunt_start + e).unwrap_or(hunt_start);

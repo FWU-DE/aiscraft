@@ -175,6 +175,11 @@ pub(crate) struct Inner {
     pub(crate) preview: Mutex<Option<PathBuf>>,
     /// Running previews; they exit when their stdin (held here) closes.
     pub(crate) previews: Mutex<Vec<std::process::Child>>,
+    /// The optional H5P player (#62), unpacked (`<data>/h5p-player`).
+    pub(crate) h5p_player_dir: PathBuf,
+    /// Where the H5P player is downloaded from; `None` for engines in memory unless a test
+    /// hands them a local server.
+    pub(crate) h5p_player_source: Mutex<Option<learn::h5p_player::Source>>,
     /// Cached pictures of assistants, characters and scenarios (`<data>/personas`).
     pub(crate) pictures_dir: PathBuf,
     /// Per-backend cache kept across restarts (AIS.chat action ids, the persona list), so the
@@ -282,6 +287,13 @@ impl Engine {
             preview: Mutex::new(None),
             privacy_maps: Mutex::new(HashMap::new()),
             previews: Mutex::new(Vec::new()),
+            // Engines in memory get a folder of their own, so tests never share an install.
+            h5p_player_dir: opts
+                .data_dir
+                .clone()
+                .map(|d| d.join("h5p-player"))
+                .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-h5p-player-{}", new_id()))),
+            h5p_player_source: Mutex::new((opts.data_dir.is_some() && !cfg!(test)).then(learn::h5p_player::Source::github)),
             attachments_dir: opts
                 .data_dir
                 .clone()
@@ -322,6 +334,7 @@ impl Engine {
             tools::settle_claims(&engine.ctx);
             privacy::refresh(&engine.ctx);
             update::start(&engine.ctx);
+            learn::h5p_player::refresh(&engine.ctx);
             #[cfg(feature = "collab")]
             collab::load(&engine.ctx);
         }
@@ -336,6 +349,23 @@ impl Engine {
     /// Without it, learning apps open in the system browser.
     pub fn set_preview_program(&self, path: Option<PathBuf>) {
         *self.ctx.0.preview.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = path;
+        learn::h5p_player::refresh(&self.ctx);
+    }
+
+    /// Download the H5P player from a local server instead of the GitHub release (tests and the
+    /// offscreen demo): `base` is the folder holding `SHA256SUMS.txt` and the zip, `pinned` the
+    /// SHA-256 the code would pin. Only `http://127.0.0.1:…`, only for engines in memory.
+    pub fn set_h5p_player_source(&self, base: &str, pinned: Option<&str>) -> Result<()> {
+        if self.ctx.0.pictures_online {
+            return Err(Error::refused("Nur ohne Datenordner (Tests, Vorschau) erlaubt"));
+        }
+        if !(base.starts_with("http://127.0.0.1:") || base.starts_with("http://localhost:")) {
+            return Err(Error::invalid("Nur ein lokaler Server (http://127.0.0.1:…) ist erlaubt"));
+        }
+        let source = learn::h5p_player::Source { base: base.trim_end_matches('/').to_string(), pinned: pinned.map(str::to_string) };
+        *self.ctx.0.h5p_player_source.lock().unwrap_or_else(PoisonError::into_inner) = Some(source);
+        learn::h5p_player::refresh(&self.ctx);
+        Ok(())
     }
 
     /// The current state. Cheap: an `Arc` that stays valid while the engine moves on.
