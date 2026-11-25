@@ -591,3 +591,57 @@ fn each_app_reads_its_own_omarchy_theme() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An expired AIS.chat session offers "Neu anmelden" in Einstellungen › Dienste, not "Abmelden".
+#[test]
+fn expired_ais_session_offers_sign_in_again() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let engine = Engine::open(Options { data_dir: None, secrets: Some(aiscraft_engine::Secrets::memory()) }).unwrap();
+    let valid = std::sync::Arc::new(AtomicBool::new(true));
+    let v = valid.clone();
+    let base = engine.block_on(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                let v = v.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 1 << 16];
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let authed = v.load(Ordering::SeqCst) && req.contains("ais-chat-app.authjs.session-token=good");
+                    let (status, ctype, body) = if !authed {
+                        ("307 Temporary Redirect\r\nlocation: /login", "text/plain", String::new())
+                    } else if req.starts_with("GET /api/auth/session") {
+                        ("200 OK", "application/json", r#"{"user":{"firstName":"Ada","lastName":"Lehrerin"},"expires":"2030-01-01"}"#.to_string())
+                    } else if req.starts_with("GET / ") {
+                        let row = r#"3:{"usedBudget":250,"maxBudget":1000,"models":[{"id":"m-uuid","name":"gpt","displayName":"GPT","priceMetadata":{"type":"text"}}]}"#;
+                        ("200 OK", "text/html", format!("<script>self.__next_f.push([1,{}])</script>", serde_json::to_string(&format!("{row}\n")).unwrap()))
+                    } else {
+                        ("200 OK", "application/json", "{}".to_string())
+                    };
+                    let _ = sock.write_all(format!("HTTP/1.1 {status}\r\ncontent-type: {ctype}\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{body}", body.len()).as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    });
+    engine.call("backend.update", serde_json::json!({"id": "ais-chat", "base_url": base})).unwrap();
+    engine.call("backend.login", serde_json::json!({"id": "ais-chat", "secret": "good"})).unwrap();
+    // The session runs out on the server.
+    valid.store(false, Ordering::SeqCst);
+    let _ = engine.call("backend.check", serde_json::json!({"id": "ais-chat"}));
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| {
+        s.backend("ais-chat").is_some_and(|b| {
+            b.has_secret && matches!(b.status, aiscraft_engine::BackendStatus::SignedOut { .. } | aiscraft_engine::BackendStatus::Failed { .. })
+        })
+    }));
+    let mut h = harness(&engine);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Comma);
+    step_until(&mut h, "the Dienste tab", |h| h.query_by_label("Neu anmelden").is_some());
+    assert!(h.query_by_label("Abmelden").is_none(), "no sign-out for an expired session");
+    h.get_by_label("Neu anmelden").click();
+    step_until(&mut h, "the sign-in dialog", |h| h.query_by_label_contains("Im Browser anmelden").is_some());
+}

@@ -833,6 +833,11 @@ impl AisCraftApp {
                                 let is_ais = b.config.kind == BackendKind::AisChat;
                                 if b.config.kind == BackendKind::ClaudeCli {
                                     // Signed in through `claude auth login`; nothing to store here.
+                                } else if is_ais && b.has_secret && matches!(b.status, BackendStatus::SignedOut { .. } | BackendStatus::Failed { .. }) {
+                                    // The session ran out: signing in again is what's needed, not signing out.
+                                    if action(ui, "Neu anmelden").clicked() {
+                                        self.dialog = Some(Dialog::login(&b.config.id));
+                                    }
                                 } else if b.has_secret {
                                     if action(ui, if is_ais { "Abmelden" } else { "Schlüssel entfernen" }).clicked() {
                                         self.run("backend.logout", json!({"id": b.config.id}));
