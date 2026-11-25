@@ -140,7 +140,7 @@ impl AisCraftApp {
         let mut open = true;
         let mut open_file = false;
         let screen = ctx.content_rect();
-        egui::Window::new(RichText::new("Beleg").strong())
+        let shown = egui::Window::new(RichText::new("Beleg").strong())
             .id(egui::Id::unique("citation"))
             .open(&mut open)
             .collapsible(false)
@@ -191,6 +191,10 @@ impl AisCraftApp {
                     ui.label(small_muted(&t, note));
                 }
             });
+        // A click beside the passage closes it, as beside a dialog.
+        if shown.is_some_and(|r| r.response.clicked_elsewhere()) {
+            open = false;
+        }
         if open_file {
             self.run("message.citation_file", json!({}));
         }
