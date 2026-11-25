@@ -304,10 +304,11 @@ impl AisChat {
         pages
     }
 
-    async fn session_user_id(&self) -> Option<String> {
-        let resp = self.send(self.request(Method::GET, "/api/auth/session").ok()?).await.ok()?;
-        let v = read_json(resp, "Sitzung").await.ok()?;
-        v.pointer("/user/id").and_then(Value::as_str).map(str::to_string)
+    /// Who is signed in; an empty [`Viewer`] when the session cannot be read.
+    async fn session_viewer(&self) -> Viewer {
+        let Ok(rb) = self.request(Method::GET, "/api/auth/session") else { return Viewer::default() };
+        let Ok(resp) = self.send(rb).await else { return Viewer::default() };
+        read_json(resp, "Sitzung").await.map(|v| Viewer::from_session(&v)).unwrap_or_default()
     }
 
     /// Fetch a generated image: a path on AIS.chat (with the session), a signed storage URL
@@ -375,9 +376,101 @@ pub fn server_result(v: Value) -> Result<Value> {
     }
 }
 
+/// Who is signed in, as far as the lists need it (from `/api/auth/session`).
+#[derive(Debug, Clone, Default)]
+pub struct Viewer {
+    pub id: Option<String>,
+    /// The person's schools (`user.schoolIds`); `None` when the session does not say.
+    pub school_ids: Option<Vec<String>>,
+    /// The state's `isShareTemplateWithSchoolEnabled`; `None` when the session does not say.
+    pub school_sharing: Option<bool>,
+}
+
+impl Viewer {
+    /// Read from the session JSON (`{user: {id, schoolIds, federalState: {featureToggles}}}`).
+    pub fn from_session(v: &Value) -> Viewer {
+        let user = v.get("user");
+        Viewer {
+            id: user.and_then(|u| u.get("id")).and_then(Value::as_str).map(str::to_string),
+            school_ids: user
+                .and_then(|u| u.get("schoolIds"))
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).take(50).map(str::to_string).collect()),
+            school_sharing: user.and_then(|u| u.pointer("/federalState/featureToggles/isShareTemplateWithSchoolEnabled")).and_then(Value::as_bool),
+        }
+    }
+
+    /// Where AIS.chat's tabs list an entity of the „all“ list. „Schulintern“ is what
+    /// `getAssistantsByOverviewFilter("school")` returns: shared within the school, or with the
+    /// community by someone from one of the person's schools (`ownerSchoolIds`); only while
+    /// the state allows sharing within schools.
+    fn sharing(&self, o: &Value) -> aiscraft_core::PersonaSharing {
+        let flag = |k: &str| o.get(k).and_then(Value::as_bool) == Some(true);
+        let (school_shared, community) = (flag("isSchoolShared"), flag("isCommunityShared"));
+        let owner: Option<Vec<&str>> = o.get("ownerSchoolIds").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect());
+        let same_school = match (&self.school_ids, owner) {
+            (Some(mine), Some(theirs)) => Some(theirs.iter().any(|s| mine.iter().any(|m| m == s))),
+            _ => None,
+        };
+        let school = self.school_sharing != Some(false)
+            && match same_school {
+                Some(true) => school_shared || community,
+                Some(false) => false,
+                // Without the school ids the list itself is the best guess: AIS.chat sends
+                // school-shared ones only to people of that school.
+                None => school_shared,
+            };
+        aiscraft_core::PersonaSharing { official: flag("isGlobal"), school, community }
+    }
+}
+
+/// A date as AIS.chat's server actions send it (`"$D2026-11-01T00:00:00.000Z"`, React Flight's
+/// date form) or plain ISO 8601; anything else is dropped.
+fn flight_date(v: Option<&Value>) -> Option<String> {
+    let s = v?.as_str()?;
+    let s = s.strip_prefix("$D").unwrap_or(s).trim();
+    let ok = s.len() >= 10
+        && s.len() <= 40
+        && s.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || "-:.+".contains(c));
+    ok.then(|| s.to_string())
+}
+
+/// AIS.chat's `extractFilterValues`: the `filterGroup` lists, for school type, grade and subject
+/// falling back to the single fields `schoolType`, `gradeLevel` and `subject`.
+fn filter_values(o: &Value) -> aiscraft_core::PersonaFilters {
+    use aiscraft_core::FilterGroup;
+    let mut out = aiscraft_core::PersonaFilters::default();
+    let group = o.get("filterGroup");
+    for g in FilterGroup::ALL {
+        let mut values: Vec<String> = group
+            .and_then(|f| f.get(g.key()))
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).filter(|k| aiscraft_core::explore::filter_key_ok(k)).map(str::to_string).collect())
+            .unwrap_or_default();
+        if values.is_empty() {
+            let single = match g {
+                FilterGroup::SchoolTypes => "schoolType",
+                FilterGroup::GradeRanges => "gradeLevel",
+                FilterGroup::Subjects => "subject",
+                _ => "",
+            };
+            if let Some(k) = o.get(single).and_then(Value::as_str).filter(|k| aiscraft_core::explore::filter_key_ok(k)) {
+                values.push(k.to_string());
+            }
+        }
+        values.sort_by_key(|v| (g.rank(v), v.clone()));
+        values.dedup();
+        values.truncate(aiscraft_core::explore::MAX_FILTER_VALUES);
+        *out.get_mut(g) = values;
+    }
+    out
+}
+
 /// Entities from `get…ByFilterAction`: own ones first, then by name. Unnamed or deleted ones are
 /// left out, at most 500.
-pub fn parse_personas(kind: PersonaKind, v: &Value, me: Option<&str>) -> Vec<PersonaInfo> {
+pub fn parse_personas(kind: PersonaKind, v: &Value, viewer: &Viewer) -> Vec<PersonaInfo> {
+    let me = viewer.id.as_deref();
     let list = v.as_array().or_else(|| v.get("value").and_then(Value::as_array));
     let Some(list) = list else { return Vec::new() };
     let s = |o: &Value, k: &str| o.get(k).and_then(Value::as_str).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
@@ -408,6 +501,10 @@ pub fn parse_personas(kind: PersonaKind, v: &Value, me: Option<&str>) -> Vec<Per
                 picture_url: s(o, "maybeSignedPictureUrl").filter(|u| picture_url_ok(u)),
                 favorite: o.get("isFavorite").and_then(Value::as_bool) == Some(true),
                 web_search: o.get("isWebSearchEnabled").and_then(Value::as_bool),
+                updated_at: flight_date(o.get("updatedAt")),
+                popularity: o.get("popularity").and_then(Value::as_u64).unwrap_or(0),
+                sharing: viewer.sharing(o),
+                filters: filter_values(o),
             })
         })
         .take(500)
@@ -808,16 +905,18 @@ impl Backend for AisChat {
             ];
             // The three lists and the session at the same time: AIS.chat takes a second or two
             // for each list.
-            // "all": own, school, community and official ones (`OverviewFilter`).
+            // "all": own, school, community and official ones (`OverviewFilter`); the tabs Meine,
+            // Offiziell, Schulintern, Community and Favoriten are told apart from what each entity
+            // carries (`Viewer::sharing`), so one request per kind is enough.
             let lists = futures::future::join_all(
                 kinds.iter().map(|(_, action)| async move { self.call_action(action, &self.pages_for(action), &[json!("all")]).await.and_then(server_result) }),
             );
-            let (me, results) = futures::join!(self.session_user_id(), lists);
+            let (viewer, results) = futures::join!(self.session_viewer(), lists);
             let mut out = Vec::new();
             let mut errors = Vec::new();
             for ((kind, _), result) in kinds.iter().zip(results) {
                 match result {
-                    Ok(v) => out.extend(parse_personas(*kind, &v, me.as_deref())),
+                    Ok(v) => out.extend(parse_personas(*kind, &v, &viewer)),
                     Err(e) if e.kind == aiscraft_core::ErrorKind::Auth => return Err(e),
                     // A kind the state switched off (its page redirects) is simply absent.
                     Err(e) => errors.push(e),
@@ -1138,7 +1237,7 @@ mod tests {
             {"id": "bad id!", "name": "X"},
             {"id": "c4", "name": "Weg", "isDeleted": true}
         ]);
-        let list = parse_personas(PersonaKind::Character, &v, Some("me"));
+        let list = parse_personas(PersonaKind::Character, &v, &Viewer { id: Some("me".into()), ..Default::default() });
         assert_eq!(list.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Ada Lovelace", "Goethe"], "own first, unnamed/deleted/odd ids dropped");
         assert!(list[0].own && !list[1].own);
         assert_eq!(list[0].prompt_suggestions, ["Was ist ein Algorithmus?"]);
@@ -1155,7 +1254,7 @@ mod tests {
             {"id": "p5", "name": "Leerzeichen", "maybeSignedPictureUrl": "https://s3.example/a b.png"},
             {"id": "p6", "name": "Nutzer", "maybeSignedPictureUrl": "https://ich@s3.example/a.png"}
         ]);
-        let list = parse_personas(PersonaKind::LearningScenario, &v, None);
+        let list = parse_personas(PersonaKind::LearningScenario, &v, &Viewer::default());
         let by = |n: &str| list.iter().find(|p| p.name == n).unwrap();
         assert_eq!(by("Mit Bild").picture_url.as_deref(), Some("https://s3.example/avatar_1?X-Amz-Signature=abc"));
         assert!(by("Mit Bild").favorite);
@@ -1167,10 +1266,66 @@ mod tests {
         for n in ["Http", "Lang", "Leer", "Leerzeichen", "Nutzer"] {
             assert!(by(n).picture_url.is_none(), "{n}: only plain https URLs up to 4096 characters");
         }
-        assert!(parse_personas(PersonaKind::Assistant, &json!({"success": false}), None).is_empty());
+        assert!(parse_personas(PersonaKind::Assistant, &json!({"success": false}), &Viewer::default()).is_empty());
         let err = server_result(json!({"success": false, "error": {"name": "NotFoundError", "message": "weg"}})).unwrap_err();
         assert_eq!(err.kind, aiscraft_core::ErrorKind::NotFound);
         assert_eq!(server_result(json!({"success": true, "value": [1]})).unwrap(), json!([1]));
+    }
+
+    /// What the overview's tabs, sort orders and filter panel need, as AIS.chat sends it with
+    /// each entity of the "all" list (2026-11-25: `updatedAt` as a Flight date, `popularity`,
+    /// the sharing flags, `ownerSchoolIds`, `filterGroup` with the single-field fallbacks).
+    #[test]
+    fn personas_carry_dates_popularity_sharing_and_filters() {
+        let session = json!({"user": {"id": "me", "schoolIds": ["s1"], "federalState": {"featureToggles": {"isShareTemplateWithSchoolEnabled": true}}}});
+        let viewer = Viewer::from_session(&session);
+        assert_eq!(viewer.school_ids.as_deref(), Some(&["s1".to_string()][..]));
+        let v = json!([
+            {"id": "a1", "name": "Offiziell", "userId": "land", "isGlobal": true, "updatedAt": "$D2026-11-01T08:00:00.000Z", "popularity": 42,
+             "filterGroup": {"school_types": ["grammar-school", "elementary-school", "grammar-school"], "subjects": ["mathematics"], "languages": ["german", "<b>"]}},
+            {"id": "a2", "name": "Kollegium", "userId": "kollegin", "isSchoolShared": true, "ownerSchoolIds": ["s1", "s2"], "updatedAt": "2026-10-01T08:00:00.000Z",
+             "schoolType": "secondary-school", "gradeLevel": "range-2", "subject": "history", "filterGroup": {}},
+            {"id": "a3", "name": "Fremd", "userId": "x", "isCommunityShared": true, "ownerSchoolIds": ["s9"], "updatedAt": "gestern", "popularity": -3},
+            {"id": "a4", "name": "Nachbarschule", "userId": "y", "isCommunityShared": true, "ownerSchoolIds": ["s1"], "popularity": "viel",
+             "filterGroup": {"categories": ["feedback"], "federal_states": ["berlin"], "grade_ranges": ["range-4", "range-1"]}}
+        ]);
+        let list = parse_personas(PersonaKind::Assistant, &v, &viewer);
+        let by = |id: &str| list.iter().find(|p| p.id == id).unwrap();
+        let a1 = by("a1");
+        assert_eq!(a1.updated_at.as_deref(), Some("2026-11-01T08:00:00.000Z"), "the Flight prefix $D goes");
+        assert_eq!(a1.popularity, 42);
+        assert_eq!(a1.sharing, aiscraft_core::PersonaSharing { official: true, school: false, community: false });
+        assert_eq!(a1.filters.school_types, ["elementary-school", "grammar-school"], "AIS.chat's order, no doubles");
+        assert_eq!(a1.filters.languages, ["german"], "odd keys are dropped");
+        let a2 = by("a2");
+        assert!(a2.sharing.school && !a2.sharing.community);
+        assert_eq!(a2.updated_at.as_deref(), Some("2026-10-01T08:00:00.000Z"));
+        assert_eq!(
+            (a2.filters.school_types.as_slice(), a2.filters.grade_ranges.as_slice(), a2.filters.subjects.as_slice()),
+            (&["secondary-school".to_string()][..], &["range-2".to_string()][..], &["history".to_string()][..])
+        );
+        let a3 = by("a3");
+        assert!(a3.sharing.community && !a3.sharing.school, "community from another school is not „Schulintern“");
+        assert_eq!((a3.updated_at.as_deref(), a3.popularity), (None, 0), "no date, no negative popularity");
+        let a4 = by("a4");
+        assert!(a4.sharing.community && a4.sharing.school, "community from a colleague of the same school is also „Schulintern“");
+        assert_eq!(a4.filters.grade_ranges, ["range-1", "range-4"]);
+        assert_eq!((a4.filters.categories.len(), a4.filters.federal_states.len(), a4.popularity), (1, 1, 0));
+
+        // The state switched sharing within schools off: no „Schulintern“.
+        let off = Viewer::from_session(
+            &json!({"user": {"id": "me", "schoolIds": ["s1"], "federalState": {"featureToggles": {"isShareTemplateWithSchoolEnabled": false}}}}),
+        );
+        assert!(parse_personas(PersonaKind::Assistant, &v, &off).iter().all(|p| !p.sharing.school));
+        // A session without school ids: the school-shared flag alone decides.
+        let unknown = Viewer::from_session(&json!({"user": {"id": "me"}}));
+        let list = parse_personas(PersonaKind::Assistant, &v, &unknown);
+        assert_eq!(list.iter().filter(|p| p.sharing.school).map(|p| p.id.as_str()).collect::<Vec<_>>(), ["a2"]);
+        // The new fields survive the cache (JSON) and old cache files without them still load.
+        let back: Vec<PersonaInfo> = serde_json::from_value(serde_json::to_value(&list).unwrap()).unwrap();
+        assert_eq!(back, list);
+        let old: PersonaInfo = serde_json::from_value(json!({"kind": "assistant", "id": "a", "name": "Alt"})).unwrap();
+        assert!(old.updated_at.is_none() && old.popularity == 0 && old.sharing.is_empty() && old.filters.is_empty());
     }
 
     #[test]
@@ -1262,7 +1417,7 @@ mod tests {
                     let flight = |value: &str| format!("0:{{\"a\":\"$@1\",\"f\":\"\",\"b\":\"b\"}}\n1:{value}\n");
                     let action = req.lines().find_map(|l| l.strip_prefix("next-action: ")).unwrap_or("").to_string();
                     let (ctype, body) = if req.starts_with("GET /api/auth/session") {
-                        ("application/json", r#"{"user":{"id":"me","firstName":"Ada"}}"#.to_string())
+                        ("application/json", r#"{"user":{"id":"me","firstName":"Ada","schoolIds":["s1"],"federalState":{"featureToggles":{"isShareTemplateWithSchoolEnabled":true}}}}"#.to_string())
                     } else if req.starts_with("GET /assistants ") {
                         ("text/html", chunk("shared") + &chunk("assistants"))
                     } else if req.starts_with("GET /characters ") {
@@ -1296,11 +1451,16 @@ mod tests {
                             (
                                 "text/x-component",
                                 flight(
-                                    r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung","updatedAt":"$D2026-11-01T00:00:00.000Z"},{"id":"a2","name":"Schulassistent","userId":"x"}]"#,
+                                    r#"[{"id":"a1","name":"Mathe-Coach","userId":"me","description":"Übt Bruchrechnung","updatedAt":"$D2026-11-01T00:00:00.000Z"},{"id":"a2","name":"Schulassistent","userId":"x","isSchoolShared":true,"ownerSchoolIds":["s1"],"updatedAt":"$D2026-11-20T00:00:00.000Z","popularity":7,"filterGroup":{"school_types":["grammar-school"],"subjects":["mathematics","physics"]}}]"#,
                                 ),
                             )
                         } else if action == id(0x22) {
-                            ("text/x-component", flight(r#"[{"id":"c1","name":"Goethe","userId":"x","initialMessage":"Seid gegrüßt!"}]"#))
+                            (
+                                "text/x-component",
+                                flight(
+                                    r#"[{"id":"c1","name":"Goethe","userId":"x","initialMessage":"Seid gegrüßt!","isGlobal":true,"popularity":120,"filterGroup":{"categories":["historical-figures"],"subjects":["german"]}}]"#,
+                                ),
+                            )
                         } else if action == id(0x33) {
                             assert!(req.ends_with(r#"[{"entityId":"0a1b-2c","entityType":"learningScenario","isFavorite":true}]"#), "{req}");
                             ("text/x-component", flight(r#"{"success":true}"#))
@@ -1373,6 +1533,12 @@ mod tests {
             [(PersonaKind::Assistant, "Mathe-Coach", true), (PersonaKind::Assistant, "Schulassistent", false), (PersonaKind::Character, "Goethe", false)]
         );
         let goethe = list.iter().find(|p| p.id == "c1").unwrap();
+        // One "all" list per kind carries what the tabs, sort orders and filters need.
+        assert!(goethe.sharing.official && goethe.popularity == 120 && goethe.filters.categories == ["historical-figures"]);
+        let school = list.iter().find(|p| p.id == "a2").unwrap();
+        assert!(school.sharing.school, "shared within the person's school (session schoolIds)");
+        assert_eq!(school.updated_at.as_deref(), Some("2026-11-20T00:00:00.000Z"));
+        assert_eq!(school.filters.subjects, ["mathematics", "physics"]);
         let msgs = vec![
             Message {
                 id: "g".into(),

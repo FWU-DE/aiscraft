@@ -2,6 +2,7 @@
 
 pub mod attribution;
 mod error;
+pub mod explore;
 pub mod h5p;
 mod memory;
 mod model;
@@ -10,6 +11,7 @@ pub mod worksheet;
 
 pub use attribution::attribution_headers;
 pub use error::{DISK_FULL, Error, ErrorKind, Result, is_connection_lost, is_disk_full, is_loopback_host};
+pub use explore::{ExploreFilter, ExploreSort, ExploreSource, FilterGroup};
 pub use memory::{MemoryArea, MemoryNote, extract_explicit_memory, is_writing_request, memory_prompt, replace_candidates, style_prompt};
 pub use model::*;
 

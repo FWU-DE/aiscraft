@@ -71,7 +71,14 @@ Zugangsdaten liegen im Schlüsselbund des Systems, nie in der Datenbank.
 **Assistenten, Dialogpartner und Lernszenarien.** „Entdecken“ in der Seitenleiste (oder Strg+K) öffnet eine Seite mit allem, was AIS.chat dir anbietet: eigene, an der Schule geteilte und offizielle Einträge, mit Bild und Beschreibung.
 
 - **Suchen:** Strg+F, dann Name oder Beschreibung. Groß- und Kleinschreibung und Umlaute spielen keine Rolle („uebung“ findet „Übung“). Bleibt genau ein Treffer, öffnet Enter ihn.
-- **Eingrenzen:** Alle, Assistenten, Dialogpartner, Lernszenarien; dazu „★ Favoriten“ und „Meine“.
+- **Eingrenzen:** Alle, Assistenten, Dialogpartner, Lernszenarien.
+- **Filter und Sortierung:** darunter, mit einem Klick aufgeklappt, alles, was AIS.chat auf seinen Übersichtsseiten anbietet:
+  - **Anzeigen:** Meine, Offiziell (vom Land), Schulintern (an deiner Schule geteilt; nur, wenn dein Land das Teilen in der Schule erlaubt und etwas geteilt ist), Community, Alle und Favoriten.
+  - **Sortierung:** Neueste zuerst (wie in AIS.chat voreingestellt), Älteste zuerst, Alphabetisch A-Z oder Z-A, Beliebteste zuerst (wie oft in letzter Zeit in ganz AIS.chat genutzt; bei Gleichstand das Neuere zuerst).
+  - **Filter:** Schulform, Klassenstufe, Fach, Kategorie, Bundesland und Sprache, jeweils nur, wenn ein Eintrag Werte dafür hat; in Klammern steht, wie viele Einträge ein Wert zeigt. Innerhalb einer Gruppe reicht einer der gewählten Werte („Gymnasium“ oder „Realschule“), über Gruppen hinweg muss alles passen („Gymnasium“ und „Deutsch“).
+  - Gewählte Werte stehen als Chips mit × unter dem Abschnitt, davor „N Treffer“; „Zurücksetzen“ wählt alle ab.
+
+  Die Auswahl bleibt, bis du AIS.ChatCraft beendest (wie AIS.chat sie für einen Browser-Tab behält); beim nächsten Start beginnt die Seite wieder mit „Alle“, „Neueste zuerst“ und ohne Filter, damit kein vergessener Filter Einträge versteckt. Die Werte vergibt, wer einen Eintrag in AIS.chat anlegt; fehlen sie, findet der Filter ihn nicht.
 - **Favoriten:** Zeige auf eine Karte und klicke auf den Stern oben rechts, oder auf „☆ Als Favorit markieren“ in den Details und im neuen Chat. Favoriten gelten auch in AIS.chat im Browser.
 - **Details:** Ein Klick auf eine Karte zeigt Beschreibung, Begrüßung, Aufgabe, ob die Websuche an ist, und Gesprächsanfänge. „Chat starten“ (oder Enter) beginnt einen neuen Chat; ein Gesprächsanfang startet ihn und schickt den Satz gleich ab.
 - **Zurück:** Esc, erst zur Übersicht, dann zum Chat.

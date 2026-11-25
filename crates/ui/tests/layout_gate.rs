@@ -566,6 +566,32 @@ Igel, Winterschlaf und Fotosynthese.",
     settle(&mut h, &at("Entdecken"), |h| label(h, "Nicht bei AIS.chat angemeldet"));
     check(&mut h, &at("Entdecken"));
 
+    // Entdecken signed in to AIS.chat (a profile of its own), with „Filter und Sortierung“
+    // open, values chosen and their chips.
+    {
+        let signed_in = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+        call(&signed_in, "settings.set", json!({"key": "theme", "value": theme}));
+        call(&signed_in, "settings.set", json!({"key": "look_chosen", "value": true}));
+        let ais = common::scripted_ais_lists(&signed_in, common::filter_catalog());
+        call(&signed_in, "backend.update", json!({"id": "ais-chat", "base_url": ais}));
+        call(&signed_in, "backend.login", json!({"id": "ais-chat", "secret": "demo"}));
+        call(&signed_in, "explore.filter", json!({"group": "school_types", "values": ["grammar-school", "secondary-school"]}));
+        call(&signed_in, "explore.filter", json!({"group": "subjects", "values": ["german", "mathematics"]}));
+        call(&signed_in, "explore.sort", json!({"by": "popularity"}));
+        let (mut h, tx) = open(&signed_in, screen, omarchy);
+        for close in ["Später", "Fertig"] {
+            if let Some(b) = h.query_by_label(close) {
+                b.click();
+                h.run_steps(2);
+            }
+        }
+        show(&mut h, &tx, "personas");
+        settle(&mut h, &at("Entdecken, Filter"), |h| label(h, "Mathe-Coach") && h.query_by_label_contains("Filter und Sortierung").is_some());
+        h.query_by_label_contains("Filter und Sortierung").unwrap().click();
+        settle(&mut h, &at("Entdecken, Filter"), |h| label(h, "Schulform (2)") && label(h, "2 Treffer") && label(h, "Zurücksetzen"));
+        check(&mut h, &at("Entdecken, Filter"));
+    }
+
     // The welcome a fresh profile gets.
     let fresh = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
     call(&fresh, "settings.set", json!({"key": "theme", "value": theme}));
