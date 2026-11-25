@@ -62,9 +62,9 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 futures = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net", "fs", "process"] }
-# system-proxy: the proxy set in Windows/macOS (school networks); native roots next to the
-# bundled ones: a school or company CA from the system store (TLS-inspecting proxies).
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots", "system-proxy", "json", "stream", "multipart", "cookies", "http2"] }
+# native roots next to the bundled ones: a school or company CA from the system store
+# (TLS-inspecting proxies). The Windows proxy setting: `system-proxy` in crates/backends (Windows only).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots", "json", "stream", "multipart", "cookies", "http2"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 keyring = { version = "3", features = ["sync-secret-service", "crypto-rust", "apple-native", "windows-native"] }
 directories = "6"

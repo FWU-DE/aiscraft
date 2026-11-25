@@ -274,27 +274,25 @@ impl AisCraftApp {
     pub(crate) fn create_menu(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let body = |app: &mut Self, ui: &mut Ui| {
-            ui.set_min_width(300.0);
-            // The topic field is the composer itself, so text typed before opening the menu is there.
-            ui.label(small_muted(&t, "Thema"));
-            ui.add(egui::TextEdit::singleline(&mut app.composer).hint_text("z. B. Brüche vergleichen, Klasse 6").desired_width(f32::INFINITY));
+            ui.set_min_width(260.0);
+            // Text already in the composer is the topic; with an empty composer the choice waits
+            // there for the topic („Arbeitsblatt: Thema eingeben“), and Enter creates it.
             let topic = app.composer.trim().to_string();
-            let usable = topic.chars().filter(|ch| ch.is_alphanumeric()).count() >= 2;
-            ui.add_space(4.0);
-            for (label, cmd, tip) in [
-                ("🎮 Lern-App", "learning_app.request", "Eine interaktive Lern-App (eine HTML-Datei) zum Thema im Eingabefeld"),
-                ("📝 Arbeitsblatt", "worksheet.request", "Ein interaktives Arbeitsblatt zum Thema im Eingabefeld, zum Lösen am Rechner und zum Drucken"),
-                ("📦 H5P-Quiz", "h5p.request", "Ein H5P-Quiz zum Thema im Eingabefeld, als .h5p-Datei für Moodle, Mebis, ByCS und andere Lernplattformen"),
-                ("▣ Whiteboard", "board.request", "Ein Whiteboard zum Thema im Eingabefeld: Mindmap, Cluster, Ablauf oder Zeitleiste"),
-                (
-                    "📅 Termine",
-                    "calendar.request",
-                    "Termine zum Thema im Eingabefeld (Klassenarbeiten, Elternabend, Unterrichtsreihe), zum Speichern als Kalenderdatei",
-                ),
-            ] {
-                if ui.add_enabled(usable, egui::Button::new(label)).on_hover_text(tip).clicked() {
-                    app.composer.clear();
-                    app.run(cmd, json!({"topic": topic}));
+            let usable = topic_usable(&topic);
+            for (label, cmd, what, tip) in CREATE_KINDS {
+                let tip = if usable {
+                    format!("{tip} zum Thema „{}“", topic.chars().take(60).collect::<String>())
+                } else {
+                    format!("{tip}; das Thema schreibst du danach ins Eingabefeld")
+                };
+                if ui.button(label).on_hover_text(tip).clicked() {
+                    if usable {
+                        app.composer.clear();
+                        app.run(cmd, json!({"topic": topic}));
+                    } else {
+                        app.create_pending = Some((cmd, what));
+                    }
+                    app.focus_composer = true;
                     ui.close();
                 }
             }
@@ -315,6 +313,20 @@ impl AisCraftApp {
         };
         egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| body(self, ui));
     }
+}
+
+/// What „Erstellen“ offers: (label, command, what it is, tooltip).
+const CREATE_KINDS: [(&str, &str, &str, &str); 5] = [
+    ("🎮 Lern-App", "learning_app.request", "Lern-App", "Eine interaktive Lern-App (eine HTML-Datei)"),
+    ("📝 Arbeitsblatt", "worksheet.request", "Arbeitsblatt", "Ein interaktives Arbeitsblatt, zum Lösen am Rechner und zum Drucken"),
+    ("📦 H5P-Quiz", "h5p.request", "H5P-Quiz", "Ein H5P-Quiz als .h5p-Datei für Moodle, Mebis, ByCS und andere Lernplattformen"),
+    ("▣ Whiteboard", "board.request", "Whiteboard", "Ein Whiteboard: Mindmap, Cluster, Ablauf oder Zeitleiste"),
+    ("📅 Termine", "calendar.request", "Termine", "Termine (Klassenarbeiten, Elternabend, Unterrichtsreihe), zum Speichern als Kalenderdatei"),
+];
+
+/// A topic worth sending: at least two letters or digits.
+pub(crate) fn topic_usable(topic: &str) -> bool {
+    topic.chars().filter(|ch| ch.is_alphanumeric()).count() >= 2
 }
 
 // ---- HTML highlighting -----------------------------------------------------------------------
