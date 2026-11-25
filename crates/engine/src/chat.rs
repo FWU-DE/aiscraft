@@ -66,6 +66,7 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
         persona: sel.persona.clone(),
         kind: sel.kind,
         remote_id: None,
+        temporary: sel.temporary,
     };
     // A character opens with its greeting, as in AIS.chat; it goes along as the first answer.
     let greeting = conv.persona.as_ref().and_then(|p| state.persona_info(&sel.backend_id, p)).and_then(|i| i.initial_message.clone()).map(|text| Message {
@@ -279,7 +280,12 @@ pub(crate) async fn send_full(
     let mut attachments = Vec::new();
     for prep in prepared {
         // Keep a copy: the bytes are not stored in the database and are read back per request.
-        let copy = files::keep_copy(&c.0.attachments_dir, Path::new(&prep.name), &prep.bytes)?;
+        let dir = if state.selection.temporary || state.current.as_ref().and_then(|id| state.conversation(id)).is_some_and(|x| x.temporary) {
+            crate::temporary::attachments_dir(&c)
+        } else {
+            c.0.attachments_dir.clone()
+        };
+        let copy = files::keep_copy(&dir, Path::new(&prep.name), &prep.bytes)?;
         let mut a = crate::attach::attachment(&prep, &copy, !caps.uploads);
         if caps.uploads {
             a.remote_id = Some(backend.upload(a.name.clone(), a.mime.clone(), prep.bytes).await?);
@@ -327,7 +333,10 @@ pub(crate) async fn send_full(
         }
     });
 
+    // A temporary chat leaves no notes behind (#34).
+    let temporary = c.state().conversation(&conv).is_some_and(|x| x.temporary);
     if c.state().settings.memory
+        && !temporary
         && let Some((area, note_text)) = extract_explicit_memory(&raw)
     {
         let note = MemoryNote {
@@ -960,7 +969,7 @@ async fn generate_with(c: Ctx, conv_id: String, context: Option<String>, interac
     }
     crate::tools::deny_all(&c, &conv_id);
     // Several tool steps went well: maybe there is a procedure worth keeping.
-    if result.is_ok() && c.state().settings.learn_skills && (caps.tools || caps.tools_via_mcp) {
+    if result.is_ok() && c.state().settings.learn_skills && (caps.tools || caps.tools_via_mcp) && !conv.temporary {
         let ctx = c.clone();
         let id = conv_id.clone();
         c.spawn(async move {

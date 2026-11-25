@@ -188,6 +188,10 @@ pub struct Conversation {
     /// whose id the server picks).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_id: Option<String>,
+    /// A temporary chat (#34): kept in memory only, never written to disk, not searched or
+    /// recalled, no memory notes; gone once it is closed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub temporary: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

@@ -59,6 +59,15 @@ static COMMANDS: &[CommandSpec] = &[
         chat_new(c, p)
     )),
     cmd!("chat.open", "Chat öffnen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_open(c, p))),
+    cmd!(
+        "chat.temporary",
+        "Vorübergehender Chat",
+        "Chat",
+        None,
+        "on?: bool (Standard: an). An: ein neuer Chat, der nicht gespeichert wird; aus: zurück zu einem normalen neuen Chat",
+        true,
+        |c, p| Box::pin(chat_temporary(c, p))
+    ),
     cmd!("chat.close", "Chat schließen", "Chat", Some("Escape"), "", true, |c, _| Box::pin(chat_close(c))),
     cmd!(
         "chat.send",
@@ -706,10 +715,29 @@ async fn chat_new(c: Ctx, p: Value) -> Result<Value> {
         s.current = None;
         s.messages.clear();
         s.variants.clear();
-        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: None, kind, aspect_ratio };
+        s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: None, kind, aspect_ratio, temporary: false };
     });
+    crate::temporary::discard_closed(&c);
     persist_selection(&c);
     Ok(json!({}))
+}
+
+/// Start a temporary chat (#34), or go back to a normal new chat.
+async fn chat_temporary(c: Ctx, p: Value) -> Result<Value> {
+    let on = match p.get("on") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(Error::invalid("on muss true oder false sein")),
+    };
+    chat_new(c.clone(), json!({})).await?;
+    if on {
+        c.update(|s| {
+            s.selection.temporary = true;
+            // Nothing from the notes goes along either; it can be switched on under „Quellen“.
+            s.selection.sources.memory = false;
+        });
+    }
+    Ok(json!({"temporary": on}))
 }
 
 /// Close the open chat: back to the start page. A running answer keeps going in the background.
@@ -724,6 +752,7 @@ async fn chat_close(c: Ctx) -> Result<Value> {
             s.selection.persona = None;
             s.selection.kind = ConversationKind::Chat;
         });
+        crate::temporary::discard_closed(&c);
     }
     Ok(json!({"closed": closed}))
 }
@@ -746,8 +775,10 @@ async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
             persona: conv.persona.clone(),
             kind: conv.kind,
             aspect_ratio: s.selection.aspect_ratio.clone(),
+            temporary: conv.temporary,
         };
     });
+    crate::temporary::discard_closed(&c);
     Ok(json!({"messages": n}))
 }
 
@@ -854,6 +885,9 @@ async fn set_style(c: Ctx, p: Value) -> Result<Value> {
 async fn chat_delete(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     chat::stop(&c, &id);
+    if c.state().conversation(&id).is_some_and(|x| x.temporary) {
+        crate::temporary::discard(&c, &id);
+    }
     c.store(|st| st.delete_conversation(&id))?;
     crate::privacy::forget(&c, &id);
     c.update(|s| {
@@ -992,6 +1026,7 @@ async fn remote_import(c: Ctx, p: Value) -> Result<Value> {
         persona,
         kind,
         remote_id: None,
+        temporary: false,
     };
     c.store(|st| {
         st.save_conversation(&conv)?;
@@ -1029,7 +1064,8 @@ fn search_chats(c: &Ctx, query: &str) -> Result<Vec<aiscraft_store::SearchHit>> 
     let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).filter(|w| !w.is_empty()).take(12).collect();
     let mut hits = Vec::new();
     if !words.is_empty() {
-        let mut convs = c.state().conversations.clone();
+        // A temporary chat (#34) is never found.
+        let mut convs: Vec<Conversation> = c.state().conversations.iter().filter(|x| !x.temporary).cloned().collect();
         convs.sort_by_key(|x| std::cmp::Reverse(x.updated_at));
         for conv in convs {
             let title = crate::privacy::reveal(c, &conv.id, &conv.title);
@@ -1164,8 +1200,10 @@ async fn persona_start(c: Ctx, p: Value) -> Result<Value> {
             persona: Some(info.persona()),
             kind: ConversationKind::Chat,
             aspect_ratio: s.selection.aspect_ratio.clone(),
+            temporary: false,
         };
     });
+    crate::temporary::discard_closed(&c);
     persist_selection(&c);
     let out = serde_json::to_value(&info)?;
     if let Some(text) = opt_str(&p, "text").filter(|t| !t.trim().is_empty()) {

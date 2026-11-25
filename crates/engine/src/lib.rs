@@ -23,6 +23,7 @@ mod secrets;
 mod skills;
 mod state;
 mod tasks;
+mod temporary;
 pub mod tools;
 mod update;
 mod usage;
@@ -256,6 +257,7 @@ impl Engine {
                 .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-attachments-{}", std::process::id()))),
         }));
         ctx.load()?;
+        temporary::clean_up(&ctx);
         if let Some(n) = secret_notice {
             ctx.notice(NoticeLevel::Warning, n);
         }

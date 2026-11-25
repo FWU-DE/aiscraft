@@ -118,3 +118,16 @@ fn style_is_chosen_in_the_composer() {
     click_until(&mut h, "Knapp", "the style reaches the engine", move |_| e.state().selection.sources.style.as_deref() == Some("concise"));
     step_until(&mut h, "the composer names the style", |h| h.query_by_label("Stil: Knapp").is_some());
 }
+
+/// #34: „Vorübergehender Chat“ on the start page starts one; it is not listed in the sidebar and
+/// says that it is not kept.
+#[test]
+fn temporary_chat_from_the_start_page() {
+    let engine = engine_with(|_| vec![json!({"choices":[{"delta":{"content":"Ok."}}]})]);
+    let mut h = harness(&engine);
+    click_until(&mut h, "Vorübergehender Chat", "the next chat is temporary", |h| h.query_by_label("Vorübergehend: an").is_some());
+    assert!(engine.state().selection.temporary);
+    engine.call("chat.send", json!({"text": "Streng geheimer Plan"})).unwrap();
+    step_until(&mut h, "the chat shows", |h| h.query_by_label_contains("wird nicht gespeichert").is_some());
+    assert!(h.query_all_by_label_contains("Streng geheimer Plan").count() <= 1, "only the message, not a sidebar entry");
+}

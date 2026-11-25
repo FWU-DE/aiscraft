@@ -206,6 +206,9 @@ pub struct Selection {
     /// Aspect ratio for the next image (`quadratic`, `landscape`, `portrait`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub aspect_ratio: String,
+    /// The next new chat is temporary (#34): not kept, not searched, no memory notes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub temporary: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

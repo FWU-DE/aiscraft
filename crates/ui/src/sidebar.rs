@@ -276,7 +276,8 @@ impl AisCraftApp {
     fn chat_list(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
         let convs: Vec<_> =
-            self.state.conversations.iter().filter(|c| self.project_filter.as_ref().is_none_or(|p| c.project_id.as_ref() == Some(p))).cloned().collect();
+            // A temporary chat (#34) is not listed: it is gone once closed.
+            self.state.conversations.iter().filter(|c| !c.temporary && self.project_filter.as_ref().is_none_or(|p| c.project_id.as_ref() == Some(p))).cloned().collect();
         if convs.is_empty() {
             ui.add_space(8.0);
             empty_hint(ui, &t, if self.project_filter.is_some() { "Noch keine Chats in diesem Projekt." } else { "Noch keine Chats." });

@@ -301,7 +301,10 @@ pub(crate) fn save_mapping(c: &Ctx, conv: &str, m: &Mapping) -> Result<()> {
     if conv.is_empty() {
         return Ok(());
     }
-    c.store(|st| st.set_setting(&map_key(conv), &serde_json::to_value(m)?))?;
+    // A temporary chat's mapping stays in memory (#34).
+    if !c.store(|st| Ok(st.is_temporary(conv)))? {
+        c.store(|st| st.set_setting(&map_key(conv), &serde_json::to_value(m)?))?;
+    }
     let mut maps = c.0.privacy_maps.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // The sidebar shows up to 500 chats; keep the cache bounded.
     if maps.len() > 1000 {

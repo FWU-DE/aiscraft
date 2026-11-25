@@ -231,6 +231,7 @@ async fn run(c: &Ctx, mut s: Schedule) -> Result<Value> {
                 persona: None,
                 kind: Default::default(),
                 remote_id: None,
+                temporary: false,
             };
             c.store(|st| st.save_conversation(&conv))?;
             let id = conv.id.clone();

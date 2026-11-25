@@ -160,6 +160,7 @@ fn answer_style_goes_inline_once_without_system_prompt() {
         persona: None,
         kind: Default::default(),
         remote_id: None,
+        temporary: false,
     };
     let sent = crate::chat::inline_context(ctx, &conv, false, "").expect("the style goes along");
     assert!(sent.block.contains("Antwortstil: formell") && sent.labels.contains(&"Antwortstil".to_string()));
@@ -169,4 +170,52 @@ fn answer_style_goes_inline_once_without_system_prompt() {
     conv.sources.style = None;
     let back = crate::chat::inline_context(ctx, &conv, false, "").expect("back to normal is said once");
     assert!(back.block.contains("wieder wie üblich"));
+}
+
+/// #34: a temporary chat is answered like any other, but after closing nothing of it remains:
+/// not in the store, not in the search, no memory note, no copy of its files.
+#[test]
+fn temporary_chat_leaves_nothing_behind() {
+    let (engine, seen) = engine_with(plain);
+    let notes = engine.state().memory.len();
+    engine.call("chat.temporary", json!({})).unwrap();
+    assert!(engine.state().selection.temporary);
+    let dir = std::env::temp_dir().join(format!("aiscraft-temp-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("notiz.txt");
+    std::fs::write(&file, "Geheimprojekt Kastanie").unwrap();
+    engine.call("chat.send", json!({"text": "Merk dir: Kastanienfest am Freitag", "files": [file.display().to_string()]})).unwrap();
+    assert!(last_chat_request(&seen, "Kastanienfest").contains("Geheimprojekt"), "it is answered as usual");
+    let conv = engine.state().current.clone().unwrap();
+    assert!(engine.state().conversation(&conv).unwrap().temporary);
+    assert_eq!(engine.state().messages.len(), 2);
+    assert_eq!(engine.state().memory.len(), notes, "no memory note");
+    let copy = engine.state().messages[0].attachments[0].local_path.clone().unwrap();
+    assert!(std::path::Path::new(&copy).exists());
+    let search = engine.call("search", json!({"query": "Kastanienfest"})).unwrap();
+    assert!(!search.to_string().contains(&conv), "not searchable while open: {search}");
+    // Closing: everything goes.
+    engine.call("chat.close", json!({})).unwrap();
+    assert!(engine.state().conversation(&conv).is_none(), "gone from the list");
+    engine
+        .ctx()
+        .store(|st| {
+            assert!(st.conversation(&conv)?.is_none());
+            assert!(st.messages(&conv)?.is_empty());
+            assert!(st.search("Kastanienfest", 10)?.is_empty());
+            assert!(st.search_any(&["Kastanienfest".to_string()], None, 10)?.is_empty());
+            assert!(st.conversations(500)?.iter().all(|c| c.id != conv));
+            Ok(())
+        })
+        .unwrap();
+    assert!(!std::path::Path::new(&copy).exists(), "the file copy is deleted");
+    assert!(engine.call("chat.open", json!({"id": conv})).is_err());
+    assert_eq!(engine.state().memory.len(), notes);
+    // The next chat is a normal one again and is kept.
+    assert!(!engine.state().selection.temporary);
+    engine.call("chat.send", json!({"text": "Normal"})).unwrap();
+    let normal = engine.state().current.clone().unwrap();
+    assert!(engine.ctx().store(|st| st.conversation(&normal)).unwrap().is_some());
+    engine.call("chat.temporary", json!({"on": false})).unwrap();
+    assert!(engine.call("chat.temporary", json!({"on": "ja"})).is_err());
 }
