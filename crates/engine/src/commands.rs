@@ -225,7 +225,15 @@ static COMMANDS: &[CommandSpec] = &[
         set_aspect(&c, &req_str(&p, "ratio")?)?;
         Ok(json!({}))
     })),
-    cmd!("chat.save_image", "Bild speichern", "Chat", None, "message_id: string, index?: number, path: string", false, |c, p| Box::pin(save_image(c, p))),
+    cmd!(
+        "chat.save_image",
+        "Bild speichern",
+        "Chat",
+        None,
+        "message_id: string, index?: number, path: string, badge?: bool (KI-Kennzeichnung ins Bild, Standard true; nur erzeugte Bilder)",
+        false,
+        |c, p| Box::pin(save_image(c, p))
+    ),
     cmd!(
         "message.check_links",
         "Links in einer Antwort prüfen",
@@ -1283,19 +1291,25 @@ async fn save_image(c: Ctx, p: Value) -> Result<Value> {
     let mid = req_str(&p, "message_id")?;
     let index = p.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
     let path = req_str(&p, "path")?;
-    let src = c
+    // „KI-Kennzeichnung“: on by default, like AIS.chat; only generated images (answers) get it.
+    let badge = p.get("badge").and_then(Value::as_bool).unwrap_or(true);
+    let (src, generated) = c
         .state()
         .messages
         .iter()
         .find(|m| m.id == mid)
-        .and_then(|m| m.attachments.iter().filter(|a| a.mime.starts_with("image/")).nth(index))
-        .and_then(|a| a.local_path.clone())
+        .and_then(|m| {
+            let a = m.attachments.iter().filter(|a| a.mime.starts_with("image/")).nth(index)?;
+            Some((a.local_path.clone()?, m.role == aiscraft_core::Role::Assistant))
+        })
         .ok_or_else(|| Error::not_found("Bild nicht gefunden"))?;
     let size = std::fs::metadata(&src).map_err(|e| Error::storage(format!("{src}: {e}")))?.len();
     if size > crate::files::MAX_FILE_BYTES {
         return Err(Error::invalid("Das Bild ist größer als 25 MB"));
     }
     let bytes = std::fs::read(&src).map_err(|e| Error::storage(format!("{src}: {e}")))?;
+    let badged = badge && generated;
+    let bytes = if badged { crate::ai_badge::bake(&bytes)?.bytes } else { bytes };
     // „Erstellt mit KI“ (#57) as the picture's comment.
     let bytes = match crate::ai_label::note_for_message(&c, Some(&mid)) {
         Some(note) => crate::ai_label::picture_with_note(&bytes, &note.plain()),
@@ -1303,7 +1317,7 @@ async fn save_image(c: Ctx, p: Value) -> Result<Value> {
     };
     crate::disk::write(std::path::Path::new(&path), &bytes)?;
     c.notice(NoticeLevel::Success, format!("Gespeichert: {path}"));
-    Ok(json!({"path": path}))
+    Ok(json!({"path": path, "badge": badged}))
 }
 
 async fn remote_import(c: Ctx, p: Value) -> Result<Value> {

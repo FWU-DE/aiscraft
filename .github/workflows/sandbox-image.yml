@@ -35,7 +35,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Bauen
         run: bash packaging/sandbox/build.sh --out dist/sandbox
       - name: Prüfsumme
@@ -51,7 +53,7 @@ jobs:
             echo
             echo "Größe: $(du -m dist/sandbox/*.tar.gz | cut -f1) MB"
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sandbox-image
           path: dist/sandbox/
