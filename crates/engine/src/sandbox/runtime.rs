@@ -202,7 +202,10 @@ impl Fake {
                 if let Some(rest) = cmd.strip_prefix("exit ") {
                     return Output { code: rest.trim().parse().ok(), stderr: b"fehlgeschlagen".to_vec(), ..Default::default() };
                 }
-                ok(format!("ausgeführt in {}: {cmd}\n", arg(0)).as_bytes())
+                // As the real Docker under WSL2: a warning on every start.
+                let warning =
+                    b"WARNING: Your kernel does not support swap limit capabilities or the cgroup is not mounted. Memory limited without swap.\n".to_vec();
+                Output { stderr: warning, ..ok(format!("ausgeführt in {}: {cmd}\n", arg(0)).as_bytes()) }
             }
             k::WRITE_SCRIPT => {
                 files.insert(format!("{mount}/{}", arg(0)), stdin.to_vec());

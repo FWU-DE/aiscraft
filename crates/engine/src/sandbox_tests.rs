@@ -269,6 +269,7 @@ fn workspace_tools_follow_nods_rule() {
     assert!(!err && outcome == "ok", "{text}");
     assert!(text.starts_with("<untrusted_tool_result tool=\"workspace_run\">") && text.matches("</untrusted_tool_result>").count() == 1, "{text}");
     assert!(text.contains("Exit-Code 0") && text.contains("Ordner: /work/."), "{text}");
+    assert!(!text.contains("swap limit") && !text.contains("Fehlerausgabe"), "Docker's swap warning is not the command's output: {text}");
     let last = fake.container_starts().pop().unwrap();
     assert_eq!(last.last().unwrap(), "600", "the time limit is capped at 10 minutes: {last:?}");
     // A failing command and the time limit are named.
@@ -477,19 +478,22 @@ fn workspace_output_passes_name_protection() {
 fn real_wsl_runs_echo_in_the_container() {
     use crate::sandbox::container as k;
     use crate::sandbox::runtime::SandboxRuntime;
+    let dir = std::env::temp_dir().join(format!("aiscraft-sandbox-live-{}", crate::new_id()));
+    // The download with the app's own checks (pinned checksum and size), outside the runtime
+    // below: an engine owns a runtime and must not be dropped inside another one.
+    let image = match std::env::var_os("AISCRAFT_SANDBOX_IMAGE") {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+            let src = crate::sandbox::image::Source::github().expect("x86-64");
+            let ctx = engine.ctx().clone();
+            engine.block_on(crate::sandbox::image::fetch(&ctx, &src, &dir)).expect("published image").0
+        }
+    };
     let rt = tokio::runtime::Runtime::new().unwrap();
     let wsl = crate::sandbox::wsl::Wsl::new("aiscraft-livetest".into());
     rt.block_on(async {
         wsl.probe().await.expect("WSL2 is there");
-        let dir = std::env::temp_dir().join(format!("aiscraft-sandbox-live-{}", crate::new_id()));
-        let image = match std::env::var_os("AISCRAFT_SANDBOX_IMAGE") {
-            Some(p) => std::path::PathBuf::from(p),
-            None => {
-                let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
-                let src = crate::sandbox::image::Source::github().expect("x86-64");
-                crate::sandbox::image::fetch(engine.ctx(), &src, &dir).await.expect("published image").0
-            }
-        };
         if wsl.exists().await {
             wsl.destroy().await.unwrap();
         }
