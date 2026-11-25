@@ -1183,6 +1183,8 @@ impl AisCraftApp {
                 }
                 ui.label(small_muted(&t, "Gilt für neue Arbeitsblätter, auch die, die ein Modell erstellt. Aus: keine Punkte, „Prüfen“ zählt richtige Aufgaben. Jedes Arbeitsblatt hat beim Bearbeiten seinen eigenen Schalter „Punkte vergeben“."));
                 ui.add_space(6.0);
+                self.computer_section(ui);
+                ui.add_space(6.0);
                 ui.label("Beim Speichern als KI-generiert kennzeichnen");
                 ui.horizontal_wrapped(|ui| {
                     let mut label = st.ai_label.clone();

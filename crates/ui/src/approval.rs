@@ -48,6 +48,14 @@ pub(crate) fn card(ui: &mut Ui, t: &Tokens, a: &Approval) -> Option<bool> {
                     ui.label(RichText::new(format!("Nicht von deinen Worten gedeckt: {}", tr.reason)).color(t.warning).small());
                 }
             }
+            if let Some(w) = &a.window {
+                // Computer use (#97): what the program shows around the control, as checked.
+                egui::CollapsingHeader::new(small_muted(t, "Fensterinhalt")).id_salt(("approval-window", &a.id)).default_open(true).show(ui, |ui| {
+                    Frame::new().fill(t.code_bg).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(8)).show(ui, |ui| {
+                        ui.add(egui::Label::new(RichText::new(w.chars().take(3000).collect::<String>()).monospace().small()).wrap());
+                    });
+                });
+            }
             egui::CollapsingHeader::new(small_muted(t, "Alle Angaben")).id_salt(("approval-args", &a.id)).default_open(a.highlights.is_empty()).show(
                 ui,
                 |ui| {
@@ -89,6 +97,7 @@ mod tests {
             destructive: false,
             trust: None,
             note: None,
+            window: None,
         }
     }
 

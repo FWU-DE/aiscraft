@@ -12,6 +12,7 @@ mod artifact_panel;
 mod backdrop;
 mod chat_import;
 mod citations;
+mod computer;
 mod conversation;
 mod dialogs;
 mod downloads;

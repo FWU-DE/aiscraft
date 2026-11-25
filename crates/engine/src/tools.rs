@@ -259,6 +259,10 @@ pub(crate) fn specs_for(c: &Ctx, sources: &aiscraft_core::Sources) -> Vec<ToolSp
     if sources.allows_connector(crate::local_files::ID) {
         out.extend(crate::local_files::specs());
     }
+    // Computer use (#97): offered only while the person has switched it on.
+    if crate::computer::enabled(c) && sources.allows_connector(crate::computer::ID) {
+        out.extend(crate::computer::specs());
+    }
     for conn in c.state().connectors.iter().filter(|x| x.enabled && x.status == "connected" && sources.allows_connector(&x.id)) {
         for t in conn.tools.iter().filter(|t| !t.app_only) {
             let mut desc = format!("[{}] {}", conn.name, if t.description.is_empty() { &t.title } else { &t.description });
@@ -300,6 +304,10 @@ struct Ready {
     secrets: Vec<String>,
     /// Why it may run, for the action log (#23).
     why: crate::action_log::Why,
+    /// Computer use (#97): the window content the check saw; the step runs only if it is still so.
+    window: Option<String>,
+    /// The request being answered (computer use opens a program for it only).
+    turn: String,
 }
 
 /// A call of the step that waits for the owner: index, the call, the verdict, a card warning.
@@ -327,6 +335,9 @@ fn needs_owner(c: &Ctx, call: &ToolCall) -> bool {
     }
     if crate::local_files::is_tool(&call.name) {
         return call.name != crate::local_files::LIST || !crate::local_files::enabled(c);
+    }
+    if crate::computer::is_tool(&call.name) {
+        return !matches!(call.name.as_str(), crate::computer::LIST | crate::computer::READ);
     }
     c.state().connectors.iter().flat_map(|x| x.tools.iter()).find(|t| t.llm_name == call.name).is_some_and(|t| !t.read_only)
 }
@@ -367,7 +378,7 @@ pub(crate) async fn run_step(c: &Ctx, conv: &str, calls: &[ToolCall], ev: &crate
         let asked = async {
             // One approval, one result: the yes is claimed before the call runs.
             let call = ready.call.clone();
-            if let Some(id) = ask(c, conv, &ready.conn, &ready.tool, &ready.call.arguments, trust, note).await {
+            if let Some(id) = ask(c, conv, &ready.conn, &ready.tool, &ready.call.arguments, trust, note, ready.window.clone()).await {
                 execute(c, conv, Ready { why: crate::action_log::Why::Approved, ..*ready }, Some(format!("approval:{id}"))).await
             } else {
                 logged(c, conv, &call, ("Die Person hat diese Aktion abgelehnt. Nicht erneut versuchen, sondern nachfragen.".to_string(), true, "denied"))
@@ -417,7 +428,21 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     }
     // Local files (#25): the person's own files, so with the names „Namen schützen“ replaced.
     let is_local = crate::local_files::is_tool(&call.name);
-    let found = if is_local {
+    let mut window = None;
+    let found = if crate::computer::is_tool(&call.name) {
+        // Computer use (#97): off, background work, blocked programs and programs not opened
+        // for this request end here, without a question.
+        match crate::computer::prepare(c, conv, &call.name, &local.arguments, interactive, &ev.turn).await {
+            Ok(p) => {
+                window = p.window;
+                Some((crate::computer::view(), p.tool))
+            }
+            Err(why) => {
+                let label = if why.starts_with("Abgelehnt") { "denied" } else { "error" };
+                return Prep::Done((why, true, label));
+            }
+        }
+    } else if is_local {
         match crate::local_files::prepare(c, &call.name, &local.arguments, interactive) {
             Ok(tool) => Some((crate::local_files::view(), tool)),
             Err(why) => return Prep::Done((why, true, if interactive { "error" } else { "denied" })),
@@ -440,11 +465,11 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
         return Prep::Done((format!("{} ist in diesem Chat nicht freigegeben.", conn.name), true, "denied"));
     }
     // Vault placeholders: fill them in here; using a secret always needs the owner's yes.
-    let (arguments, secrets) = match crate::vault::fill(c, if is_local { &local.arguments } else { &call.arguments }) {
+    let (arguments, secrets) = match crate::vault::fill(c, if is_local || crate::computer::is_tool(&call.name) { &local.arguments } else { &call.arguments }) {
         Ok(x) => x,
         Err(e) => return Prep::Done((e.message, true, "error")),
     };
-    let ready = Box::new(Ready { conn, tool, call: call.clone(), arguments, secrets, why: crate::action_log::Why::ReadOnly });
+    let ready = Box::new(Ready { conn, tool, call: call.clone(), arguments, secrets, why: crate::action_log::Why::ReadOnly, window, turn: ev.turn.clone() });
     // While local files are off, the first call asks once: the yes switches them on and runs it.
     let switch_on = if is_local { crate::local_files::enable_note(c) } else { None };
     if ready.tool.read_only && ready.secrets.is_empty() && switch_on.is_none() {
@@ -464,7 +489,7 @@ async fn prepare(c: &Ctx, conv: &str, call: &ToolCall, ev: &crate::trust::Eviden
     // fall silent.
     let trust = if settings.trust_check || !rules.is_empty() {
         let shown = crate::privacy::reveal_value(c, conv, &call.arguments);
-        crate::trust::check(c, &ready.conn.name, &ready.tool, &shown, ev, &rules).await
+        crate::trust::check(c, &ready.conn.name, &ready.tool, &shown, ev, &rules, ready.window.as_deref()).await
     } else {
         None
     };
@@ -548,6 +573,18 @@ async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> O
             let _ = c.store(|st| st.finish_claim(key, state, crate::now_ms()));
         }
     };
+    if r.conn.id == crate::computer::ID {
+        return match crate::computer::execute(c, conv, &r.tool.name, &r.arguments, r.window.as_deref(), &r.turn).await {
+            Ok(text) => {
+                finish("done");
+                (wrap_untrusted(&r.call.name, &text), false, "ok")
+            }
+            Err(e) => {
+                finish("failed");
+                (format!("Fehler: {}", e.message), true, if e.kind == aiscraft_core::ErrorKind::Refused { "denied" } else { "error" })
+            }
+        };
+    }
     if r.conn.id == crate::local_files::ID {
         return match crate::local_files::execute(c, &r.tool.name, &r.arguments) {
             Ok(text) => {
@@ -623,7 +660,9 @@ async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> O
 }
 
 /// Ask the owner and wait for the answer (or the timeout, which counts as no).
-/// Returns the approval's id on a yes.
+/// Returns the approval's id on a yes. `window` is the program's content a computer-use step
+/// works on (#97), shown on the card.
+#[allow(clippy::too_many_arguments)]
 async fn ask(
     c: &Ctx,
     conv: &str,
@@ -632,6 +671,7 @@ async fn ask(
     args: &Value,
     trust: Option<TrustVerdict>,
     note: Option<String>,
+    window: Option<String>,
 ) -> Option<String> {
     let id = new_id();
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -646,6 +686,7 @@ async fn ask(
         trust,
         highlights: crate::highlights::highlights(&crate::privacy::reveal_value(c, conv, args), &tool.input_schema),
         note,
+        window,
     };
     c.update(|s| s.approvals.push(approval));
     let answer = tokio::time::timeout(APPROVAL_TIMEOUT, rx).await.ok().and_then(Result::ok).unwrap_or(false);

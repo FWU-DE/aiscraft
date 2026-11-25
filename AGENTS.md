@@ -26,6 +26,9 @@ crates/
   mcp        L1  MCP client (stdio, Streamable HTTP) for connectors
   board      L1  whiteboard: yrs CRDT model + egui widget + mind map layout
   voice      L1  recording, playback, transcription, text to speech (OpenAI, AIS.chat)
+  desktop    L1  computer use (#97): programs on this computer through the accessibility APIs
+                 (Windows UI Automation via `uiautomation`, Apache-2.0; macOS/Linux „noch nicht
+                 verfügbar“), the hard block list (`policy.rs`), key chords, a fake for tests
   collab     L1  plug-in: live collaboration on yrs artifacts (y-sync over WebSocket, join codes);
                  engine feature `collab`, see crates/collab/README.md
   engine     L2  state, command registry, chat/tool loop, artifacts, schedules, connectors, usage
@@ -149,7 +152,11 @@ words (with provenance, hourly tidy-up), trust check and approvals bound to exac
 connectors (MCP, also for the Claude subscription via the tool bridge), connected apps (catalog:
 Microsoft 365, Google, CalDAV; OAuth in the system browser, `engine/src/accounts`), schedules, page watches,
 check-ins, usage ledger with monthly limit, history search and recall, learned skills, background
-tasks, voice in and out, hints (nudges) with quiet hours, vault with placeholders and TOTP.
+tasks, voice in and out, hints (nudges) with quiet hours, vault with placeholders and TOTP,
+computer use as an optional, off-by-default feature (#97, Windows first: `crates/desktop`,
+`engine/src/computer.rs`; open per request, trust check with the window content, the window read
+again before a step, hard block list plus „Hier nie“; no picture of a window yet, because a
+one-window capture needs Win32 calls that are `unsafe`).
 Not adopted on purpose: Nod's own sandbox computer and browser (AIS.ChatCraft runs no code itself; learning
 apps run only in the locked-down preview process or the browser), WhatsApp/Telegram channels (out of scope for a school client). Nod's repo (`n8n-io/nod`, Apache-2.0) is a reference for behaviour, not for
 code; it is Node/Electron, AIS.ChatCraft is Rust.
@@ -179,6 +186,9 @@ a slow path comes with such a gate.
 | UI tests don't depend on load or on each other | No process-wide state the UI reads per frame: each app has its own Omarchy theme source (`theme::OmarchyTheme`, tests pass theirs through `common::app`), and toasts and the theme watcher count egui's input time, not the wall clock. `cargo test -p aiscraft-ui --test ui_flows --no-run`, then `seq 1 16 \| xargs -P 8` over the test binary (and `layout_gate`): 0 failures | `each_app_reads_its_own_omarchy_theme` (ui, `tests/ui_flows.rs`); the stress run before a change to the UI tests |
 | Deleted means gone, archived means out of the way (#77) | `chat.delete` puts a chat into the trash for 30 days (undo toast, `chat.restore`); after `chat.purge`, `chat.empty_trash` or the 30 days nothing of it is left: no conversation or message (any branch) in the store, no FTS entry and so no recall excerpt, no attachment copy in the data folder, no „Namen schützen“ placeholder mapping; memory notes stay unless asked (`forget_notes`), documents stay. Archived chats are not in the sidebar or „Zuletzt bearbeitet“ and not recalled while `recall_archived` is off; the trash is never searched or recalled. AIS.chat's history is touched only with `ais_chat: true` for one chat | `a_purged_chat_leaves_nothing_behind`, `archived_chats_leave_the_sidebar_and_recall_but_stay_whole`, `deleting_in_ais_chat_needs_an_explicit_yes_for_one_chat` (engine, `archive_tests.rs`), `archive_and_trash_keep_chats_out_of_lists_and_recall` (store) |
 | Never crash on hostile input | Caps on every size, no panics | workspace lints, panic hunt |
+| Computer use only when switched on (#97) | Off by default: no `computer_*` tool offered, none runs, and no window is listed or read; background work refuses all of them | `computer_use_is_off_until_switched_on_and_reads_nothing` (engine, `computer_tests.rs`) |
+| Blocked programs are refused without a question (#97) | Terminals and script hosts, system settings and security (and anything else in the Windows folder but Editor, Paint, Rechner), Explorer, password managers, crypto wallets, AIS.ChatCraft itself, unrecognised programs and the person's „Hier nie“ list: not listed, not opened, not read, no trust check, no approval | `blocked_programs_and_background_work_are_refused_without_a_question` (engine), `the_hard_list_by_name_and_path`, `windows_are_judged_by_what_they_show_and_the_own_list` (desktop) |
+| Every change is checked with the window content (#97) | Opening needs the owner's words or a yes and lasts for one request; press, type and keys each get a trust check whose request holds the window excerpt as data (never owner words); the window is read again before the step and a changed excerpt refuses it; never into a password field, no Windows key | `every_change_is_checked_with_the_window_content_and_reread_before_it_runs`, `opening_a_program_nobody_named_asks_and_starts_it` (engine); live: `drives_notepad_open_type_read_back_close_without_saving` (desktop, `#[ignore]`, opens Notepad) |
 | Tests stay off the desktop | No windows, browser, mic or speakers | rule 2.4, `browser_allowed` |
 
 Live check against the real AIS.chat (signed in): cold, with no cache, `persona.refresh` takes

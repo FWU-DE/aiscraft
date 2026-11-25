@@ -805,6 +805,7 @@ pub(crate) fn server_configs(c: &Ctx) -> Vec<ServerConfig> {
 /// At start: the installed packages' connectors, connected when switched on.
 pub(crate) fn load(c: &Ctx) {
     crate::local_files::load(c);
+    crate::computer::load(c);
     // Staging leftovers of a run that ended in the middle of an install.
     package::remove(&c.0.ext.dir.join(STAGING));
     let all = records(c);

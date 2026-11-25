@@ -66,6 +66,8 @@ pub struct AisCraftApp {
     pub(crate) composer: String,
     /// The next composer drawn is the start page's large one (Modern, Glas).
     pub(crate) composer_big: bool,
+    /// The program being typed into „Hier nie“ (computer use, #97).
+    pub(crate) computer_never_draft: String,
     /// How wide the composer must be for all its buttons to fit in one row (measured in the last
     /// frame). Its column grows up to this when the window has room.
     pub(crate) composer_need: f32,
@@ -265,6 +267,7 @@ impl AisCraftApp {
             md: Default::default(),
             composer: String::new(),
             composer_big: false,
+            computer_never_draft: String::new(),
             composer_need: 0.0,
             panel_layout: PanelLayout::default(),
             create_as_icon: false,
