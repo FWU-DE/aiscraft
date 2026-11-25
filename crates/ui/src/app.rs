@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::dialogs::Dialog;
 use crate::palette::Palette;
-use crate::theme::{self, ThemeWatcher, Tokens};
+use crate::theme::{self, OmarchyTheme, ThemeWatcher, Tokens};
 
 /// A request from the control channel that needs the UI thread.
 pub enum UiRequest {
@@ -56,6 +56,11 @@ pub struct AisCraftApp {
     pub(crate) tokens: Tokens,
     theme_key: (String, bool, String),
     watcher: ThemeWatcher,
+    /// Where the Omarchy desktop theme comes from (the desktop's; tests set their own).
+    pub(crate) omarchy: OmarchyTheme,
+    /// Whether that theme is there: read at start and when the watcher sees `colors.toml`
+    /// change, not every frame.
+    pub(crate) omarchy_available: bool,
     pub(crate) md: egui_commonmark::CommonMarkCache,
     pub(crate) composer: String,
     /// The next composer drawn is the start page's large one (Modern, Glas).
@@ -104,8 +109,9 @@ pub struct AisCraftApp {
     pub(crate) images: std::collections::HashMap<String, Option<egui::TextureHandle>>,
     /// Numbers the start page reads from the engine, refreshed every few seconds.
     pub(crate) home: crate::home::HomeCache,
-    /// When each toast was first shown; plain information goes away on its own after a while.
-    toast_seen: std::collections::HashMap<u64, std::time::Instant>,
+    /// When each toast was first shown (egui's input time, seconds); plain information goes away
+    /// on its own after a while.
+    toast_seen: std::collections::HashMap<u64, f64>,
     /// The window width at which the sidebar was last folded or unfolded automatically.
     narrow: Option<bool>,
 }
@@ -188,7 +194,8 @@ impl AisCraftApp {
         engine.on_change(move || ctx.request_repaint());
         let state = engine.state();
         let system_dark = cc.egui_ctx.system_theme().is_none_or(|t| t == egui::Theme::Dark);
-        let tokens = theme::resolve(&state.settings.theme, system_dark, state.settings.transparency == "off");
+        let omarchy = OmarchyTheme::desktop();
+        let tokens = theme::resolve(&state.settings.theme, system_dark, state.settings.transparency == "off", &omarchy);
         tokens.apply(&cc.egui_ctx, state.settings.zoom);
         let first_run = state.backends.iter().all(|b| !b.has_secret) && state.backends.len() == 1;
         // A fresh profile gets the whole welcome (look, then sign-in); people who are set up
@@ -211,7 +218,9 @@ impl AisCraftApp {
             theme_key: (state.settings.theme.clone(), system_dark, state.settings.transparency.clone()),
             state,
             tokens,
-            watcher: ThemeWatcher::new(),
+            watcher: ThemeWatcher::new(omarchy.clone()),
+            omarchy_available: omarchy.available(),
+            omarchy,
             md: Default::default(),
             composer: String::new(),
             composer_big: false,
@@ -250,6 +259,16 @@ impl AisCraftApp {
         };
         app.register_code_theme();
         app
+    }
+
+    /// Read the Omarchy theme from `omarchy` instead of the desktop's (tests, offscreen pictures).
+    pub fn with_omarchy_theme(mut self, omarchy: OmarchyTheme) -> Self {
+        self.watcher = ThemeWatcher::new(omarchy.clone());
+        self.omarchy_available = omarchy.available();
+        self.tokens = theme::resolve(&self.theme_key.0, self.theme_key.1, self.theme_key.2 == "off", &omarchy);
+        self.omarchy = omarchy;
+        self.register_code_theme();
+        self
     }
 
     /// The texture of an image file (at most 25 MB, 8192 px a side), loaded on first use.
@@ -293,9 +312,13 @@ impl AisCraftApp {
     fn sync_theme(&mut self, ctx: &egui::Context) {
         let system_dark = ctx.system_theme().is_none_or(|t| t == egui::Theme::Dark);
         let key = (self.state.settings.theme.clone(), system_dark, self.state.settings.transparency.clone());
-        let follow = key.0 == "omarchy" && self.watcher.changed();
+        let changed = self.watcher.changed(ctx.input(|i| i.time));
+        if changed {
+            self.omarchy_available = self.omarchy.available();
+        }
+        let follow = key.0 == "omarchy" && changed;
         if key != self.theme_key || follow {
-            self.tokens = theme::resolve(&key.0, system_dark, key.2 == "off");
+            self.tokens = theme::resolve(&key.0, system_dark, key.2 == "off", &self.omarchy);
             self.register_code_theme();
             self.theme_key = key;
         }
@@ -405,7 +428,9 @@ impl AisCraftApp {
         if notices.is_empty() {
             return;
         }
-        let now = std::time::Instant::now();
+        // egui's clock, not the wall clock: the test harness advances it per frame, so a toast
+        // stays for the same frames however busy the machine is (#71).
+        let now = ctx.input(|i| i.time);
         let area =
             egui::Area::new(Id::unique("toasts")).anchor(Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -16.0)).order(egui::Order::Foreground).show(ctx, |ui| {
                 ui.set_max_width(360.0);
@@ -457,9 +482,9 @@ impl AisCraftApp {
             // With a button ("Verlauf laden") it stays longer, so there is time to use it.
             let after = if n.action.is_some() { TOAST_SECONDS * 2.5 } else { TOAST_SECONDS };
             let transient = matches!(n.level, NoticeLevel::Info | NoticeLevel::Success);
-            if transient && now.saturating_duration_since(*seen).as_secs_f32() >= after {
+            if transient && now - *seen >= f64::from(after) {
                 // Asked once; the engine removes it with its next state.
-                *seen = now + std::time::Duration::from_secs(3600);
+                *seen = now + 3600.0;
                 self.run("notice.dismiss", json!({"id": n.id}));
             }
         }

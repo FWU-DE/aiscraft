@@ -8,15 +8,16 @@
 //! - no control lies outside the window or reaches into a neighbouring panel.
 //!
 //! The gate waits for conditions (the layout settles, a label shows up), not for a fixed number of
-//! frames, so it holds under load (issue #71). Its own binary, so the Omarchy override (a global)
-//! does not race with `ui_flows`.
+//! frames, so it holds under load (issue #71). Each app reads Omarchy's colours from its own
+//! directory (`OmarchyTheme`), never the desktop's.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
 
 mod common;
 
 use aiscraft_engine::{Engine, Options};
-use aiscraft_ui::{AisCraftApp, PanelLayout, UiRequest};
+use aiscraft_ui::theme::OmarchyTheme;
+use aiscraft_ui::{PanelLayout, UiRequest};
 use common::Harness;
 use egui::accesskit::Role;
 use egui_kittest::kittest::{By, NodeT, Queryable};
@@ -77,15 +78,16 @@ fn answer_backend(engine: &Engine, answer: &'static str) -> String {
 }
 
 /// Opens the app on `engine` at a size and scale, with a control channel for `UiRequest::Show`.
-fn open(engine: &Engine, (w, h, ppp): (f32, f32, f32)) -> (Harness, std::sync::mpsc::Sender<UiRequest>) {
+fn open(engine: &Engine, (w, h, ppp): (f32, f32, f32), omarchy: &OmarchyTheme) -> (Harness, std::sync::mpsc::Sender<UiRequest>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let e = engine.clone();
     let mut rx = Some(rx);
+    let omarchy = omarchy.clone();
     let mut harness = egui_kittest::Harness::builder()
         .with_size(egui::vec2(w, h))
         .with_pixels_per_point(ppp)
         .allow_missing_glyphs()
-        .build_eframe(move |cc| AisCraftApp::new(cc, e.clone(), rx.take()));
+        .build_eframe(move |cc| common::app(cc, &e, rx.take(), omarchy.clone()));
     harness.run_steps(2);
     (harness, tx)
 }
@@ -245,7 +247,7 @@ fn call(engine: &Engine, cmd: &str, params: Value) -> Value {
 }
 
 /// All views of one look at one screen size.
-fn gate(theme: &str, screen: (f32, f32, f32)) {
+fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
     let at = |view: &str| format!("{theme} {}×{} @{}: {view}", screen.0, screen.1, screen.2);
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
     call(&engine, "settings.set", json!({"key": "theme", "value": theme}));
@@ -258,7 +260,7 @@ fn gate(theme: &str, screen: (f32, f32, f32)) {
     call(&engine, "chat.send", json!({"text": "Erkläre Photosynthese ausführlich"}));
     assert!(engine.wait_for(std::time::Duration::from_secs(10), |s| s.messages.iter().any(|m| m.content.contains("Donaudampf"))), "the answer arrived");
     let chat = engine.state().current.clone().unwrap();
-    let (mut h, tx) = open(&engine, screen);
+    let (mut h, tx) = open(&engine, screen, omarchy);
 
     // Start page.
     call(&engine, "chat.close", json!({}));
@@ -358,7 +360,7 @@ fn gate(theme: &str, screen: (f32, f32, f32)) {
     // The welcome a fresh profile gets.
     let fresh = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
     call(&fresh, "settings.set", json!({"key": "theme", "value": theme}));
-    let (mut h, _tx) = open(&fresh, screen);
+    let (mut h, _tx) = open(&fresh, screen, omarchy);
     settle(&mut h, &at("Willkommen"), |h| label(h, "Willkommen bei AIS.ChatCraft"));
     check(&mut h, &at("Willkommen"));
 }
@@ -366,14 +368,14 @@ fn gate(theme: &str, screen: (f32, f32, f32)) {
 #[test]
 fn layout_gate_modern() {
     for screen in SCREENS {
-        gate("modern-light", screen);
+        gate("modern-light", screen, &OmarchyTheme::none());
     }
 }
 
 #[test]
 fn layout_gate_glas() {
     for screen in SCREENS {
-        gate("glas-dark", screen);
+        gate("glas-dark", screen, &OmarchyTheme::none());
     }
 }
 
@@ -382,10 +384,8 @@ fn layout_gate_omarchy() {
     let dir = std::env::temp_dir().join(format!("aiscraft-layout-gate-omarchy-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("colors.toml"), "background = \"#1e1e2e\"\nforeground = \"#cdd6f4\"\naccent = \"#89b4fa\"\n").unwrap();
-    aiscraft_ui::theme::set_omarchy_dir(Some(dir.clone()));
     for screen in SCREENS {
-        gate("omarchy", screen);
+        gate("omarchy", screen, &OmarchyTheme::at(&dir));
     }
-    aiscraft_ui::theme::set_omarchy_dir(None);
     let _ = std::fs::remove_dir_all(&dir);
 }
