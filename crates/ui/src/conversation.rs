@@ -29,7 +29,8 @@ impl AisCraftApp {
             .show_separator_line(false)
             .frame(Frame::new().inner_margin(Margin { left: 0, right: 0, top: 6, bottom: 10 }))
             .show(ui, |ui| {
-                centered(ui, |ui| self.composer(ui));
+                let w = crate::app::CONTENT_WIDTH.max(self.composer_need);
+                centered_w(ui, w, |ui| self.composer(ui));
             });
         let main = if self.tokens.glass.is_some() { self.tokens.main.gamma_multiply(0.6) } else { self.tokens.main };
         let out = ScrollArea::vertical().id_salt(("messages", self.state.current.clone())).stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
@@ -389,7 +390,8 @@ impl AisCraftApp {
         if home {
             ScrollArea::vertical().id_salt("start-page").auto_shrink([false, false]).show(ui, |ui| {
                 ui.add_space(18.0);
-                centered_w(ui, 820.0, |ui| self.home_page(ui, first));
+                let w = 820.0_f32.max(self.composer_need);
+                centered_w(ui, w, |ui| self.home_page(ui, first));
             });
             return;
         }
@@ -1456,6 +1458,7 @@ impl AisCraftApp {
     /// chips, the microphone and the round send button.
     fn composer_tools(&mut self, ui: &mut Ui, generating: bool, image_mode: bool, send: &mut bool) {
         let t = self.tokens.clone();
+        let mut tools_w = 0.0_f32;
         // A narrow composer (next to a panel, small window): "Erstellen" becomes the sparkle icon.
         let compact = ui.available_width() < 560.0;
         ui.horizontal(|ui| {
@@ -1516,25 +1519,40 @@ impl AisCraftApp {
                 } else if crate::kit::icon_button(ui, &t, crate::icons::Icon::Mic, "Diktieren", t.text2, 19.0, 36.0).clicked() {
                     self.run("voice.record_start", json!({}));
                 }
+                // Everything right of here (send, voice, microphone) is drawn already.
+                let right_used = ui.max_rect().width() - ui.available_width();
                 ui.with_layout(Layout::left_to_right(Align::Center).with_main_wrap(true), |ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    let start = ui.cursor().min;
+                    // The width all buttons take in one row: each step adds what the cursor moved
+                    // (after a wrap: from the row start).
+                    let (mut acc, mut last) = (0.0_f32, start);
+                    fn step(ui: &Ui, acc: &mut f32, last: &mut egui::Pos2, start: egui::Pos2) {
+                        let now = ui.cursor().min;
+                        *acc += if (now.y - last.y).abs() < 1.0 { now.x - last.x } else { now.x - start.x };
+                        *last = now;
+                    }
                     if compact && !image_mode {
                         self.create_menu_icon(ui);
                     }
+                    step(ui, &mut acc, &mut last, start);
                     if !image_mode
                         && crate::kit::icon_button(ui, &t, crate::icons::Icon::Clip, "Dateien anhängen (oder hineinziehen)", t.text2, 19.0, 34.0).clicked()
                         && let Some(files) = rfd::FileDialog::new().pick_files()
                     {
                         self.take_files(files);
                     }
+                    step(ui, &mut acc, &mut last, start);
                     if !image_mode
                         && self.link_input.is_none()
                         && crate::kit::icon_button(ui, &t, crate::icons::Icon::Globe, "Webseite anhängen (bis zu 5 Links)", t.text2, 19.0, 34.0).clicked()
                     {
                         self.link_input = Some(String::new());
                     }
+                    step(ui, &mut acc, &mut last, start);
                     ui.add_space(2.0);
                     self.model_picker(ui);
+                    step(ui, &mut acc, &mut last, start);
                     if image_mode {
                         let cur = self.state.selection.aspect_ratio.clone();
                         let label = aiscraft_core::ASPECT_RATIOS.iter().find(|(k, _)| *k == cur).map(|(_, l)| *l).unwrap_or("Quadratisch");
@@ -1549,15 +1567,25 @@ impl AisCraftApp {
                         });
                     } else {
                         self.sources_menu(ui);
+                        step(ui, &mut acc, &mut last, start);
                         self.style_menu(ui);
+                        step(ui, &mut acc, &mut last, start);
                         self.privacy_switch(ui);
+                        step(ui, &mut acc, &mut last, start);
                         if !compact {
                             self.create_menu(ui);
                         }
                     }
+                    step(ui, &mut acc, &mut last, start);
+                    tools_w = acc + right_used;
                 });
             });
         });
+        // Frame margins (keyline left, 16 right), the stroke and a little air. Capped, so a long
+        // model name can't make the column endless.
+        if tools_w > 0.0 {
+            self.composer_need = (tools_w + f32::from(crate::home::KEYLINE_I8) + 16.0 + 8.0).min(1100.0);
+        }
     }
 
     /// Say when project instructions or notes are not sent, so nobody relies on them silently.

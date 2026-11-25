@@ -65,6 +65,9 @@ pub struct AisCraftApp {
     pub(crate) composer: String,
     /// The next composer drawn is the start page's large one (Modern, Glas).
     pub(crate) composer_big: bool,
+    /// How wide the composer must be for all its buttons to fit in one row (measured in the last
+    /// frame). Its column grows up to this when the window has room.
+    pub(crate) composer_need: f32,
     panel_layout: PanelLayout,
     /// Draw the next "Erstellen" menu as an icon (narrow composer).
     pub(crate) create_as_icon: bool,
@@ -233,6 +236,7 @@ impl AisCraftApp {
             md: Default::default(),
             composer: String::new(),
             composer_big: false,
+            composer_need: 0.0,
             panel_layout: PanelLayout::default(),
             create_as_icon: false,
             pending_files: Vec::new(),
