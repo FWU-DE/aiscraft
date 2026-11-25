@@ -778,7 +778,10 @@ impl AisCraftApp {
                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                 use crate::icons::Icon;
                 use crate::kit::{Pill, pill};
-                if pill(ui, &t, Pill::Ghost, Some(Icon::Copy), "Kopieren", 13.0, None).on_hover_text("Antwort in die Zwischenablage").clicked() {
+                let copy = pill(ui, &t, Pill::Ghost, Some(Icon::Copy), "Kopieren", 13.0, None)
+                    .on_hover_text("Antwort in die Zwischenablage; Rechtsklick: mit Kennzeichnung");
+                self.copy_menu(&copy, m);
+                if copy.clicked() {
                     ui.ctx().copy_text(m.content.clone());
                 }
                 if pill(ui, &t, Pill::Ghost, Some(Icon::Speaker), "Vorlesen", 13.0, None)

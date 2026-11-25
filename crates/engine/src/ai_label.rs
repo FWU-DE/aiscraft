@@ -7,10 +7,12 @@
 //! `ai_label_prompt` writes the prompt along (default off: a prompt may hold things not meant
 //! for a handout). Copying to the clipboard stays plain; `message.copy_labeled` copies with it.
 
-use aiscraft_core::{Artifact, BackendKind, Message, Role};
+use aiscraft_core::{Artifact, BackendKind, Error, Message, Result, Role};
 use serde::Serialize;
+use serde_json::{Value, json};
 
 use crate::Ctx;
+use crate::commands::{CommandSpec, req_str};
 
 const MAX_PROMPT: usize = 4000;
 
@@ -100,7 +102,7 @@ fn build(c: &Ctx, backend_id: &str, model: Option<&str>, prompt: Option<&str>, f
 }
 
 /// The user message an answer replied to.
-fn prompt_before<'a>(messages: &'a [Message], idx: usize) -> Option<&'a str> {
+fn prompt_before(messages: &[Message], idx: usize) -> Option<&str> {
     messages.get(..idx)?.iter().rev().find(|m| m.role == Role::User).map(|m| m.content.as_str())
 }
 
@@ -122,12 +124,7 @@ fn message_note(c: &Ctx, message_id: Option<&str>, force: bool) -> Option<Note> 
         Some(mid) => s.messages.iter().position(|m| m.id == mid)?,
         None => s.messages.len(),
     };
-    let model = s
-        .messages
-        .get(idx)
-        .and_then(|m| m.model.clone())
-        .or_else(|| conv.map(|x| x.model_id.clone()))
-        .unwrap_or_else(|| s.selection.model_id.clone());
+    let model = s.messages.get(idx).and_then(|m| m.model.clone()).or_else(|| conv.map(|x| x.model_id.clone())).unwrap_or_else(|| s.selection.model_id.clone());
     build(c, &backend, Some(&model), prompt_before(&s.messages, idx), force)
 }
 
@@ -140,8 +137,30 @@ pub(crate) fn note_for_artifact(c: &Ctx, a: &Artifact) -> Option<Note> {
     let conv = s.conversation(&conv_id)?.clone();
     let messages = if s.current.as_deref() == Some(conv_id.as_str()) { s.messages.clone() } else { c.store(|st| st.messages(&conv_id)).unwrap_or_default() };
     let idx = messages.iter().position(|m| m.created_at > a.created_at).unwrap_or(messages.len());
-    let model = messages.get(..idx).and_then(|m| m.iter().rev().find(|m| m.role == Role::Assistant)).and_then(|m| m.model.clone()).unwrap_or(conv.model_id.clone());
+    let model =
+        messages.get(..idx).and_then(|m| m.iter().rev().find(|m| m.role == Role::Assistant)).and_then(|m| m.model.clone()).unwrap_or(conv.model_id.clone());
     build(c, &conv.backend_id, Some(&model), prompt_before(&messages, idx), false)
+}
+
+pub(crate) static COMMANDS: &[CommandSpec] = &[CommandSpec {
+    id: "message.copy_labeled",
+    label: "Mit Kennzeichnung kopieren",
+    group: "Chat",
+    shortcut: None,
+    params: "message_id: string (gibt den Text mit „Erstellt mit KI …“ zurück; die Oberfläche legt ihn in die Zwischenablage)",
+    palette: false,
+    run: |c, p| Box::pin(copy_labeled(c, p)),
+}];
+
+/// The answer with its note, whatever the setting says (the person asked for it).
+async fn copy_labeled(c: Ctx, p: Value) -> Result<Value> {
+    let mid = req_str(&p, "message_id")?;
+    let m = c.state().messages.iter().find(|m| m.id == mid).cloned().ok_or_else(|| Error::not_found("Nachricht nicht gefunden"))?;
+    if m.role != Role::Assistant {
+        return Err(Error::invalid("Nur Antworten lassen sich mit Kennzeichnung kopieren"));
+    }
+    let note = note_for_message_always(&c, &mid).ok_or_else(|| Error::not_found("Nachricht nicht gefunden"))?;
+    Ok(json!({"text": format!("{}{}", m.content.trim_end(), note.markdown()), "note": note}))
 }
 
 #[cfg(test)]

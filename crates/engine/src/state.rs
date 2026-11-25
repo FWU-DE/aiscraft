@@ -365,6 +365,12 @@ pub struct Settings {
     /// New worksheets count points (on by default); off: they count right tasks, and models
     /// are told to leave points out. Each sheet has its own switch afterwards.
     pub worksheet_points: bool,
+    /// „Erstellt mit KI“ on exports (#57): `ais-chat` (only content from AIS.chat, the
+    /// default, as its terms of use ask), `all` or `off`.
+    pub ai_label: String,
+    /// Write the prompt along with the label (off: a prompt may hold things not meant for a
+    /// handout).
+    pub ai_label_prompt: bool,
     /// The owner's own rules for the trust check (#22); changed with `trust.rule_add` and
     /// `trust.rule_remove`.
     pub trust_rules: Vec<TrustRule>,
@@ -414,6 +420,8 @@ impl Default for Settings {
             quiet_end: 7,
             update_check: true,
             worksheet_points: true,
+            ai_label: "ais-chat".into(),
+            ai_label_prompt: false,
             trust_rules: Vec::new(),
         }
     }

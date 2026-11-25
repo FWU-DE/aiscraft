@@ -41,6 +41,7 @@ pub fn commands() -> &'static [CommandSpec] {
         all.extend(crate::learn::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::learn::h5p::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::learn::board::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::ai_label::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::readability::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::attach::COMMANDS.iter().map(CommandSpec::copy));
         all
@@ -370,7 +371,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Einstellung ändern",
         "Einstellungen",
         None,
-        "key: theme|transparency|look_chosen|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|check_links|proactive|quiet_start|quiet_end|update_check|worksheet_points, value: any",
+        "key: theme|transparency|look_chosen|memory|zoom|enter_sends|tools|trust_check|auto_allow_covered|monthly_token_limit|learn_skills|recall|check_links|proactive|quiet_start|quiet_end|update_check|worksheet_points|ai_label|ai_label_prompt, value: any",
         false,
         |c, p| Box::pin(async move {
             let key = req_str(&p, "key")?;
@@ -390,6 +391,9 @@ static COMMANDS: &[CommandSpec] = &[
             }
             if key == "theme" && !crate::state::THEMES.contains(&parsed.theme.as_str()) {
                 return Err(Error::invalid(format!("Unbekanntes Erscheinungsbild {}; möglich: {}", parsed.theme, crate::state::THEMES.join(", "))));
+            }
+            if key == "ai_label" && !matches!(parsed.ai_label.as_str(), "ais-chat" | "all" | "off") {
+                return Err(Error::invalid("ai_label: ais-chat, all oder off"));
             }
             if key == "transparency" && !matches!(parsed.transparency.as_str(), "gradient" | "off") {
                 return Err(Error::invalid("transparency: gradient oder off"));

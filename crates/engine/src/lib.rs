@@ -3,6 +3,7 @@
 //! all dispatch the same commands by id, so everything a person can do, an agent can do.
 
 mod action_log;
+mod ai_label;
 mod artifacts;
 mod attach;
 mod bridge;

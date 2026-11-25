@@ -1,5 +1,5 @@
-//! Under an answer: „Speichern als …“ (Word, PDF, Excel, Markdown; #46) and „Lesbarkeit“ (#48).
-//! Each item dispatches a command.
+//! Under an answer: „Speichern als …“ (Word, PDF, Excel, Markdown; #46), „Lesbarkeit“ (#48)
+//! and „Mit Kennzeichnung kopieren“ (#57). Each item dispatches a command.
 
 use aiscraft_core::Message;
 use egui::{RichText, Ui};
@@ -58,5 +58,22 @@ impl AisCraftApp {
             }
         }
         ui.add(egui::Label::new(RichText::new(r.summary()).small().color(t.muted)).wrap()).on_hover_text(hover);
+    }
+
+    /// Context menu of „Kopieren“: with the AI label (#57). Plain copying stays plain.
+    pub(crate) fn copy_menu(&mut self, r: &egui::Response, m: &Message) {
+        r.context_menu(|ui| {
+            if ui.button("Kopieren").clicked() {
+                ui.ctx().copy_text(m.content.clone());
+                ui.close();
+            }
+            if ui.button("Mit Kennzeichnung kopieren").on_hover_text("Mit „Erstellt mit KI …“ und, wenn eingestellt, dem Prompt").clicked() {
+                match self.engine.call("message.copy_labeled", json!({"message_id": m.id})) {
+                    Ok(v) => ui.ctx().copy_text(v.get("text").and_then(serde_json::Value::as_str).unwrap_or(&m.content).to_string()),
+                    Err(e) => log::warn!("Mit Kennzeichnung kopieren: {e}"),
+                }
+                ui.close();
+            }
+        });
     }
 }

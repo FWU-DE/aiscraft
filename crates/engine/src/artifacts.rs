@@ -312,8 +312,14 @@ pub(crate) async fn export(c: Ctx, p: Value) -> Result<Value> {
         return r;
     }
     let state = state_of(&c, &id)?;
-    let text = artifact_text(a.kind, &state)?;
     let format = opt_str(&p, "format").unwrap_or_else(|| "markdown".into());
+    let mut text = artifact_text(a.kind, &state)?;
+    // „Erstellt mit KI“ (#57) at the end of a handout; not in the board's own JSON.
+    if format != "json"
+        && let Some(note) = crate::ai_label::note_for_artifact(&c, &a)
+    {
+        text.push_str(&note.markdown());
+    }
     // Word and PDF are binary: written to `path`, or returned as base64.
     if let Some(bytes) = crate::office::document_bytes(&format, &a.title, &text) {
         let bytes = bytes?;

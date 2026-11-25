@@ -1,5 +1,6 @@
 //! An answer as a file (#46): Word and PDF from its Markdown, Excel from its Markdown tables,
-//! Markdown as it is. The same writers as documents (#38); nothing a model wrote runs.
+//! Markdown as it is. The same writers as documents (#38); nothing a model wrote runs. Each
+//! file carries „Erstellt mit KI“ when the setting says so (#57).
 
 use std::path::Path;
 
@@ -133,13 +134,21 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[CommandSpec {
     run: |c, p| Box::pin(export(c, p)),
 }];
 
-/// The bytes of an answer as `format`: (bytes, extension).
-pub(crate) fn answer_bytes(title: &str, md: &str, format: &str) -> Result<(Vec<u8>, &'static str)> {
+/// The bytes of an answer as `format`: (bytes, extension). `note`: „Erstellt mit KI“ (#57),
+/// under the text, or in a sheet „Hinweis“ of a workbook.
+pub(crate) fn answer_bytes(title: &str, md: &str, format: &str, note: Option<&crate::ai_label::Note>) -> Result<(Vec<u8>, &'static str)> {
+    let noted = || format!("{}{}", md.trim_end(), note.map(|n| n.markdown()).unwrap_or_default());
     Ok(match format {
-        "docx" | "word" => (super::markdown_docx(title, md)?, "docx"),
-        "pdf" => (super::pdf::markdown_pdf(title, md)?, "pdf"),
-        "xlsx" | "excel" => (super::xlsx::workbook_xlsx(&tables_spec(title, md)?)?, "xlsx"),
-        "markdown" | "md" => (md.as_bytes().to_vec(), "md"),
+        "docx" | "word" => (super::markdown_docx(title, &noted())?, "docx"),
+        "pdf" => (super::pdf::markdown_pdf(title, &noted())?, "pdf"),
+        "xlsx" | "excel" => {
+            let mut spec = tables_spec(title, md)?;
+            if let (Some(n), Some(sheets)) = (note, spec.get_mut("sheets").and_then(Value::as_array_mut)) {
+                sheets.push(json!({"name": "Hinweis", "columns": ["Hinweis"], "rows": [[n.plain()]]}));
+            }
+            (super::xlsx::workbook_xlsx(&spec)?, "xlsx")
+        }
+        "markdown" | "md" => (if note.is_some() { noted() } else { md.to_string() }.into_bytes(), "md"),
         other => return Err(Error::invalid(format!("Format {other} gibt es hier nicht (docx, pdf, xlsx, markdown)"))),
     })
 }
@@ -152,7 +161,8 @@ async fn export(c: Ctx, p: Value) -> Result<Value> {
         return Err(Error::invalid("Nur Antworten mit Text lassen sich speichern"));
     }
     let title = opt_str(&p, "title").filter(|t| !t.trim().is_empty()).unwrap_or_else(|| title_of(&m.content));
-    let (bytes, ext) = answer_bytes(&title, &m.content, &format)?;
+    let note = crate::ai_label::note_for_message(&c, Some(&mid));
+    let (bytes, ext) = answer_bytes(&title, &m.content, &format, note.as_ref())?;
     if bytes.len() > super::MAX_FILE {
         return Err(Error::invalid("Die Datei wäre größer als 25 MB"));
     }
