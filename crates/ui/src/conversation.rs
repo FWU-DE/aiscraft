@@ -974,45 +974,84 @@ impl AisCraftApp {
         } else {
             "Kontext laut Server: Eingabe der letzten Antwort plus Antwort, also ungefähr das, was die nächste Nachricht mitschickt".to_string()
         };
-        match window {
-            Some(w) if w > 0 => {
-                let frac = (used as f32 / w as f32).clamp(0.0, 1.0);
-                let color = if frac > 0.9 {
-                    t.danger
-                } else if frac > 0.7 {
-                    t.warning
-                } else {
-                    t.accent
-                };
-                // One control: label, numbers and bar share a tooltip (the row is right to left).
-                let tip = format!("{tip}. {:.0} % von {} Tokens belegt.", frac * 100.0, fmt(w));
-                let pct = format!("{prefix}{:.0} %", (frac * 100.0).max(if used > 0 { 1.0 } else { 0.0 }));
-                let g1 = crate::kit::line(ui, "Kontext", crate::kit::font(12.5, crate::theme::SEMIBOLD), t.muted, 100.0);
-                let g2 = crate::kit::line(ui, &pct, crate::kit::font(12.5, crate::theme::SEMIBOLD), t.text2, 100.0);
-                let wdt = 12.0 + g1.size().x + 8.0 + 44.0 + 8.0 + g2.size().x + 12.0;
-                let (rect, r) = ui.allocate_exact_size(egui::vec2(wdt, 30.0), egui::Sense::hover());
-                let p = ui.painter();
-                let stroke = if t.glass.is_some() { t.card_stroke } else { t.border };
-                p.rect(rect, CornerRadius::same(15), t.surface, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
-                let mut x = rect.left() + 12.0;
-                let g1w = g1.size().x;
-                p.galley(egui::pos2(x, rect.center().y - g1.size().y / 2.0), g1, t.muted);
-                x += g1w + 8.0;
-                let track = egui::Rect::from_min_size(egui::pos2(x, rect.center().y - 3.0), egui::vec2(44.0, 6.0));
-                p.rect_filled(track, CornerRadius::same(3), if t.glass.is_some() { t.border } else { t.sunken });
-                let mut fill = track;
-                fill.set_width((44.0 * frac).max(6.0));
-                p.rect_filled(fill, CornerRadius::same(3), color);
-                p.galley(egui::pos2(track.right() + 8.0, rect.center().y - g2.size().y / 2.0), g2, t.text2);
-                r.on_hover_text(format!("Kontext {prefix}{} / {}. {tip}", fmt(used), fmt(w)));
-            }
-            _ => {
-                ui.label(small_muted(t, format!("Kontext {prefix}{}", fmt(used))))
-                    .on_hover_text(format!("{tip}. Die Größe des Kontextfensters meldet dieser Dienst nicht."));
-            }
-        }
+        // The window: as the service reports it, else what this model family is known to take,
+        // else an assumption (said so in the tooltip and with „≈“).
+        let (w, window_note) = match window.filter(|w| *w > 0) {
+            Some(w) => (w, String::new()),
+            None => match known_context_window(&sel.model_id) {
+                Some(w) => (w, " Größe des Kontextfensters: übliche Größe dieses Modells, der Dienst meldet sie nicht.".to_string()),
+                None => (ASSUMED_CONTEXT_WINDOW, " Der Dienst meldet die Größe des Kontextfensters nicht; angenommen sind 128k Tokens.".to_string()),
+            },
+        };
+        let prefix = if window_note.is_empty() { prefix } else { "≈ " };
+        let frac = (used as f32 / w as f32).clamp(0.0, 1.0);
+        let color = if frac > 0.9 {
+            t.danger
+        } else if frac > 0.7 {
+            t.warning
+        } else {
+            t.accent
+        };
+        // One control: label, ring and percentage share a tooltip (the row is right to left).
+        let pct = format!("{prefix}{:.0} %", (frac * 100.0).max(1.0));
+        let g1 = crate::kit::line(ui, "Kontext", crate::kit::font(12.5, crate::theme::SEMIBOLD), t.muted, 100.0);
+        let g2 = crate::kit::line(ui, &pct, crate::kit::font(12.5, crate::theme::SEMIBOLD), t.text2, 100.0);
+        const RING: f32 = 16.0;
+        let wdt = 12.0 + g1.size().x + 8.0 + RING + 6.0 + g2.size().x + 12.0;
+        let (rect, r) = ui.allocate_exact_size(egui::vec2(wdt, 30.0), egui::Sense::hover());
+        let p = ui.painter();
+        let stroke = if t.glass.is_some() { t.card_stroke } else { t.border };
+        p.rect(rect, CornerRadius::same(15), t.surface, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
+        let mut x = rect.left() + 12.0;
+        let g1w = g1.size().x;
+        p.galley(egui::pos2(x, rect.center().y - g1.size().y / 2.0), g1, t.muted);
+        x += g1w + 8.0;
+        let center = egui::pos2(x + RING / 2.0, rect.center().y);
+        context_ring(p, center, RING / 2.0 - 1.5, frac, t.border, color);
+        p.galley(egui::pos2(x + RING + 6.0, rect.center().y - g2.size().y / 2.0), g2, t.text2);
+        r.on_hover_text(format!("Kontext {prefix}{} von {} Tokens ({:.0} %). {tip}.{window_note}", fmt(used), fmt(w), frac * 100.0));
     }
+}
 
+/// Assumed context window when neither the service nor the model name tells (most current models
+/// take at least this much).
+const ASSUMED_CONTEXT_WINDOW: u64 = 128_000;
+
+/// The usual context window of well-known model families, by the model id (lower case match).
+pub(crate) fn known_context_window(model_id: &str) -> Option<u64> {
+    let id = model_id.to_ascii_lowercase();
+    let table: [(&str, u64); 12] = [
+        ("claude", 200_000),
+        ("gemini", 1_000_000),
+        ("gpt-4.1", 1_000_000),
+        ("gpt-5", 400_000),
+        ("gpt-4o", 128_000),
+        ("o3", 200_000),
+        ("o4", 200_000),
+        ("mistral-large", 128_000),
+        ("llama-3", 128_000),
+        ("llama3", 128_000),
+        ("qwen", 32_000),
+        ("deepseek", 128_000),
+    ];
+    table.iter().find(|(k, _)| id.contains(k)).map(|(_, w)| *w)
+}
+
+/// A ring that fills clockwise from the top with `frac` of a full turn.
+fn context_ring(p: &egui::Painter, center: egui::Pos2, radius: f32, frac: f32, track: egui::Color32, fill: egui::Color32) {
+    p.circle_stroke(center, radius, Stroke::new(3.0, track));
+    let frac = frac.clamp(0.0, 1.0).max(0.02);
+    let steps = ((48.0 * frac).ceil() as usize).max(2);
+    let points: Vec<egui::Pos2> = (0..=steps)
+        .map(|i| {
+            let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * frac * (i as f32 / steps as f32);
+            center + radius * egui::vec2(a.cos(), a.sin())
+        })
+        .collect();
+    p.add(egui::Shape::line(points, Stroke::new(3.0, fill)));
+}
+
+impl AisCraftApp {
     /// What this chat may draw on: tools, memory, project instructions, history, each connector.
     fn sources_menu(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
@@ -1825,5 +1864,20 @@ mod tests {
         assert!(!super::looks_like_a_name("uds2027"));
         assert!(!super::looks_like_a_name("j.renz"));
         assert!(!super::looks_like_a_name("x"));
+    }
+}
+
+#[cfg(test)]
+mod context_window_tests {
+    use super::known_context_window;
+
+    #[test]
+    fn known_model_families_have_a_window() {
+        assert_eq!(known_context_window("claude-sonnet-5-5"), Some(200_000));
+        assert_eq!(known_context_window("GPT-4.1-mini"), Some(1_000_000));
+        assert_eq!(known_context_window("gpt-4o"), Some(128_000));
+        assert_eq!(known_context_window("models/gemini-2.5-pro"), Some(1_000_000));
+        assert_eq!(known_context_window("etwas-ganz-anderes"), None);
+        assert_eq!(known_context_window(""), None);
     }
 }
