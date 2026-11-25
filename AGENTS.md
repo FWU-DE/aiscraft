@@ -167,7 +167,7 @@ on the host; learning apps run only in the locked-down preview process or the br
 Not adopted on purpose: Nod's own browser, WhatsApp/Telegram channels (out of scope for a school client). Nod's repo (`n8n-io/nod`, Apache-2.0) is a reference for behaviour, not for
 code; it is Node/Electron, AIS.ChatCraft is Rust.
 
-Last compared with Nod's releases: **nod-v0.9.6 (2026-11-24)**; issues #63–#69. Check `gh release list -R n8n-io/nod` for newer ones and update this line.
+Last compared with Nod's releases: **nod-v0.9.7 (2026-11-25)**; issues #63–#69, from 0.9.7 the system proxy and system certificates (no issue, fixed directly). Check `gh release list -R n8n-io/nod` for newer ones and update this line.
 
 ## 6. Non-functional requirements and quality gates
 
