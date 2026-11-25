@@ -131,3 +131,25 @@ fn temporary_chat_from_the_start_page() {
     step_until(&mut h, "the chat shows", |h| h.query_by_label_contains("wird nicht gespeichert").is_some());
     assert!(h.query_all_by_label_contains("Streng geheimer Plan").count() <= 1, "only the message, not a sidebar entry");
 }
+
+/// #41: Strg+F opens the search in the chat; Enter jumps to the next hit, Esc closes it.
+#[test]
+fn ctrl_f_finds_in_the_chat() {
+    let engine = engine_with(|_| vec![json!({"choices":[{"delta":{"content":"Der Igel schläft. Igel fressen Käfer."}}]})]);
+    engine.call("chat.send", json!({"text": "Erzähl vom Igel"})).unwrap();
+    let mut h = harness(&engine);
+    step_until(&mut h, "the answer shows", |h| h.query_by_label_contains("fressen Käfer").is_some());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F);
+    step_until(&mut h, "the search field opens", |h| h.query_by_label("Im Chat suchen").is_some());
+    h.run_steps(2);
+    h.event(egui::Event::Text("igel".into()));
+    step_until(&mut h, "three hits", |h| h.query_by_label("1 von 3").is_some());
+    h.key_press(egui::Key::Enter);
+    step_until(&mut h, "the next hit", |h| h.query_by_label("2 von 3").is_some());
+    assert_eq!(engine.state().find.as_ref().map(|f| f.current), Some(1));
+    click_until(&mut h, "‹", "back to the first hit", |h| h.query_by_label("1 von 3").is_some());
+    h.key_press(egui::Key::Escape);
+    step_until(&mut h, "Esc closes the search", |h| h.query_by_label("Im Chat suchen").is_none());
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.find.is_none()));
+    assert!(engine.state().current.is_some(), "Esc closed only the search, not the chat");
+}

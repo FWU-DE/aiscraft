@@ -219,3 +219,31 @@ fn temporary_chat_leaves_nothing_behind() {
     engine.call("chat.temporary", json!({"on": false})).unwrap();
     assert!(engine.call("chat.temporary", json!({"on": "ja"})).is_err());
 }
+
+/// #41: finding in the open chat counts every hit, steps forward and back around the end, and
+/// forgets the search with the chat.
+#[test]
+fn find_in_the_open_chat() {
+    fn igel(_: &str) -> Vec<Value> {
+        vec![json!({"choices":[{"delta":{"content":"Der Igel schläft. Igel fressen Käfer."}}]})]
+    }
+    let (engine, _) = engine_with(igel);
+    assert!(engine.call("chat.find", json!({"query": "igel"})).is_err(), "no chat open");
+    engine.call("chat.send", json!({"text": "Erzähl vom IGEL"})).unwrap();
+    let r = engine.call("chat.find", json!({"query": "igel"})).unwrap();
+    assert_eq!((r["total"].as_u64(), r["current"].as_u64()), (Some(3), Some(1)));
+    let first = engine.state().messages[0].id.clone();
+    assert_eq!(r["message_id"], json!(first), "the question comes first");
+    assert_eq!(engine.call("chat.find", json!({"step": "next"})).unwrap()["current"], 2);
+    assert_eq!(engine.call("chat.find", json!({"step": "next"})).unwrap()["current"], 3);
+    assert_eq!(engine.call("chat.find", json!({"step": "next"})).unwrap()["current"], 1, "around the end");
+    assert_eq!(engine.call("chat.find", json!({"step": "prev"})).unwrap()["current"], 3);
+    assert_eq!(engine.call("chat.find", json!({"query": "Käfer"})).unwrap()["total"], 1);
+    assert_eq!(engine.call("chat.find", json!({"query": "Wal"})).unwrap()["total"], 0);
+    assert!(engine.call("chat.find", json!({"step": "seitwärts"})).is_err());
+    engine.call("chat.find", json!({"close": true})).unwrap();
+    assert!(engine.state().find.is_none());
+    engine.call("chat.find", json!({"query": "igel"})).unwrap();
+    engine.call("chat.new", json!({})).unwrap();
+    assert!(engine.state().find.is_none(), "a search belongs to its chat");
+}

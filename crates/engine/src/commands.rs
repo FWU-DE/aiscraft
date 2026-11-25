@@ -60,6 +60,15 @@ static COMMANDS: &[CommandSpec] = &[
     )),
     cmd!("chat.open", "Chat öffnen", "Chat", None, "id: string", false, |c, p| Box::pin(chat_open(c, p))),
     cmd!(
+        "chat.find",
+        "Im Chat suchen",
+        "Chat",
+        Some("Ctrl+F"),
+        "query?: string, step?: next|prev, close?: bool. Antwort: total, current (ab 1), message_id",
+        false,
+        |c, p| Box::pin(async move { crate::find::run(&c, &p) })
+    ),
+    cmd!(
         "chat.temporary",
         "Vorübergehender Chat",
         "Chat",
@@ -713,6 +722,7 @@ async fn chat_new(c: Ctx, p: Value) -> Result<Value> {
     let aspect_ratio = state.selection.aspect_ratio.clone();
     c.update(|s| {
         s.current = None;
+        s.find = None;
         s.messages.clear();
         s.variants.clear();
         s.selection = Selection { backend_id, model_id, project_id, sources: Default::default(), persona: None, kind, aspect_ratio, temporary: false };
@@ -765,6 +775,7 @@ async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
     let n = messages.len();
     c.update(|s| {
         s.current = Some(id.clone());
+        s.find = None;
         s.messages = messages;
         s.variants = variants;
         s.selection = Selection {

@@ -15,6 +15,16 @@ impl AisCraftApp {
             self.empty_state(ui);
             return;
         }
+        if self.find.is_some() && self.state.current.is_some() {
+            egui::Panel::top("find-bar").show_separator_line(false).frame(Frame::new().inner_margin(Margin { left: 0, right: 0, top: 0, bottom: 6 })).show(
+                ui,
+                |ui| {
+                    centered(ui, |ui| self.find_bar(ui));
+                },
+            );
+        } else if self.find.is_some() {
+            self.find = None;
+        }
         egui::Panel::bottom("composer-panel")
             .show_separator_line(false)
             .frame(Frame::new().inner_margin(Margin { left: 0, right: 0, top: 6, bottom: 10 }))
@@ -28,12 +38,27 @@ impl AisCraftApp {
                 // Placeholders of „Namen schützen“ shown, copied and edited as the names (#55).
                 let msgs = self.engine.shown_messages(&self.state);
                 let last_assistant = msgs.iter().rposition(|m| m.role == Role::Assistant);
+                // The message with the current hit of Strg+F (#41): marked, and scrolled to once per step.
+                let hit =
+                    self.find.as_ref().and(self.state.find.as_ref()).and_then(|f| f.current_hit().map(|h| (f.query.clone(), f.current, h.message_id.clone())));
                 for (i, m) in msgs.iter().enumerate() {
+                    let top = ui.cursor().min.y;
                     match m.role {
                         Role::User => self.user_message(ui, m),
                         // Tool results are shown as chips on the call, not as messages.
                         Role::Tool => continue,
                         _ => self.assistant_message(ui, m, Some(i) == last_assistant),
+                    }
+                    if let Some((q, n, id)) = &hit
+                        && *id == m.id
+                    {
+                        let rect = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().min.y).expand2(egui::vec2(6.0, 4.0));
+                        ui.painter().rect_stroke(rect, CornerRadius::same(8), Stroke::new(2.0, self.tokens.accent), egui::StrokeKind::Outside);
+                        let key = (q.clone(), *n);
+                        if self.find_scrolled.as_ref() != Some(&key) {
+                            ui.scroll_to_rect(rect, Some(Align::Center));
+                            self.find_scrolled = Some(key);
+                        }
                     }
                     ui.add_space(18.0);
                 }
@@ -62,6 +87,64 @@ impl AisCraftApp {
             aiscraft_core::ais_conversation_path(c.persona.as_ref(), &c.id)
         };
         Some(format!("{}{path}", b.config.base_url.trim_end_matches('/')))
+    }
+
+    /// Strg+F (#41): the search field, „2 von 5“, previous and next hit, close.
+    fn find_bar(&mut self, ui: &mut Ui) {
+        let t = self.tokens.clone();
+        let found = self.state.find.clone().unwrap_or_default();
+        let mut step = None;
+        let mut close = false;
+        let mut changed = None;
+        Frame::new().fill(t.surface_hi).corner_radius(CornerRadius::same(10)).inner_margin(Margin::symmetric(10, 6)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let Some(query) = self.find.as_mut() else { return };
+                let (r, ()) = crate::widgets::field_then_buttons(
+                    ui,
+                    |ui| {
+                        if ui.small_button("Schließen").clicked() {
+                            close = true;
+                        }
+                        let any = !found.hits.is_empty();
+                        if ui.add_enabled(any, egui::Button::new("›").small()).on_hover_text("Nächster Treffer (Enter)").clicked() {
+                            step = Some("next");
+                        }
+                        if ui.add_enabled(any, egui::Button::new("‹").small()).on_hover_text("Voriger Treffer (Umschalt+Enter)").clicked() {
+                            step = Some("prev");
+                        }
+                        let count = if found.query.trim().is_empty() {
+                            String::new()
+                        } else if found.hits.is_empty() {
+                            "keine Treffer".to_string()
+                        } else {
+                            format!("{} von {}", found.current + 1, found.hits.len())
+                        };
+                        ui.label(small_muted(&t, count));
+                    },
+                    |ui, w| ui.add(egui::TextEdit::singleline(query).id(egui::Id::unique("find-field")).hint_text("Im Chat suchen").desired_width(w)),
+                );
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Im Chat suchen"));
+                if r.changed() {
+                    changed = Some(query.clone());
+                }
+                if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    step = Some(if ui.input(|i| i.modifiers.shift) { "prev" } else { "next" });
+                    r.request_focus();
+                }
+                if self.focus_find {
+                    r.request_focus();
+                    self.focus_find = false;
+                }
+            });
+        });
+        if close {
+            self.close_find();
+        } else if let Some(q) = changed {
+            self.run("chat.find", json!({"query": q}));
+        } else if let Some(s) = step {
+            let q = self.find.clone().unwrap_or_default();
+            self.run("chat.find", json!({"query": q, "step": s}));
+        }
     }
 
     /// The title in Bold with project chip and model · time underneath; on the

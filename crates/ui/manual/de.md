@@ -195,7 +195,9 @@ Für Zeugnisbemerkungen, Elternbriefe und Förderpläne: Vor dem Senden ersetzt 
 
 ## Suche und Verlauf
 
-Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats: zuerst die Titel (alle Wörter müssen darin vorkommen), dann die Nachrichten. Rechtsklick auf einen Chat: umbenennen, anheften, in ein Projekt verschieben, exportieren, löschen.
+**Im offenen Chat:** Strg+F öffnet ein Suchfeld über den Nachrichten. Es zeigt „2 von 5“, Enter (oder ›) springt zum nächsten Treffer, Umschalt+Enter (oder ‹) zum vorigen; die Nachricht mit dem Treffer ist umrandet. Groß- und Kleinschreibung spielt keine Rolle. Esc schließt die Suche.
+
+**Alle Chats:** Strg+Umschalt+F oder das Suchfeld oben in der Seitenleiste durchsucht alle Chats: zuerst die Titel (alle Wörter müssen darin vorkommen), dann die Nachrichten. Rechtsklick auf einen Chat: umbenennen, anheften, in ein Projekt verschieben, exportieren, löschen.
 
 ## Nutzung
 
@@ -231,7 +233,7 @@ Die Akzentfarbe ist überall das AIS-Blau.
 | Strg+N | Neuer Chat |
 | Strg+B | Seitenleiste ein und aus (in einem schmalen Fenster unter 1000 Pixeln ist sie zuerst eingeklappt) |
 | Strg+Umschalt+F | Alle Chats durchsuchen |
-| Strg+F | Auf der Seite „Entdecken“: suchen |
+| Strg+F | Im offenen Chat suchen (Enter: nächster Treffer, Umschalt+Enter: voriger, Esc: schließen); auf der Seite „Entdecken“: suchen |
 | Strg+R | Antwort neu erzeugen |
 | Esc | Antwort anhalten; bei leerem Eingabefeld: Chat schließen |
 | Strg+, | Einstellungen |

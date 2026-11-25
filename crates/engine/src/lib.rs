@@ -11,6 +11,7 @@ mod collab;
 mod commands;
 mod disk;
 mod files;
+pub mod find;
 mod inbox;
 pub mod learn;
 mod links;
@@ -257,7 +258,10 @@ impl Engine {
                 .unwrap_or_else(|| std::env::temp_dir().join(format!("aiscraft-attachments-{}", std::process::id()))),
         }));
         ctx.load()?;
-        temporary::clean_up(&ctx);
+        // Leftovers of a run that ended without closing (engines in memory share a folder, skip).
+        if opts.data_dir.is_some() {
+            temporary::clean_up(&ctx);
+        }
         if let Some(n) = secret_notice {
             ctx.notice(NoticeLevel::Warning, n);
         }
