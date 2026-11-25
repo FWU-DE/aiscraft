@@ -124,6 +124,9 @@ pub struct SearchHit {
     /// The backend (service) of the chat the hit is in; empty when the chat is gone.
     #[serde(default)]
     pub backend_id: String,
+    /// The chat is archived (#77): shown with the note „archiviert“.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
 }
 
 /// Conversation fields that live in one JSON column (added in schema 3).
@@ -219,6 +222,17 @@ impl Store {
         if !has_replaced {
             db.execute_batch("ALTER TABLE memory ADD COLUMN replaced_by TEXT").map_err(db_err)?;
         }
+        // Archive and trash (#77). Added columns again: an older version shows archived and
+        // deleted chats as ordinary ones, nothing is lost.
+        let has_archived: bool =
+            db.prepare("SELECT 1 FROM pragma_table_info('conversations') WHERE name = 'archived'").and_then(|mut st| st.exists([])).map_err(db_err)?;
+        if !has_archived {
+            db.execute_batch(
+                "ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE conversations ADD COLUMN deleted_at INTEGER;",
+            )
+            .map_err(db_err)?;
+        }
         db.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}")).map_err(db_err)?;
         Ok(Self { db, temp: None, temp_ids: Default::default() })
     }
@@ -272,17 +286,45 @@ impl Store {
             kind: extra.kind,
             remote_id: extra.remote_id,
             temporary: false,
+            archived: r.get::<_, i64>(10).unwrap_or(0) != 0,
+            deleted_at: r.get::<_, Option<i64>>(11).unwrap_or(None),
         })
     }
 
-    const CONV_COLS: &'static str = "id, title, backend_id, model_id, project_id, created_at, updated_at, pinned, sources, extra";
+    const CONV_COLS: &'static str = "id, title, backend_id, model_id, project_id, created_at, updated_at, pinned, sources, extra, archived, deleted_at";
 
-    /// Pinned first, then most recently updated.
+    /// The chats in use (neither archived nor in the trash): pinned first, then most recently
+    /// updated.
     pub fn conversations(&self, limit: usize) -> Result<Vec<Conversation>> {
-        let sql = format!("SELECT {} FROM conversations ORDER BY pinned DESC, updated_at DESC LIMIT ?1", Self::CONV_COLS);
+        self.conversations_where("archived = 0 AND deleted_at IS NULL", "pinned DESC, updated_at DESC", limit)
+    }
+
+    /// Archived chats (#77), most recently updated first.
+    pub fn archived_conversations(&self, limit: usize) -> Result<Vec<Conversation>> {
+        self.conversations_where("archived != 0 AND deleted_at IS NULL", "updated_at DESC", limit)
+    }
+
+    /// Chats in the trash (#77), most recently deleted first.
+    pub fn trashed_conversations(&self, limit: usize) -> Result<Vec<Conversation>> {
+        self.conversations_where("deleted_at IS NOT NULL", "deleted_at DESC", limit)
+    }
+
+    fn conversations_where(&self, filter: &str, order: &str, limit: usize) -> Result<Vec<Conversation>> {
+        let sql = format!("SELECT {} FROM conversations WHERE {filter} ORDER BY {order} LIMIT ?1", Self::CONV_COLS);
         let mut st = self.db.prepare(&sql).map_err(db_err)?;
         let rows = st.query_map([limit as i64], Self::conv_row).map_err(db_err)?;
         rows.collect::<rusqlite::Result<_>>().map_err(db_err)
+    }
+
+    /// Archive a chat or take it out of the archive (#77). `false` when there is no such chat.
+    pub fn set_archived(&self, id: &str, archived: bool) -> Result<bool> {
+        Ok(self.db.execute("UPDATE conversations SET archived = ?2 WHERE id = ?1", params![id, archived as i64]).map_err(db_err)? > 0)
+    }
+
+    /// Move a chat into the trash (`Some(when)`) or back out of it (`None`) (#77). `false` when
+    /// there is no such chat.
+    pub fn set_deleted(&self, id: &str, at: Option<i64>) -> Result<bool> {
+        Ok(self.db.execute("UPDATE conversations SET deleted_at = ?2 WHERE id = ?1", params![id, at]).map_err(db_err)? > 0)
     }
 
     pub fn conversation(&self, id: &str) -> Result<Option<Conversation>> {
@@ -304,8 +346,8 @@ impl Store {
         }
         self.db
             .execute(
-                "INSERT INTO conversations (id, title, backend_id, model_id, project_id, created_at, updated_at, pinned, sources, extra)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                "INSERT INTO conversations (id, title, backend_id, model_id, project_id, created_at, updated_at, pinned, sources, extra, archived, deleted_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT(id) DO UPDATE SET title = excluded.title, backend_id = excluded.backend_id, model_id = excluded.model_id,
                    project_id = excluded.project_id, updated_at = excluded.updated_at, pinned = excluded.pinned, sources = excluded.sources,
                    extra = excluded.extra",
@@ -319,7 +361,10 @@ impl Store {
                     c.updated_at,
                     c.pinned as i64,
                     serde_json::to_string(&c.sources)?,
-                    serde_json::to_string(&ConvExtra { persona: c.persona.clone(), kind: c.kind, remote_id: c.remote_id.clone() })?
+                    serde_json::to_string(&ConvExtra { persona: c.persona.clone(), kind: c.kind, remote_id: c.remote_id.clone() })?,
+                    // Archive and trash change only through `set_archived` and `set_deleted`.
+                    c.archived as i64,
+                    c.deleted_at
                 ],
             )
             .map_err(db_err)?;
@@ -338,8 +383,22 @@ impl Store {
         tx.execute("DELETE FROM messages_fts WHERE conversation_id = ?1", [id]).map_err(db_err)?;
         tx.execute("DELETE FROM messages WHERE conversation_id = ?1", [id]).map_err(db_err)?;
         tx.execute("DELETE FROM message_heads WHERE conversation_id = ?1", [id]).map_err(db_err)?;
+        tx.execute("DELETE FROM tool_claims WHERE conversation_id = ?1", [id]).map_err(db_err)?;
+        // Documents, whiteboards and worksheets from the chat stay; they just lose the link.
+        tx.execute("UPDATE artifacts SET conversation_id = NULL WHERE conversation_id = ?1", [id]).map_err(db_err)?;
         tx.execute("DELETE FROM conversations WHERE id = ?1", [id]).map_err(db_err)?;
         tx.commit().map_err(db_err)
+    }
+
+    /// Every message of a conversation on every branch (earlier versions too), in creation
+    /// order: what purging a chat cleans up after (#77).
+    pub fn all_messages(&self, conversation_id: &str) -> Result<Vec<Message>> {
+        if self.is_temporary(conversation_id)
+            && let Some(t) = &self.temp
+        {
+            return t.all_messages(conversation_id);
+        }
+        Ok(self.rows(conversation_id)?.into_iter().map(|(_, m)| m).collect())
     }
 
     // ---- messages -------------------------------------------------------------------------
@@ -665,22 +724,31 @@ impl Store {
     }
 
     /// Full-text search over every message. Each word matches as a prefix; all must occur.
+    /// Archived chats are found (marked `archived`), chats in the trash are not (#77).
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
         let Some(fts) = fts_query(query) else { return Ok(Vec::new()) };
         let mut st = self
             .db
             .prepare(
-                "SELECT f.conversation_id, f.message_id, COALESCE(c.title, ''), snippet(messages_fts, 0, '«', '»', '…', 12), COALESCE(c.backend_id, '')
+                "SELECT f.conversation_id, f.message_id, COALESCE(c.title, ''), snippet(messages_fts, 0, '«', '»', '…', 12), COALESCE(c.backend_id, ''),
+                        COALESCE(c.archived, 0)
                  FROM messages_fts f LEFT JOIN conversations c ON c.id = f.conversation_id
-                 WHERE messages_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+                 WHERE messages_fts MATCH ?1 AND c.deleted_at IS NULL ORDER BY rank LIMIT ?2",
             )
             .map_err(db_err)?;
-        let rows = st
-            .query_map(params![fts, limit as i64], |r| {
-                Ok(SearchHit { conversation_id: r.get(0)?, message_id: r.get(1)?, title: r.get(2)?, snippet: r.get(3)?, backend_id: r.get(4)? })
-            })
-            .map_err(db_err)?;
+        let rows = st.query_map(params![fts, limit as i64], Self::hit_row).map_err(db_err)?;
         rows.collect::<rusqlite::Result<_>>().map_err(db_err)
+    }
+
+    fn hit_row(r: &rusqlite::Row) -> rusqlite::Result<SearchHit> {
+        Ok(SearchHit {
+            conversation_id: r.get(0)?,
+            message_id: r.get(1)?,
+            title: r.get(2)?,
+            snippet: r.get(3)?,
+            backend_id: r.get(4)?,
+            archived: r.get::<_, i64>(5)? != 0,
+        })
     }
 
     // ---- projects -------------------------------------------------------------------------
@@ -1061,8 +1129,9 @@ impl Store {
 }
 
 impl Store {
-    /// Full-text search where any of the words may match (for recall), best first.
-    pub fn search_any(&self, words: &[String], exclude_conversation: Option<&str>, limit: usize) -> Result<Vec<SearchHit>> {
+    /// Full-text search where any of the words may match (for recall), best first. Chats in the
+    /// trash never match, archived ones only `with_archived` (#77).
+    pub fn search_any(&self, words: &[String], exclude_conversation: Option<&str>, with_archived: bool, limit: usize) -> Result<Vec<SearchHit>> {
         let terms: Vec<String> = words
             .iter()
             .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>())
@@ -1076,16 +1145,14 @@ impl Store {
         let mut st = self
             .db
             .prepare(
-                "SELECT f.conversation_id, f.message_id, COALESCE(c.title, ''), snippet(messages_fts, 0, '«', '»', '…', 14), COALESCE(c.backend_id, '')
+                "SELECT f.conversation_id, f.message_id, COALESCE(c.title, ''), snippet(messages_fts, 0, '«', '»', '…', 14), COALESCE(c.backend_id, ''),
+                        COALESCE(c.archived, 0)
                  FROM messages_fts f LEFT JOIN conversations c ON c.id = f.conversation_id
-                 WHERE messages_fts MATCH ?1 AND f.conversation_id != ?2 ORDER BY rank LIMIT ?3",
+                 WHERE messages_fts MATCH ?1 AND f.conversation_id != ?2 AND c.deleted_at IS NULL AND (?4 OR COALESCE(c.archived, 0) = 0)
+                 ORDER BY rank LIMIT ?3",
             )
             .map_err(db_err)?;
-        let rows = st
-            .query_map(params![terms.join(" OR "), exclude_conversation.unwrap_or(""), limit as i64], |r| {
-                Ok(SearchHit { conversation_id: r.get(0)?, message_id: r.get(1)?, title: r.get(2)?, snippet: r.get(3)?, backend_id: r.get(4)? })
-            })
-            .map_err(db_err)?;
+        let rows = st.query_map(params![terms.join(" OR "), exclude_conversation.unwrap_or(""), limit as i64, with_archived], Self::hit_row).map_err(db_err)?;
         rows.collect::<rusqlite::Result<_>>().map_err(db_err)
     }
 }
@@ -1097,7 +1164,7 @@ impl Store {
             .db
             .prepare(
                 "SELECT m.conversation_id, COALESCE(c.title, ''), m.content, m.created_at FROM messages m LEFT JOIN conversations c ON c.id = m.conversation_id
-                 WHERE m.role = 'user' AND m.active = 1 AND m.created_at >= ?1 ORDER BY m.created_at DESC LIMIT ?2",
+                 WHERE m.role = 'user' AND m.active = 1 AND m.created_at >= ?1 AND c.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT ?2",
             )
             .map_err(db_err)?;
         let rows = st.query_map(params![since, limit as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).map_err(db_err)?;
@@ -1113,7 +1180,7 @@ impl Store {
             .prepare(
                 "SELECT m.conversation_id, COALESCE(c.backend_id, ''), COALESCE(c.model_id, ''), COALESCE(c.title, ''), m.content, m.created_at, m.extra
                  FROM messages m LEFT JOIN conversations c ON c.id = m.conversation_id
-                 WHERE m.role = 'user' AND m.active = 1 AND m.created_at >= ?1 ORDER BY m.created_at DESC LIMIT ?2",
+                 WHERE m.role = 'user' AND m.active = 1 AND m.created_at >= ?1 AND c.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT ?2",
             )
             .map_err(db_err)?;
         let rows = st
@@ -1262,6 +1329,8 @@ mod tests {
             kind: Default::default(),
             remote_id: None,
             temporary: false,
+            archived: false,
+            deleted_at: None,
         }
     }
 
@@ -1332,7 +1401,7 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert!(hits[0].snippet.contains('«'));
         assert_eq!(hits[0].backend_id, conv("a", 1).backend_id, "hits name their chat's service");
-        let any = s.search_any(&["photosynthese".into()], Some("b"), 3).unwrap();
+        let any = s.search_any(&["photosynthese".into()], Some("b"), false, 3).unwrap();
         assert_eq!(any[0].backend_id, conv("a", 1).backend_id);
         assert_eq!(s.search("zucker", 10).unwrap()[0].message_id, "2");
         assert!(s.search("\"); DROP TABLE x; --", 10).unwrap().is_empty());
@@ -1565,7 +1634,7 @@ mod tests {
         assert_eq!(s.messages("t").unwrap().len(), 2, "readable while it is open");
         assert!(s.conversation("t").unwrap().unwrap().temporary);
         assert!(s.conversations(10).unwrap().is_empty(), "never listed");
-        assert!(s.search("Elternbrief", 10).unwrap().is_empty() && s.search_any(&["elternbrief".into()], None, 10).unwrap().is_empty(), "never found");
+        assert!(s.search("Elternbrief", 10).unwrap().is_empty() && s.search_any(&["elternbrief".into()], None, true, 10).unwrap().is_empty(), "never found");
         assert!(s.user_messages_since(0, 10).unwrap().is_empty(), "never tidied into notes");
         let on_disk: i64 = s.db.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0)).unwrap();
         assert_eq!(on_disk, 0, "nothing in the file");
@@ -1576,5 +1645,42 @@ mod tests {
         assert!(!s.is_temporary("t") && s.messages("t").unwrap().is_empty() && s.conversation("t").unwrap().is_none());
         drop(s);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #77: archived chats leave the list and recall (unless asked for) but stay searchable;
+    /// chats in the trash are neither listed nor found; saving never undoes either.
+    #[test]
+    fn archive_and_trash_keep_chats_out_of_lists_and_recall() {
+        let s = Store::open_in_memory().unwrap();
+        for (id, at) in [("a", 1), ("b", 2), ("c", 3)] {
+            s.save_conversation(&conv(id, at)).unwrap();
+            s.save_message(&msg(id, &format!("{id}1"), Role::User, "Kastanienfest planen")).unwrap();
+        }
+        assert!(s.set_archived("b", true).unwrap());
+        assert!(s.set_deleted("c", Some(99)).unwrap());
+        assert!(!s.set_archived("nix", true).unwrap());
+        let ids = |v: Vec<Conversation>| v.into_iter().map(|c| c.id).collect::<Vec<_>>();
+        assert_eq!(ids(s.conversations(10).unwrap()), ["a"]);
+        assert_eq!(ids(s.archived_conversations(10).unwrap()), ["b"]);
+        let trash = s.trashed_conversations(10).unwrap();
+        assert_eq!((trash[0].id.as_str(), trash[0].deleted_at), ("c", Some(99)));
+        assert!(s.conversation("b").unwrap().unwrap().archived);
+        // A stale copy saved again (an answer that ends late) keeps the chat where it is.
+        s.save_conversation(&conv("b", 5)).unwrap();
+        s.save_conversation(&conv("c", 5)).unwrap();
+        assert_eq!(ids(s.conversations(10).unwrap()), ["a"]);
+        let hits = s.search("Kastanienfest", 10).unwrap();
+        assert_eq!(hits.len(), 2, "the trash is not searched");
+        assert!(hits.iter().any(|h| h.conversation_id == "b" && h.archived) && hits.iter().any(|h| h.conversation_id == "a" && !h.archived));
+        let words = ["kastanienfest".to_string()];
+        assert_eq!(s.search_any(&words, None, false, 10).unwrap().len(), 1, "recall without the archive");
+        assert_eq!(s.search_any(&words, None, true, 10).unwrap().len(), 2, "recall with the archive, never the trash");
+        assert_eq!(s.user_messages_since(0, 10).unwrap().len(), 2);
+        s.set_deleted("c", None).unwrap();
+        s.set_archived("b", false).unwrap();
+        assert_eq!(s.conversations(10).unwrap().len(), 3);
+        assert_eq!(s.all_messages("a").unwrap().len(), 1);
+        s.delete_conversation("a").unwrap();
+        assert!(s.search("Kastanienfest", 10).unwrap().iter().all(|h| h.conversation_id != "a"));
     }
 }

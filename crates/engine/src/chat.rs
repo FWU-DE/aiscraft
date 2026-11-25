@@ -70,6 +70,8 @@ fn ensure_conversation(c: &Ctx, first_text: &str) -> Result<String> {
         kind: sel.kind,
         remote_id: None,
         temporary: sel.temporary,
+        archived: false,
+        deleted_at: None,
     };
     // A character opens with its greeting, as in AIS.chat; it goes along as the first answer.
     let greeting = conv.persona.as_ref().and_then(|p| state.persona_info(&sel.backend_id, p)).and_then(|i| i.initial_message.clone()).map(|text| Message {

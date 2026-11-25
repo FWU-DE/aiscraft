@@ -6,6 +6,7 @@ mod action_log;
 mod answer_tools;
 mod app;
 mod approval;
+mod archive_view;
 mod artifact_panel;
 mod backdrop;
 mod chat_import;

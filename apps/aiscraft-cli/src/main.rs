@@ -200,7 +200,8 @@ fn run(engine: &Engine, cmd: Cmd) -> Result<(), String> {
             stream_answer(engine, text, files)?;
         }
         Cmd::List { limit } => {
-            for c in engine.state().conversations.iter().take(limit) {
+            // The chats in use, as the sidebar lists them (not archived, not temporary; #77).
+            for c in engine.state().listed_conversations().take(limit) {
                 println!("{}  {}{}", c.id, if c.pinned { "📌 " } else { "" }, c.title);
             }
         }

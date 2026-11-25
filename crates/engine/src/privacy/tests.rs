@@ -166,9 +166,11 @@ fn no_real_name_reaches_the_backend() {
     assert!(posted(&seen).pop().unwrap().contains("Ohne Schutz: Lea"));
     engine.call("chat.set_sources", json!({"protect": null})).unwrap();
 
-    // Deleting the chat deletes its mapping.
+    // Deleting the chat keeps its mapping while it lies in the trash (#77); purging deletes it.
     let conv = engine.state().current.clone().unwrap();
     engine.call("chat.delete", json!({"id": conv})).unwrap();
+    assert!(!mapping(engine.ctx(), &conv).entries.is_empty(), "restorable with its names");
+    engine.call("chat.purge", json!({"id": conv})).unwrap();
     assert!(mapping(engine.ctx(), &conv).entries.is_empty());
     let _ = std::fs::remove_dir_all(dir);
 }

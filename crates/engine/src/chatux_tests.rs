@@ -8,11 +8,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{Engine, Options};
 
-type Seen = Arc<Mutex<Vec<String>>>;
+pub(crate) type Seen = Arc<Mutex<Vec<String>>>;
 
 /// An OpenAI-compatible server that records every request and streams the chunks `answer`
 /// makes from the request body.
-fn scripted(engine: &Engine, answer: fn(&str) -> Vec<Value>) -> (String, Seen) {
+pub(crate) fn scripted(engine: &Engine, answer: fn(&str) -> Vec<Value>) -> (String, Seen) {
     let seen: Seen = Arc::new(Mutex::new(Vec::new()));
     let seen2 = seen.clone();
     let url = engine.block_on(async move {
@@ -63,7 +63,7 @@ fn scripted(engine: &Engine, answer: fn(&str) -> Vec<Value>) -> (String, Seen) {
     (url, seen)
 }
 
-fn engine_with(answer: fn(&str) -> Vec<Value>) -> (Engine, Seen) {
+pub(crate) fn engine_with(answer: fn(&str) -> Vec<Value>) -> (Engine, Seen) {
     let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
     let (url, seen) = scripted(&engine, answer);
     let id = engine.call("backend.add", json!({"kind": "openai", "base_url": url, "name": "Test"})).unwrap()["id"].as_str().unwrap().to_string();
@@ -73,11 +73,11 @@ fn engine_with(answer: fn(&str) -> Vec<Value>) -> (Engine, Seen) {
     (engine, seen)
 }
 
-fn plain(_: &str) -> Vec<Value> {
+pub(crate) fn plain(_: &str) -> Vec<Value> {
     vec![json!({"choices":[{"delta":{"content":"Antwort"}}]})]
 }
 
-fn last_chat_request(seen: &Seen, marker: &str) -> String {
+pub(crate) fn last_chat_request(seen: &Seen, marker: &str) -> String {
     seen.lock().unwrap().iter().rev().find(|r| r.contains(marker)).cloned().unwrap_or_default()
 }
 
@@ -161,6 +161,8 @@ fn answer_style_goes_inline_once_without_system_prompt() {
         kind: Default::default(),
         remote_id: None,
         temporary: false,
+        archived: false,
+        deleted_at: None,
     };
     let sent = crate::chat::inline_context(ctx, &conv, false, "").expect("the style goes along");
     assert!(sent.block.contains("Antwortstil: formell") && sent.labels.contains(&"Antwortstil".to_string()));
@@ -203,7 +205,7 @@ fn temporary_chat_leaves_nothing_behind() {
             assert!(st.conversation(&conv)?.is_none());
             assert!(st.messages(&conv)?.is_empty());
             assert!(st.search("Kastanienfest", 10)?.is_empty());
-            assert!(st.search_any(&["Kastanienfest".to_string()], None, 10)?.is_empty());
+            assert!(st.search_any(&["Kastanienfest".to_string()], None, true, 10)?.is_empty());
             assert!(st.conversations(500)?.iter().all(|c| c.id != conv));
             Ok(())
         })

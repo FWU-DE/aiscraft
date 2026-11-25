@@ -17,7 +17,12 @@ pub struct State {
     /// Increases with every change; surfaces redraw when it moves.
     pub revision: u64,
     pub backends: Vec<BackendView>,
+    /// The chats: in use and archived (`archived`, #77), not those in the trash.
     pub conversations: Vec<Conversation>,
+    /// Chats in the trash (#77), most recently deleted first; purged after
+    /// [`aiscraft_core::TRASH_DAYS`] days.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trash: Vec<Conversation>,
     pub projects: Vec<Project>,
     /// Files in the projects' knowledge (#32), without their text.
     #[serde(default)]
@@ -431,6 +436,8 @@ pub struct Settings {
     pub learn_skills: bool,
     /// Put fitting skills and excerpts from earlier chats into the context.
     pub recall: bool,
+    /// Recall also takes excerpts from archived chats (#77; off by default).
+    pub recall_archived: bool,
     /// Check the links in every answer once it is complete (off: only on click).
     pub check_links: bool,
     /// Hourly hints for concrete open needs (off by default).
@@ -498,6 +505,7 @@ impl Default for Settings {
             monthly_token_limit: 0,
             learn_skills: true,
             recall: true,
+            recall_archived: false,
             check_links: false,
             proactive: false,
             quiet_start: 22,
@@ -525,6 +533,16 @@ impl State {
     }
     pub fn conversation(&self, id: &str) -> Option<&Conversation> {
         self.conversations.iter().find(|c| c.id == id)
+    }
+    /// The chats in use: neither archived nor temporary (#77, #34), as the sidebar lists them.
+    pub fn listed_conversations(&self) -> impl Iterator<Item = &Conversation> {
+        self.conversations.iter().filter(|c| !c.archived && !c.temporary)
+    }
+    /// Archived chats (#77), most recently updated first.
+    pub fn archived_conversations(&self) -> Vec<&Conversation> {
+        let mut out: Vec<&Conversation> = self.conversations.iter().filter(|c| c.archived).collect();
+        out.sort_by_key(|c| std::cmp::Reverse(c.updated_at));
+        out
     }
     /// A temporary chat (#34) needs a backend that keeps no history of its own. AIS.chat stores
     /// every chat in its own history, so there is none with it.

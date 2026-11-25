@@ -99,6 +99,10 @@ pub enum Dialog {
     },
     /// Chats from claude.ai or ChatGPT (#42).
     ImportChats,
+    /// Chats into the trash (#77): what stays in AIS.chat, and its yes to delete there too.
+    DeleteChats(crate::archive_view::DeleteChats),
+    /// Chats out of the trash for good, or the whole trash (#77).
+    PurgeChats(crate::archive_view::PurgeChats),
 }
 
 /// Ready-made backends: (label, kind, base URL, needs a key, hint).
@@ -633,6 +637,8 @@ impl AisCraftApp {
             }
             Dialog::Know(d) => self.know_dialog(ui, d),
             Dialog::ImportChats => self.import_chats_dialog(ui),
+            Dialog::DeleteChats(d) => self.delete_chats_dialog(ui, d),
+            Dialog::PurgeChats(d) => self.purge_chats_dialog(ui, d),
             Dialog::Confirm { text, command, params } => {
                 ui.label(RichText::new(text.as_str()).strong());
                 ui.add_space(8.0);
@@ -1110,6 +1116,10 @@ impl AisCraftApp {
                 let mut recall = st.recall;
                 if ui.checkbox(&mut recall, "Erinnern: passende Vorgehen und Ausschnitte aus früheren Chats mitgeben").changed() {
                     self.run("settings.set", json!({"key": "recall", "value": recall}));
+                }
+                let mut archived = st.recall_archived;
+                if ui.add_enabled(recall, egui::Checkbox::new(&mut archived, "Auch archivierte Chats beim Erinnern einbeziehen")).changed() {
+                    self.run("settings.set", json!({"key": "recall_archived", "value": archived}));
                 }
                 ui.label(small_muted(&t, format!("Gelernte Vorgehen enthalten keine persönlichen Daten, sind nur Hinweise und nie eine Erlaubnis. Höchstens {} werden behalten; die am meisten genutzten bleiben.", 40)));
                 ui.label(small_muted(&t, "Bei AIS.chat stehen sie oben in deiner Nachricht, je Chat nur einmal; unter der Nachricht steht, was mitging."));

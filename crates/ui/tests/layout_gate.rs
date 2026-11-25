@@ -486,6 +486,27 @@ Igel, Winterschlaf und Fotosynthese.",
     }
     let _ = std::fs::remove_file(&file);
 
+    // Archive and trash (#77), with long titles and the entries at the bottom of the sidebar.
+    for (text, cmd) in [
+        ("Elternbrief zur Klassenfahrt der 7b nach Berlin mit Kostenaufstellung, Packliste und Notfallnummern", "chat.archive"),
+        ("Vertretungsplan für die Projektwoche vor den Herbstferien mit allen Aufsichten und Raumänderungen", "chat.delete"),
+    ] {
+        call(&engine, "chat.new", json!({}));
+        call(&engine, "chat.send", json!({"text": text}));
+        let id = engine.state().current.clone().unwrap();
+        call(&engine, cmd, json!({"id": id}));
+    }
+    // The „Gelöscht – Rückgängig“ toast is not part of the page.
+    for n in engine.state().notices.clone() {
+        call(&engine, "notice.dismiss", json!({"id": n.id}));
+    }
+    call(&engine, "chat.open", json!({"id": chat}));
+    for (view, what, ready) in [("Archiv", "archive", "Öffnen"), ("Papierkorb", "trash", "Papierkorb leeren")] {
+        show(&mut h, &tx, what);
+        settle(&mut h, &at(view), |h| label(h, ready) && label(h, "Wiederherstellen"));
+        check(&mut h, &at(view));
+    }
+
     // Entdecken (nobody signed in to AIS.chat: the page explains it).
     show(&mut h, &tx, "personas");
     settle(&mut h, &at("Entdecken"), |h| label(h, "Nicht bei AIS.chat angemeldet"));

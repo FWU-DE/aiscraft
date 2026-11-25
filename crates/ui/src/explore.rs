@@ -152,6 +152,7 @@ fn chip(ui: &mut Ui, t: &Tokens, selected: bool, text: impl Into<String>, count:
 
 impl AisCraftApp {
     pub(crate) fn open_explore(&mut self) {
+        self.archive = None;
         if self.explore.is_none() {
             self.explore = Some(ExploreView { focus_search: true, ..Default::default() });
         }

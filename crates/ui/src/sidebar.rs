@@ -36,6 +36,7 @@ impl AisCraftApp {
                 ui.add_space(4.0);
                 self.personas_section(ui);
                 self.chat_list(ui);
+                self.archive_links(ui);
                 self.remote_section(ui);
             }
         });
@@ -173,6 +174,10 @@ impl AisCraftApp {
         ui.label(small_muted(&t, format!("{} Treffer", hits.len())));
         for h in hits {
             let r = ui.add(egui::Button::new(RichText::new(if h.title.is_empty() { "Ohne Titel" } else { &h.title }).strong()).frame(false).wrap());
+            // An archived chat is found too, with a note (#77).
+            if h.archived {
+                ui.label(small_muted(&t, "archiviert"));
+            }
             let snippet = h.snippet.replace(['«', '»'], "");
             ui.add(egui::Label::new(small_muted(&t, snippet)).wrap());
             ui.add_space(4.0);
@@ -210,6 +215,21 @@ impl AisCraftApp {
                 }
                 if ui.button("Neuer Chat im Projekt").clicked() {
                     self.run("chat.new", json!({"project": p.id}));
+                    ui.close();
+                }
+                // The project as a whole into the archive, and back (#77).
+                let (live, archived) = self
+                    .state
+                    .conversations
+                    .iter()
+                    .filter(|c| c.project_id.as_deref() == Some(&p.id) && !c.temporary)
+                    .fold((0, 0), |(l, a), c| if c.archived { (l, a + 1) } else { (l + 1, a) });
+                if live > 0 && ui.button("Chats archivieren").clicked() {
+                    self.run("chat.archive", json!({"project": p.id}));
+                    ui.close();
+                }
+                if archived > 0 && ui.button(format!("Archivierte Chats zurückholen ({archived})")).clicked() {
+                    self.run("chat.unarchive", json!({"project": p.id}));
                     ui.close();
                 }
                 if ui.button(RichText::new("Löschen").color(t.danger)).clicked() {
@@ -275,14 +295,17 @@ impl AisCraftApp {
 
     fn chat_list(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
+        // A temporary chat (#34) is not listed: it is gone once closed; an archived one (#77)
+        // lies in the archive.
         let convs: Vec<_> =
-            // A temporary chat (#34) is not listed: it is gone once closed.
-            self.state.conversations.iter().filter(|c| !c.temporary && self.project_filter.as_ref().is_none_or(|p| c.project_id.as_ref() == Some(p))).cloned().collect();
+            self.state.listed_conversations().filter(|c| self.project_filter.as_ref().is_none_or(|p| c.project_id.as_ref() == Some(p))).cloned().collect();
         if convs.is_empty() {
             ui.add_space(8.0);
             empty_hint(ui, &t, if self.project_filter.is_some() { "Noch keine Chats in diesem Projekt." } else { "Noch keine Chats." });
             return;
         }
+        self.selection_bar(ui);
+        let order: Vec<String> = convs.iter().map(|c| c.id.clone()).collect();
         let mut last_group = "";
         for c in convs {
             let group = if c.pinned { "Angeheftet" } else { age_group(c.updated_at) };
@@ -291,7 +314,8 @@ impl AisCraftApp {
                 self.heading(ui, group, None);
                 last_group = group;
             }
-            let selected = self.state.current.as_deref() == Some(&c.id);
+            let picked = self.selected_chats.contains(&c.id);
+            let selected = if self.selected_chats.is_empty() { self.state.current.as_deref() == Some(&c.id) } else { picked };
             let generating = self.state.is_generating(&c.id);
             // „Namen schützen“: the title keeps placeholders, shown with the names (#55).
             let shown = self.engine.reveal(&c.id, &c.title);
@@ -306,7 +330,32 @@ impl AisCraftApp {
                 }
             }
             if resp.clicked() {
-                self.run("chat.open", json!({"id": c.id}));
+                // Strg or Umschalt picks chats for the actions above the list (#77); a plain
+                // click opens the chat and ends the selection.
+                if !self.select_click(&c.id, click_modifiers(ui), &order) {
+                    self.selected_chats.clear();
+                    self.select_anchor = Some(c.id.clone());
+                    self.run("chat.open", json!({"id": c.id}));
+                }
+            }
+            // On a picked chat the menu acts on all picked ones.
+            let many = picked && self.selected_chats.len() > 1;
+            if many {
+                let ids = self.selected_chats.clone();
+                resp.context_menu(|ui| {
+                    ui.label(small_muted(&t, format!("{} Chats ausgewählt", ids.len())));
+                    if ui.button("Archivieren").clicked() {
+                        self.run("chat.archive", json!({"ids": ids}));
+                        self.selected_chats.clear();
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button(RichText::new("Löschen").color(t.danger)).clicked() {
+                        self.ask_delete(ids.clone());
+                        ui.close();
+                    }
+                });
+                continue;
             }
             resp.context_menu(|ui| {
                 if ui.button("Umbenennen").clicked() {
@@ -339,10 +388,13 @@ impl AisCraftApp {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(url));
                     ui.close();
                 }
+                if ui.button("Archivieren").on_hover_text("Aus der Seitenleiste ins Archiv; bleibt ganz erhalten").clicked() {
+                    self.run("chat.archive", json!({"id": c.id}));
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button(RichText::new("Löschen").color(t.danger)).clicked() {
-                    self.dialog =
-                        Some(Dialog::Confirm { text: format!("„{}“ löschen?", c.title), command: "chat.delete".into(), params: json!({"id": c.id}) });
+                    self.ask_delete(vec![c.id.clone()]);
                     ui.close();
                 }
             });
@@ -550,6 +602,30 @@ impl AisCraftApp {
             }
         }
     }
+}
+
+/// The modifiers of the click just made: from the pointer event (what the platform reported with
+/// it), else the keyboard state.
+fn click_modifiers(ui: &Ui) -> egui::Modifiers {
+    ui.input(|i| {
+        let ev = i
+            .events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let k = i.modifiers;
+        egui::Modifiers {
+            alt: ev.alt || k.alt,
+            ctrl: ev.ctrl || k.ctrl,
+            shift: ev.shift || k.shift,
+            mac_cmd: ev.mac_cmd || k.mac_cmd,
+            command: ev.command || k.command,
+        }
+    })
 }
 
 /// What an empty section says, with a little room above and the entries' indent.

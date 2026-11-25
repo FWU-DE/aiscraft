@@ -555,7 +555,8 @@ fn main() {
         } else {
             match engine.call(&cmd, params.clone()) {
                 Ok(v) => {
-                    if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
+                    // `chat.send` names its chat as `conversation_id` (for `chat.archive`, #77).
+                    if let Some(id) = v.get("id").or_else(|| v.get("conversation_id")).and_then(|i| i.as_str()) {
                         last = id.to_string();
                     }
                 }
