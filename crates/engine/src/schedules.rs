@@ -115,6 +115,11 @@ impl Cron {
     /// Does the rule fire in this minute? Day of month and weekday combine with OR when both are
     /// restricted, as in classic cron.
     pub fn matches<T: Datelike + Timelike>(&self, t: &T) -> bool {
+        self.minutes.contains(&t.minute()) && self.hours.contains(&t.hour()) && self.on_day(t)
+    }
+
+    /// Does the rule fire on this day (month, day of month, weekday)?
+    fn on_day<T: Datelike>(&self, t: &T) -> bool {
         let dom = self.days.contains(&t.day());
         let dow = self.weekdays.contains(&t.weekday().num_days_from_sunday());
         let day = match (self.any_day, self.any_weekday) {
@@ -123,21 +128,55 @@ impl Cron {
             (true, false) => dow,
             (false, false) => dom || dow,
         };
-        self.minutes.contains(&t.minute()) && self.hours.contains(&t.hour()) && self.months.contains(&t.month()) && day
+        self.months.contains(&t.month()) && day
     }
 
-    /// The next minute after `after` (ms) the rule fires, within a year.
+    /// The next time after `after` (ms) the rule fires, in local time; `None` when it never does
+    /// within [`HORIZON_DAYS`] (a 30 February).
     pub fn next_after(&self, after_ms: i64) -> Option<i64> {
-        let start = Local.timestamp_millis_opt(after_ms).single()?;
-        let mut t = start.with_second(0)?.with_nanosecond(0)? + chrono::Duration::minutes(1);
-        for _ in 0..(366 * 24 * 60) {
-            if self.matches(&t) {
-                return Some(t.timestamp_millis());
+        self.next_after_in(&Local, after_ms)
+    }
+
+    /// [`Cron::next_after`] in a given time zone. Walks day by day, not minute by minute, so a
+    /// rare rule (29 February, once a year) costs a few thousand cheap date checks, not millions
+    /// of time conversions; the UI asks for it every frame (Nod #1315).
+    ///
+    /// Clock changes: a time the clock skips (02:30 on the spring-forward night) runs at the
+    /// first minute after the gap, once; a time that happens twice (autumn) runs the first time
+    /// only. So a daily schedule runs exactly once on both nights.
+    pub fn next_after_in<Tz: TimeZone>(&self, tz: &Tz, after_ms: i64) -> Option<i64> {
+        let mut day = tz.timestamp_millis_opt(after_ms).single()?.date_naive();
+        for _ in 0..=HORIZON_DAYS {
+            if self.on_day(&day) {
+                let first = self
+                    .hours
+                    .iter()
+                    .flat_map(|h| self.minutes.iter().map(move |m| (*h, *m)))
+                    .filter_map(|(h, m)| local_run(tz, day, h, m))
+                    .filter(|t| *t > after_ms)
+                    .min();
+                if first.is_some() {
+                    return first;
+                }
             }
-            t += chrono::Duration::minutes(1);
+            day = day.succ_opt()?;
         }
         None
     }
+}
+
+/// How far ahead a rule is looked at: eight years, so 29 February always comes round.
+pub const HORIZON_DAYS: u32 = 8 * 366;
+
+/// The instant of `h:m` local time on `day`: the earlier one when the clock goes back, the first
+/// minute after the gap when the clock skips it.
+fn local_run<Tz: TimeZone>(tz: &Tz, day: chrono::NaiveDate, h: u32, m: u32) -> Option<i64> {
+    let naive = day.and_hms_opt(h, m, 0)?;
+    if let Some(t) = tz.from_local_datetime(&naive).earliest() {
+        return Some(t.timestamp_millis());
+    }
+    // In the gap: the first local minute that exists (gaps are at most a few hours).
+    (1..=24 * 60).find_map(|k| tz.from_local_datetime(&(naive + chrono::Duration::minutes(k))).earliest()).map(|t| t.timestamp_millis())
 }
 
 // ---- storage --------------------------------------------------------------------------------
@@ -202,15 +241,29 @@ pub(crate) fn start(c: &Ctx) {
     });
 }
 
-/// Due now? A cron rule fires once per matching minute; a one-off once at or after its time.
+/// Due now? A cron rule fires once per run time (within the last minute, so a time the clock
+/// skips or repeats runs once too); a one-off once at or after its time.
 pub fn due(s: &Schedule, now: i64) -> bool {
+    due_in(&Local, s, now)
+}
+
+fn due_in<Tz: TimeZone>(tz: &Tz, s: &Schedule, now: i64) -> bool {
     if let Some(at) = s.run_at {
         return s.last_run.is_none() && now >= at;
     }
     let Some(rule) = s.cron.as_deref().and_then(|r| Cron::parse(r).ok()) else { return false };
-    let Some(t) = Local.timestamp_millis_opt(now).single() else { return false };
-    let this_minute = now - (now % 60_000);
-    rule.matches(&t) && s.last_run.is_none_or(|l| l < this_minute)
+    // Runs since the last run, but at most one minute back: missed runs are not made up.
+    let since = s.last_run.unwrap_or(i64::MIN).max(now - 60_000);
+    rule.next_after_in(tz, since).is_some_and(|t| t <= now)
+}
+
+/// A new rule must fire some day: „30. Februar“ is refused when it is set, never when an old
+/// schedule is only paused or renamed (Nod #1514).
+fn check_rule(rule: &str) -> Result<()> {
+    if Cron::parse(rule)?.next_after(now_ms()).is_none() {
+        return Err(Error::invalid(format!("Cron: {rule} trifft nie zu (gibt es diesen Tag, z. B. 30. Februar?)")));
+    }
+    Ok(())
 }
 
 async fn run(c: &Ctx, mut s: Schedule) -> Result<Value> {
@@ -379,7 +432,7 @@ pub(crate) async fn create(c: Ctx, p: Value) -> Result<Value> {
     };
     match (&cron, run_at) {
         (Some(r), None) => {
-            Cron::parse(r)?;
+            check_rule(r)?;
         }
         (None, Some(at)) if at <= now - 60_000 => return Err(Error::invalid("Dieser Zeitpunkt liegt in der Vergangenheit")),
         (None, Some(_)) => {}
@@ -423,7 +476,7 @@ pub(crate) async fn edit(c: Ctx, p: Value) -> Result<Value> {
         s.prompt = t;
     }
     if let Some(r) = opt_str(&p, "cron").filter(|r| !r.trim().is_empty()) {
-        Cron::parse(&r)?;
+        check_rule(&r)?;
         s.cron = Some(r);
         s.run_at = None;
     }
@@ -474,6 +527,103 @@ mod tests {
 
     fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> chrono::DateTime<Local> {
         Local.with_ymd_and_hms(y, mo, d, h, mi, 0).single().unwrap()
+    }
+
+    /// Berlin in 2026, independent of the machine's zone: summer time from 29 March 01:00 UTC
+    /// to 25 October 01:00 UTC.
+    #[derive(Debug, Clone, Copy)]
+    struct Berlin;
+
+    fn utc(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> chrono::NaiveDateTime {
+        chrono::NaiveDate::from_ymd_opt(y, mo, d).unwrap().and_hms_opt(h, mi, 0).unwrap()
+    }
+
+    fn ms(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> i64 {
+        utc(y, mo, d, h, mi).and_utc().timestamp_millis()
+    }
+
+    impl TimeZone for Berlin {
+        type Offset = chrono::FixedOffset;
+        fn from_offset(_: &chrono::FixedOffset) -> Self {
+            Berlin
+        }
+        fn offset_from_local_date(&self, d: &chrono::NaiveDate) -> chrono::LocalResult<chrono::FixedOffset> {
+            self.offset_from_local_datetime(&d.and_hms_opt(12, 0, 0).unwrap())
+        }
+        fn offset_from_local_datetime(&self, local: &chrono::NaiveDateTime) -> chrono::LocalResult<chrono::FixedOffset> {
+            let fits: Vec<chrono::FixedOffset> = [2, 1]
+                .into_iter()
+                .map(|h| chrono::FixedOffset::east_opt(h * 3600).unwrap())
+                .filter(|o| self.offset_from_utc_datetime(&(*local - chrono::Duration::seconds(o.local_minus_utc().into()))) == *o)
+                .collect();
+            match fits.as_slice() {
+                [one] => chrono::LocalResult::Single(*one),
+                [a, b] => chrono::LocalResult::Ambiguous(*a, *b),
+                _ => chrono::LocalResult::None,
+            }
+        }
+        fn offset_from_utc_date(&self, d: &chrono::NaiveDate) -> chrono::FixedOffset {
+            self.offset_from_utc_datetime(&d.and_hms_opt(0, 0, 0).unwrap())
+        }
+        fn offset_from_utc_datetime(&self, t: &chrono::NaiveDateTime) -> chrono::FixedOffset {
+            let summer = *t >= utc(2026, 3, 29, 1, 0) && *t < utc(2026, 10, 25, 1, 0);
+            chrono::FixedOffset::east_opt(if summer { 7200 } else { 3600 }).unwrap()
+        }
+    }
+
+    /// Nod #1315: monthly and rare rules. The 31st skips short months, 29 February comes round
+    /// in a leap year, 30 February never; looking that far costs days, not minutes.
+    #[test]
+    fn monthly_and_rare_rules() {
+        let on_31 = Cron::parse("0 8 31 * *").unwrap();
+        // 31 Jan 09:00 Berlin (08:00 UTC): next is 31 March 08:00 Berlin, summer time (06:00 UTC).
+        assert_eq!(on_31.next_after_in(&Berlin, ms(2026, 1, 31, 8, 0)), Some(ms(2026, 3, 31, 6, 0)));
+        assert_eq!(on_31.next_after_in(&Berlin, ms(2026, 4, 1, 0, 0)), Some(ms(2026, 5, 31, 6, 0)), "not in April");
+        let leap = Cron::parse("0 0 29 2 *").unwrap();
+        assert_eq!(leap.next_after_in(&Berlin, ms(2026, 3, 1, 0, 0)), Some(ms(2028, 2, 28, 23, 0)));
+        assert_eq!(leap.next_after(at(2026, 3, 1, 0, 0).timestamp_millis()), Some(at(2028, 2, 29, 0, 0).timestamp_millis()));
+        let yearly = Cron::parse("0 7 1 9 *").unwrap();
+        assert_eq!(yearly.next_after_in(&Berlin, ms(2026, 9, 1, 6, 0)), Some(ms(2027, 9, 1, 6, 0)));
+        let never = Cron::parse("0 9 30 2 *").unwrap();
+        assert_eq!(never.next_after(now_ms()), None);
+        assert!(check_rule("0 9 30 2 *").is_err() && check_rule("0 0 29 2 *").is_ok() && check_rule("0 8 31 * *").is_ok());
+        // Every first Monday-or-1st (cron's OR) and the last days of the month by list.
+        let ends = Cron::parse("0 18 28-31 * *").unwrap();
+        assert_eq!(ends.next_after_in(&Berlin, ms(2026, 2, 27, 0, 0)), Some(ms(2026, 2, 28, 17, 0)));
+        assert_eq!(ends.next_after_in(&Berlin, ms(2026, 2, 28, 18, 0)), Some(ms(2026, 3, 28, 17, 0)));
+    }
+
+    /// Clock changes: 02:30 on the spring night (skipped) runs once at 03:00; on the autumn night
+    /// (twice) it runs the first time only.
+    #[test]
+    fn clock_changes_run_once() {
+        let rule = Cron::parse("30 2 * * *").unwrap();
+        // Spring: 29 March, 02:00–03:00 does not exist; 03:00 local is 01:00 UTC.
+        assert_eq!(rule.next_after_in(&Berlin, ms(2026, 3, 28, 12, 0)), Some(ms(2026, 3, 29, 1, 0)));
+        assert_eq!(rule.next_after_in(&Berlin, ms(2026, 3, 29, 1, 0)), Some(ms(2026, 3, 30, 0, 30)));
+        // Autumn: 25 October, 02:30 happens at 00:30 and 01:30 UTC; only the first counts.
+        assert_eq!(rule.next_after_in(&Berlin, ms(2026, 10, 24, 12, 0)), Some(ms(2026, 10, 25, 0, 30)));
+        assert_eq!(rule.next_after_in(&Berlin, ms(2026, 10, 25, 0, 30)), Some(ms(2026, 10, 26, 1, 30)));
+        // The daily run in the skipped hour is due once after the gap, and not again in the repeated hour.
+        let s = Schedule {
+            id: "s".into(),
+            title: "t".into(),
+            prompt: "p".into(),
+            cron: Some("30 2 * * *".into()),
+            run_at: None,
+            backend_id: "b".into(),
+            model_id: "m".into(),
+            conversation_id: None,
+            watch: false,
+            enabled: true,
+            last_run: Some(ms(2026, 3, 28, 1, 30)),
+            last_result: None,
+            created_at: 0,
+        };
+        assert!(due_in(&Berlin, &s, ms(2026, 3, 29, 1, 0) + 10_000), "the skipped 02:30 runs at 03:00");
+        let ran = Schedule { last_run: Some(ms(2026, 10, 25, 0, 30) + 5_000), ..s };
+        assert!(due_in(&Berlin, &Schedule { last_run: Some(ms(2026, 10, 24, 0, 30)), ..ran.clone() }, ms(2026, 10, 25, 0, 30) + 5_000));
+        assert!(!due_in(&Berlin, &ran, ms(2026, 10, 25, 1, 30) + 5_000), "02:30 again an hour later does not run again");
     }
 
     #[test]

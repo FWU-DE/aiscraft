@@ -166,7 +166,9 @@ async fn openai_speech_json_instead_of_audio_is_err() {
     assert!(e.message.contains("voice not found"), "{}", e.message);
 
     let (base, _rx) = serve_once(fixed("429 Too Many Requests", "application/json", "", br#"{"error":{"message":"quota"}}"#)).await;
-    assert_eq!(speak_openai(&base, None, "tts-1", "alloy", "Hallo").await.err().unwrap().kind, ErrorKind::Refused);
+    let e = speak_openai(&base, None, "tts-1", "alloy", "Hallo").await.err().unwrap();
+    assert_eq!(e.kind, ErrorKind::Busy, "a rate limit: wait and retry");
+    assert!(e.message.contains("quota") && e.message.contains("warten"), "{}", e.message);
 }
 
 #[tokio::test]

@@ -190,7 +190,45 @@ impl ToolResult {
             .collect();
         if texts.is_empty() { self.structured_content.as_ref().map(Value::to_string).unwrap_or_default() } else { texts.join("\n") }
     }
+
+    /// What the model gets: the text blocks, plus `structuredContent` as compact JSON when the text
+    /// does not already carry it. Many servers send only a summary as text („1 Datei erstellt“) and
+    /// put links and ids in `structuredContent`; without it the model cannot act on them (Nod #1476).
+    /// A text block that is the same JSON as `structuredContent` is dropped, so the data comes once.
+    /// The JSON is capped at [`MAX_STRUCTURED_CHARS`].
+    pub fn model_text(&self) -> String {
+        let Some(structured) = &self.structured_content else { return self.text() };
+        let repeats = |t: &str| serde_json::from_str::<Value>(t.trim()).is_ok_and(|v| &v == structured);
+        let parts: Vec<&str> = self
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                Content::Text { text } => Some(text.as_str()),
+                Content::Resource(EmbeddedResource { text: Some(t), .. }) => Some(t.as_str()),
+                _ => None,
+            })
+            .filter(|t| !repeats(t))
+            .collect();
+        let mut out = parts.join("\n");
+        let json = structured.to_string();
+        // A text that already holds the same compact JSON needs no second copy.
+        if out.contains(&json) {
+            return out;
+        }
+        let mut capped: String = json.chars().take(MAX_STRUCTURED_CHARS).collect();
+        if json.chars().count() > MAX_STRUCTURED_CHARS {
+            capped.push_str(" … (gekürzt)");
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&capped);
+        out
+    }
 }
+
+/// How much of `structuredContent` the model sees next to the text (characters).
+pub const MAX_STRUCTURED_CHARS: usize = 24 * 1024;
 
 /// One content block of a tool result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -317,5 +355,31 @@ mod tests {
         assert!(matches!(&r.content[4], Content::Unknown { .. }));
         assert_eq!(ToolResult::parse(&json!({"structuredContent": {"n": 1}})).text(), r#"{"n":1}"#);
         assert_eq!(ToolResult::parse(&json!("nope")), ToolResult::default());
+    }
+
+    #[test]
+    fn the_model_gets_structured_content_next_to_a_summary() {
+        let job = json!({"status": "ok", "files": [{"id": "f-17", "url": "https://files.example/f-17"}]});
+        // Summary text: the model gets the summary and the data.
+        let summary = ToolResult::parse(&json!({"content": [{"type": "text", "text": "Fertig, 1 Datei."}], "structuredContent": job}));
+        assert_eq!(summary.text(), "Fertig, 1 Datei.");
+        let m = summary.model_text();
+        assert!(m.starts_with("Fertig, 1 Datei.\n"), "{m}");
+        assert!(m.contains("https://files.example/f-17") && m.contains("f-17"), "{m}");
+        // The text is the same JSON (pretty): it comes once, compact.
+        let same = ToolResult::parse(&json!({"content": [{"type": "text", "text": serde_json::to_string_pretty(&job).unwrap()}], "structuredContent": job}));
+        assert_eq!(same.model_text(), job.to_string());
+        // The text already holds the compact JSON: nothing is added.
+        let inside = ToolResult::parse(&json!({"content": [{"type": "text", "text": format!("Ergebnis: {job}")}], "structuredContent": job}));
+        assert_eq!(inside.model_text(), format!("Ergebnis: {job}"));
+        // No structured content: as before.
+        let plain = ToolResult::parse(&json!({"content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}));
+        assert_eq!(plain.model_text(), "a\nb");
+        // Only structured content: the JSON.
+        assert_eq!(ToolResult::parse(&json!({"structuredContent": {"n": 1}})).model_text(), r#"{"n":1}"#);
+        // Huge structured content is capped.
+        let big = ToolResult::parse(&json!({"content": [{"type": "text", "text": "viel"}], "structuredContent": {"x": "y".repeat(100_000)}}));
+        let m = big.model_text();
+        assert!(m.chars().count() < MAX_STRUCTURED_CHARS + 100 && m.ends_with("(gekürzt)"), "{}", m.len());
     }
 }

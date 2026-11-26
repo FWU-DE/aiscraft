@@ -110,11 +110,16 @@ changes, the client breaks or misses features. **At least once per working week,
 release**, compare against the AIS.chat repository (`FWU-DE/ais-chat`, public, AGPL) and pull new
 features in.
 
-Last compared: **`674c6be3fd5f` (2026-11-25)**. Update this line when you compare.
+What was last compared, and when, lives in **`upstreams.json`** (key `ais-chat`: `compared` is the
+commit, `date`, `notes`, `issues`), not here. **Update `upstreams.json` when you compare**, and
+close the upstream issue. `.github/workflows/upstreams.yml` checks weekly (Mondays, or by hand) and
+opens or updates one issue „Upstream: AIS.chat hat N neue Commits seit …“ (label `ais-chat-parity`)
+with the commit subjects and the changed files under the paths below; it never compares for you.
 
 ```sh
-gh api repos/FWU-DE/ais-chat/compare/674c6be3fd5f...main --jq '.commits[].commit.message' | head -80
-gh api 'repos/FWU-DE/ais-chat/compare/674c6be3fd5f...main' --jq '.files[].filename' | sort -u
+SHA=$(jq -r '."ais-chat".compared' upstreams.json)
+gh api "repos/FWU-DE/ais-chat/compare/$SHA...main" --jq '.commits[].commit.message' | head -80
+gh api "repos/FWU-DE/ais-chat/compare/$SHA...main" --jq '.files[].filename' | sort -u
 ```
 
 What to check, in this order (paths in `FWU-DE/ais-chat`):
@@ -194,7 +199,13 @@ on the host; learning apps run only in the locked-down preview process or the br
 Not adopted on purpose: WhatsApp/Telegram channels (out of scope for a school client). Nod's repo (`n8n-io/nod`, Apache-2.0) is a reference for behaviour, not for
 code; it is Node/Electron, AIS.ChatCraft is Rust.
 
-Last compared with Nod's releases: **nod-v0.9.7 (2026-11-25)**; issues #63–#69, from 0.9.7 the system proxy and system certificates (no issue, fixed directly). Check `gh release list -R n8n-io/nod` for newer ones and update this line.
+Which Nod release was last compared, what was adopted from it and the parity issues live in
+**`upstreams.json`** (key `nod`). To compare: `gh release list -R n8n-io/nod` for releases newer
+than `jq -r .nod.compared upstreams.json`, read their notes (`gh release view <tag> -R n8n-io/nod`)
+and the linked PRs as behaviour references, adopt what fits, then **update `upstreams.json` when you
+compare** (`compared`, `date`, `adopted`, `issues`) and close the upstream issue.
+`.github/workflows/upstreams.yml` opens or updates one issue „Upstream: Nod … erschienen“ (label
+`nod-parity`) per week when there is a newer release.
 
 ## 6. Non-functional requirements and quality gates
 

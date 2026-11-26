@@ -1,0 +1,111 @@
+name: Upstreams
+
+# Reminds us to compare with the projects AIS.ChatCraft follows (AGENTS.md §4, §5). Reads
+# upstreams.json and opens, or updates, one issue per upstream when there is something new:
+#
+# - ais-chat: commits on FWU-DE/ais-chat main since `compared` (subjects, and the changed files
+#   under the paths AGENTS.md §4 names), label `ais-chat-parity`.
+# - nod: releases of n8n-io/nod newer than `compared`, label `nod-parity`.
+#
+# It never compares for us: the person who compares updates upstreams.json and closes the issue.
+# Commit messages and release data are untrusted text: they only go into a body file, never into
+# a command line, and sit in a code block so they cannot mention anyone.
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: upstreams
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  check:
+    name: Upstreams prüfen
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Labels anlegen
+        run: |
+          set -euo pipefail
+          have=$(gh label list --limit 200 --json name --jq '.[].name')
+          grep -qx 'ais-chat-parity' <<<"$have" || gh label create ais-chat-parity --color 1d76db --description "Funktion aus AIS.chat übernehmen"
+          grep -qx 'nod-parity' <<<"$have" || gh label create nod-parity --color 5319e7 --description "Verhalten aus n8n Nod übernehmen"
+
+      - name: AIS.chat
+        run: |
+          set -euo pipefail
+          sha=$(jq -r '."ais-chat".compared' upstreams.json)
+          if ! [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then echo "upstreams.json: ais-chat.compared ist kein Commit: $sha" >&2; exit 1; fi
+          gh api "repos/FWU-DE/ais-chat/compare/$sha...main" > compare.json
+          ahead=$(jq '.ahead_by' compare.json)
+          if ! [[ "$ahead" =~ ^[0-9]+$ ]]; then echo "unerwartete Antwort" >&2; exit 1; fi
+          if [ "$ahead" -eq 0 ]; then echo "AIS.chat: nichts Neues seit $sha"; exit 0; fi
+          # The paths AGENTS.md §4 names (what we rely on).
+          watched='api/chat/|types/(chat|ai-activity)|utils/streaming|utils/files/generated-document|/auth/|db/schema\.ts|llm-model-provider|image-generation|image-model-provider|favorite|entity-overview|overview-filter|custom-chat|assistant-service|conversation|app-sidebar|api/v1/(files|speech)|ai-core/src/errors|messages/de\.json'
+          {
+            echo "<!-- upstream:ais-chat -->"
+            echo "AIS.chat (\`FWU-DE/ais-chat\`) hat **$ahead** neue Commits seit \`$sha\` (Stand in \`upstreams.json\`)."
+            echo
+            echo "Vorgehen: AGENTS.md §4. Danach \`upstreams.json\` (\`ais-chat.compared\`, \`date\`) aktualisieren und dieses Issue schließen."
+            echo
+            echo "Vergleich: https://github.com/FWU-DE/ais-chat/compare/$sha...main"
+            echo
+            echo "### Commits (höchstens 100)"
+            echo
+            echo '```text'
+            jq -r '.commits[-100:][] | (.sha[0:12]) + " " + (.commit.message | split("\n")[0] | gsub("`"; "'"'"'"))' compare.json
+            echo '```'
+            echo
+            echo "### Geänderte Dateien unter den Pfaden aus AGENTS.md §4"
+            echo
+            echo '```text'
+            jq -r '.files[]?.filename' compare.json | sort -u | grep -E "$watched" | tr -d '`' | head -200 || echo "(keine)"
+            echo '```'
+          } > body.md
+          title="Upstream: AIS.chat hat $ahead neue Commits seit $sha"
+          existing=$(gh issue list --state open --limit 200 --json number,title --jq '[.[] | select(.title | startswith("Upstream: AIS.chat"))][0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --title "$title" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md --label ais-chat-parity
+          fi
+
+      - name: Nod
+        run: |
+          set -euo pipefail
+          tag=$(jq -r '.nod.compared' upstreams.json)
+          if ! [[ "$tag" =~ ^nod-v[0-9]+(\.[0-9]+)*$ ]]; then echo "upstreams.json: nod.compared ist kein Nod-Release: $tag" >&2; exit 1; fi
+          since=$(gh release view "$tag" -R n8n-io/nod --json publishedAt --jq '.publishedAt')
+          gh release list -R n8n-io/nod --limit 50 --exclude-drafts --exclude-pre-releases --json tagName,publishedAt > releases.json
+          jq --arg since "$since" '[.[] | select(.tagName | test("^nod-v[0-9]+([.][0-9]+)*$")) | select(.publishedAt > $since)] | sort_by(.publishedAt)' releases.json > newer.json
+          count=$(jq 'length' newer.json)
+          if [ "$count" -eq 0 ]; then echo "Nod: nichts Neues seit $tag"; exit 0; fi
+          newest=$(jq -r '.[-1].tagName' newer.json)
+          {
+            echo "<!-- upstream:nod -->"
+            echo "n8n Nod hat **$count** neue Releases seit \`$tag\` (Stand in \`upstreams.json\`)."
+            echo
+            echo "Vorgehen: AGENTS.md §5. Release-Notes und verlinkte PRs nur als Verhaltensvorlage lesen, nie Code übernehmen. Danach \`upstreams.json\` (\`nod.compared\`, \`date\`, \`adopted\`, \`issues\`) aktualisieren und dieses Issue schließen."
+            echo
+            jq -r '.[] | "- https://github.com/n8n-io/nod/releases/tag/" + .tagName + " (" + (.publishedAt[0:10]) + ")"' newer.json
+          } > body.md
+          title="Upstream: Nod ${newest#nod-} erschienen"
+          if [ "$count" -gt 1 ]; then title="$title ($count neue Releases seit ${tag#nod-})"; fi
+          existing=$(gh issue list --state open --limit 200 --json number,title --jq '[.[] | select(.title | startswith("Upstream: Nod"))][0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --title "$title" --body-file body.md
+          else
+            gh issue create --title "$title" --body-file body.md --label nod-parity
+          fi

@@ -137,6 +137,22 @@ fn a_new_fact_replaces_the_old_one_and_comes_back() {
     assert!(engine.call("memory.replace", json!({"id": "nix", "by": bob})).is_err());
 }
 
+/// Nod #1490: asking to remember works in any language, through the chat like „Merke dir“.
+#[test]
+fn remembering_works_in_any_language_in_the_chat() {
+    let (engine, _seen) = engine_with_recording(r#"{"ersetzt": null}"#);
+    for (text, fact) in [
+        ("Remember that the parents' evening is on Thursday", "The parents' evening is on Thursday"),
+        ("Recuerda que la excursión es en mayo", "La excursión es en mayo"),
+        ("Veli toplantısı perşembe günü, bunu hatırla", "Veli toplantısı perşembe günü"),
+    ] {
+        engine.call("chat.send", json!({"text": text})).unwrap();
+        let note = engine.state().memory.iter().find(|n| n.text == fact).cloned();
+        let note = note.unwrap_or_else(|| panic!("saved: {text}"));
+        assert_eq!(note.source_quote, text, "the owner's own words are the source");
+    }
+}
+
 /// #21: nothing but the owner's words replaces a note: no answer, no model pick outside the
 /// candidates, and no model at all where the notes do not go anyway (the owner is asked).
 #[test]

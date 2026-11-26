@@ -1,0 +1,18 @@
+{
+  "ais-chat": {
+    "repo": "FWU-DE/ais-chat",
+    "license": "AGPL-3.0",
+    "compared": "674c6be3fd5f",
+    "date": "2026-11-25",
+    "notes": "Adopted: assistants, characters, learning scenarios (overview tabs, sorting, filters, favourites), image generation, links on messages, create_plot diagrams, generated documents, deleting chats in the history. Not yet: creating and editing assistants/characters/scenarios, custom chats, image styles and input images, sharing with learners, top-up, new server-side tools.",
+    "issues": []
+  },
+  "nod": {
+    "repo": "n8n-io/nod",
+    "license": "Apache-2.0",
+    "compared": "nod-v0.9.8",
+    "date": "2026-11-26",
+    "adopted": "v0.9.7: system proxy and system certificates. v0.9.8: structuredContent next to a summary text goes to the model (#1476), remembering in any language (#1490), monthly, rare and clock-change schedules projected correctly and old rules still pausable (#1315, #1514), speech rate limits no longer called missing credit (#1334). Not adopted: Telegram/WhatsApp channels, Fedora RPM.",
+    "issues": [63, 64, 65, 66, 67, 68, 69]
+  }
+}
