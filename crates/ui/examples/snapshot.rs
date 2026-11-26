@@ -573,10 +573,24 @@ fn main() {
         demo_vertex(&engine);
     }
     if args.iter().any(|a| a == "--demo-update") {
-        let release = json!([{"tag_name": "v0.2.0", "name": "AIS.ChatCraft 0.2.0", "draft": false, "prerelease": false,
-            "html_url": "https://github.com/FWU-DE/aiscraft/releases/tag/v0.2.0", "body": "- Startseite\n- Bilder in AIS.chat", "assets": []}]);
+        let release = json!([{"tag_name": "v9.0.0", "name": "AIS.ChatCraft 9.0.0", "draft": false, "prerelease": false,
+            "html_url": "https://github.com/FWU-DE/aiscraft/releases/tag/v9.0.0", "body": "## Neu\n\n- Startseite\n- Bilder in AIS.chat", "assets": []}]);
         engine.set_update_feed(Ok(release.to_string())).unwrap();
         engine.call("app.check_update", json!({})).unwrap();
+    }
+    // `--demo-update-install`: the hint with „Jetzt aktualisieren“; `--demo-update-progress`: an
+    // update downloading (#125). Nothing is downloaded.
+    if args.iter().any(|a| a == "--demo-update-install") {
+        engine.set_update_preview(None).unwrap();
+    }
+    if args.iter().any(|a| a == "--demo-update-progress") {
+        let progress = aiscraft_engine::UpdateProgress {
+            version: "9.0.0".into(),
+            phase: aiscraft_engine::UpdatePhase::Download,
+            done: 41_000_000,
+            total: 96_000_000,
+        };
+        engine.set_update_preview(Some(progress)).unwrap();
     }
     let (tx, rx) = mpsc::channel::<UiRequest>();
     let app_engine = engine.clone();

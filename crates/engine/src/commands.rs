@@ -47,6 +47,7 @@ pub fn commands() -> &'static [CommandSpec] {
         all.extend(crate::readability::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::attach::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::templates::COMMANDS.iter().map(CommandSpec::copy));
+        all.extend(crate::update::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::research::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::voice_mode::COMMANDS.iter().map(CommandSpec::copy));
         all.extend(crate::local_files::COMMANDS.iter().map(CommandSpec::copy));
@@ -920,7 +921,7 @@ static COMMANDS: &[CommandSpec] = &[
         "Nach Updates suchen",
         "App",
         None,
-        "background?: bool (nur wenn eingeschaltet und höchstens einmal am Tag, Fehler still)",
+        "background?: bool (nur wenn eingeschaltet und höchstens einmal pro Stunde, Fehler still)",
         true,
         |c, p| Box::pin(async move { crate::update::check(&c, p.get("background").and_then(Value::as_bool).unwrap_or(false)).await })
     ),
