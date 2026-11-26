@@ -1,6 +1,7 @@
 //! The local Claude Code CLI as a chat backend, so a claude.ai subscription can be used.
 //!
-//! Each answer is one `claude -p` run with every tool and MCP server switched off, no saved
+//! Each answer is one `claude -p` run with every tool and MCP server switched off (but the app's
+//! tool bridge, and the CLI's web search while the chat may use the web, #122), no saved
 //! session and an empty working directory: the CLI only talks, it cannot touch files. The whole
 //! conversation goes in each time (as text plus image/PDF blocks via `--input-format
 //! stream-json`), so AIS.ChatCraft stays the only place the history lives. `ANTHROPIC_API_KEY` is
@@ -9,6 +10,7 @@
 use std::process::Stdio;
 
 use aiscraft_core::{AccountInfo, BackendConfig, Capabilities, ChatRequest, Error, Message, ModelInfo, Result, Role, StreamEvent, Usage};
+use aiscraft_core::{ActivityLink, ActivityStep, WebAccess, WebRead, WebSearch};
 use futures::future::BoxFuture;
 use futures::{StreamExt, stream};
 use serde_json::{Value, json};
@@ -110,7 +112,180 @@ pub fn input_message(req: &ChatRequest) -> Value {
     json!({"type": "user", "message": {"role": "user", "content": blocks}})
 }
 
-/// Map one line of `--output-format stream-json` to events.
+/// The CLI's own tool for the web search (#122). Its `WebFetch` stays off: pages go through the
+/// app's reader over the bridge, which refuses private addresses and logs every call.
+const WEB_SEARCH_TOOL: &str = "WebSearch";
+const MAX_STEPS: usize = 20;
+const MAX_LINKS: usize = 20;
+const MAX_TEXT: usize = 2 * 1024 * 1024;
+
+/// The command line of one answer: every tool off, but the app's bridge (when there is one)
+/// and the CLI's web search (when the chat may go on the web).
+pub fn cli_args(req: &ChatRequest, mcp_config: Option<&str>) -> Vec<String> {
+    let mut a: Vec<String> = [
+        "-p",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--tools",
+        if req.web { WEB_SEARCH_TOOL } else { "" },
+        "--strict-mcp-config",
+        "--no-session-persistence",
+        "--setting-sources",
+        "",
+        "--model",
+        &req.model,
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    if let Some(sys) = req.system.as_deref().filter(|s| !s.trim().is_empty()) {
+        a.extend(["--system-prompt".to_string(), sys.to_string()]);
+    }
+    let mut allowed: Vec<&str> = Vec::new();
+    if let Some(path) = mcp_config {
+        a.extend(["--mcp-config".to_string(), path.to_string()]);
+        allowed.push("mcp__aischatcraft");
+    }
+    if req.web {
+        allowed.push(WEB_SEARCH_TOOL);
+    }
+    if !allowed.is_empty() {
+        a.extend(["--allowedTools".to_string(), allowed.join(",")]);
+    }
+    a
+}
+
+/// One answer's `stream-json` output, line by line. It remembers the text (to see which pages
+/// the answer cites) and the steps of the CLI's web search, shown as „Websuche“ with its links.
+#[derive(Default)]
+pub struct Lines {
+    text: String,
+    steps: Vec<(String, ActivityStep)>,
+}
+
+fn clean(s: &str, n: usize) -> String {
+    s.chars().filter(|c| !c.is_control()).take(n).collect::<String>().trim().to_string()
+}
+
+/// The pages one search found: the CLI's structured result, else the `Links: [...]` in its text.
+fn search_links(line: &Value, item: &Value) -> Vec<ActivityLink> {
+    let mut raw: Vec<Value> = line
+        .pointer("/tool_use_result/results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.get("content").and_then(Value::as_array))
+        .flatten()
+        .cloned()
+        .collect();
+    if raw.is_empty() {
+        let text = match item.get("content") {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Array(parts)) => parts.iter().filter_map(|p| p.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n"),
+            _ => String::new(),
+        };
+        if let Some((_, rest)) = text.split_once("Links: ")
+            && let Some(Ok(Value::Array(list))) = serde_json::Deserializer::from_str(rest).into_iter::<Value>().next()
+        {
+            raw = list;
+        }
+    }
+    let mut out: Vec<ActivityLink> = Vec::new();
+    for r in raw {
+        let url = r.get("url").and_then(Value::as_str).unwrap_or("").trim();
+        if !(url.starts_with("https://") || url.starts_with("http://")) || url.len() > 2048 || url.chars().any(char::is_control) {
+            continue;
+        }
+        if out.len() >= MAX_LINKS || out.iter().any(|l| l.url == url) {
+            continue;
+        }
+        let title = clean(r.get("title").and_then(Value::as_str).unwrap_or(""), 200);
+        out.push(ActivityLink { title: if title.is_empty() { url.to_string() } else { title }, url: url.to_string(), failed: false, cited: false });
+    }
+    out
+}
+
+impl Lines {
+    fn activity(&self) -> StreamEvent {
+        StreamEvent::Activity { steps: self.steps.iter().map(|(_, s)| s.clone()).collect() }
+    }
+
+    /// Map one line of `--output-format stream-json` to events.
+    pub fn line(&mut self, line: &str) -> Result<Vec<StreamEvent>> {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { return Ok(vec![]) };
+        let content = |v: &Value| v.pointer("/message/content").and_then(Value::as_array).cloned().unwrap_or_default();
+        match v.get("type").and_then(Value::as_str).unwrap_or("") {
+            // The model asks for a search: a step with the query.
+            "assistant" => {
+                let mut changed = false;
+                for item in content(&v) {
+                    let id = item.get("id").and_then(Value::as_str).unwrap_or("");
+                    if item.get("type").and_then(Value::as_str) == Some("tool_use")
+                        && item.get("name").and_then(Value::as_str) == Some(WEB_SEARCH_TOOL)
+                        && !id.is_empty()
+                        && self.steps.len() < MAX_STEPS
+                        && !self.steps.iter().any(|(i, _)| i == id)
+                    {
+                        let query = clean(item.pointer("/input/query").and_then(Value::as_str).unwrap_or(""), 200);
+                        let step = ActivityStep { label: "Websuche".into(), detail: (!query.is_empty()).then_some(query), ..Default::default() };
+                        self.steps.push((id.to_string(), step));
+                        changed = true;
+                    }
+                }
+                Ok(if changed { vec![self.activity()] } else { vec![] })
+            }
+            // The search's result: the step is done, with the pages it found.
+            "user" => {
+                let mut changed = false;
+                for item in content(&v) {
+                    let id = item.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
+                    if item.get("type").and_then(Value::as_str) != Some("tool_result") {
+                        continue;
+                    }
+                    let links = search_links(&v, &item);
+                    if let Some((_, step)) = self.steps.iter_mut().find(|(i, _)| i == id) {
+                        step.done = true;
+                        step.failed = item.get("is_error").and_then(Value::as_bool) == Some(true);
+                        step.links = links;
+                        changed = true;
+                    }
+                }
+                Ok(if changed { vec![self.activity()] } else { vec![] })
+            }
+            "result" if v.get("is_error").and_then(Value::as_bool) != Some(true) => {
+                let mut out = line_events(line)?;
+                if !self.steps.is_empty() {
+                    // The pages the answer links to are its sources, shown under it.
+                    for (_, step) in self.steps.iter_mut() {
+                        step.done = true;
+                        for l in step.links.iter_mut() {
+                            l.cited = self.text.contains(&l.url);
+                        }
+                    }
+                    out.insert(0, self.activity());
+                }
+                Ok(out)
+            }
+            _ => {
+                let out = line_events(line)?;
+                for e in &out {
+                    if let StreamEvent::Delta { text } = e
+                        && self.text.len() + text.len() <= MAX_TEXT
+                    {
+                        self.text.push_str(text);
+                    }
+                }
+                Ok(out)
+            }
+        }
+    }
+}
+
+/// Map one line of `--output-format stream-json` to events (text, refusal, result).
 pub fn line_events(line: &str) -> Result<Vec<StreamEvent>> {
     let Ok(v) = serde_json::from_str::<Value>(line) else { return Ok(vec![]) };
     let ty = v.get("type").and_then(Value::as_str).unwrap_or("");
@@ -153,7 +328,15 @@ impl Backend for ClaudeCli {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: false, tools_via_mcp: true, web_search: false }
+        Capabilities {
+            remote_history: false,
+            uploads: false,
+            system_prompt: true,
+            vision: true,
+            tools: false,
+            tools_via_mcp: true,
+            web: WebAccess::new(WebSearch::CliTool, WebRead::AppReader),
+        }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
@@ -207,26 +390,6 @@ impl Backend for ClaudeCli {
             let dir = std::env::temp_dir().join(format!("aiscraft-claude-{}", std::process::id()));
             std::fs::create_dir_all(&dir).map_err(|e| Error::io("Arbeitsordner", &e))?;
             let mut c = self.command();
-            c.current_dir(&dir).args([
-                "-p",
-                "--input-format",
-                "stream-json",
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--include-partial-messages",
-                "--tools",
-                "",
-                "--strict-mcp-config",
-                "--no-session-persistence",
-                "--setting-sources",
-                "",
-                "--model",
-                &req.model,
-            ]);
-            if let Some(sys) = req.system.as_deref().filter(|s| !s.trim().is_empty()) {
-                c.args(["--system-prompt", sys]);
-            }
             // The app's tools, through its MCP bridge: only that server, every other tool stays off.
             let mcp_file = match &req.tool_bridge {
                 Some(b) => {
@@ -234,11 +397,12 @@ impl Backend for ClaudeCli {
                     let cfg =
                         json!({"mcpServers": {"aischatcraft": {"type": "http", "url": b.url, "headers": {"Authorization": format!("Bearer {}", b.token)}}}});
                     write_private(&path, cfg.to_string().as_bytes())?;
-                    c.args(["--mcp-config", &path.display().to_string(), "--allowedTools", "mcp__aischatcraft"]);
                     Some(path)
                 }
                 None => None,
             };
+            let mcp_path = mcp_file.as_ref().map(|p| p.display().to_string());
+            c.current_dir(&dir).args(cli_args(&req, mcp_path.as_deref()));
             let mut child = c.spawn().map_err(|e| Error::not_found(format!("Claude-CLI „{}“ lässt sich nicht starten: {e}", self.program)))?;
             let mut stdin = child.stdin.take().ok_or_else(|| Error::protocol("Claude-CLI: keine Eingabe"))?;
             let stdout = child.stdout.take().ok_or_else(|| Error::protocol("Claude-CLI: keine Ausgabe"))?;
@@ -258,6 +422,7 @@ impl Backend for ClaudeCli {
                 stderr: Option<tokio::process::ChildStderr>,
                 queue: std::collections::VecDeque<Result<StreamEvent>>,
                 finished: bool,
+                parse: Lines,
             }
             let st = St {
                 _mcp: mcp_file.map(TempFile),
@@ -266,6 +431,7 @@ impl Backend for ClaudeCli {
                 stderr: stderr.take(),
                 queue: Default::default(),
                 finished: false,
+                parse: Lines::default(),
             };
             Ok(stream::unfold(st, |mut st| async move {
                 loop {
@@ -282,7 +448,7 @@ impl Backend for ClaudeCli {
                     }
                     match st.lines.next_line().await {
                         Ok(Some(l)) if l.len() > MAX_LINE => st.queue.push_back(Err(Error::protocol("Claude-CLI: Zeile zu lang"))),
-                        Ok(Some(l)) => match line_events(&l) {
+                        Ok(Some(l)) => match st.parse.line(&l) {
                             Ok(evs) => st.queue.extend(evs.into_iter().map(Ok)),
                             Err(e) => st.queue.push_back(Err(e)),
                         },
@@ -368,6 +534,78 @@ mod tests {
                 == aiscraft_core::ErrorKind::Auth
         );
         assert!(line_events("garbage").unwrap().is_empty());
+    }
+    /// With „Web“ on, the CLI may use its web search (and only that besides the bridge); with
+    /// „Web“ off every tool stays off as before (#122). Its WebFetch is never switched on.
+    #[test]
+    fn web_search_only_while_the_chat_may_use_the_web() {
+        let req = |web: bool| ChatRequest {
+            conversation_id: "c".into(),
+            model: "claude-opus-5-5".into(),
+            system: None,
+            messages: vec![],
+            tools: vec![],
+            tool_bridge: None,
+            persona: None,
+            web,
+            effort: None,
+        };
+        let after = |a: &[String], flag: &str| a.iter().position(|x| x == flag).and_then(|i| a.get(i + 1)).cloned();
+        let off = cli_args(&req(false), None);
+        assert_eq!(after(&off, "--tools").as_deref(), Some(""));
+        assert!(!off.contains(&"--allowedTools".to_string()), "{off:?}");
+        let off_bridge = cli_args(&req(false), Some("/tmp/mcp.json"));
+        assert_eq!(after(&off_bridge, "--tools").as_deref(), Some(""));
+        assert_eq!(after(&off_bridge, "--allowedTools").as_deref(), Some("mcp__aischatcraft"));
+        let on = cli_args(&req(true), Some("/tmp/mcp.json"));
+        assert_eq!(after(&on, "--tools").as_deref(), Some("WebSearch"));
+        assert_eq!(after(&on, "--allowedTools").as_deref(), Some("mcp__aischatcraft,WebSearch"));
+        assert_eq!(after(&cli_args(&req(true), None), "--allowedTools").as_deref(), Some("WebSearch"));
+        for a in [&off, &off_bridge, &on] {
+            assert!(!a.iter().any(|x| x.contains("WebFetch")), "{a:?}");
+        }
+    }
+
+    /// The CLI's web search shows as „Websuche“ with its pages; the pages the answer links to
+    /// are its sources under it. Hostile results (no http, control characters) are dropped.
+    #[test]
+    fn web_search_steps_and_sources() {
+        let mut p = Lines::default();
+        let ask = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"s1","name":"WebSearch","input":{"query":"Ferien Bayern 2027"}}]}}"#;
+        let out = p.line(ask).unwrap();
+        let [StreamEvent::Activity { steps }] = out.as_slice() else { panic!("{out:?}") };
+        assert_eq!((steps[0].label.as_str(), steps[0].detail.as_deref(), steps[0].done), ("Websuche", Some("Ferien Bayern 2027"), false));
+        let result = json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "s1", "content": "Web search results"}]},
+            "tool_use_result": {"query": "Ferien Bayern 2027", "results": [{"tool_use_id": "x", "content": [
+                {"title": "Ferientermine", "url": "https://www.km.bayern.de/ferien"},
+                {"title": "Böse", "url": "javascript:alert(1)"},
+                {"title": "Andere", "url": "https://example.org/ferien"}]}, "Zusammenfassung"]}});
+        let out = p.line(&result.to_string()).unwrap();
+        let [StreamEvent::Activity { steps }] = out.as_slice() else { panic!("{out:?}") };
+        assert!(steps[0].done && steps[0].links.len() == 2, "{steps:?}");
+        // Text form, as older CLIs write it.
+        let ask2 = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"s2","name":"WebSearch","input":{"query":"zweite"}}]}}"#;
+        p.line(ask2).unwrap();
+        let text = "Web search results for query: \"zweite\"\n\nLinks: [{\"title\":\"Drei\",\"url\":\"https://drei.example/\"}]\n\nMehr";
+        let r2 = json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "s2", "content": [{"type": "text", "text": text}]}]}});
+        let out = p.line(&r2.to_string()).unwrap();
+        let [StreamEvent::Activity { steps }] = out.as_slice() else { panic!("{out:?}") };
+        assert_eq!(steps[1].links[0].url, "https://drei.example/");
+        // Other tools (the bridge) make no step.
+        assert!(
+            p.line(r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b","name":"mcp__aischatcraft__web_fetch","input":{}}]}}"#)
+                .unwrap()
+                .is_empty()
+        );
+        let d = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Laut [KM](https://www.km.bayern.de/ferien) …"}}}"#;
+        p.line(d).unwrap();
+        let evs = p.line(r#"{"type":"result","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}"#).unwrap();
+        let StreamEvent::Activity { steps } = &evs[0] else { panic!("{evs:?}") };
+        let cited: Vec<&str> = steps.iter().flat_map(|s| &s.links).filter(|l| l.cited).map(|l| l.url.as_str()).collect();
+        assert_eq!(cited, vec!["https://www.km.bayern.de/ferien"]);
+        assert_eq!(evs.last(), Some(&StreamEvent::Done));
+        // Without a search, a result is as before: usage and done.
+        assert_eq!(Lines::default().line(r#"{"type":"result","is_error":false}"#).unwrap().len(), 2);
     }
 
     /// A CLI that ends in the middle of an answer: the message names the Claude CLI, the exit

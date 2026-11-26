@@ -138,3 +138,32 @@ pub fn build(config: BackendConfig, secret: Option<String>, on_secret: SecretSin
         BackendKind::Vertex => Arc::new(vertex::Vertex::new(config, secret)?),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aiscraft_core::{WebAccess, WebRead, WebSearch};
+
+    /// Every backend names its web strategy (#122): who searches, who reads pages.
+    #[test]
+    fn each_backend_names_its_web_strategy() {
+        let web = |kind: BackendKind, base: &str, model: &str| {
+            let cfg = BackendConfig { id: "b".into(), name: "B".into(), kind, base_url: base.into(), default_model: None, send_context: true };
+            let b = build(cfg, Some("k".into()), Arc::new(|_, _| {})).unwrap();
+            b.capabilities().for_model(kind, model).web
+        };
+        let ais = web(BackendKind::AisChat, "https://ais.example", "m");
+        assert_eq!(ais, WebAccess::new(WebSearch::ServerSwitch, WebRead::Off));
+        assert!(ais.own_search() && !ais.search_per_request(), "AIS.chat: the server's switch, not the request");
+        let api = web(BackendKind::Anthropic, "https://api.anthropic.com", "claude-opus-5-5");
+        assert_eq!(api, WebAccess::new(WebSearch::ServerTool, WebRead::ServerTool));
+        let cli = web(BackendKind::ClaudeCli, "claude", "claude-opus-5-5");
+        assert_eq!(cli, WebAccess::new(WebSearch::CliTool, WebRead::AppReader));
+        assert!(cli.search_per_request() && cli.reaches_web(false), "the CLI searches itself even without tools");
+        let local = web(BackendKind::OpenAi, "http://localhost:11434/v1", "llama");
+        assert_eq!(local, WebAccess::new(WebSearch::Off, WebRead::AppReader));
+        assert!(!local.own_search() && local.reaches_web(true) && !local.reaches_web(false));
+        assert_eq!(web(BackendKind::Vertex, "global", "claude-opus-5-5"), WebAccess::new(WebSearch::ServerTool, WebRead::ServerTool));
+        assert_eq!(web(BackendKind::Vertex, "global", "google/gemini-2.5-flash"), WebAccess::new(WebSearch::Off, WebRead::AppReader));
+    }
+}
