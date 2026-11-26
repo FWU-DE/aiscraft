@@ -71,23 +71,195 @@ pub struct MemoryNote {
     pub replaced_by: Option<String>,
 }
 
-const TRIGGERS: [&str; 9] =
-    ["bitte merke dir", "bitte merk dir", "merke dir", "merk dir", "notiere dir", "speichere dir", "please remember", "remember that", "remember"];
+/// Polite words in front of the request („Bitte merk dir …“, „Please remember …“, „Lütfen …“).
+const POLITE: [&str; 12] =
+    ["bitte", "please", "por favor", "s'il te plaît", "s'il vous plaît", "per favore", "alsjeblieft", "lütfen", "proszę", "пожалуйста", "kérlek", "请"];
 
-/// If the owner explicitly asks to remember something ("Merke dir: …"), return the area and the
-/// note text. Only the owner's own message is ever passed here.
-pub fn extract_explicit_memory(user_text: &str) -> Option<(MemoryArea, String)> {
-    let trimmed = user_text.trim();
-    let lower = trimmed.to_lowercase();
-    let trigger = TRIGGERS.iter().find(|t| lower.starts_with(*t))?;
-    // Lowercasing can change byte lengths (e.g. 'İ'), so cut by characters, not bytes.
-    let rest: String = trimmed.chars().skip(trigger.chars().count()).collect();
-    let rest = rest.trim_start_matches(|c: char| c == ':' || c == ',' || c == '-' || c.is_whitespace());
-    let rest = rest.strip_prefix("dass ").or_else(|| rest.strip_prefix("that ")).unwrap_or(rest).trim();
-    let rest = rest.trim_end_matches(['.', '!']).trim();
-    if rest.chars().count() < 3 {
+/// Requests to remember that open the message, in the languages people at school write in
+/// (Nod #1490: remembering works in any language, not only German and English).
+const LEADING: [&str; 50] = [
+    // Deutsch
+    "merke dir",
+    "merk dir",
+    "notiere dir",
+    "speichere dir",
+    "denk dran",
+    "denke daran",
+    "vergiss nicht",
+    // English
+    "remember",
+    "keep in mind",
+    "don't forget",
+    "do not forget",
+    // Français
+    "souviens-toi",
+    "souvenez-vous",
+    "rappelle-toi",
+    "retiens",
+    "n'oublie pas",
+    // Español, Português, Italiano
+    "recuerda",
+    "acuérdate de",
+    "no olvides",
+    "lembre-se de",
+    "lembre-se",
+    "lembra-te de",
+    "lembra",
+    "lembre",
+    "ricordati",
+    "ricorda",
+    "non dimenticare",
+    // Nederlands, Skandinavisk, Suomi
+    "onthoud",
+    "vergeet niet",
+    "kom ihåg att",
+    "kom ihåg",
+    "husk at",
+    "husk",
+    "muista",
+    // Polski, Čeština, Українська, Русский, Ελληνικά
+    "zapamiętaj",
+    "nie zapomnij",
+    "zapamatuj si",
+    "запам'ятай",
+    "запамʼятай",
+    "запомни",
+    "не забудь",
+    "θυμήσου",
+    // Türkçe (also at the end, see TRAILING)
+    "şunu hatırla",
+    "bunu hatırla",
+    "hatırla",
+    "unutma",
+    // العربية, 中文, 日本語
+    "تذكر",
+    "记住",
+    "記住",
+    "覚えておいて",
+];
+
+/// Words that join the request and the fact („…, dass“, „that“, „que“, „che“, …).
+const JOINERS: [&str; 11] = ["dass", "daß", "that", "que", "che", "dat", "että", "że", "že", "что", "ότι"];
+
+/// Requests to remember that close the message, where the verb comes last (Türkçe, 日本語, 한국어,
+/// हिन्दी): „Toplantı salı günü, bunu hatırla“, „会議は火曜日だと覚えておいて“.
+const TRAILING: [&str; 17] = [
+    "hatırla",
+    "hatırlayın",
+    "unutma",
+    "unutmayın",
+    "aklında tut",
+    "aklınızda tutun",
+    "覚えておいてください",
+    "覚えておいて",
+    "覚えといて",
+    "覚えて",
+    "기억해 주세요",
+    "기억해 줘",
+    "기억해줘",
+    "기억해",
+    "याद रखना",
+    "याद रखो",
+    "याद रखें",
+];
+
+/// Scripts written without spaces between words: a request there needs no word boundary.
+fn unspaced(c: char) -> bool {
+    matches!(c as u32, 0x3040..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF)
+}
+
+/// Equal ignoring case, also for the Turkish dotted and dotless i.
+fn same(c: char, t: char) -> bool {
+    c == t || c.to_lowercase().eq(t.to_lowercase()) || matches!((c, t), ('I', 'ı') | ('İ', 'i') | ('ʼ', '\'') | ('’', '\''))
+}
+
+/// Whether `chars` starts with `word` as a whole word; the length in chars if so.
+fn leading(chars: &[char], word: &str) -> Option<usize> {
+    let w: Vec<char> = word.chars().collect();
+    let head = chars.get(..w.len())?;
+    if !head.iter().zip(&w).all(|(c, t)| same(*c, *t)) {
         return None;
     }
+    let cjk = w.first().copied().is_some_and(unspaced);
+    match chars.get(w.len()) {
+        Some(next) if next.is_alphanumeric() && !cjk => None,
+        _ => Some(w.len()),
+    }
+}
+
+/// Whether `chars` ends with `word` as a whole word; the length in chars if so.
+fn trailing(chars: &[char], word: &str) -> Option<usize> {
+    let w: Vec<char> = word.chars().collect();
+    let start = chars.len().checked_sub(w.len())?;
+    let tail = chars.get(start..)?;
+    if !tail.iter().zip(&w).all(|(c, t)| same(*c, *t)) {
+        return None;
+    }
+    let cjk = w.first().copied().is_some_and(unspaced);
+    match start.checked_sub(1).and_then(|i| chars.get(i)) {
+        Some(prev) if prev.is_alphanumeric() && !cjk => None,
+        _ => Some(w.len()),
+    }
+}
+
+fn is_separator(c: char) -> bool {
+    c.is_whitespace() || matches!(c, ':' | ',' | '-' | '–' | '：' | '，' | '、' | ';' | '،')
+}
+
+/// The longest of `words` that fits, so „merke dir“ wins over a shorter one.
+fn longest(chars: &[char], words: &[&str], fits: fn(&[char], &str) -> Option<usize>) -> Option<usize> {
+    words.iter().filter_map(|w| fits(chars, w)).max()
+}
+
+/// The fact the owner asks to remember, without the request around it; `None` if the message is no
+/// such request. Works by characters (lowercasing can change byte lengths, e.g. 'İ').
+fn remembered_fact(text: &str) -> Option<String> {
+    let mut chars: Vec<char> = text.trim().chars().collect();
+    let skip_separators = |chars: &mut Vec<char>| {
+        let n = chars.iter().take_while(|c| is_separator(**c)).count();
+        chars.drain(..n);
+    };
+    if let Some(n) = longest(&chars, &POLITE, leading) {
+        chars.drain(..n);
+        skip_separators(&mut chars);
+    }
+    let end_marks = |c: &char| matches!(c, '.' | '!' | '。' | '！');
+    if let Some(n) = longest(&chars, &LEADING, leading) {
+        chars.drain(..n);
+        skip_separators(&mut chars);
+        if let Some(n) = longest(&chars, &JOINERS, leading) {
+            chars.drain(..n);
+            skip_separators(&mut chars);
+        }
+    } else {
+        while chars.last().is_some_and(end_marks) {
+            chars.pop();
+        }
+        let n = longest(&chars, &TRAILING, trailing)?;
+        chars.truncate(chars.len().saturating_sub(n));
+        // „…, bunu hatırla“, „…ことを覚えておいて“: the pointer to the fact goes too.
+        while chars.last().is_some_and(|c| is_separator(*c) || matches!(c, 'を' | 'は')) {
+            chars.pop();
+        }
+        for pointer in ["bunu", "şunu", "これを", "이것을", "이걸"] {
+            if let Some(n) = trailing(&chars, pointer) {
+                chars.truncate(chars.len().saturating_sub(n));
+            }
+        }
+    }
+    while chars.last().is_some_and(|c| end_marks(c) || is_separator(*c)) {
+        chars.pop();
+    }
+    let fact: String = chars.into_iter().collect();
+    let fact = fact.trim();
+    (fact.chars().count() >= 3).then(|| fact.to_string())
+}
+
+/// If the owner explicitly asks to remember something („Merke dir: …“, „Remember …“, „Recuerda
+/// que …“, „… hatırla“), in any common language, return the area and the note text. Only the
+/// owner's own message is ever passed here.
+pub fn extract_explicit_memory(user_text: &str) -> Option<(MemoryArea, String)> {
+    let rest = remembered_fact(user_text)?;
     let mut text: String = rest.chars().take(500).collect();
     if let Some(first) = text.chars().next() {
         let upper: String = first.to_uppercase().collect();
@@ -214,6 +386,40 @@ mod tests {
         assert_eq!(a, MemoryArea::Preferences);
         assert!(extract_explicit_memory("Was soll ich mir merken?").is_none());
         assert!(extract_explicit_memory("merke dir").is_none());
+    }
+
+    /// Nod #1490: a request to remember is saved in any language, with the fact alone as the note.
+    #[test]
+    fn remembering_works_in_any_language() {
+        let cases = [
+            ("Remember that I teach maths and physics.", "I teach maths and physics"),
+            ("Please remember: my school is in Kiel", "My school is in Kiel"),
+            ("Recuerda que la reunión es el martes.", "La reunión es el martes"),
+            ("Souviens-toi que j'enseigne le français", "J'enseigne le français"),
+            ("Ricorda che il consiglio di classe è giovedì", "Il consiglio di classe è giovedì"),
+            ("Lembre-se de que a reunião é na terça", "A reunião é na terça"),
+            ("Onthoud dat ik op dinsdag vrij ben", "Ik op dinsdag vrij ben"),
+            ("Muista että kokous on tiistaina", "Kokous on tiistaina"),
+            ("Zapamiętaj, że zebranie jest we wtorek", "Zebranie jest we wtorek"),
+            ("Запомни, что собрание во вторник", "Собрание во вторник"),
+            ("Hatırla: toplantı salı günü", "Toplantı salı günü"),
+            ("Toplantı salı günü, bunu hatırla!", "Toplantı salı günü"),
+            ("Veli toplantısı perşembe günü unutma", "Veli toplantısı perşembe günü"),
+            ("HATIRLA: Ahmet matematik öğretmeni", "Ahmet matematik öğretmeni"),
+            ("会議は火曜日だと覚えておいて。", "会議は火曜日だと"),
+            ("记住：我教数学", "我教数学"),
+            ("Bitte denk dran, dass ich montags frei habe", "Ich montags frei habe"),
+        ];
+        for (input, note) in cases {
+            let got = extract_explicit_memory(input).map(|(_, t)| t);
+            assert_eq!(got.as_deref(), Some(note), "{input}");
+        }
+        // Not a request to remember: words that only start the same, questions, mentions.
+        for input in
+            ["Remembering things is hard", "Recuerdas cómo se llama?", "Was soll ich mir merken?", "Ich habe vergessen, es zu sagen", "hatırla", "覚えて"]
+        {
+            assert!(extract_explicit_memory(input).is_none(), "{input}");
+        }
     }
 
     #[test]

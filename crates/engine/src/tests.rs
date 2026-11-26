@@ -1330,6 +1330,54 @@ fn every_command_has_a_functional_test() {
     assert!(missing.is_empty(), "commands without a functional test: {missing:?}");
 }
 
+/// `upstreams.json` (AGENTS.md §4, §5, `.github/workflows/upstreams.yml`): every upstream names
+/// its repository, what was last compared and a real date.
+#[test]
+fn upstreams_file_names_repo_compared_and_date() {
+    let v: Value = serde_json::from_str(include_str!("../../../upstreams.json")).expect("upstreams.json is JSON");
+    let all = v.as_object().expect("an object of upstreams");
+    for key in ["ais-chat", "nod"] {
+        let u = all.get(key).unwrap_or_else(|| panic!("{key} missing"));
+        let repo = u["repo"].as_str().unwrap_or("");
+        assert!(repo.split('/').count() == 2 && !repo.starts_with('/') && !repo.ends_with('/'), "{key}: repo owner/name");
+        assert!(!u["compared"].as_str().unwrap_or("").trim().is_empty(), "{key}: compared");
+        let date = u["date"].as_str().unwrap_or("");
+        assert!(chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok(), "{key}: date {date:?}");
+        assert!(u.get("issues").is_none_or(|i| i.as_array().is_some_and(|a| a.iter().all(Value::is_u64))), "{key}: issues are numbers");
+    }
+    let sha = v["ais-chat"]["compared"].as_str().unwrap_or("");
+    assert!(sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()), "ais-chat: a commit sha");
+    assert!(v["nod"]["compared"].as_str().unwrap_or("").starts_with("nod-v"), "nod: a release tag");
+}
+
+/// Nod #1315, #1514: rare rules are accepted with a next run, a rule that never fires is refused
+/// when set, and a schedule saved with a rule that no longer counts can still be paused and
+/// renamed (only a new rule is checked).
+#[test]
+fn rare_and_old_schedules_can_be_set_paused_and_renamed() {
+    let (engine, _) = engine_with_recording("ok");
+    let leap = engine.call("schedule.create", json!({"title": "Schaltjahr", "prompt": "Gratuliere", "cron": "0 8 29 2 *"})).unwrap();
+    assert!(leap["next_run"].as_i64().is_some(), "29 February comes round: {leap}");
+    let monthly = engine.call("schedule.create", json!({"title": "Monatsende", "prompt": "Zeugnisse?", "cron": "0 8 31 * *"})).unwrap();
+    assert!(monthly["next_run"].as_i64().is_some());
+    let never = engine.call("schedule.create", json!({"title": "Nie", "prompt": "x", "cron": "0 9 30 2 *"})).unwrap_err();
+    assert!(never.message.contains("trifft nie zu"), "{}", never.message);
+    let id = monthly["id"].as_str().unwrap().to_string();
+    assert!(engine.call("schedule.update", json!({"id": id, "cron": "0 9 31 2 *"})).is_err(), "a new rule is checked");
+
+    // An old schedule whose rule no longer counts (saved by an earlier version).
+    let mut all = crate::schedules::load(engine.ctx());
+    all.iter_mut().find(|s| s.id == id).unwrap().cron = Some("0 9 30 2 *".into());
+    engine.ctx().store(|st| st.set_setting("schedules", &serde_json::to_value(&all)?)).unwrap();
+    let paused = engine.call("schedule.update", json!({"id": id, "enabled": false, "title": "Monatsende (alt)"})).unwrap();
+    assert!(paused["next_run"].is_null());
+    let s = crate::schedules::load(engine.ctx()).into_iter().find(|s| s.id == id).unwrap();
+    assert!(!s.enabled && s.title == "Monatsende (alt)");
+    engine.call("schedule.update", json!({"id": id, "cron": "0 8 L * *"})).unwrap_err();
+    engine.call("schedule.update", json!({"id": id, "cron": "0 8 28 * *", "enabled": true})).unwrap();
+    assert!(crate::schedules::load(engine.ctx()).into_iter().any(|s| s.id == id && s.enabled && s.cron.as_deref() == Some("0 8 28 * *")));
+}
+
 /// Schedules: create, run, watch without change, change, delete; check-ins from the model.
 #[test]
 fn schedules_run_watch_and_check_in() {

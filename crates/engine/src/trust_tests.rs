@@ -604,3 +604,29 @@ fn an_empty_term_list_needs_the_current_short_reply() {
     let now = crate::trust::Evidence { turn: "t1".into(), ..ev };
     assert_eq!(engine.block_on(crate::tools::run(engine.ctx(), "conv", &call, &now, true)).2, "ok");
 }
+
+/// Nod #1476: a connector that sends only a summary as text and the data in `structuredContent`
+/// gives the model both, inside the untrusted wrapper.
+#[test]
+fn the_model_sees_structured_content_next_to_the_summary() {
+    let echo_name: Arc<Mutex<String>> = Arc::default();
+    let e2 = echo_name.clone();
+    let Some((engine, seen, _, echo)) = setup(move |body| {
+        if last_role(body) == "tool" {
+            return text("Fertig.");
+        }
+        if !body.contains("\"tools\"") {
+            return text(r#"{"none": true}"#);
+        }
+        calls(&[(&e2.lock().unwrap().clone(), json!({"text": "1 Datei erstellt"}))])
+    }) else {
+        return;
+    };
+    *echo_name.lock().unwrap() = echo;
+    engine.call("chat.send", json!({"text": "Erstell die Datei"})).unwrap();
+    let bodies = seen.lock().unwrap().clone();
+    let round = bodies.iter().find(|b| last_role(b) == "tool").expect("a round with the tool result");
+    let result = last_text(round);
+    assert!(result.contains("untrusted_tool_result") && result.contains("1 Datei erstellt"), "{result}");
+    assert!(result.contains(r#"{"echoed":"1 Datei erstellt"}"#), "the structured data reaches the model: {result}");
+}

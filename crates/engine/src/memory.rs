@@ -61,7 +61,7 @@ pub(crate) async fn check_replaces(c: &Ctx, note_id: &str) -> Result<Option<Stri
         return Ok(None);
     }
     let list: Vec<String> = candidates.iter().enumerate().map(|(i, n)| format!("{}. {}", i + 1, n.text)).collect();
-    let system = "Du prüfst Notizen einer Person über sich selbst. Ersetzt die neue Notiz eine der älteren, weil sie dasselbe anders sagt oder ihr widerspricht (zum Beispiel ist jetzt jemand anderes zuständig, ein Termin oder eine Vorliebe hat sich geändert)? Nur wenn das eindeutig ist; eine Ergänzung ersetzt nichts. Antworte nur mit JSON: {\"ersetzt\": Nummer der älteren Notiz oder null}";
+    let system = "Du prüfst Notizen einer Person über sich selbst. Ersetzt die neue Notiz eine der älteren, weil sie dasselbe anders sagt oder ihr widerspricht (zum Beispiel ist jetzt jemand anderes zuständig, ein Termin oder eine Vorliebe hat sich geändert)? Nur wenn das eindeutig ist; eine Ergänzung ersetzt nichts. Die Notizen können in jeder Sprache sein. Antworte nur mit JSON: {\"ersetzt\": Nummer der älteren Notiz oder null}";
     let prompt = format!("Neue Notiz: {}\n\nÄltere Notizen:\n{}", new.text, list.join("\n"));
     let out = crate::chat::complete(c, Some(system), &prompt).await?;
     // Only one of the numbered candidates; any other answer replaces nothing.

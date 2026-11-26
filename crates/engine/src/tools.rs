@@ -834,7 +834,7 @@ async fn execute_once(c: &Ctx, conv: &str, r: Ready, claim: Option<String>) -> O
         Ok(res) => {
             finish("done");
             remember_view(c, &r, &res);
-            (wrap_untrusted(&r.call.name, &crate::vault::scrub(&res.text(), &r.secrets)), res.is_error, if res.is_error { "error" } else { "ok" })
+            (wrap_untrusted(&r.call.name, &crate::vault::scrub(&res.model_text(), &r.secrets)), res.is_error, if res.is_error { "error" } else { "ok" })
         }
         // The request may have reached the connector: say so, never try again.
         Err(e)
