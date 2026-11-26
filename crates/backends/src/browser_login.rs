@@ -170,21 +170,60 @@ async fn close_leftover_browser(profile: &Path) {
     tokio::time::sleep(Duration::from_millis(500)).await;
 }
 
+/// A start handed over to another browser that holds the profile. The sign-in ends such leftovers
+/// itself and tries again; this text only stays when even that did not help.
+const LEFTOVER: &str = "Ein anderer Browser hält das Anmeldeprofil von AIS.ChatCraft und ließ sich nicht beenden. Bitte den Rechner neu anmelden oder im Task-Manager Browser-Prozesse ohne Fenster beenden, dann erneut anmelden.";
+
+/// Whether a process's command line uses exactly this profile folder (`--user-data-dir=<dir>`).
+/// Only browsers started with the app's own AIS.chat profile match, never the person's browser.
+fn uses_profile(cmd: &[std::ffi::OsString], profile: &Path) -> bool {
+    let want = profile.to_string_lossy().trim_end_matches(['/', '\\']).to_lowercase();
+    if want.is_empty() {
+        return false;
+    }
+    cmd.iter().any(|a| {
+        let a = a.to_string_lossy();
+        a.strip_prefix("--user-data-dir=").is_some_and(|v| v.trim_matches('"').trim_end_matches(['/', '\\']).to_lowercase() == want)
+    })
+}
+
+/// Ends browser processes without a window (a hidden sign-in from before, a background process
+/// after the app ended) that still hold the app's own profile, so a new sign-in can start.
+/// Returns how many were ended.
+fn end_profile_processes(profile: &Path) -> usize {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
+    let mut ended = 0;
+    for p in sys.processes().values() {
+        if uses_profile(p.cmd(), profile) && p.kill() {
+            ended += 1;
+        }
+    }
+    ended
+}
+
+/// How long a browser that relaunched itself (Edge on Windows starts a second process and the
+/// first one ends at once) gets to write its port file after the started process ended.
+const RELAUNCH_GRACE: Duration = Duration::from_secs(10);
+
 /// Waits for the port file of the browser just started. `alive` says whether that process still
-/// runs; when it ends before the port appears, another browser has the profile.
-async fn wait_for_port(profile: &Path, timeout: Duration, alive: &mut (dyn FnMut() -> bool + Send)) -> Result<u16> {
+/// runs; when it ended and no port file came within [`RELAUNCH_GRACE`], another browser has the
+/// profile.
+async fn wait_for_port(profile: &Path, timeout: Duration, grace: Duration, alive: &mut (dyn FnMut() -> bool + Send)) -> Result<u16> {
     let deadline = Instant::now() + timeout;
+    let mut ended_at: Option<Instant> = None;
     while Instant::now() < deadline {
         if let Some(port) = read_port(profile) {
             return Ok(port);
         }
         if !alive() {
-            // One more look: the process may have written the file and ended in between.
-            return read_port(profile).ok_or_else(|| {
-                Error::protocol(
-                    "Für die Anmeldung ist noch ein Browserfenster von vorhin offen. Bitte alle Fenster der AIS.chat-Anmeldung schließen und erneut anmelden.",
-                )
-            });
+            // The started process ended: a browser that relaunched itself writes the port file
+            // a moment later; only when none comes did another browser take the start over.
+            let since = *ended_at.get_or_insert_with(Instant::now);
+            if since.elapsed() >= grace {
+                return read_port(profile).ok_or_else(|| Error::protocol(LEFTOVER));
+            }
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -216,28 +255,71 @@ pub async fn login(opts: LoginOptions) -> Result<String> {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&opts.profile_dir, std::fs::Permissions::from_mode(0o700));
     }
-    close_leftover_browser(&opts.profile_dir).await;
-    let _ = std::fs::remove_file(opts.profile_dir.join("DevToolsActivePort"));
-    let login_url = format!("{}/login", opts.base_url.trim_end_matches('/'));
-    let mut cmd = tokio::process::Command::new(&browser);
-    cmd.arg(format!("--user-data-dir={}", opts.profile_dir.display()))
+    free_profile(&opts.profile_dir).await;
+    // Already signed in (the profile still holds a valid AIS.chat session): a short hidden look
+    // finds the cookie, and no window opens at all.
+    if !opts.headless {
+        let quick = run(&browser, &opts.profile_dir, &opts.base_url, &host, true, SIGNED_IN_LOOK).await;
+        free_profile(&opts.profile_dir).await;
+        if let Ok(cookie) = quick {
+            return Ok(cookie);
+        }
+    }
+    match run(&browser, &opts.profile_dir, &opts.base_url, &host, opts.headless, opts.timeout).await {
+        // A browser without a window still held the profile: end it and try once more.
+        Err(e) if e.message == LEFTOVER => {
+            free_profile(&opts.profile_dir).await;
+            run(&browser, &opts.profile_dir, &opts.base_url, &host, opts.headless, opts.timeout).await
+        }
+        other => other,
+    }
+}
+
+/// How long the hidden look for an existing session may take before the window opens.
+const SIGNED_IN_LOOK: Duration = Duration::from_secs(8);
+
+/// Closes a browser from before that still holds the profile (politely over DevTools, then by
+/// ending its processes) and removes its port file.
+async fn free_profile(profile: &Path) {
+    close_leftover_browser(profile).await;
+    if end_profile_processes(profile) > 0 {
+        // The profile lock goes a moment after the processes.
+        tokio::time::sleep(Duration::from_millis(800)).await;
+    }
+    let _ = std::fs::remove_file(profile.join("DevToolsActivePort"));
+}
+
+/// One browser start with the profile: hidden or as a small app window on the login page; the
+/// session cookie as soon as it is there.
+async fn run(browser: &Path, profile: &Path, base_url: &str, host: &str, headless: bool, timeout: Duration) -> Result<String> {
+    let login_url = format!("{}/login", base_url.trim_end_matches('/'));
+    let mut cmd = tokio::process::Command::new(browser);
+    cmd.arg(format!("--user-data-dir={}", profile.display()))
         .args(["--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", "--no-first-run", "--no-default-browser-check"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
-    if opts.headless {
+    if headless {
         cmd.args(["--headless=new", &login_url]);
     } else {
         cmd.arg(format!("--app={login_url}")).arg("--window-size=520,760");
     }
     let mut child = cmd.spawn().map_err(|e| Error::not_found(format!("Browser {} lässt sich nicht starten: {e}", browser.display())))?;
     let result = async {
-        let mut alive = || matches!(child.try_wait(), Ok(None));
-        let port = wait_for_port(&opts.profile_dir, Duration::from_secs(20), &mut alive).await?;
-        wait_for_cookie(port, &host, opts.timeout, &mut alive).await
+        let mut started = || matches!(child.try_wait(), Ok(None));
+        let port = wait_for_port(profile, Duration::from_secs(20), RELAUNCH_GRACE, &mut started).await?;
+        // The window is open as long as its DevTools endpoint answers, also when the browser
+        // relaunched itself and the process started here has long ended (Edge on Windows).
+        let mut open = || {
+            matches!(child.try_wait(), Ok(None))
+                || std::net::TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), Duration::from_millis(300)).is_ok()
+        };
+        wait_for_cookie(port, host, timeout, &mut open).await
     }
     .await;
+    // A relaunched browser is not our child: close it over DevTools as well.
+    close_leftover_browser(profile).await;
     let _ = child.start_kill();
     let _ = child.wait().await;
     match result {
@@ -272,15 +354,46 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let _ = std::fs::remove_file(dir.join("DevToolsActivePort"));
         let started = Instant::now();
-        let err = wait_for_port(&dir, Duration::from_secs(20), &mut || false).await.unwrap_err();
+        let err = wait_for_port(&dir, Duration::from_secs(20), Duration::from_millis(600), &mut || false).await.unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(2));
-        assert!(err.message.contains("Browserfenster von vorhin"), "{}", err.message);
+        assert_eq!(err.message, LEFTOVER);
 
         std::fs::write(dir.join("DevToolsActivePort"), "9222\n/devtools/browser/x\n").unwrap();
-        assert_eq!(wait_for_port(&dir, Duration::from_secs(1), &mut || false).await.unwrap(), 9222);
+        assert_eq!(wait_for_port(&dir, Duration::from_secs(1), Duration::ZERO, &mut || false).await.unwrap(), 9222);
         // Nothing answers on that port: closing a leftover is a no-op, never an error.
         close_leftover_browser(&dir).await;
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Edge on Windows relaunches itself: the started process ends at once and the real one
+    /// writes the port file a moment later. That is a normal start, not a leftover.
+    #[tokio::test]
+    async fn a_browser_that_relaunches_itself_is_waited_for() {
+        let dir = std::env::temp_dir().join(format!("aiscraft-relaunch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::remove_file(dir.join("DevToolsActivePort"));
+        let file = dir.join("DevToolsActivePort");
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            let _ = std::fs::write(file, "9333\n/devtools/browser/y\n");
+        });
+        let port = wait_for_port(&dir, Duration::from_secs(10), Duration::from_secs(5), &mut || false).await.unwrap();
+        assert_eq!(port, 9333);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Only browsers started with exactly the app's profile count as leftovers, never the
+    /// person's own browser or another profile that merely starts the same way.
+    #[test]
+    fn only_processes_with_the_apps_profile_are_leftovers() {
+        let os = |v: &[&str]| v.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+        let profile = Path::new(r"C:\Users\x\AppData\Roaming\uds\aiscraft\data\browser-profile");
+        assert!(uses_profile(&os(&["msedge.exe", r"--user-data-dir=C:\Users\x\AppData\Roaming\uds\aiscraft\data\browser-profile", "--headless=new"]), profile));
+        assert!(uses_profile(&os(&["chrome", r#"--user-data-dir="c:\users\x\appdata\roaming\uds\aiscraft\data\browser-profile\""#]), profile));
+        assert!(!uses_profile(&os(&["msedge.exe"]), profile), "the person's browser");
+        assert!(!uses_profile(&os(&["chrome", r"--user-data-dir=C:\Users\x\AppData\Roaming\uds\aiscraft\data\browser-profile-2"]), profile));
+        assert!(!uses_profile(&os(&["chrome", r"--profile-directory=browser-profile"]), profile));
+        assert!(!uses_profile(&os(&["chrome", "--user-data-dir="]), Path::new("")));
     }
 
     /// A fake DevTools endpoint: the cookie appears on the third ask.

@@ -18,6 +18,8 @@ reqwest.workspace = true
 tokio.workspace = true
 log.workspace = true
 bytes = "1"
+# Leftover browser processes that still hold the app's own AIS.chat profile (browser_login).
+sysinfo = { version = "0.37", default-features = false, features = ["system"] }
 base64 = "0.22"
 tokio-tungstenite = "0.30"
 # RSA signing of the service account JWT (Vertex). Already in the tree through rustls.
