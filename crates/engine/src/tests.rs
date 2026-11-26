@@ -1395,7 +1395,8 @@ fn schedules_run_watch_and_check_in() {
     let conv = sched.conversation_id.clone().unwrap();
     assert!(s.conversation(&conv).unwrap().title.contains("Morgenplan"));
     assert_eq!(engine.ctx().store(|st| st.messages(&conv)).unwrap().len(), 2);
-    assert!(seen.lock().unwrap().last().unwrap().contains("Was steht heute an?"));
+    // Background calls (title, memory) may arrive after it: look at every request, not only the last.
+    assert!(seen.lock().unwrap().iter().any(|r| r.contains("Was steht heute an?")), "the schedule's prompt reached the model");
     engine.call("schedule.update", json!({"id": id, "enabled": false})).unwrap();
     assert!(!engine.state().schedules[0].enabled);
     engine.call("schedule.delete", json!({"id": id})).unwrap();
