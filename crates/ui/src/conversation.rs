@@ -181,9 +181,9 @@ impl AisCraftApp {
                     let unread = self.state.inbox.iter().filter(|i| !i.read).count();
                     if unread > 0 {
                         let label = if unread == 1 { "1 neue Benachrichtigung".to_string() } else { format!("{unread} neue Benachrichtigungen") };
-                        if crate::kit::pill(ui, &t, crate::kit::Pill::Accent2, Some(crate::icons::Icon::Sparkles), &label, 12.5, None).clicked() {
-                            self.run("notice.read", json!({}));
-                        }
+                        // Opens the notifications, the same panel as the bell; reading them is the user's call.
+                        let r = crate::kit::pill(ui, &t, crate::kit::Pill::Accent2, Some(crate::icons::Icon::Sparkles), &label, 12.5, None);
+                        self.inbox_popup(&r, unread);
                     }
                 }
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
