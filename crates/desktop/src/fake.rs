@@ -87,14 +87,14 @@ impl FakeDesktop {
         }
     }
 
-    /// Give a control the keyboard focus (and mark it a password field).
-    pub fn focus(&self, window: &str, control: &str, password: bool) {
+    /// Give a control the keyboard focus (masked: a password field, whose text is never read).
+    pub fn focus(&self, window: &str, control: &str, masked: bool) {
         let mut d = self.desk();
         if let Some(w) = d.windows.iter_mut().find(|w| w.0.id == window) {
             for c in w.1.iter_mut() {
                 c.focused = c.path == control;
                 if c.path == control {
-                    c.password = password;
+                    c.password = masked;
                 }
             }
         }
