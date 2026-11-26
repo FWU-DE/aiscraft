@@ -13,6 +13,7 @@ mod backdrop;
 mod browser_panel;
 mod chat_import;
 mod citations;
+mod computer;
 mod conversation;
 mod dialogs;
 mod downloads;

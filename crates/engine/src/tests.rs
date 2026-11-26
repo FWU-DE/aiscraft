@@ -1309,6 +1309,7 @@ fn every_command_has_a_functional_test() {
         include_str!("nod_tests.rs"),
         include_str!("know_tests.rs"),
         include_str!("local_files_tests.rs"),
+        include_str!("computer_tests.rs"),
         include_str!("sandbox_tests.rs"),
         include_str!("sandbox_browser_tests.rs"),
         include_str!("accounts_tests.rs"),

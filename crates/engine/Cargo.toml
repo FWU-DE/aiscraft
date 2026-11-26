@@ -59,6 +59,7 @@ webbrowser = "1"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 aiscraft-board = { path = "../board" }
 aiscraft-mcp = { path = "../mcp" }
+aiscraft-desktop = { path = "../desktop" }
 aiscraft-voice = { path = "../voice" }
 aiscraft-collab = { path = "../collab", optional = true }
 reqwest.workspace = true

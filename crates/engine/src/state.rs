@@ -66,6 +66,9 @@ pub struct State {
     /// Local files (#25): on or off, folders kept out.
     #[serde(default)]
     pub local_files: crate::local_files::LocalFilesState,
+    /// Computer use (#97): on or off, the person's own list „Hier nie“.
+    #[serde(default)]
+    pub computer: crate::computer::ComputerState,
     /// „Eigener Rechner (Sandbox)“ (#94): installed, on, network, what is missing.
     #[serde(default)]
     pub sandbox: crate::sandbox::SandboxState,
@@ -270,6 +273,10 @@ pub struct Approval {
     /// A warning for the card, e.g. that the same action may have run already (#24).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// Computer use (#97): the window content around the control the step works on, as the
+    /// trust check saw it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
 }
 
 /// One value worth checking before a yes: „An“ kollegium@schule.de.

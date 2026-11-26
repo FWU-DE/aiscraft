@@ -17,6 +17,7 @@ pub mod citations;
 #[cfg(feature = "collab")]
 mod collab;
 mod commands;
+pub(crate) mod computer;
 mod disk;
 pub mod explore;
 mod ext;
@@ -74,6 +75,7 @@ pub use artifacts::{change_blocks, doc_replace, doc_text, markdown_html, merge_s
 pub use attach::{AIS_ACCEPTS, AttachmentPreview, RangeKind};
 pub use chat::{LEFT_OUT, SENT_ALONG};
 pub use commands::{CommandSpec, commands};
+pub use computer::ComputerState;
 pub use ext::{ConfigField, ExtensionOffer, ExtensionView, ExtensionsState, PackageRule, PluginSkill};
 pub use fallback::{FALLBACK, FallbackModel};
 pub use files::{MAX_FILE_BYTES, mime_of};
@@ -167,6 +169,8 @@ pub(crate) struct Inner {
     pub(crate) accounts: accounts::Runtime,
     /// Local files, connector packages, plug-ins and connector views (#25, #43, #28, #74).
     ext: ext::Runtime,
+    /// Computer use (#97): the accessibility backend and the programs opened per request.
+    pub(crate) computer: computer::Runtime,
     bridge: bridge::Bridge,
     voice: voice::Voice,
     research: research::Stops,
@@ -279,6 +283,8 @@ impl Engine {
             tools: Default::default(),
             accounts: accounts::Runtime::new(opts.data_dir.is_some() && std::env::var_os("AISCRAFT_NO_BROWSER").is_none()),
             ext: ext::Runtime::new(opts.data_dir.clone()),
+            // Only the real app reads real windows; engines in memory (tests, scripts) never do.
+            computer: computer::Runtime::new(opts.data_dir.is_some() && !cfg!(test) && std::env::var_os("AISCRAFT_NO_BROWSER").is_none()),
             bridge: Default::default(),
             voice: Default::default(),
             research: Default::default(),
@@ -795,6 +801,8 @@ mod apps_tests;
 mod archive_tests;
 #[cfg(test)]
 mod chatux_tests;
+#[cfg(test)]
+mod computer_tests;
 #[cfg(test)]
 mod know_tests;
 #[cfg(test)]
