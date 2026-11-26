@@ -791,7 +791,7 @@ impl Capabilities {
     /// What one model of the backend can do: on Vertex AI only Claude searches the web itself.
     pub fn for_model(mut self, kind: BackendKind, model: &str) -> Self {
         if kind == BackendKind::Vertex && !model.starts_with("claude-") {
-            self.web_search = false;
+            self.web = WebAccess::new(WebSearch::Off, WebRead::AppReader);
         }
         self
     }
@@ -870,9 +870,68 @@ pub struct Capabilities {
     /// The backend calls tools through an MCP server the app provides (the Claude CLI).
     #[serde(default)]
     pub tools_via_mcp: bool,
-    /// The backend searches and reads the web on its own servers (Claude's server tools).
+    /// How the backend reaches the web (#122).
     #[serde(default)]
-    pub web_search: bool,
+    pub web: WebAccess,
+}
+
+/// Who searches the web for a backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebSearch {
+    /// No search.
+    #[default]
+    Off,
+    /// A tool on the service's servers, asked for per request (Claude (API), Claude on Vertex AI).
+    ServerTool,
+    /// The service's own switch on the assistant or chat (AIS.chat `isWebSearchEnabled`), not per request.
+    ServerSwitch,
+    /// The Claude CLI's own `WebSearch` tool, switched on per request.
+    CliTool,
+}
+
+/// Who reads web pages for a backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WebRead {
+    /// Nobody, or the service as part of its search (AIS.chat).
+    #[default]
+    Off,
+    /// A tool on the service's servers (Claude's `web_fetch`).
+    ServerTool,
+    /// The app's own reader `web_fetch`: as a tool call, or over the MCP bridge (Claude CLI). It
+    /// refuses private addresses, marks the page as untrusted data and logs the call.
+    AppReader,
+}
+
+/// The web strategy of a backend (#122): who searches and who reads pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct WebAccess {
+    #[serde(default)]
+    pub search: WebSearch,
+    #[serde(default)]
+    pub read: WebRead,
+}
+
+impl WebAccess {
+    pub const fn new(search: WebSearch, read: WebRead) -> Self {
+        Self { search, read }
+    }
+
+    /// The request's `web` flag switches the search on (see [`ChatRequest::web`]).
+    pub fn search_per_request(&self) -> bool {
+        matches!(self.search, WebSearch::ServerTool | WebSearch::CliTool)
+    }
+
+    /// The service searches by itself, without a search engine set up in the app.
+    pub fn own_search(&self) -> bool {
+        self.search != WebSearch::Off
+    }
+
+    /// Anything reaches the web: a search, or a reader (the app's reader needs tools).
+    pub fn reaches_web(&self, tools: bool) -> bool {
+        self.own_search() || self.read == WebRead::ServerTool || (self.read == WebRead::AppReader && tools)
+    }
 }
 
 /// Everything a backend needs to answer the next turn.
@@ -892,7 +951,7 @@ pub struct ChatRequest {
     /// The assistant, character or learning scenario to answer as (AIS.chat).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<Persona>,
-    /// Let the backend search and read the web itself (see [`Capabilities::web_search`]).
+    /// Let the backend search and read the web itself (see [`WebAccess::search_per_request`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub web: bool,
     /// How much to think (see [`Sources::effort`]); backends without such a switch ignore it.

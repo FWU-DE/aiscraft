@@ -167,7 +167,7 @@ async fn start(c: Ctx, p: Value) -> Result<Value> {
     }
     let search_url = state.research.search_url.clone();
     let caps = backend.capabilities().for_model(backend.config().kind, &state.selection.model_id);
-    let own_search = caps.web_search || backend.config().kind == aiscraft_core::BackendKind::AisChat;
+    let own_search = caps.web.own_search() || backend.config().kind == aiscraft_core::BackendKind::AisChat;
     if search_url.is_empty() && !own_search {
         return Err(Error::unsupported(
             "Recherche braucht eine Websuche: trage in den Einstellungen einen Suchdienst (SearXNG) ein oder wähle einen Dienst mit eigener Websuche (Claude API, AIS.chat).",

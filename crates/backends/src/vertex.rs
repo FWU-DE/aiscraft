@@ -14,6 +14,7 @@ use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use aiscraft_core::{AccountInfo, BackendConfig, Capabilities, ChatRequest, Error, ErrorKind, ModelCheck, ModelInfo, Result};
+use aiscraft_core::{WebAccess, WebRead, WebSearch};
 use base64::Engine as _;
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -395,7 +396,15 @@ impl Backend for Vertex {
     /// Per backend, not per model: web search is Claude's (on Vertex only `web_search_20250305`,
     /// no web fetch, no Files API); Gemini answers without it.
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: true, tools_via_mcp: false, web_search: true }
+        Capabilities {
+            remote_history: false,
+            uploads: false,
+            system_prompt: true,
+            vision: true,
+            tools: true,
+            tools_via_mcp: false,
+            web: WebAccess::new(WebSearch::ServerTool, WebRead::ServerTool),
+        }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {
@@ -536,7 +545,7 @@ mod tests {
         // Per model: Claude searches the web and takes documents, Gemini does neither.
         let v = aiscraft_core::BackendKind::Vertex;
         let caps = Vertex::new(config("global"), None).unwrap().capabilities();
-        assert!(caps.for_model(v, "claude-opus-5-5").web_search && !caps.for_model(v, "google/gemini-2.5-flash").web_search);
+        assert!(caps.for_model(v, "claude-opus-5-5").web.own_search() && !caps.for_model(v, "google/gemini-2.5-flash").web.own_search());
         assert!(aiscraft_core::speaks_anthropic(v, "claude-opus-5-5") && !aiscraft_core::speaks_anthropic(v, "google/gemini-2.5-flash"));
     }
 

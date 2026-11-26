@@ -1151,10 +1151,12 @@ impl AisCraftApp {
             {
                 set("other_services", others);
             }
-            if caps.web_search || caps.tools {
-                let mut web = src.web && (caps.web_search || src.tools);
-                let label = if caps.web_search { "Websuche (sucht und liest im Netz)" } else { "Webseiten lesen (nur lesen)" };
-                if ui.add_enabled(caps.web_search || src.tools, egui::Checkbox::new(&mut web, label)).changed() {
+            // The web strategy of the service (#122): its own search, or the app's page reader.
+            let search = caps.web.search_per_request();
+            if search || caps.web.read == aiscraft_core::WebRead::AppReader {
+                let mut web = src.web && (search || src.tools);
+                let label = if search { "Websuche (sucht und liest im Netz)" } else { "Webseiten lesen (nur lesen)" };
+                if ui.add_enabled(search || src.tools, egui::Checkbox::new(&mut web, label)).changed() {
                     set("web", web);
                 }
             }
