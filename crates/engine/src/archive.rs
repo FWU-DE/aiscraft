@@ -162,7 +162,11 @@ fn set_archived(c: &Ctx, p: &Value, on: bool) -> Result<Value> {
             }
             many => format!("{} Chats archiviert", many.len()),
         };
-        c.notice_with(NoticeLevel::Info, text, Some(NoticeAction { label: "Rückgängig".into(), command: "chat.unarchive".into(), params: json!({"ids": targets}) }));
+        c.notice_with(
+            NoticeLevel::Info,
+            text,
+            Some(NoticeAction { label: "Rückgängig".into(), command: "chat.unarchive".into(), params: json!({"ids": targets}) }),
+        );
     }
     Ok(if on { json!({"archived": targets.len()}) } else { json!({"restored": targets.len()}) })
 }

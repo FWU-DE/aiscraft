@@ -208,7 +208,9 @@ fn the_sidebar_and_the_header_share_one_chat_menu() {
     let (engine, ids) = engine_with_chats(&["Kastanienfest planen", "Elternabend vorbereiten"]);
     engine.call("chat.open", json!({"id": ids[0]})).unwrap();
     let mut h = harness(&engine);
-    step_until(&mut h, "the open chat's row shows its „…“", |h| h.query_by_label("Chat-Aktionen").is_some() && h.query_by_label("Weitere Aktionen").is_some());
+    step_until(&mut h, "the open chat's row shows its „…“", |h| {
+        h.query_by_label("Chat-Aktionen").is_some() && h.query_by_label("Weitere Aktionen").is_some()
+    });
     assert_eq!(h.query_all_by_label("Chat-Aktionen").count(), 1, "only the open chat's row, while nothing is hovered");
     // The row's „…“ lies inside the row, 20 px and more from the sidebar's right edge, right of the title.
     let more = h.get_by_label("Chat-Aktionen").rect();
@@ -222,11 +224,7 @@ fn the_sidebar_and_the_header_share_one_chat_menu() {
     click_until(&mut h, "Chat-Aktionen", "the sidebar's menu closes", |h| h.query_by_label("Duplizieren").is_none());
     click_until(&mut h, "Weitere Aktionen", "the header's menu opens", |h| h.query_by_label("Duplizieren").is_some());
     let header_menu = menu_entries(&h);
-    assert_eq!(
-        sidebar_menu,
-        ["Umbenennen …", "Anheften", "In Projekt", "Duplizieren", "Als Datei speichern", "Archivieren", "Löschen"],
-        "the sidebar's menu"
-    );
+    assert_eq!(sidebar_menu, ["Umbenennen …", "Anheften", "In Projekt", "Duplizieren", "Als Datei speichern", "Archivieren", "Löschen"], "the sidebar's menu");
     let mut expected = sidebar_menu.clone();
     expected.push("Chat schließen (Esc)");
     assert_eq!(header_menu, expected, "the header's menu is the sidebar's plus „Chat schließen“");
