@@ -584,12 +584,8 @@ fn main() {
         engine.set_update_preview(None).unwrap();
     }
     if args.iter().any(|a| a == "--demo-update-progress") {
-        let progress = aiscraft_engine::UpdateProgress {
-            version: "9.0.0".into(),
-            phase: aiscraft_engine::UpdatePhase::Download,
-            done: 41_000_000,
-            total: 96_000_000,
-        };
+        let progress =
+            aiscraft_engine::UpdateProgress { version: "9.0.0".into(), phase: aiscraft_engine::UpdatePhase::Download, done: 41_000_000, total: 96_000_000 };
         engine.set_update_preview(Some(progress)).unwrap();
     }
     let (tx, rx) = mpsc::channel::<UiRequest>();

@@ -79,9 +79,7 @@ fn hex(bytes: &[u8]) -> String {
 
 /// The release list as GitHub sends it, with the package's real size.
 fn release_list(size: usize) -> String {
-    let asset = |name: &str, size: usize| {
-        json!({"name": name, "size": size, "browser_download_url": format!("https://github.com/FWU-DE/aiscraft/releases/download/v99.0.0/{name}")})
-    };
+    let asset = |name: &str, size: usize| json!({"name": name, "size": size, "browser_download_url": format!("https://github.com/FWU-DE/aiscraft/releases/download/v99.0.0/{name}")});
     json!([{"tag_name": "v99.0.0", "name": "AIS.ChatCraft 99.0.0", "draft": false, "prerelease": false,
         "html_url": "https://github.com/FWU-DE/aiscraft/releases/tag/v99.0.0", "body": "## Neu\n\n- Selbst-Update",
         "assets": [asset(PACKAGE, size), asset("aischatcraft-99.0.0-windows-x64.msi", 10), asset("SHA256SUMS.txt", 100)]}])

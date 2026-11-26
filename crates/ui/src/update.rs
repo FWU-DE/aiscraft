@@ -26,11 +26,7 @@ fn phase_text(u: &UpdateState) -> Option<(String, Option<f32>)> {
     Some(match p.phase {
         UpdatePhase::Download => {
             let share = if p.total > 0 { (p.done as f32 / p.total as f32).clamp(0.0, 1.0) } else { 0.0 };
-            let text = if p.total > 0 {
-                format!("Lädt: {} von {} MB", p.done / 1_000_000, p.total.div_ceil(1_000_000))
-            } else {
-                "Lädt …".to_string()
-            };
+            let text = if p.total > 0 { format!("Lädt: {} von {} MB", p.done / 1_000_000, p.total.div_ceil(1_000_000)) } else { "Lädt …".to_string() };
             (text, Some(share))
         }
         UpdatePhase::Verify => ("Prüft das Paket …".into(), None),
@@ -105,7 +101,11 @@ impl AisCraftApp {
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                if ui.add(egui::Button::new(small_muted(&t, "Später")).frame(false)).on_hover_text("Fragt in 4 Stunden oder beim nächsten Start wieder").clicked() {
+                if ui
+                    .add(egui::Button::new(small_muted(&t, "Später")).frame(false))
+                    .on_hover_text("Fragt in 4 Stunden oder beim nächsten Start wieder")
+                    .clicked()
+                {
                     self.run("app.update_later", json!({}));
                 }
                 ui.label(small_muted(&t, "·"));
@@ -137,7 +137,9 @@ impl AisCraftApp {
                 }
             }
             ui.horizontal_wrapped(|ui| {
-                if p.phase == UpdatePhase::WaitAnswer && ui.button("Antwort anhalten").on_hover_text("Hält die laufende Antwort an, dann geht das Update weiter").clicked() {
+                if p.phase == UpdatePhase::WaitAnswer
+                    && ui.button("Antwort anhalten").on_hover_text("Hält die laufende Antwort an, dann geht das Update weiter").clicked()
+                {
                     self.run("chat.stop", json!({}));
                 }
                 if matches!(p.phase, UpdatePhase::Download | UpdatePhase::Verify | UpdatePhase::WaitAnswer)
