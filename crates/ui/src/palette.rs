@@ -42,6 +42,9 @@ enum UiAction {
     Join,
     Archive,
     Trash,
+    ArchiveChat,
+    DeleteChat,
+    PinChat,
 }
 
 impl Item {
@@ -109,6 +112,16 @@ impl AisCraftApp {
             Item::Ui { label: "Archiv öffnen", group: "Chat", action: UiAction::Archive },
             Item::Ui { label: "Papierkorb öffnen", group: "Chat", action: UiAction::Trash },
         ]);
+        // The open chat's menu entries (#123).
+        if let Some(c) = self.current_chat() {
+            if !c.temporary && !c.archived {
+                items.push(Item::Ui { label: "Chat archivieren", group: "Chat", action: UiAction::ArchiveChat });
+            }
+            items.push(Item::Ui { label: "Chat löschen", group: "Chat", action: UiAction::DeleteChat });
+            if !c.temporary {
+                items.push(Item::Ui { label: if c.pinned { "Chat lösen" } else { "Chat anheften" }, group: "Chat", action: UiAction::PinChat });
+            }
+        }
         if self.state.collab.available {
             items.push(Item::Ui { label: "Mit Code beitreten", group: "Zusammenarbeit", action: UiAction::Join });
         }
@@ -243,6 +256,21 @@ impl AisCraftApp {
                 UiAction::Join => self.dialog = Some(Dialog::Join { code: String::new() }),
                 UiAction::Archive => self.open_archive(false),
                 UiAction::Trash => self.open_archive(true),
+                UiAction::ArchiveChat => {
+                    if let Some(c) = self.current_chat() {
+                        self.archive_chats(vec![c.id]);
+                    }
+                }
+                UiAction::DeleteChat => {
+                    if let Some(c) = self.current_chat() {
+                        self.ask_delete(vec![c.id]);
+                    }
+                }
+                UiAction::PinChat => {
+                    if let Some(c) = self.current_chat() {
+                        self.run("chat.pin", json!({"id": c.id, "pinned": !c.pinned}));
+                    }
+                }
                 UiAction::Search => {
                     self.sidebar_open = true;
                     self.focus_search = true;
