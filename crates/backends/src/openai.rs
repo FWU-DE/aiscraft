@@ -2,6 +2,7 @@
 //! own `/v1` API (Bearer API key).
 
 use aiscraft_core::{AccountInfo, BackendConfig, Capabilities, ChatRequest, Citation, Error, ModelInfo, Result, Role, StreamEvent, Usage};
+use aiscraft_core::{WebAccess, WebRead, WebSearch};
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
 
@@ -248,7 +249,15 @@ impl Backend for OpenAi {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: true, tools_via_mcp: false, web_search: false }
+        Capabilities {
+            remote_history: false,
+            uploads: false,
+            system_prompt: true,
+            vision: true,
+            tools: true,
+            tools_via_mcp: false,
+            web: WebAccess::new(WebSearch::Off, WebRead::AppReader),
+        }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {

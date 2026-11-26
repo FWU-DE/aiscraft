@@ -14,6 +14,7 @@ use aiscraft_core::{
     AccountInfo, ActivityLink, ActivityStep, BackendConfig, Capabilities, ChatRequest, ConversationKind, Error, GeneratedDocument, ImageRequest, ImageResult,
     ModelInfo, Persona, PersonaInfo, PersonaKind, RemoteConversation, Result, Role, StreamEvent,
 };
+use aiscraft_core::{WebAccess, WebRead, WebSearch};
 use aiscraft_rsc::flight::{ActionDecoder, ActionEvent};
 use aiscraft_rsc::{encode_action_args, scrape};
 use futures::future::BoxFuture;
@@ -741,7 +742,15 @@ impl Backend for AisChat {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: true, uploads: true, system_prompt: false, vision: true, tools: false, tools_via_mcp: false, web_search: false }
+        Capabilities {
+            remote_history: true,
+            uploads: true,
+            system_prompt: false,
+            vision: true,
+            tools: false,
+            tools_via_mcp: false,
+            web: WebAccess::new(WebSearch::ServerSwitch, WebRead::Off),
+        }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {

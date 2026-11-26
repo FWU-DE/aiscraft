@@ -102,7 +102,10 @@ pub const TEMPLATES: &[Template] = &[
 /// Whether this need is met now, for schedules with the selected service.
 fn met(s: &crate::State, need: Need) -> bool {
     match need {
-        Need::Web => s.settings.tools && s.backend(&s.selection.backend_id).is_some_and(|b| b.capabilities.web_search || b.capabilities.tools),
+        Need::Web => {
+            s.settings.tools
+                && s.backend(&s.selection.backend_id).is_some_and(|b| b.capabilities.web.reaches_web(b.capabilities.tools || b.capabilities.tools_via_mcp))
+        }
         _ => {
             s.settings.tools
                 && s.connectors.iter().filter(|k| k.enabled).any(|k| {

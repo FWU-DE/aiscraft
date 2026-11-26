@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use aiscraft_core::{
     AccountInfo, ActivityLink, ActivityStep, BackendConfig, Capabilities, ChatRequest, Citation, Error, Message, ModelInfo, Result, Role, StreamEvent, Usage,
 };
+use aiscraft_core::{WebAccess, WebRead, WebSearch};
 use futures::future::BoxFuture;
 use serde_json::{Value, json};
 
@@ -650,7 +651,15 @@ impl Backend for Anthropic {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities { remote_history: false, uploads: false, system_prompt: true, vision: true, tools: true, tools_via_mcp: false, web_search: true }
+        Capabilities {
+            remote_history: false,
+            uploads: false,
+            system_prompt: true,
+            vision: true,
+            tools: true,
+            tools_via_mcp: false,
+            web: WebAccess::new(WebSearch::ServerTool, WebRead::ServerTool),
+        }
     }
 
     fn check(&self) -> BoxFuture<'_, Result<AccountInfo>> {

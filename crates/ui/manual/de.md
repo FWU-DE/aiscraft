@@ -113,7 +113,7 @@ Unter Wayland erlauben manche Desktops einem Programm nicht, sein Fenster selbst
 - **Werkzeuge:** Dokumente, Whiteboards, Zeitpläne, Aufgaben.
 - **Andere Chats durchsuchen.**
 - **Auch Chats mit anderen Diensten an … geben:** Ohne diesen Haken gehen nur Ausschnitte aus Chats mit demselben Dienst mit; Chats mit Claude erreichen AIS.chat also nicht ungefragt. Was deshalb wegblieb, steht als „Nicht mitgeschickt (anderer Dienst): …“ unter deiner Nachricht.
-- **Websuche:** Claude (API) sucht und liest selbst im Netz. Andere Dienste mit Werkzeugen lesen Webseiten unter einer Adresse, nur lesend und nicht im lokalen Netz. Die genutzten Seiten stehen als **Quellen** unter der Antwort.
+- **Websuche:** Claude (API) sucht und liest selbst im Netz. Das Claude-Abo sucht mit der Websuche der Claude-CLI und liest Seiten mit dem Leser von AIS.ChatCraft, auch in Zeitplänen; ist „Web“ aus, bekommt es kein Web-Werkzeug. Andere Dienste mit Werkzeugen lesen Webseiten unter einer Adresse, nur lesend und nicht im lokalen Netz. Die genutzten Seiten stehen als **Quellen** unter der Antwort.
 - **Einzelne Konnektoren.**
 
 Für einen neuen Chat stellst du die Quellen vor der ersten Nachricht ein. Das Menü bleibt offen, bis du „Schließen“ klickst.

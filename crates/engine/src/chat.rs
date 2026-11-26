@@ -853,7 +853,7 @@ async fn generate_with_doc(c: Ctx, conv_id: String, context: Option<String>, doc
     let tools_on = c.state().settings.tools && conv.sources.tools;
     let mut tools = if caps.tools && tools_on { crate::tools::specs_for(&c, &conv.sources) } else { vec![] };
     // Backends without web tools of their own read pages with the built-in reader.
-    if caps.tools && tools_on && conv.sources.web && !caps.web_search {
+    if caps.tools && tools_on && conv.sources.web && caps.web.read == aiscraft_core::WebRead::AppReader {
         tools.push(crate::tools::web_fetch_spec());
     }
     // Backends that call tools through MCP themselves get a bridge to the same tools.
@@ -1004,11 +1004,26 @@ async fn generate_with_doc(c: Ctx, conv_id: String, context: Option<String>, doc
             tools: round_tools,
             tool_bridge: if same { bridge.as_ref().map(|(b, _)| b.clone()) } else { None },
             persona: if same { conv.persona.clone() } else { None },
-            web: active_caps.web_search && conv.sources.web,
+            web: active_caps.web.search_per_request() && conv.sources.web,
             effort: conv.sources.effort.clone(),
         };
         let round_result = stream_round(&c, &active, req, &mut answer, &conv_id, &mut cancel_rx).await;
         crate::action_log::model(&c, &conv_id, &active_id, &model_name, answer.usage, "Antwort");
+        // Pages read over the tool bridge (Claude CLI, #122) are sources of this answer.
+        let bridged = c.0.bridge_pages.lock().ok().and_then(|mut p| p.remove(&conv_id)).unwrap_or_default();
+        if !bridged.is_empty() {
+            for link in bridged {
+                if !read_pages.iter().any(|l| l.url == link.url) {
+                    read_pages.push(link);
+                }
+            }
+            let step = aiscraft_core::ActivityStep { label: "Webseiten gelesen".into(), done: true, links: read_pages.clone(), ..Default::default() };
+            match answer.activity.iter_mut().find(|s| s.label == step.label) {
+                Some(s) => *s = step,
+                None => answer.activity.push(step),
+            }
+            put_message(&c, &conv_id, &answer);
+        }
         // The server's own steps replace the list; the note on the backup model stays.
         if let Some(step) = &fallback_step
             && !answer.activity.iter().any(|s| s.label == crate::fallback::FALLBACK)
