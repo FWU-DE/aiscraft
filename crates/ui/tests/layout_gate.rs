@@ -282,10 +282,21 @@ fn gate(theme: &str, screen: (f32, f32, f32), omarchy: &OmarchyTheme) {
     settle(&mut h, &at("Startseite"), |h| label(h, "Stundenentwurf"));
     check(&mut h, &at("Startseite"));
 
-    // Chat with a long Markdown answer.
+    // Chat with a long Markdown answer, and a long title: in the sidebar it is shortened before
+    // the open chat's „…“ (#123), which stays inside its row, 20 px and more from the edge.
+    let long_title = "Photosynthese ausführlich erklärt für die Klasse 7b mit Versuch und Arbeitsblatt";
+    call(&engine, "chat.rename", json!({"id": chat, "title": long_title}));
     call(&engine, "chat.open", json!({"id": chat}));
-    settle(&mut h, &at("Chat"), |h| label(h, "Kopieren"));
+    settle(&mut h, &at("Chat"), |h| label(h, "Kopieren") && label(h, "Chat-Aktionen"));
     check(&mut h, &at("Chat"));
+    let more = h.get_by_label("Chat-Aktionen").rect();
+    let sidebar = h.state().panel_layout().sidebar.unwrap();
+    assert!(
+        h.query_all_by_label(long_title).any(|n| n.rect().contains_rect(more) && n.rect().right() - more.right() >= 4.0),
+        "{}: „…“ at {more:?} lies inside its row",
+        at("Chat")
+    );
+    assert!(sidebar.right() - more.right() >= 20.0, "{}: „…“ at {more:?} keeps 20 px from the sidebar's edge {sidebar:?}", at("Chat"));
 
     // The browser taken over (#107): the live picture under the messages, the way back.
     let mut png = std::io::Cursor::new(Vec::new());

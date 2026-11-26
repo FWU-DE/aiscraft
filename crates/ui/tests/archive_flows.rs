@@ -180,3 +180,72 @@ fn multi_select_archives_several_chats_at_once() {
     step_until(&mut h, "the selection ends", |h| h.query_by_label_contains("ausgewählt").is_none());
     assert!(in_sidebar(&h, "Zweiter Chat") && !in_sidebar(&h, "Erster Chat") && in_sidebar(&h, "Archiv (2)"));
 }
+
+/// Every entry a chat's menu can have, sidebar and header (#123).
+const MENU_ENTRIES: [&str; 10] = [
+    "Umbenennen …",
+    "Anheften",
+    "Lösen",
+    "In Projekt",
+    "Duplizieren",
+    "Als Datei speichern",
+    "In AIS.chat öffnen",
+    "Archivieren",
+    "Löschen",
+    "Chat schließen (Esc)",
+];
+
+/// The entries of the menu on screen, in [`MENU_ENTRIES`] order.
+fn menu_entries(h: &Harness) -> Vec<&'static str> {
+    MENU_ENTRIES.iter().copied().filter(|l| h.query_by_label(l).is_some()).collect()
+}
+
+/// #123: the sidebar's „…“ (on the open chat, and on another while the pointer is over it) and
+/// the header's „…“ open the same menu; the header adds „Chat schließen (Esc)“. Archiving from
+/// the open chat goes back to the start page with „Rückgängig“; F2 and Entf on a focused row.
+#[test]
+fn the_sidebar_and_the_header_share_one_chat_menu() {
+    let (engine, ids) = engine_with_chats(&["Kastanienfest planen", "Elternabend vorbereiten"]);
+    engine.call("chat.open", json!({"id": ids[0]})).unwrap();
+    let mut h = harness(&engine);
+    step_until(&mut h, "the open chat's row shows its „…“", |h| {
+        h.query_by_label("Chat-Aktionen").is_some() && h.query_by_label("Weitere Aktionen").is_some()
+    });
+    assert_eq!(h.query_all_by_label("Chat-Aktionen").count(), 1, "only the open chat's row, while nothing is hovered");
+    // The row's „…“ lies inside the row, 20 px and more from the sidebar's right edge, right of the title.
+    let more = h.get_by_label("Chat-Aktionen").rect();
+    let rows: Vec<egui::Rect> = h.query_all_by_label("Kastanienfest planen").map(|n| n.rect()).collect();
+    assert!(rows.iter().any(|row| row.contains_rect(more) && row.right() - more.right() >= 4.0), "the button {more:?} lies in its row {rows:?}");
+    let sidebar = h.state().panel_layout().sidebar.unwrap();
+    assert!(sidebar.right() - more.right() >= 20.0, "the button {more:?} keeps 20 px from the sidebar's edge {sidebar:?}");
+
+    click_until(&mut h, "Chat-Aktionen", "the sidebar's menu opens", |h| h.query_by_label("Duplizieren").is_some());
+    let sidebar_menu = menu_entries(&h);
+    click_until(&mut h, "Chat-Aktionen", "the sidebar's menu closes", |h| h.query_by_label("Duplizieren").is_none());
+    click_until(&mut h, "Weitere Aktionen", "the header's menu opens", |h| h.query_by_label("Duplizieren").is_some());
+    let header_menu = menu_entries(&h);
+    assert_eq!(sidebar_menu, ["Umbenennen …", "Anheften", "In Projekt", "Duplizieren", "Als Datei speichern", "Archivieren", "Löschen"], "the sidebar's menu");
+    let mut expected = sidebar_menu.clone();
+    expected.push("Chat schließen (Esc)");
+    assert_eq!(header_menu, expected, "the header's menu is the sidebar's plus „Chat schließen“");
+
+    // Archiving the open chat from its header: back to the start page, with „Rückgängig“.
+    click_until(&mut h, "Archivieren", "the chat is archived", |_| engine.state().conversation(&ids[0]).is_some_and(|c| c.archived));
+    assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.current.is_none()), "back to the start page");
+    step_until(&mut h, "the toast offers „Rückgängig“", |h| h.query_by_label("Rückgängig").is_some());
+    click_until(&mut h, "Rückgängig", "the chat is back", |_| engine.state().conversation(&ids[0]).is_some_and(|c| !c.archived));
+
+    // Another chat's „…“ while the pointer is over its row.
+    step_until(&mut h, "the chats in the sidebar", |h| in_sidebar(h, "Elternabend vorbereiten") && in_sidebar(h, "Kastanienfest planen"));
+    side(&h, "Elternabend vorbereiten").unwrap().hover();
+    step_until(&mut h, "the hovered row shows its „…“", |h| h.query_by_label("Chat-Aktionen").is_some());
+
+    // F2 and Entf on the row under the pointer (no text field has the keys).
+    h.key_press(egui::Key::F2);
+    step_until(&mut h, "F2 renames", |h| h.query_by_label("Chat umbenennen").is_some());
+    click_until(&mut h, "Abbrechen", "the dialog closes", |h| h.query_by_label("Chat umbenennen").is_none());
+    side(&h, "Elternabend vorbereiten").unwrap().hover();
+    step_until(&mut h, "the hovered row shows its „…“ again", |h| h.query_by_label("Chat-Aktionen").is_some());
+    h.key_press(egui::Key::Delete);
+    step_until(&mut h, "Entf asks to delete", |h| h.query_all_by_label_contains("Papierkorb lässt es sich").next().is_some());
+}

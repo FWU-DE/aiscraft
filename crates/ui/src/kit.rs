@@ -187,6 +187,47 @@ pub fn section(ui: &mut Ui, t: &Tokens, label: &str, plus: Option<&str>) -> Opti
 pub fn side_item(ui: &mut Ui, t: &Tokens, icon: Icon, label: &str, active: bool) -> Response {
     let w = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
+    paint_side_item(ui, t, icon, label, active, rect, &resp, false);
+    resp
+}
+
+/// Where a sidebar row's „…“ button sits (#123): 24 px, 4 px inside the row's right edge.
+pub fn side_more_rect(row: Rect) -> Rect {
+    Rect::from_center_size(pos2(row.right() - 4.0 - 12.0, row.center().y), vec2(24.0, 24.0))
+}
+
+/// How far right a sidebar row's label may reach: with the „…“ button it ends 6 px before it.
+pub fn side_label_right(row: Rect, more: bool) -> f32 {
+    if more { side_more_rect(row).left() - 6.0 } else { row.right() - 11.0 }
+}
+
+/// A chat's row in the sidebar: like [`side_item`], with a „…“ button (named `name`) on the
+/// right while the row is hovered, focused or active, or its menu is open (#123). The title is
+/// shortened before the button, never under it. Returns the row and, when shown, the button.
+pub fn side_chat_item(ui: &mut Ui, t: &Tokens, icon: Icon, label: &str, active: bool, name: &str) -> (Response, Option<Response>) {
+    let w = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
+    let more_id = resp.id.with("more");
+    let menu_open = egui::Popup::is_id_open(ui.ctx(), more_id.with("popup"));
+    let show = active || menu_open || resp.has_focus() || ui.rect_contains_pointer(rect);
+    paint_side_item(ui, t, icon, label, active, rect, &resp, show);
+    if !show {
+        return (resp, None);
+    }
+    let r = side_more_rect(rect);
+    let more = ui.interact(r, more_id, Sense::click());
+    more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
+    let fg = if active { t.side_active_text } else { t.side_text2 };
+    if more.hovered() || more.has_focus() || menu_open {
+        ui.painter().circle_filled(r.center(), 12.0, fg.gamma_multiply(0.14));
+    }
+    Icon::More.paint(ui.painter(), r.center(), 16.0, fg);
+    let more = more.on_hover_text(name);
+    (resp, Some(more))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_side_item(ui: &Ui, t: &Tokens, icon: Icon, label: &str, active: bool, rect: Rect, resp: &Response, more: bool) {
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
     let p = ui.painter();
     let r = CornerRadius::same(12);
@@ -200,7 +241,7 @@ pub fn side_item(ui: &mut Ui, t: &Tokens, icon: Icon, label: &str, active: bool)
         if t.flush_modern() {
             p.rect_filled(Rect::from_min_size(pos2(rect.left(), rect.center().y - 9.0), vec2(3.0, 18.0)), CornerRadius::same(2), t.accent2);
         }
-    } else if resp.hovered() || resp.has_focus() {
+    } else if resp.hovered() || resp.has_focus() || (more && ui.rect_contains_pointer(rect)) {
         p.rect_filled(rect, r, t.side_active.gamma_multiply(0.5));
     }
     let fg = if active { t.side_active_text } else { t.side_text2 };
@@ -213,9 +254,8 @@ pub fn side_item(ui: &mut Ui, t: &Tokens, icon: Icon, label: &str, active: bool)
     };
     icon.paint(p, pos2(rect.left() + 12.0 + 8.5, rect.center().y), 17.0, ic);
     let family = if active { theme::SEMIBOLD } else { "" };
-    let g = line(ui, label, font(14.5, family), fg, w - 52.0);
+    let g = line(ui, label, font(14.5, family), fg, side_label_right(rect, more) - (rect.left() + 41.0));
     p.galley(pos2(rect.left() + 41.0, rect.center().y - g.size().y / 2.0), g, fg);
-    resp
 }
 
 /// A small key cap ("Strg K").
@@ -268,5 +308,17 @@ mod tests {
         assert_eq!(super::initials("demo"), "D");
         assert_eq!(super::initials(""), "?");
         assert_eq!(super::initials("anne-marie von x"), "AV");
+    }
+
+    /// #123: a chat's title is shortened before the „…“ button, which stays inside the row.
+    #[test]
+    fn the_more_button_never_covers_the_title() {
+        for w in [120.0, 236.0, 300.0] {
+            let row = egui::Rect::from_min_size(egui::pos2(14.0, 100.0), egui::vec2(w, 32.0));
+            let more = super::side_more_rect(row);
+            assert!(row.contains_rect(more) && row.right() - more.right() >= 4.0, "{w}: inside the row");
+            assert!(super::side_label_right(row, true) <= more.left() - 4.0, "{w}: the title ends before the button");
+            assert!(super::side_label_right(row, false) > super::side_label_right(row, true), "{w}: without it the title has the room");
+        }
     }
 }

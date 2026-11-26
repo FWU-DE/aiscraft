@@ -338,10 +338,13 @@ impl AisCraftApp {
             let generating = self.state.is_generating(&c.id);
             // „Namen schützen“: the title keeps placeholders, shown with the names (#55).
             let shown = self.engine.reveal(&c.id, &c.title);
-            let resp = crate::kit::side_item(ui, &t, Icon::Chat, &shown, selected).on_hover_text(&shown);
+            let (resp, more) = crate::kit::side_chat_item(ui, &t, Icon::Chat, &shown, selected, crate::chat_menu::ROW_BUTTON);
+            let resp = resp.on_hover_text(&shown);
             if generating {
                 let r = resp.rect;
-                let center = egui::pos2(r.right() - 12.0, r.center().y);
+                // Left of the „…“ button while it shows.
+                let right = if more.is_some() { crate::kit::side_more_rect(r).left() - 2.0 } else { r.right() - 12.0 };
+                let center = egui::pos2(right, r.center().y);
                 let tt = ui.input(|i| i.time) as f32;
                 for k in 0..3 {
                     let a = (tt * 3.0 - k as f32 * 0.6).sin() * 0.5 + 0.5;
@@ -359,64 +362,55 @@ impl AisCraftApp {
             }
             // On a picked chat the menu acts on all picked ones.
             let many = picked && self.selected_chats.len() > 1;
+            let ids = if many { self.selected_chats.clone() } else { vec![c.id.clone()] };
+            // Entf: into the trash, F2: rename (#123); only for the row with the keyboard focus
+            // or under the pointer, never while a text field takes the keys.
+            let keys = self.dialog.is_none()
+                && self.palette.is_none()
+                && !ui.ctx().text_edit_focused()
+                && (resp.has_focus() || resp.hovered() || more.as_ref().is_some_and(|m| m.has_focus() || m.hovered()));
+            if keys && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)) {
+                self.ask_delete(ids.clone());
+            }
+            if keys && !many && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F2)) {
+                self.dialog = Some(Dialog::Rename { id: c.id.clone(), title: c.title.clone() });
+            }
             if many {
-                let ids = self.selected_chats.clone();
-                resp.context_menu(|ui| {
-                    ui.label(small_muted(&t, format!("{} Chats ausgewählt", ids.len())));
-                    if ui.button("Archivieren").clicked() {
-                        self.run("chat.archive", json!({"ids": ids}));
-                        self.selected_chats.clear();
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button(RichText::new("Löschen").color(t.danger)).clicked() {
-                        self.ask_delete(ids.clone());
-                        ui.close();
-                    }
-                });
+                resp.context_menu(|ui| self.many_chats_menu(ui, &ids));
+                if let Some(more) = &more {
+                    egui::Popup::menu(more).show(|ui| self.many_chats_menu(ui, &ids));
+                }
                 continue;
             }
-            resp.context_menu(|ui| {
-                if ui.button("Umbenennen").clicked() {
-                    self.dialog = Some(Dialog::Rename { id: c.id.clone(), title: c.title.clone() });
-                    ui.close();
-                }
-                if ui.button(if c.pinned { "Lösen" } else { "Anheften" }).clicked() {
-                    self.run("chat.pin", json!({"id": c.id, "pinned": !c.pinned}));
-                    ui.close();
-                }
-                ui.menu_button("In Projekt", |ui| {
-                    if ui.button("Kein Projekt").clicked() {
-                        self.run("chat.move", json!({"id": c.id, "project": null}));
-                        ui.close();
-                    }
-                    for p in self.state.projects.clone() {
-                        if ui.button(&p.name).clicked() {
-                            self.run("chat.move", json!({"id": c.id, "project": p.id}));
-                            ui.close();
-                        }
-                    }
-                });
-                if let Some(url) = self
-                    .state
-                    .backend(&c.backend_id)
-                    .filter(|b| b.config.kind == BackendKind::AisChat)
-                    .map(|b| format!("{}{}", b.config.base_url.trim_end_matches('/'), aiscraft_core::ais_conversation_path(c.persona.as_ref(), &c.id)))
-                    && ui.button("In AIS.chat öffnen").clicked()
-                {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-                    ui.close();
-                }
-                if ui.button("Archivieren").on_hover_text("Aus der Seitenleiste ins Archiv; bleibt ganz erhalten").clicked() {
-                    self.run("chat.archive", json!({"id": c.id}));
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button(RichText::new("Löschen").color(t.danger)).clicked() {
-                    self.ask_delete(vec![c.id.clone()]);
-                    ui.close();
-                }
-            });
+            // The same menu as in the chat's header (#123).
+            resp.context_menu(|ui| self.chat_menu(ui, &c, crate::chat_menu::Place::Sidebar));
+            if let Some(more) = &more {
+                egui::Popup::menu(more).show(|ui| self.chat_menu(ui, &c, crate::chat_menu::Place::Sidebar));
+            }
+        }
+    }
+
+    /// The menu of several picked chats (#77, #123).
+    fn many_chats_menu(&mut self, ui: &mut Ui, ids: &[String]) {
+        let t = self.tokens.clone();
+        ui.set_min_width(200.0);
+        ui.label(small_muted(&t, format!("{} Chats ausgewählt", ids.len())));
+        let all_pinned = ids.iter().all(|id| self.state.conversation(id).is_some_and(|c| c.pinned));
+        if ui.button(if all_pinned { "Lösen" } else { "Anheften" }).clicked() {
+            for id in ids {
+                self.run("chat.pin", json!({"id": id, "pinned": !all_pinned}));
+            }
+            ui.close();
+        }
+        ui.menu_button("In Projekt", |ui| self.project_menu(ui, ids, None));
+        ui.separator();
+        if ui.button("Archivieren").clicked() {
+            self.archive_chats(ids.to_vec());
+            ui.close();
+        }
+        if ui.button(RichText::new("Löschen").color(t.danger)).clicked() {
+            self.ask_delete(ids.to_vec());
+            ui.close();
         }
     }
 

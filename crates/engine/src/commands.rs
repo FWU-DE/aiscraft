@@ -1135,7 +1135,7 @@ async fn chat_close(c: Ctx) -> Result<Value> {
     Ok(json!({"closed": closed}))
 }
 
-async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
+pub(crate) async fn chat_open(c: Ctx, p: Value) -> Result<Value> {
     let id = req_str(&p, "id")?;
     let conv = c.state().conversation(&id).cloned().or(c.store(|st| st.conversation(&id))?).ok_or_else(|| Error::not_found("Chat nicht gefunden"))?;
     if conv.deleted_at.is_some() {
