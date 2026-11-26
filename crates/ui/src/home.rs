@@ -364,7 +364,12 @@ impl AisCraftApp {
         let t = self.tokens.clone();
         let unread = self.state.inbox.iter().filter(|i| !i.read).count();
         let r = bell_button(ui, &t, unread);
-        egui::Popup::from_toggle_button_response(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        self.inbox_popup(&r, unread);
+    }
+
+    /// The notifications panel, opened from the bell or from the "neue Benachrichtigung" pill.
+    pub(crate) fn inbox_popup(&mut self, anchor: &egui::Response, unread: usize) {
+        egui::Popup::from_toggle_button_response(anchor).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             ui.set_width(340.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Benachrichtigungen").strong());
