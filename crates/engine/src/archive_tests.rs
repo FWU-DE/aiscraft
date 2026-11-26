@@ -238,3 +238,74 @@ fn deleting_in_ais_chat_only_for_ais_chats() {
     assert!(engine.call("chat.delete", json!({"id": conv, "ais_chat": true})).is_err());
     assert!(engine.state().conversation(&conv).is_some());
 }
+
+/// „Duplizieren“ (#123): a copy with the shown branch, its own file copies and the „Namen
+/// schützen“ mapping, opened; the original stays as it was, and purging it leaves the copy whole.
+#[test]
+fn a_duplicated_chat_copies_the_shown_branch_and_keeps_its_own_files() {
+    let (engine, _) = engine_with(plain);
+    let dir = std::env::temp_dir().join(format!("aiscraft-dup-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("plan.txt");
+    std::fs::write(&file, "Ablauf Kastanienfest").unwrap();
+    engine.call("chat.set_sources", json!({"protect": true})).unwrap();
+    engine.call("chat.send", json!({"text": "Plane das Kastanienfest mit Klaus", "files": [file.display().to_string()]})).unwrap();
+    let orig = engine.state().current.clone().unwrap();
+    engine.call("chat.regenerate", json!({})).unwrap();
+    assert_eq!(engine.ctx().store(|st| st.all_messages(&orig)).unwrap().len(), 3, "two answers, one shown");
+    let orig_file = engine.state().messages[0].attachments[0].local_path.clone().unwrap();
+    let shown: Vec<String> = engine.state().messages.iter().map(|m| m.content.clone()).collect();
+
+    // Without id: the open chat.
+    let out = engine.call("chat.duplicate", json!({})).unwrap();
+    let copy = out["id"].as_str().unwrap().to_string();
+    assert_ne!(copy, orig);
+    assert_eq!(out["messages"], 2, "only the shown branch");
+    let s = engine.state();
+    assert_eq!(s.current.as_deref(), Some(copy.as_str()), "the copy opens");
+    let conv = s.conversation(&copy).unwrap();
+    let src = s.conversation(&orig).unwrap();
+    assert!(conv.title.ends_with("(Kopie)") && conv.title.starts_with(&src.title), "{}", conv.title);
+    assert_eq!((&conv.backend_id, &conv.model_id, &conv.project_id), (&src.backend_id, &src.model_id, &src.project_id));
+    assert!(conv.remote_id.is_none() && !conv.pinned && !conv.archived);
+    assert_eq!(s.messages.iter().map(|m| m.content.clone()).collect::<Vec<_>>(), shown);
+    assert!(s.messages.iter().all(|m| m.conversation_id == copy));
+    assert!(s.notices.iter().any(|n| n.text.starts_with("Kopie angelegt")));
+    let copy_file = s.messages[0].attachments[0].local_path.clone().unwrap();
+    assert_ne!(copy_file, orig_file, "its own copy of the file");
+    assert_eq!(std::fs::read(&copy_file).unwrap(), std::fs::read(&orig_file).unwrap());
+    // Klaus was replaced in the original; the copy shows him by the same mapping.
+    let map = |id: &str| engine.ctx().store(|st| st.setting(&format!("privacy.map.{id}"))).unwrap();
+    assert!(map(&orig).is_some() && map(&copy) == map(&orig), "the mapping goes along");
+    assert_eq!(engine.ctx().store(|st| st.all_messages(&orig)).unwrap().len(), 3, "the original stays as it was");
+
+    // Purging the original leaves the copy whole.
+    engine.call("chat.delete", json!({"id": orig})).unwrap();
+    engine.call("chat.purge", json!({"id": orig})).unwrap();
+    assert!(!std::path::Path::new(&orig_file).exists() && std::path::Path::new(&copy_file).exists());
+    engine.call("chat.open", json!({"id": copy})).unwrap();
+    assert_eq!(engine.state().messages.len(), 2);
+
+    // Refused: unknown, in the trash, temporary, nothing open.
+    assert!(engine.call("chat.duplicate", json!({"id": "gibt-es-nicht"})).is_err());
+    engine.call("chat.delete", json!({"id": copy})).unwrap();
+    assert!(engine.call("chat.duplicate", json!({"id": copy})).unwrap_err().message.contains("Papierkorb"));
+    engine.call("chat.temporary", json!({})).unwrap();
+    engine.call("chat.send", json!({"text": "Nur kurz"})).unwrap();
+    assert!(engine.call("chat.duplicate", json!({})).is_err(), "temporary chats are not copied");
+    engine.call("chat.close", json!({})).unwrap();
+    assert!(engine.call("chat.duplicate", json!({})).is_err(), "nothing open");
+}
+
+/// Archiving offers „Rückgängig“ like deleting (#123).
+#[test]
+fn archiving_offers_an_undo() {
+    let (engine, _) = engine_with(plain);
+    let a = chat_with(&engine, "Kastanienfest planen");
+    engine.call("chat.archive", json!({"id": a})).unwrap();
+    let notice = engine.state().notices.iter().find(|n| n.text.contains("Archiviert")).cloned().unwrap();
+    let undo = notice.action.unwrap();
+    assert_eq!((undo.label.as_str(), undo.command.as_str()), ("Rückgängig", "chat.unarchive"));
+    engine.call(&undo.command, undo.params).unwrap();
+    assert!(!engine.state().conversation(&a).unwrap().archived);
+}

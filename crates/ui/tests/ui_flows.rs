@@ -384,7 +384,7 @@ fn close_chat_shows_the_start_page() {
     assert!(h.query_by_label("Woran arbeiten wir heute?").is_none(), "a chat is open, no start page");
     h.get_by_label("Weitere Aktionen").click();
     h.run_steps(4);
-    h.get_by_label("Chat schließen, zur Startseite (Esc)").click();
+    h.get_by_label("Chat schließen (Esc)").click();
     h.run_steps(8);
     // chat.close runs on the engine's runtime; on a slow runner it lands after these frames.
     assert!(engine.wait_for(std::time::Duration::from_secs(5), |s| s.current.is_none()), "× closed the chat");

@@ -377,28 +377,19 @@ impl AisCraftApp {
             });
             ui.horizontal_wrapped(|ui| {
                 if ui.small_button("Archivieren").clicked() {
-                    self.run("chat.archive", json!({"ids": ids}));
-                    self.selected_chats.clear();
+                    self.archive_chats(ids.clone());
                 }
                 if ui.small_button(RichText::new("Löschen").color(t.danger)).clicked() {
                     self.ask_delete(ids.clone());
                 }
-                ui.menu_button(RichText::new("In Projekt").small(), |ui| {
-                    if ui.button("Kein Projekt").clicked() {
-                        for id in &ids {
-                            self.run("chat.move", json!({"id": id, "project": null}));
-                        }
-                        ui.close();
+                // Pin or unpin all of them (#123).
+                let all_pinned = ids.iter().all(|id| self.state.conversation(id).is_some_and(|c| c.pinned));
+                if ui.small_button(if all_pinned { "Lösen" } else { "Anheften" }).clicked() {
+                    for id in &ids {
+                        self.run("chat.pin", json!({"id": id, "pinned": !all_pinned}));
                     }
-                    for p in self.state.projects.clone() {
-                        if ui.button(&p.name).clicked() {
-                            for id in &ids {
-                                self.run("chat.move", json!({"id": id, "project": p.id}));
-                            }
-                            ui.close();
-                        }
-                    }
-                });
+                }
+                ui.menu_button(RichText::new("In Projekt").small(), |ui| self.project_menu(ui, &ids, None));
                 if ui.small_button("Exportieren").clicked() {
                     self.export_many(&ids);
                 }

@@ -80,6 +80,15 @@ pub(crate) static COMMANDS: &[CommandSpec] = &[
         palette: false,
         run: |c, p| Box::pin(async move { empty_trash(&c, &p) }),
     },
+    CommandSpec {
+        id: "chat.duplicate",
+        label: "Chat duplizieren",
+        group: "Chat",
+        shortcut: None,
+        params: "id?: string (sonst der offene Chat). Legt eine Kopie mit den Nachrichten des gezeigten Zweigs an und öffnet sie (#123)",
+        palette: true,
+        run: |c, p| Box::pin(duplicate(c, p)),
+    },
 ];
 
 /// The chats a command is about: `id` or `ids` (at most [`MAX_IDS`], each once).
@@ -144,6 +153,21 @@ fn set_archived(c: &Ctx, p: &Value, on: bool) -> Result<Value> {
             conv.archived = on;
         }
     });
+    // Archived from a menu: the toast offers the way back (#123).
+    if on && !targets.is_empty() {
+        let text = match targets.as_slice() {
+            [one] => {
+                let title = state.conversation(one).map(|x| crate::privacy::reveal(c, &x.id, &x.title)).unwrap_or_default();
+                format!("Archiviert: „{title}“")
+            }
+            many => format!("{} Chats archiviert", many.len()),
+        };
+        c.notice_with(
+            NoticeLevel::Info,
+            text,
+            Some(NoticeAction { label: "Rückgängig".into(), command: "chat.unarchive".into(), params: json!({"ids": targets}) }),
+        );
+    }
     Ok(if on { json!({"archived": targets.len()}) } else { json!({"restored": targets.len()}) })
 }
 
@@ -318,6 +342,74 @@ fn purge(c: &Ctx, id: &str, forget_notes: bool) -> Result<usize> {
         }
     });
     Ok(forgotten.len())
+}
+
+/// A copy of a chat with the messages of its shown branch (#123): to try another direction
+/// without losing the first. The copy is local only (no AIS.chat id), keeps project, service,
+/// model, persona and sources, gets its own copies of attached files (so deleting one chat for
+/// good never takes the other's files) and the „Namen schützen“ mapping, and opens.
+async fn duplicate(c: Ctx, p: Value) -> Result<Value> {
+    let state = c.state();
+    let id = opt_str(&p, "id").or_else(|| state.current.clone()).ok_or_else(|| Error::invalid("Welcher Chat? Öffne einen Chat oder gib id an."))?;
+    let Some(src) = state.conversation(&id).cloned() else {
+        return Err(if state.trash.iter().any(|x| x.id == id) {
+            Error::invalid("Der Chat liegt im Papierkorb. Stelle ihn zuerst wieder her.")
+        } else {
+            Error::not_found("Chat nicht gefunden")
+        });
+    };
+    drop(state);
+    if src.temporary {
+        return Err(Error::invalid("Ein temporärer Chat lässt sich nicht duplizieren: er wird nicht gespeichert."));
+    }
+    let messages = c.store(|st| st.messages(&id))?;
+    let new = crate::new_id();
+    let now = now_ms();
+    let title: String = format!("{} (Kopie)", src.title).chars().take(200).collect();
+    let conv = Conversation {
+        id: new.clone(),
+        title,
+        created_at: now,
+        updated_at: now,
+        pinned: false,
+        remote_id: None,
+        temporary: false,
+        archived: false,
+        deleted_at: None,
+        ..src
+    };
+    // The mapping first: the copy's title and messages hold its placeholders.
+    let mapping = crate::privacy::mapping(&c, &id);
+    crate::privacy::save_mapping(&c, &new, &mapping)?;
+    let dir = c.0.attachments_dir.clone();
+    c.store(|st| st.save_conversation(&conv))?;
+    for m in &messages {
+        let mut copy = aiscraft_core::Message { id: crate::new_id(), conversation_id: new.clone(), ..m.clone() };
+        for a in &mut copy.attachments {
+            a.local_path = a.local_path.as_deref().and_then(|path| copy_attachment(&dir, Path::new(path)));
+        }
+        c.store(|st| st.save_message(&copy))?;
+    }
+    c.update(|s| {
+        s.conversations.push(conv.clone());
+        s.conversations.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.updated_at.cmp(&a.updated_at)));
+    });
+    crate::commands::chat_open(c.clone(), json!({"id": new})).await?;
+    c.notice(NoticeLevel::Success, format!("Kopie angelegt: „{}“", crate::privacy::reveal(&c, &new, &conv.title)));
+    Ok(json!({"id": new, "messages": messages.len()}))
+}
+
+/// A copy of an attached file next to it, under a new name; `None` when the file is not in the
+/// attachments folder (a path from the database is never trusted blindly) or cannot be read.
+fn copy_attachment(dir: &Path, path: &Path) -> Option<String> {
+    if !in_one_of(path, std::slice::from_ref(&dir.to_path_buf())) {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+    let to = dir.join(format!("{}{ext}", crate::new_id()));
+    crate::disk::write_new(&to, &bytes, "Anhang").ok()?;
+    Some(to.display().to_string())
 }
 
 /// Whether `path` lies directly in one of `dirs`.

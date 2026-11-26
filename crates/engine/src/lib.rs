@@ -206,6 +206,8 @@ pub(crate) struct Inner {
     /// Test hook: the page reader may reach local addresses (the tests' scripted servers).
     /// Never set outside tests; the real app refuses loopback and private addresses.
     pub(crate) web_local_ok: std::sync::atomic::AtomicBool,
+    /// Pages the page reader read over the tool bridge (#122), per chat, until the answer takes them.
+    pub(crate) bridge_pages: Mutex<HashMap<String, Vec<aiscraft_core::ActivityLink>>>,
     /// Where the update check reads releases from; off for engines in memory.
     pub(crate) update_feed: Mutex<update::Feed>,
     /// The self-update (#125): release found, running download, prepared restart.
@@ -301,6 +303,7 @@ impl Engine {
             picture_origin: Mutex::new(None),
             pictures_online: opts.data_dir.is_some(),
             web_local_ok: std::sync::atomic::AtomicBool::new(false),
+            bridge_pages: Mutex::new(HashMap::new()),
             update_feed: Mutex::new(if opts.data_dir.is_some() && !cfg!(test) && std::env::var_os("AISCRAFT_NO_UPDATE_CHECK").is_none() {
                 update::Feed::GitHub
             } else {

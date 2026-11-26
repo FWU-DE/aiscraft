@@ -2166,6 +2166,66 @@ fn web_fetch_tool_reads_pages_and_lists_sources() {
     assert!(err);
 }
 
+/// The Claude subscription reads pages over the tool bridge (#122): offered only with „Web“ and
+/// tools on, private addresses stay blocked, it runs without a question (also unattended, as in
+/// a schedule), and the page becomes a source under the answer.
+#[test]
+fn the_bridge_offers_the_page_reader_and_pages_become_sources() {
+    let (engine, _) = engine_with_recording("Laut der Seite: Ahorn.");
+    engine.call("chat.send", json!({"text": "Hallo"})).unwrap();
+    let conv = engine.state().current.clone().unwrap();
+    let ctx = engine.ctx().clone();
+    let page = engine.block_on(async move {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else { return };
+                tokio::spawn(async move {
+                    read_http(&mut sock).await;
+                    let html = "<html><head><title>Baumschule</title></head><body><p>Ahorn.</p></body></html>";
+                    let reply = format!("HTTP/1.1 200 OK\r\ncontent-type: text/html\r\nconnection: close\r\ncontent-length: {}\r\n\r\n{html}", html.len());
+                    let _ = sock.write_all(reply.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}/baum")
+    });
+    let list = |c: &crate::Ctx| -> Vec<String> {
+        let r = engine.block_on(crate::bridge::handle(c, &conv, &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))).unwrap();
+        r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
+    };
+    let fetch = |c: &crate::Ctx| {
+        let req = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "web_fetch", "arguments": {"url": page}}});
+        engine.block_on(crate::bridge::handle(c, &conv, &req)).unwrap()
+    };
+    assert!(list(&ctx).contains(&"web_fetch".to_string()));
+    // A local address is refused while the switch for it is off.
+    let r = fetch(&ctx);
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    assert!(ctx.0.bridge_pages.lock().unwrap().is_empty());
+    engine.allow_local_web().unwrap();
+    let r = fetch(&ctx);
+    assert_eq!(r["result"]["isError"], false, "{r}");
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("Ahorn"));
+    assert!(engine.state().approvals.is_empty(), "reading needs no yes");
+    // Unattended (a schedule): the reader runs without a question too.
+    let call = aiscraft_core::ToolCall { id: "u".into(), name: "web_fetch".into(), arguments: json!({"url": page}), outcome: None };
+    let (_, err, outcome) = engine.block_on(crate::tools::run(&ctx, &conv, &call, &Default::default(), false));
+    assert!(!err && outcome == "ok", "{outcome}");
+    // The next answer takes the page as its source.
+    engine.call("chat.send", json!({"text": "Und?"})).unwrap();
+    let s = engine.state();
+    let answer = s.messages.last().unwrap();
+    let sources: Vec<_> = answer.activity.iter().flat_map(|a| &a.links).filter(|l| l.cited).collect();
+    assert_eq!(sources.len(), 1, "{:?}", answer.activity);
+    assert_eq!((sources[0].title.as_str(), sources[0].url.as_str()), ("Baumschule", page.as_str()));
+    assert!(ctx.0.bridge_pages.lock().unwrap().is_empty(), "taken by the answer");
+    // „Web“ off: not offered, and a call anyway is refused.
+    engine.call("chat.set_sources", json!({"web": false})).unwrap();
+    assert!(!list(&ctx).contains(&"web_fetch".to_string()));
+    assert_eq!(fetch(&ctx)["result"]["isError"], true);
+}
 /// Edit and regenerate keep the old version (issue #33): ‹ › switches, the model, the export
 /// and the search follow the shown branch, a failed edit leaves the old branch in place.
 #[test]

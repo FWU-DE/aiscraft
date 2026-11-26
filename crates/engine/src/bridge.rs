@@ -119,10 +119,12 @@ pub(crate) async fn handle(c: &Ctx, conv: &str, req: &Value) -> Option<Value> {
         "ping" => ok(json!({})),
         "tools/list" => {
             let sources = c.state().conversation(conv).map(|x| x.sources.clone()).unwrap_or_default();
-            let tools: Vec<Value> = crate::tools::specs_for(c, &sources)
-                .into_iter()
-                .map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.input_schema}))
-                .collect();
+            let mut specs = crate::tools::specs_for(c, &sources);
+            // The app's page reader (#122): the CLI's own WebFetch stays off.
+            if sources.tools && sources.web {
+                specs.push(crate::tools::web_fetch_spec());
+            }
+            let tools: Vec<Value> = specs.into_iter().map(|t| json!({"name": t.name, "description": t.description, "inputSchema": t.input_schema})).collect();
             ok(json!({"tools": tools}))
         }
         "tools/call" => {
@@ -131,6 +133,15 @@ pub(crate) async fn handle(c: &Ctx, conv: &str, req: &Value) -> Option<Value> {
             let call = ToolCall { id: new_id(), name, arguments, outcome: None };
             let evidence = crate::trust::evidence(&c.store(|st| st.messages(conv)).unwrap_or_default());
             let (text, is_error, outcome) = crate::tools::run(c, conv, &call, &evidence, true).await;
+            // A page read is a source of the answer; the chat adds it when the round ends.
+            if let Some(link) = crate::tools::fetched_link(&call, &text).filter(|_| !is_error)
+                && let Ok(mut pages) = c.0.bridge_pages.lock()
+            {
+                let list = pages.entry(conv.to_string()).or_default();
+                if list.len() < 50 && !list.iter().any(|l| l.url == link.url) {
+                    list.push(link);
+                }
+            }
             record(c, conv, ToolCall { outcome: Some(outcome.to_string()), ..call });
             ok(json!({"content": [{"type": "text", "text": text}], "isError": is_error}))
         }

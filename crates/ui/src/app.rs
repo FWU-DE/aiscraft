@@ -537,6 +537,16 @@ impl AisCraftApp {
         }
     }
 
+    /// Save one chat as Markdown or JSON, from its menu (#123): the file name is asked for.
+    pub(crate) fn export_chat(&self, id: &str, format: &str) {
+        let title = self.state.conversation(id).map(|c| self.engine.reveal(&c.id, &c.title)).unwrap_or_else(|| "chat".into());
+        let safe: String = title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).take(80).collect();
+        let (ext, filter) = if format == "json" { ("json", "JSON") } else { ("md", "Markdown") };
+        if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.{ext}", safe.trim())).add_filter(filter, &[ext]).save_file() {
+            self.run("chat.export", json!({"id": id, "format": format, "path": path.display().to_string()}));
+        }
+    }
+
     fn toasts(&mut self, ctx: &egui::Context) {
         let t = self.tokens.clone();
         let notices = self.state.notices.clone();

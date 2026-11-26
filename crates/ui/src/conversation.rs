@@ -82,19 +82,6 @@ impl AisCraftApp {
         crate::backdrop::vertical_gradient(ui.painter(), bottom, egui::CornerRadius::ZERO, clear, main);
     }
 
-    /// The link to this chat in AIS.chat, for chats there.
-    fn ais_link(&self) -> Option<String> {
-        let id = self.state.current.as_ref()?;
-        let c = self.state.conversation(id)?;
-        let b = self.state.backend(&c.backend_id).filter(|b| b.config.kind == BackendKind::AisChat)?;
-        let path = if c.kind == aiscraft_core::ConversationKind::Image {
-            format!("/image-generation/d/{}", c.remote_id.as_deref().unwrap_or(&c.id))
-        } else {
-            aiscraft_core::ais_conversation_path(c.persona.as_ref(), &c.id)
-        };
-        Some(format!("{}{path}", b.config.base_url.trim_end_matches('/')))
-    }
-
     /// Strg+F (#41): the search field, „2 von 5“, previous and next hit, close.
     fn find_bar(&mut self, ui: &mut Ui) {
         let t = self.tokens.clone();
@@ -166,23 +153,8 @@ impl AisCraftApp {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 if let Some(c) = &conv {
                     let more = crate::kit::icon_button(ui, &t, crate::icons::Icon::More, "Weitere Aktionen", t.text2, 19.0, 36.0);
-                    egui::Popup::menu(&more).show(|ui| {
-                        ui.set_min_width(220.0);
-                        if ui.button("Umbenennen …").clicked() {
-                            self.dialog = Some(Dialog::Rename { id: c.id.clone(), title: c.title.clone() });
-                            ui.close();
-                        }
-                        if let Some(url) = self.ais_link()
-                            && ui.button("In AIS.chat öffnen").clicked()
-                        {
-                            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-                            ui.close();
-                        }
-                        if ui.button("Chat schließen, zur Startseite (Esc)").clicked() {
-                            self.close_chat();
-                            ui.close();
-                        }
-                    });
+                    // The same menu as the chat's row in the sidebar (#123).
+                    egui::Popup::menu(&more).show(|ui| self.chat_menu(ui, c, crate::chat_menu::Place::Header));
                 }
                 self.inbox_button(ui);
                 if conv.is_some() {
@@ -1179,10 +1151,12 @@ impl AisCraftApp {
             {
                 set("other_services", others);
             }
-            if caps.web_search || caps.tools {
-                let mut web = src.web && (caps.web_search || src.tools);
-                let label = if caps.web_search { "Websuche (sucht und liest im Netz)" } else { "Webseiten lesen (nur lesen)" };
-                if ui.add_enabled(caps.web_search || src.tools, egui::Checkbox::new(&mut web, label)).changed() {
+            // The web strategy of the service (#122): its own search, or the app's page reader.
+            let search = caps.web.search_per_request();
+            if search || caps.web.read == aiscraft_core::WebRead::AppReader {
+                let mut web = src.web && (search || src.tools);
+                let label = if search { "Websuche (sucht und liest im Netz)" } else { "Webseiten lesen (nur lesen)" };
+                if ui.add_enabled(search || src.tools, egui::Checkbox::new(&mut web, label)).changed() {
                     set("web", web);
                 }
             }
