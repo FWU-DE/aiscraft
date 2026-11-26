@@ -141,7 +141,8 @@ pub enum JobKind {
     Watch,
 }
 
-/// The update check (`app.check_update`). No download, no install: a hint with a link.
+/// The update check (`app.check_update`) and, after the person's yes, the self-update
+/// (`app.update_now`, #125).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UpdateState {
@@ -163,6 +164,47 @@ pub struct UpdateState {
     /// Hidden until the next start.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dismissed: Option<String>,
+    /// This copy can replace itself (craft-update knows how it was installed and may install
+    /// there); otherwise the hint offers the download in the browser.
+    pub can_install: bool,
+    /// „Später“: no hint before this time (ms since 1970); 0 = none. Lasts until the next start.
+    pub remind_at: i64,
+    /// „Jetzt aktualisieren“ is running or ready for the restart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<UpdateProgress>,
+    /// Why the last update did not go through (German, with the next step).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// The restart was started: the window closes so the new version can start.
+    pub restart: bool,
+}
+
+/// The running self-update.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UpdateProgress {
+    /// The version being installed.
+    pub version: String,
+    pub phase: UpdatePhase,
+    /// Bytes downloaded so far and in all (0 when not known).
+    pub done: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdatePhase {
+    /// The package is being downloaded.
+    #[default]
+    Download,
+    /// It is checked against the release's checksums.
+    Verify,
+    /// An answer is still being written; the update waits for it.
+    WaitAnswer,
+    /// craft-update puts it in place.
+    Install,
+    /// Checked and in place (Windows: ready for the helper); the restart is next.
+    Ready,
 }
 
 /// A published release newer than the running version.

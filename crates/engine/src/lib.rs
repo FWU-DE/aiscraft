@@ -210,6 +210,8 @@ pub(crate) struct Inner {
     pub(crate) bridge_pages: Mutex<HashMap<String, Vec<aiscraft_core::ActivityLink>>>,
     /// Where the update check reads releases from; off for engines in memory.
     pub(crate) update_feed: Mutex<update::Feed>,
+    /// The self-update (#125): release found, running download, prepared restart.
+    pub(crate) update_job: update::Runtime,
     /// Placeholder mappings of chats read so far (#55), so drawing never waits for the database.
     pub(crate) privacy_maps: Mutex<HashMap<String, Arc<privacy::Mapping>>>,
     /// The downloadable name recognition (#73): its folder, source and the loaded model.
@@ -307,6 +309,7 @@ impl Engine {
             } else {
                 update::Feed::Off
             }),
+            update_job: Default::default(),
             cache_dir: opts.data_dir.clone().map(|d| d.join("cache")),
             pictures_dir: opts
                 .data_dir
@@ -500,6 +503,19 @@ impl Engine {
             return Err(Error::refused("Nur ohne Datenordner (Tests, Vorschau) erlaubt"));
         }
         *self.ctx.0.update_feed.lock().unwrap_or_else(PoisonError::into_inner) = update::Feed::Scripted(feed);
+        Ok(())
+    }
+
+    /// Show the self-update as if this copy could replace itself and, with `progress`, as if an
+    /// update ran (the offscreen snapshot). Only for engines in memory; nothing is downloaded.
+    pub fn set_update_preview(&self, progress: Option<UpdateProgress>) -> Result<()> {
+        if self.ctx.0.pictures_online {
+            return Err(Error::refused("Nur ohne Datenordner (Tests, Vorschau) erlaubt"));
+        }
+        self.ctx.update(|s| {
+            s.update.can_install = true;
+            s.update.progress = progress;
+        });
         Ok(())
     }
 
@@ -817,6 +833,8 @@ mod nod_tests;
 mod sandbox_browser_tests;
 #[cfg(test)]
 mod sandbox_tests;
+#[cfg(test)]
+mod update_tests;
 
 #[cfg(test)]
 pub(crate) fn chat_system_prompt_for_test(c: &Ctx, conv: &aiscraft_core::Conversation, send: bool, takes: bool) -> Option<String> {

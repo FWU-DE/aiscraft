@@ -397,7 +397,13 @@ Darunter steht das **Aktionsprotokoll**: jeder Modellaufruf (Modell, Tokens, bei
 
 ## Updates
 
-Einmal am Tag schaut AIS.ChatCraft nach, ob es eine neue Version gibt. Gibt es eine, steht über deinem Konto ein Hinweis: **Herunterladen** öffnet den Download im Browser, **Was ist neu** die Seite mit den Änderungen. **Diese Version überspringen** blendet den Hinweis für diese Version dauerhaft aus, **Später** bis zum nächsten Start. Installiert wird nichts von selbst.
+Beim Start und danach stündlich schaut AIS.ChatCraft nach, ob es eine neue Version gibt. Gibt es eine, steht über deinem Konto ein Hinweis mit der Version und **Was ist neu** (die Seite mit den Änderungen):
+
+- **Jetzt aktualisieren** lädt die neue Version im Hintergrund (mit Fortschritt), prüft sie gegen die veröffentlichte Prüfsumme und startet AIS.ChatCraft neu. Schreibt gerade eine Antwort, wartet das Update, bis sie fertig ist (oder du hältst sie an). Was im Eingabefeld steht, ist nach dem Neustart wieder da. **Abbrechen** hält den Download an; passt die Datei nicht zur Prüfsumme, wird sie gelöscht und nichts installiert.
+- **Später** fragt in 4 Stunden oder beim nächsten Start wieder.
+- **Überspringen** blendet den Hinweis für diese Version dauerhaft aus.
+
+Ohne deine Zustimmung wird nichts heruntergeladen oder installiert. Selbst aktualisieren kann sich AIS.ChatCraft vorerst als AppImage unter Linux (und wo die Installation es zulässt); unter Windows und bei anderen Installationen steht stattdessen **Herunterladen**, das den Download im Browser öffnet.
 
 Dafür geht eine anonyme Anfrage an `api.github.com` (die Releases von FWU-DE/aiscraft), ohne Konto und ohne Daten aus deinen Chats. Unter **Einstellungen › Über** schaltest du das ab, prüfst mit **Jetzt prüfen** sofort und siehst deine Version.
 
@@ -452,7 +458,7 @@ Andere Backends bekommen Dateien wie bisher; was sie gar nicht lesen könnten (e
 - Zugangsdaten, Konnektoren und der Tresor liegen im Schlüsselbund des Systems.
 - Was du an einen Dienst schickst, verarbeitet dieser Dienst. Bei AIS.chat gelten dessen Regeln für Schulen.
 - Angehängte Dateien kopiert AIS.ChatCraft in seinen Datenordner, damit sie auch später noch mitgehen.
-- Die Update-Prüfung fragt einmal am Tag anonym bei GitHub nach der neuesten Version (abschaltbar, siehe „Updates“).
+- Die Update-Prüfung fragt höchstens einmal pro Stunde anonym bei GitHub nach der neuesten Version (abschaltbar, siehe „Updates“). Das Paket lädt AIS.ChatCraft nur nach **Jetzt aktualisieren** von GitHub.
 
 ## Für Agenten und Skripte
 

@@ -1317,6 +1317,7 @@ fn every_command_has_a_functional_test() {
         include_str!("ext/plugin_tests.rs"),
         include_str!("apps_tests.rs"),
         include_str!("archive_tests.rs"),
+        include_str!("update_tests.rs"),
         include_str!("chat_import.rs")
     )
     // A Windows checkout may mix CRLF and LF files; the end of the hunt is found by "\n}\n".

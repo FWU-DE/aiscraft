@@ -87,6 +87,10 @@ aiscraft-backends = { workspace = true, features = ["test-support"] }
 craft-xls = { workspace = true, features = ["test-support"] }
 craft-heif = { workspace = true, features = ["test-support"] }
 aiscraft-collab-server = { path = "../../apps/aiscraft-collab-server" }
+# Tests only: craft-update accepts package links on 127.0.0.1, so the self-update tests download
+# from a local server (#125). Release builds (`cargo build -p aiscraft`) never build
+# dev-dependencies, so the shipped app keeps GitHub-only links and HTTPS.
+craft-update = { workspace = true, features = ["local-mirror"] }
 
 [lints]
 workspace = true

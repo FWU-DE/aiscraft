@@ -34,7 +34,7 @@ Fork = needs the storytold egui fork (`[patch.crates-io]`, see below).
 | craft-dialogs | Non-blocking native file dialogs (rfd), fixes the macOS re-entrancy abort | blocking `rfd::FileDialog` in `ui` (6 call sites) | good, no egui dep; answers arrive on a later frame, so each call site needs state | no | later (after the collab and persona branches merge: touches `conversation.rs`, `artifact_panel.rs`) |
 | craft-platform | Dialog lifecycle, XDG appearance (light/dark) | rfd, our Omarchy `ThemeWatcher` | partial | optional | later, with craft-dialogs |
 | craft-quit | macOS quit and app menu | — | no unsaved documents, Linux first | no | no |
-| craft-update | Release check and self-update | — | `check_for_update` reads FWU-DE/aiscraft's GitHub releases (published, stable only; drafts and pre-releases skipped), links and assets checked; its egui `StartupPrompt` is a modal with ArtCraft branding, so the hint is our own (`ui/src/update.rs`) | no (without feature `egui`) | **adopted, check only** (see below) |
+| craft-update | Release check and self-update | — | `check_for_update` reads FWU-DE/aiscraft's GitHub releases (published, stable only; drafts and pre-releases skipped), links and assets checked; its egui `StartupPrompt` is a modal with ArtCraft branding, so the hint is our own (`ui/src/update.rs`); `self_update::prepare_update` downloads, checks and swaps after the person's yes (#125) | no (without feature `egui`) | **adopted, check and self-update** (see below) |
 | craft-i18n | Translation catalogs, plurals, locale | German strings in code | UI is German only | no | no |
 | craft-font-catalog | Installed fonts on every platform, lookup by name | `fc-match` subprocess in `ui/theme.rs` (Linux only) | works, but the first lookup scans every font: 860 ms for 968 faces here vs 13 ms per `fc-match` | no | later (with a background scan) |
 | craft-text | Hyphenation (Liang patterns, German through hypher), bidi, line breaking | — | the German hyphenation points as syllables for the readability of an answer (`readability.rs`, #48); only the `hyphen` + `german` features | no | **adopted** (#48) |
@@ -80,8 +80,8 @@ embedded Unicode font when that matters.
 ## Update check
 
 `crates/engine/src/update.rs`: `craft_update::check_for_update(&APP, &Http, CARGO_PKG_VERSION)`
-on a blocking task, at start (5 s after, at most once in 24 h, silent on errors) and with
-`app.check_update`. The answer (last check, newest release, skipped version) is stored under the
+on a blocking task, at start (5 s after) and then hourly (a loop looks every 5 minutes; at most
+one request per hour, silent on errors), and with `app.check_update`. The answer (last check, newest release, skipped version) is stored under the
 settings key `update`; `update_check` in `Settings` switches it off. Engines in memory and
 `cfg!(test)` builds never ask GitHub; tests hand them release JSON (`Engine::set_update_feed`),
 which goes through craft-update's `parse_github_release_list` and `version::offers_update`, the
@@ -99,10 +99,46 @@ carry the names `pick_asset` reads, `aischatcraft-<version>-<os>-<arch>.<ext>`: 
 `self_update::finish` first (`aiscraft_engine::finish_update_helper`), so the restart helper works
 once the self-update is switched on.
 
-Not adopted yet: the self-update itself (`self_update::prepare_update`, `Updater`). Missing: signed
-Windows builds (unsigned copies get no update offered; the signing secrets go into the repo's
-`release` environment), the portable data folder beside the exe when `portable.txt` is there, and
-dialogs without ArtCraft branding.
+## Self-update (#125)
+
+After „Jetzt aktualisieren“ (`app.update_now`) the engine calls
+`self_update::prepare_update(&APP, &self_update::current(&APP), release, Platform::current(), …)`
+on a blocking task: craft-update picks the package for this installation (`pick_asset`), checks
+that its link and `SHA256SUMS.txt` are the repository's own release downloads, downloads it with
+`Http::download` (resuming, checked against the release's `SHA256SUMS.txt`; a mismatch deletes the
+file), on Windows checks the MSI's signature, then calls our `last` callback (waits until no answer
+is being written; `app.update_cancel` stops it through `Stop`), swaps the copy (macOS, Linux) and
+returns the `Restart`. Its `JobPhase`s become `UpdateState::progress`. The UI then calls
+`app.update_restart` with the composer's text (kept under the settings key `update_draft` and put
+back into the composer on the next start), which starts the helper and closes the window.
+`self_update::take_outcome` says at the next start how it ended; `just_updated_to` keeps a release
+that was just installed from being offered again. „Später“ (`app.update_later`) is ours: hours
+in memory, so the next start asks again. The UI is ours (`ui/src/update.rs`), no `Updater`.
+
+Only the desktop program (`aiscraft`) offers it, and only where `self_update::is_self_updating`
+says the installation can be replaced; anything else keeps „Herunterladen“ (the browser). In
+practice that is the **AppImage** (and Flatpak release bundles) on Linux today. **Windows is off**
+until two things are settled: the packages are not signed yet (#58; craft-update offers nothing
+to an unsigned copy), and craft-update's Windows helper only finishes a program named after the
+asset stem (`aischatcraft.exe`), while ours is `aiscraft.exe`. Linux deb/rpm installs put the
+program at `/usr/bin/aiscraft`, not `/usr/bin/aischatcraft`, so craft-update does not recognise
+them as its package either; the tarball's `bin/` likewise. macOS has no package yet.
+
+Tests: the engine's dev-dependency turns on craft-update's `local-mirror` feature, so its link
+check accepts packages on 127.0.0.1 (release builds never build dev-dependencies). Tests feed the
+release JSON (`set_update_feed`), serve the package and `SHA256SUMS.txt` from a local server, run
+the real `prepare_update` as if this were an AppImage on Linux x86-64, and let `last` stop it
+before anything is swapped (`update_tests.rs`).
+
+Gaps in craft-update (for an issue in storytold/craft-libs, not copied here):
+- `App` has one `id` for the asset stem and the program name; an app whose binary is named
+  differently (`aiscraft` vs `aischatcraft`) cannot use the Windows helper or the deb/rpm/tarball
+  detection. An `exe`/`program` field would fix it.
+- Errors are English strings without a kind; we read the text to say it in German
+  (`install_german`). An error enum (cancelled, checksum, signature, not this installation, network,
+  disk full) would make that robust.
+- The `last` callback is the only seam before the swap; a test seam (or a dry-run option) that
+  works without `local-mirror` would let apps test their flow without a feature flag.
 
 Worksheets (`engine/src/learn/print.rs`) print through the same writer: the worksheet becomes
 Markdown (answer lines as escaped underscores, `( )`/`[ ]` instead of ballot boxes, which
