@@ -1,5 +1,7 @@
 //! Local files (#25), in Einstellungen › Konnektoren: on or off, and folders kept out.
 
+use crate::files::Then;
+use craft_dialogs::FileDialog;
 use egui::{RichText, Ui};
 use serde_json::json;
 
@@ -31,10 +33,8 @@ impl AisCraftApp {
                 });
             });
         }
-        if ui.button("Ordner sperren …").clicked()
-            && let Some(dir) = rfd::FileDialog::new().pick_folder()
-        {
-            self.run("files.keep_out_add", json!({"path": dir.display().to_string()}));
+        if ui.button("Ordner sperren …").clicked() {
+            self.files.ask(FileDialog::folder(), Then::Run { cmd: "files.keep_out_add", params: json!({}) });
         }
     }
 }

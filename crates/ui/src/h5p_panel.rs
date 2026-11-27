@@ -4,6 +4,8 @@
 //! back unchanged. The main app has no webview: "Im Player ansehen" (#62) shows the content in
 //! the real H5P player in the preview process, once the optional player is downloaded.
 
+use crate::files::Then;
+use craft_dialogs::FileDialog;
 use std::time::Instant;
 
 use aiscraft_core::h5p;
@@ -156,10 +158,10 @@ impl AisCraftApp {
         if save {
             self.save_if_dirty();
             let title = self.state.artifacts.iter().find(|a| a.id == id).map(|a| a.title.clone()).unwrap_or_default();
-            if let Some(path) = rfd::FileDialog::new().add_filter("H5P", &["h5p"]).set_file_name(aiscraft_engine::office::file_name(&title, "h5p")).save_file()
-            {
-                self.run("h5p.export", json!({"id": id, "path": path.display().to_string()}));
-            }
+            self.files.ask(
+                FileDialog::save().filter("H5P", &["h5p"]).file_name(aiscraft_engine::office::file_name(&title, "h5p")),
+                Then::Run { cmd: "h5p.export", params: json!({"id": id}) },
+            );
         }
         if editable {
             self.revise_bar(ui, "Mit KI überarbeiten, z. B. „Zwei Fragen mehr, leichter“");

@@ -1,6 +1,8 @@
 //! The panel next to the chat that shows the open document, whiteboard, learning app or
 //! worksheet (the last two in `learn_panel.rs` and `worksheet.rs`).
 
+use crate::files::Then;
+use craft_dialogs::FileDialog;
 use std::time::{Duration, Instant};
 
 use aiscraft_board::{Board, BoardStyle, BoardView, ViewState};
@@ -216,14 +218,11 @@ impl AisCraftApp {
             };
             if ui.button(label).clicked() {
                 let name: String = meta.title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-                if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.{ext}", name.trim())).save_file() {
-                    self.save_if_dirty();
-                    let path = path.display().to_string();
-                    match (meta.kind, *ext) {
-                        (ArtifactKind::H5p, "h5p") => self.run("h5p.export", json!({"id": meta.id, "path": path})),
-                        _ => self.run("artifact.export", json!({"id": meta.id, "format": f, "path": path})),
-                    }
-                }
+                let then = match (meta.kind, *ext) {
+                    (ArtifactKind::H5p, "h5p") => Then::ExportArtifact { cmd: "h5p.export", params: json!({"id": meta.id}) },
+                    _ => Then::ExportArtifact { cmd: "artifact.export", params: json!({"id": meta.id, "format": f}) },
+                };
+                self.files.ask(FileDialog::save().file_name(format!("{}.{ext}", name.trim())), then);
                 ui.close();
             }
         }

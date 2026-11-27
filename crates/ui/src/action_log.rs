@@ -1,6 +1,8 @@
 //! The action log under Einstellungen › Nutzung (#23): every model call and tool action, newest
 //! first, with why it was allowed, and a CSV export.
 
+use crate::files::Then;
+use craft_dialogs::FileDialog;
 use egui::{RichText, Ui};
 use serde_json::{Value, json};
 
@@ -14,10 +16,8 @@ pub(crate) fn section(app: &mut AisCraftApp, ui: &mut Ui) {
     let t = app.tokens.clone();
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Als CSV exportieren …").clicked()
-                && let Some(path) = rfd::FileDialog::new().add_filter("CSV", &["csv"]).set_file_name("aktionsprotokoll.csv").save_file()
-            {
-                app.run("log.export", json!({"path": path.display().to_string()}));
+            if ui.button("Als CSV exportieren …").clicked() {
+                app.files.ask(FileDialog::save().filter("CSV", &["csv"]).file_name("aktionsprotokoll.csv"), Then::Run { cmd: "log.export", params: json!({}) });
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.label(RichText::new("Aktionsprotokoll").strong());

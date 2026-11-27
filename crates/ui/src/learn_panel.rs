@@ -5,6 +5,8 @@
 //! No webview here: a learning app opens in the separate `aiscraft-preview` process or in the
 //! system browser, always with the engine's Content-Security-Policy.
 
+use crate::files::Then;
+use craft_dialogs::FileDialog;
 use std::time::{Duration, Instant};
 
 use aiscraft_core::ArtifactKind;
@@ -126,11 +128,11 @@ impl AisCraftApp {
                     self.save_if_dirty();
                     self.run("learning_app.open", json!({"id": id}));
                 }
-                if ui.button("Speichern …").on_hover_text("Als HTML-Datei speichern, z. B. zum Weitergeben an Schülerinnen und Schüler").clicked()
-                    && let Some(path) = rfd::FileDialog::new().set_file_name(aiscraft_engine::office::file_name(&title, "html")).save_file()
-                {
-                    self.save_if_dirty();
-                    self.run("learning_app.save", json!({"id": id, "path": path.display().to_string()}));
+                if ui.button("Speichern …").on_hover_text("Als HTML-Datei speichern, z. B. zum Weitergeben an Schülerinnen und Schüler").clicked() {
+                    self.files.ask(
+                        FileDialog::save().file_name(aiscraft_engine::office::file_name(&title, "html")),
+                        Then::ExportArtifact { cmd: "learning_app.save", params: json!({"id": id}) },
+                    );
                 }
                 ui.label(small_muted(&t, format!("{kb} KB · ohne Netzwerkzugriff")));
             });

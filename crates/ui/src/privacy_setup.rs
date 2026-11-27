@@ -7,6 +7,8 @@
 //! `privacy.onboarding_done`, so switching on later does not ask again. The engine does the work;
 //! this only shows and dispatches commands.
 
+use crate::files::{CLASS_LIST, Then};
+use craft_dialogs::FileDialog;
 use egui::{CornerRadius, Frame, Margin, RichText, Ui};
 use serde_json::json;
 
@@ -248,10 +250,10 @@ impl AisCraftApp {
             .button("Klassenliste einlesen …")
             .on_hover_text("CSV, Excel (xlsx, xls), OpenDocument (ods) oder Kontakte (vcf): Spalten Vorname und Nachname oder eine Person pro Zeile")
             .clicked()
-            && let Some(path) = rfd::FileDialog::new().add_filter("Klassenliste", &["csv", "tsv", "txt", "xlsx", "xls", "ods", "vcf"]).pick_file()
         {
             let project = project.as_ref().filter(|_| s.project_only);
-            self.run("privacy.list_import", json!({"path": path.display().to_string(), "project": project}));
+            self.files
+                .ask(FileDialog::open().filter("Klassenliste", CLASS_LIST), Then::Run { cmd: "privacy.list_import", params: json!({"project": project}) });
         }
         ui.add_space(8.0);
         ui.label(small_muted(&t, "Oder Namen einfügen, eine Person pro Zeile („Lea Müller“ oder „Müller, Lea“):"));

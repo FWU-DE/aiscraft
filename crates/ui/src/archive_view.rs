@@ -2,7 +2,9 @@
 //! „Wiederherstellen“) or the trash („Wiederherstellen“, „Endgültig löschen“, „Papierkorb
 //! leeren“), the dialogs for deleting and purging, and the multi-select in the sidebar.
 
+use crate::files::Then;
 use aiscraft_core::{BackendKind, Conversation, TRASH_DAYS};
+use craft_dialogs::FileDialog;
 use egui::{Align, Frame, Key, Layout, Margin, RichText, ScrollArea, Ui};
 use serde_json::json;
 
@@ -399,8 +401,12 @@ impl AisCraftApp {
     }
 
     /// Export several chats as Markdown files into a folder the owner picks.
-    fn export_many(&self, ids: &[String]) {
-        let Some(dir) = rfd::FileDialog::new().set_title("Ordner für die Chats wählen").pick_folder() else { return };
+    fn export_many(&mut self, ids: &[String]) {
+        self.files.ask(FileDialog::folder().title("Ordner für die Chats wählen"), Then::ExportChats { ids: ids.to_vec() });
+    }
+
+    /// The folder came back: one Markdown file per chat, names made unique.
+    pub(crate) fn export_many_into(&self, ids: &[String], dir: &std::path::Path) {
         let mut used = std::collections::HashSet::new();
         for id in ids {
             let title = self.state.conversation(id).map(|c| self.engine.reveal(&c.id, &c.title)).unwrap_or_else(|| "chat".into());

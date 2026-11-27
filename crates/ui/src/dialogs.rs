@@ -1,5 +1,7 @@
+use crate::files::{CLASS_LIST, Then};
 use aiscraft_core::{BackendKind, MemoryArea, Project};
 use aiscraft_engine::BackendStatus;
+use craft_dialogs::FileDialog;
 use egui::{Id, RichText, Ui};
 use serde_json::{Value, json};
 
@@ -170,12 +172,12 @@ fn kind_str(k: BackendKind) -> &'static str {
 }
 
 /// Ask for the service account key of Vertex AI (a JSON file). The engine reads it.
-fn pick_key_file() -> Option<String> {
-    rfd::FileDialog::new().set_title("Dienstkonto-Schlüssel (JSON) wählen").add_filter("JSON-Schlüssel", &["json"]).pick_file().map(|p| p.display().to_string())
+fn key_file_dialog() -> FileDialog {
+    FileDialog::open().title("Dienstkonto-Schlüssel (JSON) wählen").filter("JSON-Schlüssel", &["json"])
 }
 
 /// The file name of a chosen key, for the dialog.
-fn file_name(path: &str) -> String {
+pub(crate) fn file_name(path: &str) -> String {
     std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
 }
 
@@ -400,10 +402,8 @@ impl AisCraftApp {
                         // The path of the key file; the engine reads and checks it.
                         ui.label("Schlüsseldatei");
                         ui.horizontal(|ui| {
-                            if ui.button("JSON-Datei wählen …").clicked()
-                                && let Some(path) = pick_key_file()
-                            {
-                                *secret = path;
+                            if ui.button("JSON-Datei wählen …").clicked() {
+                                self.files.ask(key_file_dialog(), Then::KeyFileToForm);
                             }
                             ui.label(small_muted(&t, if secret.is_empty() { "keine gewählt".to_string() } else { file_name(secret) }));
                         });
@@ -720,12 +720,8 @@ impl AisCraftApp {
             ));
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if accent_button(ui, &t, "JSON-Datei wählen …").clicked()
-                    && let Some(path) = pick_key_file()
-                {
-                    self.run("backend.login", json!({"id": backend_id, "key_file": path}));
-                    *secret = file_name(&path);
-                    *sent = true;
+                if accent_button(ui, &t, "JSON-Datei wählen …").clicked() {
+                    self.files.ask(key_file_dialog(), Then::KeyFileLogin { backend_id: backend_id.clone() });
                 }
                 if matches!(view.status, BackendStatus::Checking) {
                     ui.add(egui::Spinner::new());
@@ -1301,10 +1297,8 @@ impl AisCraftApp {
                     if ui.button("+ Eintrag").clicked() {
                         self.dialog = Some(Dialog::AddVault { name: String::new(), username: String::new(), password: String::new(), totp: String::new(), url: String::new() });
                     }
-                    if ui.button("Aus Bitwarden (CSV) übernehmen …").clicked()
-                        && let Some(path) = rfd::FileDialog::new().add_filter("CSV", &["csv"]).pick_file()
-                    {
-                        self.run("vault.import_bitwarden", json!({"path": path.display().to_string()}));
+                    if ui.button("Aus Bitwarden (CSV) übernehmen …").clicked() {
+                        self.files.ask(FileDialog::open().filter("CSV", &["csv"]), Then::Run { cmd: "vault.import_bitwarden", params: json!({}) });
                     }
                 });
             }
@@ -1491,7 +1485,8 @@ impl AisCraftApp {
         ui.add_space(8.0);
         // The first list switches protection on: before the setup was gone through, the setup
         // follows, with this list on its list step (and „Einrichtung abbrechen“ takes it back).
-        let first_setup = (!onboarded && self.state.privacy.lists.is_empty()).then(|| self.privacy_setup(1, true));
+        let first_setup_wanted = !onboarded && self.state.privacy.lists.is_empty();
+        let first_setup = first_setup_wanted.then(|| self.privacy_setup(1, true));
         for l in self.state.privacy.lists.clone() {
             card(&t).show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1528,17 +1523,16 @@ impl AisCraftApp {
                 .button("Klassenliste einlesen …")
                 .on_hover_text("CSV, Excel (xlsx, xls), OpenDocument (ods) oder Kontakte (vcf): Spalten Vorname und Nachname oder eine Person pro Zeile")
                 .clicked()
-                && let Some(path) = rfd::FileDialog::new().add_filter("Klassenliste", &["csv", "tsv", "txt", "xlsx", "xls", "ods", "vcf"]).pick_file()
             {
-                self.run("privacy.list_import", json!({"path": path.display().to_string()}));
-                added = true;
+                self.files.ask(FileDialog::open().filter("Klassenliste", CLASS_LIST), Then::ClassList { project: None, first_setup: first_setup_wanted });
             }
             if let (Some(pid), Some(name)) = (&project, &project_name)
                 && ui.button(format!("… nur für Projekt {name}")).clicked()
-                && let Some(path) = rfd::FileDialog::new().add_filter("Klassenliste", &["csv", "tsv", "txt", "xlsx", "xls", "ods", "vcf"]).pick_file()
             {
-                self.run("privacy.list_import", json!({"path": path.display().to_string(), "project": pid}));
-                added = true;
+                self.files.ask(
+                    FileDialog::open().filter("Klassenliste", CLASS_LIST),
+                    Then::ClassList { project: Some(pid.clone()), first_setup: first_setup_wanted },
+                );
             }
         });
         ui.add_space(8.0);

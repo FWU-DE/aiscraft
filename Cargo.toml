@@ -25,6 +25,7 @@ craft-jsonrpc = { git = "https://github.com/storytold/craft-libs", rev = "c0977a
 craft-mcp = { git = "https://github.com/storytold/craft-libs", rev = "c0977ad6125f1b88ee717b9c23a6340f41b0a8dd" }
 craft-control-protocol = { git = "https://github.com/storytold/craft-libs", rev = "c0977ad6125f1b88ee717b9c23a6340f41b0a8dd" }
 craft-math = { git = "https://github.com/storytold/craft-libs", rev = "c0977ad6125f1b88ee717b9c23a6340f41b0a8dd" }
+craft-dialogs = { git = "https://github.com/storytold/craft-libs", rev = "c0977ad6125f1b88ee717b9c23a6340f41b0a8dd" }
 craft-quit = { git = "https://github.com/storytold/craft-libs", rev = "c0977ad6125f1b88ee717b9c23a6340f41b0a8dd" }
 # Office files and PDF (#38): Word and PDF export, spreadsheets and slides from model tools.
 craft-markdown = { git = "https://github.com/storytold/craft-libs", rev = "c0977ad6125f1b88ee717b9c23a6340f41b0a8dd" }
@@ -77,7 +78,6 @@ env_logger = "0.11"
 eframe = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "links", "system_fonts", "glow", "wayland", "x11"] }
 egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 egui_commonmark = { version = "0.26", features = ["better_syntax_highlighting"] }
-rfd = "0.17"
 clap = { version = "4", features = ["derive"] }
 
 [workspace.lints.rust]

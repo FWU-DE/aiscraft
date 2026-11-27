@@ -1,3 +1,5 @@
+use crate::files::Then;
+use craft_dialogs::FileDialog;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -96,6 +98,8 @@ pub struct AisCraftApp {
     pub(crate) project_filter: Option<String>,
     pub(crate) editing: Option<(String, String)>,
     pub(crate) dialog: Option<Dialog>,
+    /// Native file dialogs, asked for by buttons and answered on a later frame (`files.rs`).
+    pub(crate) files: crate::files::Files,
     pub(crate) palette: Option<Palette>,
     pub(crate) focus_composer: bool,
     pub(crate) focus_search: bool,
@@ -291,6 +295,7 @@ impl AisCraftApp {
             project_filter: None,
             editing: None,
             dialog: welcome,
+            files: crate::files::service(&cc.egui_ctx),
             palette: None,
             focus_composer: true,
             focus_search: false,
@@ -525,26 +530,23 @@ impl AisCraftApp {
         self.focus_composer = true;
     }
 
-    pub(crate) fn export_dialog(&self) {
+    pub(crate) fn export_dialog(&mut self) {
         let Some(id) = self.state.current.clone() else { return };
         let title = self.state.conversation(&id).map(|c| c.title.clone()).unwrap_or_else(|| "chat".into());
         let safe: String = title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-        if let Some(path) =
-            rfd::FileDialog::new().set_file_name(format!("{}.md", safe.trim())).add_filter("Markdown", &["md"]).add_filter("JSON", &["json"]).save_file()
-        {
-            let format = if path.extension().is_some_and(|e| e == "json") { "json" } else { "markdown" };
-            self.run("chat.export", json!({"id": id, "format": format, "path": path.display().to_string()}));
-        }
+        self.files
+            .ask(FileDialog::save().file_name(format!("{}.md", safe.trim())).filter("Markdown", &["md"]).filter("JSON", &["json"]), Then::ExportChat { id });
     }
 
     /// Save one chat as Markdown or JSON, from its menu (#123): the file name is asked for.
-    pub(crate) fn export_chat(&self, id: &str, format: &str) {
+    pub(crate) fn export_chat(&mut self, id: &str, format: &str) {
         let title = self.state.conversation(id).map(|c| self.engine.reveal(&c.id, &c.title)).unwrap_or_else(|| "chat".into());
         let safe: String = title.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).take(80).collect();
         let (ext, filter) = if format == "json" { ("json", "JSON") } else { ("md", "Markdown") };
-        if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.{ext}", safe.trim())).add_filter(filter, &[ext]).save_file() {
-            self.run("chat.export", json!({"id": id, "format": format, "path": path.display().to_string()}));
-        }
+        self.files.ask(
+            FileDialog::save().file_name(format!("{}.{ext}", safe.trim())).filter(filter, &[ext]),
+            Then::Run { cmd: "chat.export", params: json!({"id": id, "format": format}) },
+        );
     }
 
     fn toasts(&mut self, ctx: &egui::Context) {
@@ -821,6 +823,7 @@ impl eframe::App for AisCraftApp {
             self.sync_windows();
             self.window_frame(ui, &id);
             self.dialogs(&ctx);
+            self.files_frame(frame);
             return;
         }
         if self.state.current != self.last_current {
@@ -926,6 +929,7 @@ impl eframe::App for AisCraftApp {
         layout.overlay = self.dialog.is_some() || self.manual.is_some() || self.palette.is_some() || self.state.citation.is_some();
         self.panel_layout = layout;
         self.artifact_windows(&ctx, frame);
+        self.files_frame(frame);
 
         // While an answer streams, the engine requests repaints; spinners need a steady tick too.
         if !self.state.generating.is_empty() {
