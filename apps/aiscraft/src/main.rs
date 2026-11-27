@@ -111,11 +111,15 @@ fn main() {
         viewport: viewport.with_title("AIS.ChatCraft").with_app_id("ai.uds.aiscraft").with_inner_size([1180.0, 780.0]).with_min_inner_size([640.0, 420.0]),
         ..Default::default()
     };
-    let result = eframe::run_native("AIS.ChatCraft", native, Box::new(move |cc| {
-        #[cfg(target_os = "macos")]
-        macos::install_app_menu(&cc.egui_ctx);
-        Ok(Box::new(AisCraftApp::new(cc, engine, Some(ui_rx))))
-    }));
+    let result = eframe::run_native(
+        "AIS.ChatCraft",
+        native,
+        Box::new(move |cc| {
+            #[cfg(target_os = "macos")]
+            macos::install_app_menu(&cc.egui_ctx);
+            Ok(Box::new(AisCraftApp::new(cc, engine, Some(ui_rx))))
+        }),
+    );
     if let Err(e) = result {
         eprintln!("AIS.ChatCraft: {e}");
         std::process::exit(1);
