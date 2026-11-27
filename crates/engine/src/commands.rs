@@ -495,6 +495,9 @@ static COMMANDS: &[CommandSpec] = &[
         true,
         |c, p| Box::pin(browser_login(c, p))
     ),
+    cmd!("backend.browser_login_cancel", "Anmeldung im Browser abbrechen", "Backends", None, "id?: string (AIS.chat)", true, |c, p| {
+        Box::pin(async move { browser_login_cancel(c, p) })
+    }),
     cmd!("backend.check", "Verbindung prüfen", "Backends", None, "id?: string", true, |c, p| Box::pin(async move {
         let id = opt_str(&p, "id").unwrap_or_else(|| c.state().selection.backend_id.clone());
         refresh_backend(&c, &id).await?;
@@ -1813,9 +1816,13 @@ pub(crate) async fn browser_login(c: Ctx, p: Value) -> Result<Value> {
     if config.kind != BackendKind::AisChat {
         return Err(Error::unsupported("Anmelden im Browser gibt es nur für AIS.chat"));
     }
+    // One browser sign-in per service: a second click or call while the first one still opens
+    // the browser or waits for the person must not start a second browser.
+    let guard = BrowserLoginGuard::enter(&c, &id)?;
     if !c.0.browser_allowed {
         return Err(Error::unsupported("In dieser Umgebung startet AIS.ChatCraft keinen Browser (Tests, Skripte, AISCRAFT_NO_BROWSER)"));
     }
+    let mut cancel = guard.cancel.clone();
     let opts = |headless: bool, secs: u64| aiscraft_backends::browser_login::LoginOptions {
         base_url: config.base_url.clone(),
         profile_dir: c.0.browser_profile.clone(),
@@ -1826,15 +1833,74 @@ pub(crate) async fn browser_login(c: Ctx, p: Value) -> Result<Value> {
     let silent = p.get("silent").and_then(Value::as_bool).unwrap_or(false);
     // `window: false` never opens a visible window (tests, agents, the automatic re-login).
     let window = p.get("window").and_then(Value::as_bool).unwrap_or(true);
-    let cookie = match (silent, window) {
-        (true, true) => match aiscraft_backends::browser_login::login(opts(true, 25)).await {
-            Ok(c) => c,
-            Err(_) => aiscraft_backends::browser_login::login(opts(false, 600)).await?,
-        },
-        (true, false) => aiscraft_backends::browser_login::login(opts(true, 25)).await?,
-        (false, _) => aiscraft_backends::browser_login::login(opts(false, 600)).await?,
+    let login = async {
+        Ok::<String, Error>(match (silent, window) {
+            (true, true) => match aiscraft_backends::browser_login::login(opts(true, 25)).await {
+                Ok(c) => c,
+                Err(_) => aiscraft_backends::browser_login::login(opts(false, 600)).await?,
+            },
+            (true, false) => aiscraft_backends::browser_login::login(opts(true, 25)).await?,
+            (false, _) => aiscraft_backends::browser_login::login(opts(false, 600)).await?,
+        })
     };
-    backend_login(c, json!({"id": id, "secret": cookie})).await
+    // Cancelling drops the sign-in, which ends the browser it started (`kill_on_drop`).
+    let cookie = tokio::select! {
+        r = login => r?,
+        _ = cancel.wait_for(|stop| *stop) => return Err(Error::cancelled()),
+    };
+    // The guard stays until the check after the sign-in is through.
+    let result = backend_login(c, json!({"id": id, "secret": cookie})).await;
+    drop(guard);
+    result
+}
+
+/// Marks a browser sign-in as running for a backend; released when dropped, also on errors.
+pub(crate) struct BrowserLoginGuard {
+    c: Ctx,
+    id: String,
+    pub(crate) cancel: tokio::sync::watch::Receiver<bool>,
+}
+
+impl BrowserLoginGuard {
+    pub(crate) fn enter(c: &Ctx, id: &str) -> Result<Self> {
+        let (tx, cancel) = tokio::sync::watch::channel(false);
+        {
+            let mut running = c.0.browser_logins.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if running.contains_key(id) {
+                return Err(Error::busy("Die Anmeldung im Browser läuft schon. Bitte im geöffneten Browserfenster anmelden oder die Anmeldung abbrechen."));
+            }
+            running.insert(id.to_string(), tx);
+        }
+        c.update(|s| set_browser_login(s, id, true));
+        Ok(Self { c: c.clone(), id: id.to_string(), cancel })
+    }
+}
+
+impl Drop for BrowserLoginGuard {
+    fn drop(&mut self) {
+        self.c.0.browser_logins.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&self.id);
+        self.c.update(|s| set_browser_login(s, &self.id, false));
+    }
+}
+
+fn set_browser_login(s: &mut crate::State, id: &str, on: bool) {
+    if let Some(b) = s.backends.iter_mut().find(|b| b.config.id == id) {
+        b.browser_login = on;
+    }
+}
+
+/// Ends a running browser sign-in (the person changed their mind or the window is stuck).
+fn browser_login_cancel(c: Ctx, p: Value) -> Result<Value> {
+    let id = opt_str(&p, "id").unwrap_or_else(|| "ais-chat".into());
+    let running = c.0.browser_logins.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let was_running = match running.get(&id) {
+        Some(tx) => {
+            let _ = tx.send(true);
+            true
+        }
+        None => false,
+    };
+    Ok(json!({"cancelled": was_running}))
 }
 
 async fn backend_login(c: Ctx, p: Value) -> Result<Value> {

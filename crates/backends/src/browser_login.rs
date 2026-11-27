@@ -78,6 +78,9 @@ pub fn cookie_from_cdp(result: &Value, host: &str) -> Option<String> {
     Some(parts.into_iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; "))
 }
 
+/// Pause between two asks for the cookie: the sign-in is noticed this much sooner.
+const COOKIE_POLL: Duration = Duration::from_millis(500);
+
 /// Ask a DevTools endpoint for cookies until the session cookie appears or `timeout` passes.
 pub async fn wait_for_cookie(port: u16, host: &str, timeout: Duration, alive: &mut (dyn FnMut() -> bool + Send)) -> Result<String> {
     let deadline = Instant::now() + timeout;
@@ -95,7 +98,7 @@ pub async fn wait_for_cookie(port: u16, host: &str, timeout: Duration, alive: &m
             }
             Err(e) => last_err = e.message,
         }
-        tokio::time::sleep(Duration::from_millis(1200)).await;
+        tokio::time::sleep(COOKIE_POLL).await;
     }
     Err(Error::auth(if last_err.is_empty() {
         "Anmeldung nicht abgeschlossen (Zeit abgelaufen)".into()
@@ -258,7 +261,8 @@ pub async fn login(opts: LoginOptions) -> Result<String> {
     free_profile(&opts.profile_dir).await;
     // Already signed in (the profile still holds a valid AIS.chat session): a short hidden look
     // finds the cookie, and no window opens at all.
-    if !opts.headless {
+    // A profile that never ran has no session to find: skip the look (first sign-in saves ~10 s).
+    if !opts.headless && opts.profile_dir.join("Default").is_dir() {
         let quick = run(&browser, &opts.profile_dir, &opts.base_url, &host, true, SIGNED_IN_LOOK).await;
         free_profile(&opts.profile_dir).await;
         if let Ok(cookie) = quick {

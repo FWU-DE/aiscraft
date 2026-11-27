@@ -749,14 +749,22 @@ impl AisCraftApp {
             ui.label(muted(&t, "Die Anmeldung (VIDIS, Schulkonto oder Microsoft 365) läuft in einem eigenen Browserfenster. AIS.ChatCraft übernimmt danach die Sitzung und schließt das Fenster."));
             ui.add_space(8.0);
             let checking = matches!(view.status, BackendStatus::Checking);
+            let signing_in = view.browser_login;
             ui.horizontal(|ui| {
-                if ui.add_enabled(!checking, egui::Button::new(RichText::new("Im Browser anmelden").color(t.on_accent).strong()).fill(t.accent)).clicked() {
+                let button = egui::Button::new(RichText::new("Im Browser anmelden").color(t.on_accent).strong()).fill(t.accent);
+                if ui.add_enabled(!checking && !signing_in, button).clicked() {
                     self.run("backend.browser_login", json!({"id": backend_id}));
                     *sent = true;
                 }
-                if checking {
+                if signing_in {
                     ui.add(egui::Spinner::new());
-                    ui.label(small_muted(&t, "Warte auf die Anmeldung im Browserfenster …"));
+                    ui.label(small_muted(&t, "Browser wird geöffnet … Bitte dort anmelden, das kann einen Moment dauern."));
+                    if ui.button("Abbrechen").clicked() {
+                        self.run("backend.browser_login_cancel", json!({"id": backend_id}));
+                    }
+                } else if checking {
+                    ui.add(egui::Spinner::new());
+                    ui.label(small_muted(&t, "Anmeldung wird geprüft …"));
                 }
             });
             ui.label(small_muted(
