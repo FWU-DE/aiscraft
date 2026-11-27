@@ -1,5 +1,7 @@
+use crate::files::Then;
 use aiscraft_core::{BackendKind, Message, Role};
 use aiscraft_engine::BackendStatus;
+use craft_dialogs::FileDialog;
 use egui::{Align, CornerRadius, Frame, Key, KeyboardShortcut, Layout, Margin, Modifiers, RichText, ScrollArea, Stroke, Ui};
 use serde_json::json;
 
@@ -617,9 +619,11 @@ impl AisCraftApp {
                         }
                         if let Some(doc) = &s.document
                             && ui.button(format!("💾  {} speichern", doc.file_name)).clicked()
-                            && let Some(path) = rfd::FileDialog::new().set_file_name(&doc.file_name).save_file()
                         {
-                            self.run("chat.save_document", json!({"message_id": m.id, "step": i, "path": path.display().to_string()}));
+                            self.files.ask(
+                                FileDialog::save().file_name(&doc.file_name),
+                                Then::Run { cmd: "chat.save_document", params: json!({"message_id": m.id, "step": i}) },
+                            );
                         }
                     }
                 });
@@ -674,10 +678,8 @@ impl AisCraftApp {
                 }
             }
             ui.horizontal_wrapped(|ui| {
-                if ui.add(egui::Button::new(small_muted(&t, "Bild speichern …")).frame(false)).clicked()
-                    && let Some(path) = rfd::FileDialog::new().set_file_name(badged_name(&a.name, badge)).save_file()
-                {
-                    self.run("chat.save_image", self.image_save_params(&m.id, *i, &path.display().to_string()));
+                if ui.add(egui::Button::new(small_muted(&t, "Bild speichern …")).frame(false)).clicked() {
+                    self.files.ask(FileDialog::save().file_name(badged_name(&a.name, badge)), Then::SaveImage { message_id: m.id.clone(), index: *i });
                 }
                 if ui.add(egui::Button::new(small_muted(&t, "Bild kopieren")).frame(false)).clicked()
                     && let Some(img) = a.local_path.as_deref().and_then(|p| crate::app::image_pixels(p, badge))
@@ -1671,9 +1673,8 @@ impl AisCraftApp {
                     step(ui, &mut acc, &mut last, start);
                     if !image_mode
                         && crate::kit::icon_button(ui, &t, crate::icons::Icon::Clip, "Dateien anhängen (oder hineinziehen)", t.text2, 19.0, 34.0).clicked()
-                        && let Some(files) = rfd::FileDialog::new().pick_files()
                     {
-                        self.take_files(files);
+                        self.files.ask(FileDialog::open_many(), Then::AttachFiles);
                     }
                     step(ui, &mut acc, &mut last, start);
                     if !image_mode

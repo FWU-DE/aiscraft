@@ -20,6 +20,7 @@ mod dialogs;
 mod downloads;
 mod explore;
 mod extensions;
+mod files;
 mod h5p_panel;
 mod home;
 pub mod icons;

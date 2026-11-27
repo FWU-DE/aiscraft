@@ -2,7 +2,9 @@
 //! in the app's attachments folder; "Speichern …" asks where to put it (the save dialog), then
 //! `chat.save_file` copies it there.
 
+use crate::files::Then;
 use aiscraft_core::Message;
+use craft_dialogs::FileDialog;
 use egui::{CornerRadius, Frame, Margin, RichText, Ui};
 use serde_json::json;
 
@@ -42,10 +44,9 @@ impl AisCraftApp {
                         ui.label(small_muted(&t, size_label(a.size)));
                     });
                     ui.add_space(12.0);
-                    if ui.button("Speichern …").clicked()
-                        && let Some(path) = rfd::FileDialog::new().set_file_name(&a.name).save_file()
-                    {
-                        self.run("chat.save_file", json!({"message_id": m.id, "index": i, "path": path.display().to_string()}));
+                    if ui.button("Speichern …").clicked() {
+                        self.files
+                            .ask(FileDialog::save().file_name(&a.name), Then::Run { cmd: "chat.save_file", params: json!({"message_id": m.id, "index": i}) });
                     }
                 });
             });

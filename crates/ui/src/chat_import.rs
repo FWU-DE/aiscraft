@@ -2,8 +2,9 @@
 //! (`chat.import`). The dialog says how to get the export and that names protection does not
 //! apply to what was written there.
 
+use crate::files::Then;
+use craft_dialogs::FileDialog;
 use egui::{RichText, Ui};
-use serde_json::json;
 
 use crate::app::AisCraftApp;
 use crate::widgets::{accent_button, small_muted};
@@ -33,10 +34,7 @@ impl AisCraftApp {
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             if accent_button(ui, &t, "Exportdatei wählen …").clicked() {
-                if let Some(path) = rfd::FileDialog::new().add_filter("Datenexport", &["zip", "json"]).pick_file() {
-                    let project = self.state.selection.project_id.clone();
-                    self.run("chat.import", json!({"path": path.display().to_string(), "project": project}));
-                }
+                self.files.ask(FileDialog::open().filter("Datenexport", &["zip", "json"]), Then::ImportChat);
                 keep = false;
             }
             if ui.button("Abbrechen").clicked() {

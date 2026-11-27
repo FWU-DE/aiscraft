@@ -4,7 +4,9 @@
 //! code has nothing to do with one's own artifact: it lives on the start page, in the sidebar and
 //! in the command palette („Mit Code beitreten“).
 
+use crate::files::Then;
 use aiscraft_core::Artifact;
+use craft_dialogs::FileDialog;
 use egui::{RichText, Sense, Ui, vec2};
 use serde_json::{Value, json};
 
@@ -239,14 +241,11 @@ impl AisCraftApp {
                 ui.add(egui::Label::new(small_muted(&t, &hint)).wrap());
                 if clicked {
                     let name = aiscraft_engine::office::file_name(&format!("{}{}", meta.title, s(&p, "suffix")), &ext);
-                    if let Some(path) = rfd::FileDialog::new().set_file_name(name).save_file() {
-                        self.save_if_dirty();
-                        let mut params = json!({"id": meta.id, "format": s(&p, "format"), "path": path.display().to_string()});
-                        if let (Some(v), Some(o)) = (p.get("variant").and_then(Value::as_str), params.as_object_mut()) {
-                            o.insert("variant".into(), json!(v));
-                        }
-                        self.run("artifact.export", params);
+                    let mut params = json!({"id": meta.id, "format": s(&p, "format")});
+                    if let (Some(v), Some(o)) = (p.get("variant").and_then(Value::as_str), params.as_object_mut()) {
+                        o.insert("variant".into(), json!(v));
                     }
+                    self.files.ask(FileDialog::save().file_name(name), Then::ExportArtifact { cmd: "artifact.export", params });
                 }
             });
         }

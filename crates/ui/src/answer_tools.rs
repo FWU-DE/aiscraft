@@ -1,7 +1,9 @@
 //! Under an answer: „Speichern als …“ (Word, PDF, Excel, Markdown; #46; Kalenderdatei, #51), „Lesbarkeit“ (#48)
 //! and „Mit Kennzeichnung kopieren“ (#57). Each item dispatches a command.
 
+use crate::files::Then;
 use aiscraft_core::Message;
+use craft_dialogs::FileDialog;
 use egui::{RichText, Ui};
 use serde_json::json;
 
@@ -30,9 +32,10 @@ impl AisCraftApp {
                 let b = ui.add_enabled(enabled, egui::Button::new(label)).on_hover_text(tip).on_disabled_hover_text("Die Antwort enthält keine Tabelle");
                 if b.clicked() {
                     ui.close();
-                    if let Some(path) = rfd::FileDialog::new().set_file_name(aiscraft_engine::office::file_name(&base, ext)).save_file() {
-                        self.run("message.export", json!({"message_id": m.id, "format": format, "path": path.display().to_string()}));
-                    }
+                    self.files.ask(
+                        FileDialog::save().file_name(aiscraft_engine::office::file_name(&base, ext)),
+                        Then::Run { cmd: "message.export", params: json!({"message_id": m.id, "format": format}) },
+                    );
                 }
             }
             let cal = ui
@@ -44,9 +47,10 @@ impl AisCraftApp {
                 .on_disabled_hover_text("Die Antwort enthält keine Termine (ics-Block oder Tabelle mit Datum)");
             if cal.clicked() {
                 ui.close();
-                if let Some(path) = rfd::FileDialog::new().set_file_name(aiscraft_engine::office::file_name(&base, "ics")).save_file() {
-                    self.run("calendar.save", json!({"from_message": m.id, "title": base, "path": path.display().to_string()}));
-                }
+                self.files.ask(
+                    FileDialog::save().file_name(aiscraft_engine::office::file_name(&base, "ics")),
+                    Then::Run { cmd: "calendar.save", params: json!({"from_message": m.id, "title": base}) },
+                );
             }
         });
         let shown = self.state.readability.contains_key(&m.id);

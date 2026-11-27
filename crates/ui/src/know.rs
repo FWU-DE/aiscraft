@@ -2,6 +2,8 @@
 //! (#53) and templates (#54): the dialogs, bars and sections. The engine does the work; this
 //! file only draws and dispatches commands.
 
+use crate::files::Then;
+use craft_dialogs::FileDialog;
 use egui::{Id, RichText, Ui};
 use serde_json::{Value, json};
 
@@ -366,12 +368,8 @@ impl AisCraftApp {
             self.run("project.file_remove", json!({"id": id}));
         }
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Datei hinzufügen …").clicked()
-                && let Some(paths) = rfd::FileDialog::new().pick_files()
-            {
-                for p in paths {
-                    self.run("project.file_add", json!({"project": project, "path": p.display().to_string()}));
-                }
+            if ui.button("Datei hinzufügen …").clicked() {
+                self.files.ask(FileDialog::open_many(), Then::ProjectFiles { project: project.to_string() });
             }
             if !files.is_empty() {
                 let chars: u64 = files.iter().map(|f| f.chars).sum();

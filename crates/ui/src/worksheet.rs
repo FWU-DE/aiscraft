@@ -4,6 +4,8 @@
 //! "Prüfen" uses the same `score` as the `worksheet.check` command. A sheet without points
 //! (`Worksheet::points` off) hides the points fields and counts right tasks instead.
 
+use crate::files::Then;
+use craft_dialogs::FileDialog;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -248,9 +250,10 @@ impl AisCraftApp {
                 let title = self.state.artifacts.iter().find(|a| a.id == id).map(|a| a.title.clone()).unwrap_or_default();
                 let suffix = if variant == "loesung" { " Lösungen" } else { "" };
                 let name = aiscraft_engine::office::file_name(&format!("{title}{suffix}"), what);
-                if let Some(path) = rfd::FileDialog::new().set_file_name(name).save_file() {
-                    self.run("worksheet.export", json!({"id": id, "format": what, "variant": variant, "path": path.display().to_string()}));
-                }
+                self.files.ask(
+                    FileDialog::save().file_name(name),
+                    Then::Run { cmd: "worksheet.export", params: json!({"id": id, "format": what, "variant": variant}) },
+                );
             } else {
                 self.run("worksheet.print", json!({"id": id, "variant": variant}));
             }

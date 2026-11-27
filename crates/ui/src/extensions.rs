@@ -1,6 +1,8 @@
 //! Connector packages and plug-ins (#43, #28) in Einstellungen › Konnektoren, and the install
 //! dialog: what a package may do and its settings, before anything runs.
 
+use crate::files::Then;
+use craft_dialogs::FileDialog;
 use std::collections::BTreeMap;
 
 use egui::{RichText, Ui};
@@ -81,18 +83,17 @@ impl AisCraftApp {
             ui.add_space(4.0);
         }
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Paket installieren …").clicked()
-                && let Some(path) = rfd::FileDialog::new().add_filter("MCP-Paket oder Plug-in", &["mcpb", "dxt", "zip", "plugin"]).pick_file()
-            {
-                self.run("extension.inspect", json!({"path": path.display().to_string()}));
+            if ui.button("Paket installieren …").clicked() {
+                self.files.ask(
+                    FileDialog::open().filter("MCP-Paket oder Plug-in", &["mcpb", "dxt", "zip", "plugin"]),
+                    Then::Run { cmd: "extension.inspect", params: json!({}) },
+                );
             }
             if ui.button("Ordner neu einlesen").clicked() {
                 self.run("extension.rescan", json!({}));
             }
-            if ui.button("Plug-in-Ordner …").clicked()
-                && let Some(dir) = rfd::FileDialog::new().pick_folder()
-            {
-                self.run("extension.inspect", json!({"path": dir.display().to_string()}));
+            if ui.button("Plug-in-Ordner …").clicked() {
+                self.files.ask(FileDialog::folder(), Then::Run { cmd: "extension.inspect", params: json!({}) });
             }
         });
         if !self.state.extensions.folder.is_empty() {
@@ -167,17 +168,8 @@ impl AisCraftApp {
                                     let edit = if f.multiple { egui::TextEdit::multiline(v).desired_rows(2) } else { egui::TextEdit::singleline(v) };
                                     ui.add(edit.desired_width(300.0).hint_text(if f.multiple { "ein Pfad pro Zeile" } else { "Pfad" }));
                                     if ui.small_button("Wählen …").clicked() {
-                                        let picked =
-                                            if f.kind == "directory" { rfd::FileDialog::new().pick_folder() } else { rfd::FileDialog::new().pick_file() };
-                                        if let Some(p) = picked {
-                                            let p = p.display().to_string();
-                                            if f.multiple && !v.trim().is_empty() {
-                                                v.push('\n');
-                                                v.push_str(&p);
-                                            } else {
-                                                *v = p;
-                                            }
-                                        }
+                                        let ask = if f.kind == "directory" { FileDialog::folder() } else { FileDialog::open() };
+                                        self.files.ask(ask, Then::ExtensionField { key: f.key.clone(), multiple: f.multiple });
                                     }
                                 });
                             }

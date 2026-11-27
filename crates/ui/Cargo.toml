@@ -13,13 +13,13 @@ aiscraft-engine.workspace = true
 egui.workspace = true
 eframe.workspace = true
 egui_commonmark.workspace = true
-rfd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
 aiscraft-board = { path = "../board" }
 craft-math.workspace = true
 craft-quit.workspace = true
+craft-dialogs.workspace = true
 pulldown-cmark = { version = "0.13", default-features = false }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
