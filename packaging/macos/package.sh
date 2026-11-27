@@ -5,6 +5,10 @@
 #   $DIST/aischatcraft-cli-<version>-macos-<arch>.zip   the command line
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
+#        packaging/macos/package.sh --install [--skip-build]
+#   --install  for this Mac only: this machine's architecture, just AIS.ChatCraft.app (no DMG,
+#              no CLI zip), copied to ~/Applications (override: APP_DIR), with the command line
+#              linked as ~/.local/bin/aiscraft-cli. Ad-hoc signed unless MACOS_SIGN_IDENTITY is set.
 #
 # Called by craft-common-actions' release.yml (job "macOS universal").
 # Signing (env):
@@ -20,11 +24,13 @@ HERE="$ROOT/packaging/macos"
 
 ARCH=universal
 SKIP_BUILD=0
+INSTALL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch) ARCH="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
-    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+    --install) INSTALL=1; ARCH="$(uname -m | sed 's/arm64/aarch64/')"; shift ;;
+    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -115,7 +121,7 @@ notarize() {
 echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # aiscraft finds aiscraft-preview next to itself.
-cp "$WORK/bin/aiscraft" "$WORK/bin/aiscraft-preview" "$APP/Contents/MacOS/"
+cp "$WORK/bin/aiscraft" "$WORK/bin/aiscraft-preview" "$WORK/bin/aiscraft-cli" "$APP/Contents/MacOS/"
 ICONSET="$WORK/AIS.ChatCraft.iconset"
 mkdir -p "$ICONSET"
 for size in 16 32 128 256 512; do
@@ -135,6 +141,7 @@ xattr -cr "$APP"
 
 # Sign inside-out: nested code first, then the bundle itself.
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/aiscraft-preview"
+sign --options runtime "$APP/Contents/MacOS/aiscraft-cli"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/aiscraft"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
@@ -145,6 +152,21 @@ if [[ "$NOTARIZE" = 1 ]]; then
   stapler_retry staple "$APP"
   stapler_retry validate "$APP"
   spctl --assess --type execute -vvv "$APP"
+fi
+
+# ---- local install (--install) -----------------------------------------------------------------
+if [[ "$INSTALL" = 1 ]]; then
+  APP_DIR="${APP_DIR:-$HOME/Applications}"
+  BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
+  mkdir -p "$APP_DIR" "$BIN_DIR"
+  rm -rf "$APP_DIR/AIS.ChatCraft.app"
+  ditto "$APP" "$APP_DIR/AIS.ChatCraft.app"
+  # `aiscraft` finds aiscraft-preview next to itself, so link into the bundle, never copy out.
+  ln -sf "$APP_DIR/AIS.ChatCraft.app/Contents/MacOS/aiscraft" "$BIN_DIR/aiscraft"
+  ln -sf "$APP_DIR/AIS.ChatCraft.app/Contents/MacOS/aiscraft-cli" "$BIN_DIR/aiscraft-cli"
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DIR/AIS.ChatCraft.app" >/dev/null 2>&1 || true
+  echo "==> installed $APP_DIR/AIS.ChatCraft.app (command line: $BIN_DIR/aiscraft, aiscraft-cli)"
+  exit 0
 fi
 
 # ---- DMG ---------------------------------------------------------------------------------------

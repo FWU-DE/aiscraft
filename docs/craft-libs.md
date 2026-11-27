@@ -7,8 +7,8 @@ AIS.ChatCraft uses the shared libraries of the storytold Craft apps
 ## Pin
 
 All craft-libs entries in the root `Cargo.toml` use the same source:
-`git = "https://github.com/storytold/craft-libs", rev = "249a41bd9306a1b34330ac94e596a1a8b881378a"`
-(main, 2026-11-23). The README and CHANGELOG describe a `v0.1.0` tag, but the repository has no
+`git = "https://github.com/storytold/craft-libs", rev = "c0977ad6125f1b88ee717b9c23a6340f41b0a8dd"`
+(main, 2026-11-27; was 249a41bd of 2026-11-23). The README and CHANGELOG describe a `v0.1.0` tag, but the repository has no
 tags or releases yet (`gh api repos/storytold/craft-libs/tags` is empty), so we pin a full commit
 as `docs/versioning.md` allows. Switch to `tag = "vX.Y.Z"` once one exists. Update all entries
 together, never mix two revs (duplicate crate instances), run the tests, commit `Cargo.lock`.
@@ -33,7 +33,7 @@ Fork = needs the storytold egui fork (`[patch.crates-io]`, see below).
 | craft-settings | `config.toml` settings, atomic saves, migrations | settings live in SQLite (`store`) | would mean a data migration | no | no |
 | craft-dialogs | Non-blocking native file dialogs (rfd), fixes the macOS re-entrancy abort | blocking `rfd::FileDialog` in `ui` (6 call sites) | good, no egui dep; answers arrive on a later frame, so each call site needs state | no | later (after the collab and persona branches merge: touches `conversation.rs`, `artifact_panel.rs`) |
 | craft-platform | Dialog lifecycle, XDG appearance (light/dark) | rfd, our Omarchy `ThemeWatcher` | partial | optional | later, with craft-dialogs |
-| craft-quit | macOS quit and app menu | — | no unsaved documents, Linux first | no | no |
+| craft-quit | macOS quit through `-[NSApplication terminate:]`: closing an eframe window crashes AppKit's Touch Bar finder | `AisCraftApp::logic` (`craft_quit::quit()` on a root close request) and the German app menu in `apps/aiscraft/src/macos.rs` | only `quit()`, which is the same on the pinned rev and on main; `on_close_request` (pin) became `intercept_close` (main), `install_app_menu` has English labels, and we have no unsaved-document prompt | no | **adopted** (`quit()` only) |
 | craft-update | Release check and self-update | — | `check_for_update` reads FWU-DE/aiscraft's GitHub releases (published, stable only; drafts and pre-releases skipped), links and assets checked; its egui `StartupPrompt` is a modal with ArtCraft branding, so the hint is our own (`ui/src/update.rs`); `self_update::prepare_update` downloads, checks and swaps after the person's yes (#125) | no (without feature `egui`) | **adopted, check and self-update** (see below) |
 | craft-i18n | Translation catalogs, plurals, locale | German strings in code | UI is German only | no | no |
 | craft-font-catalog | Installed fonts on every platform, lookup by name | `fc-match` subprocess in `ui/theme.rs` (Linux only) | works, but the first lookup scans every font: 860 ms for 968 faces here vs 13 ms per `fc-match` | no | later (with a background scan) |
@@ -122,7 +122,7 @@ until two things are settled: the packages are not signed yet (#58; craft-update
 to an unsigned copy), and craft-update's Windows helper only finishes a program named after the
 asset stem (`aischatcraft.exe`), while ours is `aiscraft.exe`. Linux deb/rpm installs put the
 program at `/usr/bin/aiscraft`, not `/usr/bin/aischatcraft`, so craft-update does not recognise
-them as its package either; the tarball's `bin/` likewise. macOS has no package yet.
+them as its package either; the tarball's `bin/` likewise. macOS: `packaging/macos/package.sh` builds `AIS.ChatCraft.app` (binary `aiscraft`), so craft-update does not recognise it as its package either; the DMG is not part of the release workflow yet (needs a paid macOS runner and signing).
 
 Tests: the engine's dev-dependency turns on craft-update's `local-mirror` feature, so its link
 check accepts packages on 127.0.0.1 (release builds never build dev-dependencies). Tests feed the

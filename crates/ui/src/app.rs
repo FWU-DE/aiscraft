@@ -803,6 +803,15 @@ fn save_png(path: &std::path::Path, img: &egui::ColorImage) -> Result<(), String
 }
 
 impl eframe::App for AisCraftApp {
+    /// Leaving by closing the window crashes eframe on macOS (AppKit's Touch Bar finder trips
+    /// over the dropped view). Quit through `terminate:` instead; elsewhere `quit()` does
+    /// nothing and the window closes as usual. Last, so a `CancelClose` of ours would win.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if ctx.viewport_id() == egui::ViewportId::ROOT && ctx.input(|i| i.viewport().close_requested()) && craft_quit::quit() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.state = self.engine.state();

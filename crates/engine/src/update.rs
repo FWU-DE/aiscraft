@@ -285,7 +285,7 @@ async fn fetch(c: &Ctx, feed: Feed) -> std::result::Result<Option<Release>, Stri
         }
         Feed::GitHub => tokio::task::spawn_blocking(|| {
             let http = craft_update::Http::new(&agent())?;
-            let found = craft_update::check_for_update(&APP, &http, CURRENT_VERSION)?;
+            let found = craft_update::check_for_update(&APP, &http, CURRENT_VERSION).map_err(|e| e.to_string())?;
             // Just updated to it (a release whose program says another version): don't loop.
             let paths = Paths::for_app(&APP).ok();
             Ok(found.filter(|r| paths.as_ref().is_none_or(|p| !self_update::just_updated_to(p, r))))
