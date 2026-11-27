@@ -163,6 +163,9 @@ pub(crate) struct Inner {
     revision: tokio::sync::watch::Sender<u64>,
     /// Per-conversation cancel signals of running generations.
     cancels: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
+    /// Browser sign-ins in progress, per backend id, with their cancel signal: a second one for
+    /// the same service must not start a second browser.
+    pub(crate) browser_logins: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
     next_notice: std::sync::atomic::AtomicU64,
     tools: tools::ToolRuntime,
     /// Connected apps (#26): the browser opener, test endpoints, one token refresh at a time.
@@ -283,6 +286,7 @@ impl Engine {
             listeners: Mutex::new(Vec::new()),
             revision: tx,
             cancels: Mutex::new(HashMap::new()),
+            browser_logins: Mutex::new(HashMap::new()),
             next_notice: std::sync::atomic::AtomicU64::new(1),
             tools: Default::default(),
             accounts: accounts::Runtime::new(opts.data_dir.is_some() && std::env::var_os("AISCRAFT_NO_BROWSER").is_none()),
@@ -666,6 +670,7 @@ impl Ctx {
                 personas_error: None,
                 image_models,
                 model_checks,
+                browser_login: s.backend(&config.id).is_some_and(|b| b.browser_login),
             };
             match s.backends.iter_mut().find(|b| b.config.id == config.id) {
                 Some(b) => *b = view,

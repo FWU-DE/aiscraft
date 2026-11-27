@@ -404,6 +404,9 @@ pub struct BackendView {
     /// Every model tried and whether it worked (Vertex AI: models the project has not enabled).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_checks: Vec<aiscraft_core::ModelCheck>,
+    /// A sign-in in the browser is running (opening the browser, waiting for the person).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub browser_login: bool,
 }
 
 impl BackendView {

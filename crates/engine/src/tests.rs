@@ -2952,3 +2952,26 @@ fn detached_windows_one_per_content_and_back_into_the_panel() {
     drop(engine);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A second browser sign-in for the same service while one runs starts no second browser; the
+/// person can cancel the running one (`backend.browser_login_cancel`).
+#[test]
+fn a_second_browser_login_is_refused_while_one_runs() {
+    let engine = Engine::open(Options { data_dir: None, secrets: None }).unwrap();
+    let ctx = engine.ctx();
+    let guard = crate::commands::BrowserLoginGuard::enter(ctx, "ais-chat").unwrap();
+    assert!(engine.state().backend("ais-chat").unwrap().browser_login, "the UI can see the running sign-in");
+    let err = engine.call("backend.browser_login", json!({"id": "ais-chat"})).unwrap_err();
+    assert_eq!(err.kind, aiscraft_core::ErrorKind::Busy);
+    assert!(err.message.contains("läuft schon"), "{}", err.message);
+    assert!(crate::commands::BrowserLoginGuard::enter(ctx, "ais-chat").is_err());
+    let r = engine.call("backend.browser_login_cancel", json!({"id": "ais-chat"})).unwrap();
+    assert_eq!(r["cancelled"], true);
+    assert!(*guard.cancel.borrow(), "cancel reaches the running sign-in");
+    drop(guard);
+    assert!(!engine.state().backend("ais-chat").unwrap().browser_login);
+    let r = engine.call("backend.browser_login_cancel", json!({"id": "ais-chat"})).unwrap();
+    assert_eq!(r["cancelled"], false, "nothing running, nothing to cancel");
+    // Free again: the in-memory engine refuses the browser itself, not as busy.
+    assert_eq!(engine.call("backend.browser_login", json!({"id": "ais-chat"})).unwrap_err().kind, aiscraft_core::ErrorKind::Unsupported);
+}
