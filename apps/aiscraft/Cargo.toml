@@ -19,6 +19,10 @@ log.workspace = true
 env_logger.workspace = true
 uuid.workspace = true
 
+# German app menu (About, Hide, Quit) in place of winit's English default; see src/macos.rs.
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.21", default-features = false }
+
 [features]
 default = ["preview", "ner"]
 # Learning apps open in the separate `aiscraft-preview` program (wry webview) when it is

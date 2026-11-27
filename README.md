@@ -74,7 +74,7 @@ Fertige Pakete stehen unter [Releases](https://github.com/FWU-DE/aiscraft/releas
 | Windows | `aischatcraft-<version>-windows-x64.msi` (Installer) oder `…-windows-x64-portable.zip` (ohne Installation); für ARM-Geräte `arm64` |
 | Linux | `.AppImage` (jede Distribution), `.deb` (Debian, Ubuntu, Mint), `.rpm` (Fedora, openSUSE), `.flatpak` oder `.tar.gz`, je für `x86_64` und `aarch64` |
 
-`SHA256SUMS.txt` im Release enthält die Prüfsummen. Die Pakete sind noch nicht signiert; Windows warnt deshalb beim ersten Start (SmartScreen: „Weitere Informationen“ › „Trotzdem ausführen“). Für macOS gibt es noch kein Paket.
+`SHA256SUMS.txt` im Release enthält die Prüfsummen. Die Pakete sind noch nicht signiert; Windows warnt deshalb beim ersten Start (SmartScreen: „Weitere Informationen“ › „Trotzdem ausführen“). Für macOS gibt es noch kein fertiges Paket; `packaging/macos/package.sh --install` baut und installiert die App (siehe unten).
 
 Wer den neuesten Stand will: Jede Nacht, in der sich auf `main` etwas geändert hat und alle Tests grün sind, entsteht eine Vorabversion (`…-nightly.<Datum>`) unter [Releases](https://github.com/FWU-DE/aiscraft/releases). Die Update-Prüfung der App bietet nur fertige Versionen an.
 
@@ -83,6 +83,7 @@ Aus dem Quellcode (auch macOS):
 ```sh
 git clone https://github.com/FWU-DE/aiscraft && cd aiscraft
 packaging/install.sh      # Linux: baut und installiert für den eigenen Benutzer, ohne sudo
+packaging/macos/package.sh --install   # macOS: AIS.ChatCraft.app nach ~/Applications, CLI nach ~/.local/bin
 cargo run --release -p aiscraft   # oder direkt starten (alle Systeme)
 ```
 
